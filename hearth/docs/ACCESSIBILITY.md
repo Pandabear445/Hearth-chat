@@ -50,7 +50,9 @@ Each item is checked by `npm run test:a11y` unless marked otherwise.
   the focused one, or the dialog's only field. It uses `aria-invalid` and `aria-describedby` (`markInvalid` /
   `clearInvalid`). Editing the field clears the error state.
 - The image viewer (`openViewer`) does the same: it traps Tab, closes on Esc and returns focus to the picture.
-  Pictures in messages open with Enter or Space.
+  Pictures in messages open with Enter or Space. On a touch screen it also takes gestures (`viewer-touch.js`), each
+  with a button too: on a phone, More has the previous and next pictures and zoom, beside Download and Close (44px).
+  With reduced motion the picture doesn't follow the finger or slide.
 
 ### Menus and popups (`popover()`, `menu()`, `contextMenu()`)
 - Any `button` built with `data-pop-anchor` gets `aria-haspopup="true"` and `aria-expanded="false"` automatically

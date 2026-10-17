@@ -338,6 +338,160 @@ async function attachments(t) {
   await alice.closeSettings();
 }
 
+// ------------------------------------------------------------------ 5b. pictures on a phone
+// A tall phone screenshot and a panorama, seen on a phone (390×844, touch) and on a desktop. On the phone they're as
+// big as the message allows (the screenshot up to about 70% of the screen's height), never cropped, sharp (the full
+// picture replaces the thumbnail), and the viewer takes fingers: double tap, pinch, swipes. The desktop's sizes are
+// the same as ever: at most 440 wide and 340 tall, the thumbnail cropped to fit.
+async function phonePictures(t) {
+  const { alice, bob } = t.people;
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  const sent = { 'A phone screenshot': [1170, 2532], 'A panorama': [4000, 1000] };
+  for (const [text, [w, h]] of Object.entries(sent)) {
+    const name = text.endsWith('screenshot') ? 'Screenshot_20261017-204512_Hearth_Chat_Conversation.png' : 'panorama.png';
+    await alice.$('.cw-main input[type=file]').setInputFiles([{ name, mimeType: 'image/png', buffer: makePng(w, h) }]);
+    await alice.send(text);
+  }
+  const loaded = (p, text) => p.page.waitForFunction((t) => {
+    const m = [...document.querySelectorAll('#messages .msg[data-mid]')].find((x) => x.textContent.includes(t));
+    const i = m && m.querySelector('.att-img');
+    return i && i.complete && i.naturalWidth > 0;
+  }, text);
+  const measure = (m) => m.evaluate((el) => {
+    const box = el.querySelector('.att-media').getBoundingClientRect();
+    const img = el.querySelector('.att-img');
+    return { w: box.width, h: box.height, col: el.querySelector('.msg-files').getBoundingClientRect().width, screen: innerHeight, fit: getComputedStyle(img).objectFit, nw: img.naturalWidth, nh: img.naturalHeight };
+  });
+
+  // A desktop with a mouse: exactly as before.
+  const desk = {};
+  for (const [text, [w, h]] of Object.entries(sent)) {
+    const m = bob.message(text).first();
+    await m.scrollIntoViewIfNeeded();
+    await loaded(bob, text);
+    const r = desk[text] = await measure(m);
+    const want = Math.min(440, w, Math.round(340 * w / h));
+    check(Math.abs(r.w - want) < 1 && Math.abs(r.h - want * h / w) < 1.5, `On a desktop “${text}” should be ${want}×${Math.round(want * h / w)} as before (got ${r.w}×${r.h}).`);
+    check(r.fit === 'cover', `On a desktop the picture should still fill its box (got object-fit ${r.fit}).`);
+  }
+
+  // The same messages on bob's phone.
+  const phone = await t.open('bob-phone', { phone: true });
+  await phone.login('bob', t.pw.bob);
+  const nav = phone.$('#main-head .nav-toggle');
+  if (await nav.isVisible()) await nav.tap();
+  await phone.$(`#rail button[aria-label="${SERVER}"]`).tap();
+  await phone.page.locator('#sidebar-head .server-head-name', { hasText: exact(SERVER) }).waitFor({ state: 'attached' });
+  if (!(await phone.$('#composer-input[placeholder="Message #general"]').count())) {
+    if (await nav.isVisible()) await nav.tap();
+    await phone.channelRow('general').locator('.ch-main').tap();
+  }
+  await phone.page.waitForSelector('#composer-input[placeholder="Message #general"]');
+  const shot = phone.message('A phone screenshot').first();
+  const pano = phone.message('A panorama').first();
+  await shot.scrollIntoViewIfNeeded();
+  // Once it's on screen the full picture takes the thumbnail's place (it's drawn bigger than 480 px on this screen).
+  await phone.page.waitForFunction(() => {
+    const m = [...document.querySelectorAll('#messages .msg[data-mid]')].find((x) => x.textContent.includes('A phone screenshot'));
+    const i = m && m.querySelector('.att-img');
+    return i && i.complete && i.naturalWidth === 1170;
+  });
+  const s = await measure(shot);
+  check(s.w >= 0.7 * s.col || s.h >= 0.6 * s.screen, `On a phone the screenshot should be big (got ${s.w}×${s.h} in a ${s.col}px column on an ${s.screen}px screen).`);
+  check(s.h <= 0.72 * s.screen, `…but no taller than about 70% of the screen (got ${s.h} of ${s.screen}).`);
+  check(s.fit === 'contain' && Math.abs(s.w / s.h - 1170 / 2532) < 0.02, `…and never cropped (object-fit ${s.fit}, box ${s.w}×${s.h}).`);
+  await pano.scrollIntoViewIfNeeded();
+  await loaded(phone, 'A panorama');
+  const p = await measure(pano);
+  check(p.w >= p.col - 1, `On a phone the panorama should use the message's whole width (got ${p.w} of ${p.col}).`);
+  check(p.fit === 'contain' && Math.abs(p.w / p.h - 4) < 0.05, `…and never be cropped (object-fit ${p.fit}, box ${p.w}×${p.h}).`);
+
+  // The viewer: its bar fits, with 44px buttons.
+  await shot.locator('.att-img').tap();
+  await phone.$('.viewer').waitFor();
+  await phone.page.waitForFunction(() => { const i = document.querySelector('.viewer-img'); return i && i.complete && i.naturalWidth > 0 && i.offsetWidth > 0 && !i.getAnimations().length; });
+  const bar = await phone.page.evaluate(() => ({
+    buttons: [...document.querySelectorAll('.viewer-bar button')].filter((b) => b.getClientRects().length).map((b) => { const r = b.getBoundingClientRect(); return { label: b.getAttribute('aria-label'), w: r.width, h: r.height, right: r.right }; }),
+    count: document.querySelector('.viewer-count').getBoundingClientRect().height,
+    width: innerWidth,
+  }));
+  check(JSON.stringify(bar.buttons.map((b) => b.label)) === JSON.stringify(['Download', 'More', 'Close (Esc)']), `The phone viewer's bar should have Download, More and Close (got ${bar.buttons.map((b) => b.label).join(', ')}).`);
+  check(bar.buttons.every((b) => b.w >= 44 && b.h >= 44 && b.right <= bar.width), `Its buttons should be at least 44px and on screen (got ${JSON.stringify(bar.buttons)}).`);
+  check(bar.count < 30, `The picture count should be on one line (it's ${bar.count}px tall).`);
+  // A long name is shortened in the middle, so how it ends stays in sight.
+  const name = await phone.page.evaluate(() => {
+    const base = document.querySelector('.viewer-name-base'); const ext = document.querySelector('.viewer-name-ext').getBoundingClientRect();
+    return { ext: document.querySelector('.viewer-name-ext').textContent, extWidth: ext.width, extRight: ext.right, count: document.querySelector('.viewer-count').getBoundingClientRect().left, cut: base.scrollWidth > base.clientWidth };
+  });
+  check(name.cut && name.ext === '.png' && name.extWidth > 0 && name.extRight <= name.count + 0.5, `A long name should be shortened, keeping “.png” in sight before the count (got ${JSON.stringify(name)}).`);
+  await phone.$('.viewer-bar button[aria-label="More"]').tap();
+  await phone.menuItem('Zoom in').waitFor();
+  await phone.page.keyboard.press('Escape');
+  await phone.page.locator('.popover').waitFor({ state: 'detached' });
+  check(await phone.$('.viewer').count(), 'Escape in the More menu should close the menu, not the viewer.');
+
+  const fingers = await touchscreen(phone);
+  const pic = () => phone.page.$eval('.viewer-img', (i) => { const r = i.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+  const still = () => phone.page.waitForFunction(() => !document.querySelector('.viewer-stage.easing, .viewer-stage.touching'));
+  const fit = await pic();
+  // A double tap zooms to 2x around the tapped point, and the next goes back to the whole picture.
+  const at = { x: fit.x + fit.w * 0.3, y: fit.y + fit.h * 0.35 };
+  await fingers.doubleTap(at.x, at.y);
+  await still();
+  const zoomed = await pic();
+  check(Math.abs(zoomed.w / fit.w - 2) < 0.02, `A double tap should zoom to 2x (got ${(zoomed.w / fit.w).toFixed(2)}x).`);
+  check(Math.abs((at.x - zoomed.x) / zoomed.w - 0.3) < 0.02 && Math.abs((at.y - zoomed.y) / zoomed.h - 0.35) < 0.02, 'The tapped point should stay under the finger.');
+  await fingers.doubleTap(at.x, at.y);
+  await still();
+  const back = await pic();
+  check(Math.abs(back.w - fit.w) < 1 && Math.abs(back.x - fit.x) < 1 && Math.abs(back.y - fit.y) < 1, 'A second double tap should go back to the whole picture.');
+  // Two fingers moving apart zoom in.
+  const mid = { x: fit.x + fit.w / 2, y: fit.y + fit.h / 2 };
+  await fingers.pinch(mid, 60, 200);
+  await still();
+  const pinched = await pic();
+  check(pinched.w / fit.w > 2.5 && pinched.w / fit.w <= 6.01, `A pinch should zoom in (got ${(pinched.w / fit.w).toFixed(2)}x).`);
+  await fingers.doubleTap(mid.x, mid.y);
+  await still();
+  // Not zoomed, a swipe to the left shows the next picture, and a swipe down closes the viewer.
+  const [k, n] = (await phone.$('.viewer-count').textContent()).split('/').map((x) => Number(x.trim()));
+  await fingers.swipe({ x: 330, y: mid.y }, { x: 60, y: mid.y });
+  await phone.$('.viewer-count', { hasText: `${(k % n) + 1} / ${n}` }).waitFor();
+  await still();
+  await fingers.swipe({ x: 200, y: 300 }, { x: 200, y: 600 });
+  await phone.$('.viewer').waitFor({ state: 'detached' });
+
+  // Nothing of this reached the desktop: the same sizes, and still the thumbnail.
+  for (const text of Object.keys(sent)) {
+    const r = await measure(bob.message(text).first());
+    check(r.w === desk[text].w && r.h === desk[text].h && r.nw <= 480 && r.nh <= 480, `On a desktop “${text}” should keep its size and thumbnail (got ${r.w}×${r.h}, ${r.nw}×${r.nh}).`);
+  }
+  await phone.close();
+}
+// Fingers on a phone's screen, through the browser's own touch input (two at once for a pinch).
+async function touchscreen(p) {
+  const cdp = await p.context.newCDPSession(p.page);
+  const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+  const frame = () => p.page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r())));
+  const tap = async (x, y) => { await touch('touchStart', [[x, y]]); await touch('touchEnd', []); };
+  return {
+    async doubleTap(x, y) { await tap(x, y); await frame(); await tap(x, y); },
+    async pinch(c, from, to, steps = 8) {
+      await touch('touchStart', [[c.x - from / 2, c.y], [c.x + from / 2, c.y]]);
+      for (let i = 1; i <= steps; i++) { const d = from + ((to - from) * i) / steps; await touch('touchMove', [[c.x - d / 2, c.y], [c.x + d / 2, c.y]]); await frame(); }
+      await touch('touchEnd', []);
+    },
+    async swipe(a, b, steps = 10) {
+      await touch('touchStart', [[a.x, a.y]]);
+      for (let i = 1; i <= steps; i++) { await touch('touchMove', [[a.x + ((b.x - a.x) * i) / steps, a.y + ((b.y - a.y) * i) / steps]]); await frame(); }
+      await touch('touchEnd', []);
+    },
+  };
+}
+
 // ------------------------------------------------------------------ pictures: avatar, server icon, custom emoji, GIF library
 async function pictures(t) {
   const { alice, bob } = t.people;
@@ -3366,6 +3520,7 @@ export const FLOWS = [
   ['direct messages: both ways, block and unblock, friends', directMessages],
   ['disappearing messages: turn on in a DM, a picture vanishes on both screens with its file and inbox entry, turn off, day dividers, asked before sending under a weaker timer; a channel message goes by the apps’ own timer', disappearing],
   ['attachments: image preview, byte-exact download, storage', attachments],
+  ['pictures on a phone: as big as the message allows, never cropped, sharp; the viewer zooms with a double tap and a pinch, swipes to the next and down to close; the desktop is as before', phonePictures],
   ['pictures: avatar, custom emoji, server icon, GIF library', pictures],
   ['search: Ctrl+K words, from:, jump to the message', search],
   ['settings: display name, username, signed-in devices', settings],

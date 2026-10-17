@@ -123,6 +123,12 @@ All decryption happens in the app; the server only ever sends ciphertext.
 
 - **Pictures**: thumbnail first (when the sender made one), full size on demand. Clicking opens the gallery: every
   picture in the conversation's loaded messages, ← → keys and buttons, wraps around, zoom, download, copy image.
+- **Pictures on phones and touch screens** (`device.js`): drawn as wide as the message, a tall one up to about 70% of
+  the screen's height, never cropped. One drawn much bigger than its 480 px thumbnail on a sharp screen loads full size
+  once it's on screen, through the same queue (not with Data Saver on, nor over 20 MB); a picture in a message the word
+  filter hides does the same when its row is on screen, so the server sees the same downloads. Nothing changes in what
+  is sent or stored. The gallery pinches and double-taps to zoom, swipes between pictures and down to close
+  (`viewer-touch.js`).
 - **Video and audio**: played from a decrypted `blob:` URL with the browser's controls. Encrypted videos and songs
   over 20 MB show "Play video · size" and download (with a progress bar) only when pressed.
 - **Other files**: a card with the name, size, kind ("PDF document", "ZIP archive", "XYZ file"), "Encrypted"

@@ -662,7 +662,7 @@ Also back up `.env`. `cert.pem` and `key.pem` (the self-signed certificate) are 
 - **Alt + ↑/↓** move between channels or conversations in the sidebar
 - **Shift + Esc** marks the server you're in as read
 - **Ctrl + Shift + M** mute, **Ctrl + Shift + D** deafen (change them in Settings → Keybinds)
-- In the image viewer: **←/→** previous/next, **+/−** zoom, **Esc** close
+- In the image viewer: **←/→** previous/next, **+/−** zoom, **Esc** close (on a touch screen: pinch or double-tap to zoom, swipe for the next picture, swipe down to close)
 - Right-click messages, channels, servers and people for more actions
 
 ## Not included (yet)

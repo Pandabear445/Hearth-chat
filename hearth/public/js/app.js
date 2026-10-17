@@ -10,7 +10,7 @@ import { PERMS, PERM_GROUPS, ALL as ALL_PERMS, has, memberRoles, basePerms, topC
 import { openCropper } from './cropper.js';
 import { adminView, CATEGORY_LABEL } from './admin.js';
 import { captchaWidget } from './captcha.js';
-import { prepareImage, makeQueue, whenVisible, previewThumb } from './media.js';
+import { prepareImage, makeQueue, whenVisible, whenOnScreen, previewThumb } from './media.js';
 import { isUploadUrl, safeDownloadHref, ALT_MAX } from './attachments.js';
 import { outsideMode, outsideHost, imageDecision, openedLinks } from './outside.js';
 import { CHUNKED_ABOVE, uploadResumable, uploadSimple, download, makeUrlCache, mediaKind, typeLabel } from './files.js';
@@ -44,6 +44,8 @@ import { label as disLabel, deadline, expired as isExpired, disappears, serverKe
 import { createScheduled } from './scheduled.js';
 import { bindNew, bindEdit, describe as describeBinding, createVersions, createCopies, createOriginals, noteMessage, bindingState } from './binding.js';
 import { trackViewport } from './viewport.js';
+import { isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
+import { touchGestures } from './viewer-touch.js';
 import { initAway, CLEAR_AFTER, clearAfterMs, clearsLabel, onlyPresenceChanged } from './presence.js';
 import { createWordFilter, filterLabel, previewLabel } from './wordfilter-app.js';
 import { inviteMessage, movingMessage, joinNote, signUpMode, canShare, nudgeWanted, nudgeDismissed, dismissNudge } from './invite-share.js';
@@ -3806,6 +3808,7 @@ function revealFiltered(m) {
 // While a hidden message is drawn out of sight (filteredEl): what its pictures would load, instead of waiting for them
 // to come on screen themselves.
 let lazyLoads = null;
+let lazyRow = null; // (and the row on screen in its place)
 const loadWhenVisible = (el, fn) => (lazyLoads ? lazyLoads.push(fn) : whenVisible(el, fn));
 // A message the word filter hides: one row that says so, with Show. The message is still drawn behind it, out of
 // sight, and loads what it would have shown (its pictures, a poll's votes) when its row comes near the screen like any
@@ -3814,7 +3817,8 @@ function filteredEl(el, m, prev, ctx, wf, o) {
   const loads = [];
   lazyLoads = loads;
   let shadow;
-  try { shadow = fillMessage(h('div'), m, prev, ctx, { ...o, mine: false }); } finally { lazyLoads = null; }
+  lazyRow = el;
+  try { shadow = fillMessage(h('div'), m, prev, ctx, { ...o, mine: false }); } finally { lazyLoads = null; lazyRow = null; }
   for (const img of shadow.querySelectorAll('img[loading="lazy"]')) {
     const src = img.getAttribute('src') || '';
     if (src && !src.startsWith('data:')) loads.push(() => { const i = new Image(); i.referrerPolicy = 'no-referrer'; i.src = src; });
@@ -4588,6 +4592,36 @@ function mediaDownloadBtn(m, f) {
   return b;
 }
 const loadQueue = makeQueue(3);
+// Phones and touch screens (device.js): the chat shows a picture's thumbnail (480 px, made for desktops), and drawn
+// much bigger than that on a sharp screen it looks soft. So once it's on screen, the full picture loads (through the
+// same queue, with the same progress bar) and takes the thumbnail's place once it's ready to draw, without a flash.
+// Not with Data Saver on or for a very big file; what's sent and stored stays the same.
+// standIn: the row a message the word filter hides is drawn as (filteredEl). Its picture isn't on screen, so it's
+// sized as it would be there (app.css: the message's width, at most 70% of the screen's height) and loads the same
+// way when the row comes on screen: the server sees the same downloads either way.
+function sharpenWhenShown(el, holder, f, full, standIn) {
+  if (!(isTouchUI() || isPhoneLayout()) || !holder.classList.contains('sized')) return;
+  if ((navigator.connection && navigator.connection.saveData) || (f.size || 0) > AUTOLOAD_MAX) return;
+  const w = Number(f.w); const h = Number(f.h);
+  const soft = () => {
+    const nw = el.naturalWidth; const nh = el.naturalHeight;
+    if (!nw || !nh || !(standIn || el).isConnected) return false;
+    const body = standIn && standIn.querySelector('.msg-body');
+    const drawn = standIn ? Math.min(body ? body.clientWidth : 0, w, (0.7 * innerHeight * w) / h)
+      : Math.min(el.clientWidth, (el.clientHeight * nw) / nh); // (the box may be letterboxed)
+    return drawn * (window.devicePixelRatio || 1) > 1.25 * nw && w > nw * 1.1;
+  };
+  const shown = el.complete ? Promise.resolve() : new Promise((resolve) => el.addEventListener('load', resolve, { once: true }));
+  shown.then(() => whenOnScreen(standIn || holder, () => {
+    if (!soft()) return;
+    loadQueue(full).then((u) => {
+      if (!el.isConnected || el.getAttribute('src') === u) return null;
+      const next = new Image();
+      next.src = u;
+      return (next.decode ? next.decode() : Promise.resolve()).then(() => { if (el.isConnected) el.src = u; });
+    }).catch(() => {}); // the thumbnail stays (the viewer still loads the full picture when it's opened)
+  }));
+}
 function attachmentEl(f, m) {
   // Unencrypted entries (older messages) load straight from this server; anything else was dropped when the
   // message was decrypted (see attachments.js), and is refused here too.
@@ -4602,6 +4636,7 @@ function attachmentEl(f, m) {
       ? h('img', { class: 'att-img', alt: f.alt || f.name || 'Image', tabindex: '0', role: 'button', 'aria-label': `Open ${f.alt || f.name || 'image'}` })
       : h(media, { class: `att-${media}`, controls: true, preload: 'metadata', 'aria-label': f.alt || null });
     const holder = h('div', { class: `att-media${enc ? ' locked' : ''}`, dataset: { name: f.name || '' } }, el);
+    const standIn = lazyRow;
     if (f.alt && media !== 'audio') { holder.classList.add('has-alt'); holder.append(altChip(f.alt)); }
     if (f.sp) spoilerCover(holder, el, media);
     // Reserve the right space up front so the chat doesn't jump while images load.
@@ -4609,6 +4644,8 @@ function attachmentEl(f, m) {
       const w = Math.min(440, f.w, Math.round(340 * f.w / f.h));
       holder.style.width = `${w}px`;
       holder.style.aspectRatio = `${f.w} / ${f.h}`;
+      // Phones and touch screens size it from its shape instead, up to the message's width (app.css).
+      if (Number(f.w) > 0 && Number(f.h) > 0) { holder.style.setProperty('--att-w', String(Number(f.w))); holder.style.setProperty('--att-h', String(Number(f.h))); }
       holder.classList.add('sized');
     }
     const meter = h('div', { class: 'att-meter', hidden: true }, h('i'));
@@ -4627,7 +4664,7 @@ function attachmentEl(f, m) {
     const load = () => {
       holder.classList.add('loading');
       const want = media === 'img' && f.th ? () => decryptedUrl(m, { ...f.th, type: 'image/webp' }) : fullWatched;
-      loadQueue(want).then((u) => { el.src = u; holder.classList.remove('locked', 'loading', 'failed'); })
+      loadQueue(want).then((u) => { el.src = u; holder.classList.remove('locked', 'loading', 'failed'); if (media === 'img' && f.th) sharpenWhenShown(el, holder, f, fullWatched, standIn); })
         .catch((e) => {
           holder.classList.remove('loading');
           if (e && e.code === 'gone') return markGone(holder);
@@ -4698,6 +4735,11 @@ function openViewer(fromImg, { name, download } = {}) {
   let scale = 1; let tx = 0; let ty = 0;
   const img = h('img', { class: 'viewer-img', alt: '' });
   const caption = h('span', { class: 'viewer-name' });
+  // The name in two parts, so a phone can shorten it and still show how it ends (".jpg").
+  const setCaption = (text) => {
+    const parts = /^(.+?)(\.[a-z0-9]{1,8})$/i.exec(text) || [text, text, ''];
+    caption.replaceChildren(h('span', { class: 'viewer-name-base' }, parts[1]), h('span', { class: 'viewer-name-ext' }, parts[2]));
+  };
   const counter = h('span', { class: 'viewer-count' });
   const stage = h('div', { class: 'viewer-stage' }, img);
   const apply = () => { img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; stage.classList.toggle('zoomed', scale > 1); };
@@ -4709,22 +4751,25 @@ function openViewer(fromImg, { name, download } = {}) {
     stage.classList.add('loading-full');
     if (src._full) {
       src._full().then((u) => { if (imgs[idx] === src) { img.src = u; } })
-        .catch((e) => { if (imgs[idx] === src && e && e.code === 'gone') caption.textContent = `${caption.textContent} \u2014 no longer available`; })
+        .catch((e) => { if (imgs[idx] === src && e && e.code === 'gone') setCaption(`${caption.textContent} \u2014 no longer available`); })
         .finally(() => { if (imgs[idx] === src) stage.classList.remove('loading-full'); });
     }
     else stage.classList.remove('loading-full');
     const nm = src.closest('.att-media') ? src.closest('.att-media').dataset.name : src.alt;
-    caption.textContent = nm || 'Image';
+    setCaption(nm || 'Image');
     counter.textContent = imgs.length > 1 ? `${idx + 1} / ${imgs.length}` : '';
     scale = 1; tx = 0; ty = 0; apply();
   };
   const zoom = (f) => { scale = Math.min(6, Math.max(1, scale * f)); if (scale === 1) { tx = 0; ty = 0; } apply(); };
   const close = () => {
     overlay.classList.add('closing'); setTimeout(() => overlay.remove(), 140); document.removeEventListener('keydown', keys, true);
+    stopFitting();
+    if (morePop && morePop.isConnected) closePopover();
     // Back to whatever opened it (the picture in the chat), like other dialogs.
     if (opener && opener.isConnected && opener !== document.body) opener.focus({ preventScroll: true });
   };
   const keys = (e) => {
+    if (morePop && morePop.isConnected) return; // the More menu (phones) takes the keys while it's open
     if (e.key === 'Escape') { e.stopPropagation(); close(); }
     if (e.key === 'Tab') trapTab(e, overlay);
     if (e.key === 'ArrowRight') show(idx + 1);
@@ -4745,20 +4790,47 @@ function openViewer(fromImg, { name, download } = {}) {
       toast('Image copied.');
     } catch { copyText(img.src.startsWith('blob:') ? '' : img.src); toast(img.src.startsWith('blob:') ? 'Your browser can\u2019t copy this image.' : 'Image link copied.'); }
   };
+  const fullscreen = () => (document.fullscreenElement ? document.exitFullscreen() : overlay.requestFullscreen().catch(() => {}));
+  // On a phone (device.js PHONE_LAYOUT) the bar keeps Download and Close, with bigger buttons, and the rest goes under
+  // More, with the previous and next pictures (swipes stand in for the arrow buttons there, which screen readers can't
+  // make). It changes over if the screen does (a window narrowed, say).
+  const extras = [ibtn('zoomOut', 'Zoom out (−)', () => zoom(1 / 1.4)), ibtn('zoomIn', 'Zoom in (+)', () => zoom(1.4)),
+    ibtn('maximize', 'Fullscreen', fullscreen), ibtn('copy', 'Copy image', copy)];
+  let morePop = null;
+  const more = ibtn('more', 'More', () => {
+    morePop = menu(more, [
+      imgs.length > 1 ? { label: 'Previous picture', icon: 'chevronLeft', action: () => show(idx - 1) } : null,
+      imgs.length > 1 ? { label: 'Next picture', icon: 'chevronRight', action: () => show(idx + 1) } : null,
+      imgs.length > 1 ? '-' : null,
+      { label: 'Zoom in', icon: 'zoomIn', action: () => zoom(1.4) },
+      { label: 'Zoom out', icon: 'zoomOut', action: () => zoom(1 / 1.4) },
+      document.fullscreenEnabled ? { label: document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen', icon: 'maximize', action: fullscreen } : null,
+      { label: 'Copy image', icon: 'copy', action: copy },
+    ], { align: 'end', className: 'viewer-menu' });
+  }, { attrs: { 'data-pop-anchor': '' } });
+  const fit = () => { const phone = isPhoneLayout(); extras.forEach((b) => { b.hidden = phone; }); more.hidden = !phone; };
+  fit();
+  const stopFitting = onDeviceChange(fit);
   const bar = h('div', { class: 'viewer-bar' }, caption, counter, h('span', { class: 'spacer' }),
-    ibtn('zoomOut', 'Zoom out (−)', () => zoom(1 / 1.4)), ibtn('zoomIn', 'Zoom in (+)', () => zoom(1.4)),
-    ibtn('maximize', 'Fullscreen', () => (document.fullscreenElement ? document.exitFullscreen() : overlay.requestFullscreen().catch(() => {}))),
-    ibtn('copy', 'Copy image', copy), ibtn('download', 'Download', dl), ibtn('close', 'Close (Esc)', close));
+    ...extras, ibtn('download', 'Download', dl), more, ibtn('close', 'Close (Esc)', close));
   const overlay = h('div', { class: 'viewer', role: 'dialog', 'aria-label': 'Image viewer', 'aria-modal': 'true' }, bar, stage,
     imgs.length > 1 ? h('button', { class: 'viewer-nav prev', 'aria-label': 'Previous image', onclick: () => show(idx - 1) }, icon('chevronLeft')) : null,
     imgs.length > 1 ? h('button', { class: 'viewer-nav next', 'aria-label': 'Next image', onclick: () => show(idx + 1) }, icon('chevronRight')) : null);
   overlay._mids = new Set(imgs.map((i) => (i.closest('[data-mid]') || {}).dataset?.mid).filter(Boolean));
   overlay._close = close;
-  stage.addEventListener('click', (e) => { if (e.target === stage) close(); });
+  // Touch screens (device.js TOUCH_UI): pinch, double tap, swipes (viewer-touch.js). The clicks a browser makes out
+  // of those taps are left to it; a mouse works as on a desktop.
+  const touch = isTouchUI() ? touchGestures({
+    stage, img, bar, backdrop: overlay, close, count: () => imgs.length, step: (d) => show(idx + d),
+    view: () => ({ scale, tx, ty }), setView: (v) => { ({ scale, tx, ty } = v); apply(); },
+    busy: () => { if (!morePop || !morePop.isConnected) return false; closePopover(); return true; },
+  }) : null;
+  const fromTouch = () => !!touch && touch.touchedRecently();
+  stage.addEventListener('click', (e) => { if (e.target === stage && !fromTouch()) close(); });
   stage.addEventListener('wheel', (e) => { e.preventDefault(); zoom(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: false });
-  img.addEventListener('dblclick', () => { if (scale > 1) { scale = 1; tx = 0; ty = 0; apply(); } else zoom(2.5); });
+  img.addEventListener('dblclick', () => { if (fromTouch()) return; if (scale > 1) { scale = 1; tx = 0; ty = 0; apply(); } else zoom(2.5); });
   let drag = null;
-  img.addEventListener('pointerdown', (e) => { if (scale <= 1) return; drag = { x: e.clientX - tx, y: e.clientY - ty }; img.setPointerCapture(e.pointerId); });
+  img.addEventListener('pointerdown', (e) => { if (scale <= 1 || (touch && e.pointerType !== 'mouse')) return; drag = { x: e.clientX - tx, y: e.clientY - ty }; img.setPointerCapture(e.pointerId); });
   img.addEventListener('pointermove', (e) => { if (!drag) return; tx = e.clientX - drag.x; ty = e.clientY - drag.y; apply(); });
   img.addEventListener('pointerup', () => { drag = null; });
   document.addEventListener('keydown', keys, true);

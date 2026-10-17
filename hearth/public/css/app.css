@@ -1726,8 +1726,6 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   .emoji-picker, .gif-picker { width: calc(100vw - 16px); }
   .safety { grid-template-columns: repeat(3, 1fr); font-size: 15px; }
   #toasts { top: 62px; left: 12px; right: 12px; align-items: center; }
-  .viewer-stage { padding: 0 8px 20px; }
-  .viewer-nav { display: none; }
   .modal-search { margin-top: 0; }
 }
 
@@ -2274,6 +2272,52 @@ img.cemoji.big { width: 40px; height: 40px; }
 .att-kind::before { content: '\00b7'; margin-right: 8px; }
 .viewer-stage.loading-full::after { content: 'Loading full size\2026'; position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); padding: 4px 10px; border-radius: 8px; background: rgb(0 0 0 / .55); color: #fff; font-size: 12px; }
 .viewer-stage { position: relative; }
+
+/* ------------------------------------------------------------------ phones and touch screens: pictures and the viewer
+   The same two media queries as device.js. PHONE LAYOUT: (max-width: 760px), (pointer: coarse) and (max-height: 500px),
+   a narrow window or a phone held sideways. TOUCH UI: (pointer: coarse), phones and tablets. A desktop with a mouse
+   matches neither and looks as it always has. */
+/* PHONE LAYOUT or TOUCH UI: a picture in the chat takes the message's whole width when its shape allows, and a tall
+   one up to about 70% of the screen's height instead of 340px, so a phone screenshot can be read. The box keeps the
+   picture's shape (app.js attachmentEl gives it --att-w and --att-h), so nothing jumps while it loads, and the picture
+   is never cropped: should the box ever disagree with it, it's letterboxed. In the viewer it always fits the screen. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px), (pointer: coarse) {
+  .att-media { max-width: 100%; }
+  .att-media.sized { width: min(100%, calc(var(--att-w) * 1px), calc(560px * var(--att-w) / var(--att-h))) !important; }
+  @supports (height: 1svh) {
+    .att-media.sized { width: min(100%, calc(var(--att-w) * 1px), calc(70svh * var(--att-w) / var(--att-h))) !important; }
+  }
+  .att-media.sized.locked { min-width: 0; min-height: 0; }
+  .att-media.sized .att-img { object-fit: contain; }
+  .att-img { max-height: 560px; max-height: 70svh; }
+  /* The viewer's picture fits the screen however tall or wide it is (an auto-sized grid row would grow to it). */
+  .viewer-stage { grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
+}
+/* TOUCH UI: the viewer takes the fingers itself (viewer-touch.js: pinch, double tap, swipes), so the page never zooms
+   or scrolls underneath. The picture follows a finger directly and glides when it's let go. */
+@media (pointer: coarse) {
+  .viewer { touch-action: none; }
+  .viewer-stage.touching .viewer-img { transition: none; }
+  .viewer-stage.easing .viewer-img { transition: transform .2s var(--ease); }
+}
+/* PHONE LAYOUT: the viewer goes edge to edge on an opaque backdrop, clear of the notch and the home bar. Its bar keeps
+   the name, the count on one line, Download, More (app.js openViewer) and Close, as 44px buttons; swipes stand in for
+   the arrow buttons. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  .viewer { background: rgb(8 7 11); }
+  .viewer-bar { gap: 2px; padding: max(4px, env(safe-area-inset-top)) max(4px, env(safe-area-inset-right)) 4px max(14px, env(safe-area-inset-left)); }
+  .viewer-bar .icon-btn { width: 44px; height: 44px; border-radius: 12px; }
+  .viewer-bar .icon-btn .ic { width: 22px; height: 22px; }
+  .viewer-name { display: flex; min-width: 0; max-width: none; }
+  .viewer-name-base { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .viewer-name-ext { flex: none; }
+  .viewer-count { flex: none; white-space: nowrap; margin-left: 8px; }
+  .viewer-stage { padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  .viewer-stage.loading-full::after { bottom: calc(14px + env(safe-area-inset-bottom)); }
+  .viewer-img { border-radius: 0; }
+  .viewer-nav { display: none; }
+  #layer > .viewer-menu { z-index: 85; }
+}
 .adm-srv-ic { width: 30px; height: 30px; border-radius: 9px; object-fit: cover; background: var(--active); display: grid; place-items: center; font-size: 11px; font-weight: 700; flex: none; }
 .ip-chip.static { cursor: default; }
 .row.gap.tight { gap: 4px; align-items: center; }
