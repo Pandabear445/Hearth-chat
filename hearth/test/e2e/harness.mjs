@@ -147,11 +147,6 @@ export async function startServer() {
 }
 
 // ------------------------------------------------------------------ people (one browser context each)
-const PHONE = {
-  viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
-  userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
-};
-
 // Everything a page logs is kept: console messages, uncaught errors and failed requests. On a failure they're
 // written next to a screenshot; uncaught errors and 5xx answers also fail the run at the end.
 export class Person {
@@ -174,10 +169,9 @@ export class Person {
     page.on('requestfailed', (r) => { if (r.url().startsWith(this.base)) this.log.push(`${stamp()} [requestfailed] ${r.method()} ${r.url().replace(this.base, '')} ${r.failure() ? r.failure().errorText : ''}`); });
   }
 
-  // phone: a phone held upright (Android Chrome: 390×844, a sharp touch screen) instead of a desktop with a mouse.
-  static async open(browser, base, name, { phone = false } = {}) {
-    const screen = phone ? PHONE : { viewport: { width: 1400, height: 900 } };
-    const context = await browser.newContext({ ...screen, acceptDownloads: true, permissions: ['microphone', 'camera'] });
+  // device: other browser settings for this person (PHONE below), instead of a desktop window.
+  static async open(browser, base, name, device = {}) {
+    const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, acceptDownloads: true, permissions: ['microphone', 'camera'], ...device });
     // Nothing leaves this machine: outside requests are refused (fast and the same every run). A flow that needs an
     // outside site answers for it with its own page.route, which takes precedence over this one.
     await context.route((url) => !url.href.startsWith(base), (route) => route.abort());
@@ -194,8 +188,6 @@ export class Person {
     await page.goto(base);
     return new Person(name, context, page, base);
   }
-
-  static openPhone(browser, base, name) { return Person.open(browser, base, name, { phone: true }); }
 
   async close() { await this.context.close().catch(() => {}); }
 
@@ -330,6 +322,12 @@ export class Person {
     fs.writeFileSync(path.join(dir, `${safe}.console.log`), this.log.join('\n') + '\n');
   }
 }
+
+// A phone: Android Chrome's screen, touch and user agent (Person.open's device).
+export const PHONE = {
+  viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
+  userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+};
 
 // A regular expression matching exactly this text (Playwright's hasText is a substring match otherwise).
 export function exact(text) { return new RegExp(`^\\s*${String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`); }

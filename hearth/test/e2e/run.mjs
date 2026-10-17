@@ -45,8 +45,8 @@ async function main() {
     // Everyone ever opened, also once closed or opened again under the same name (t.people keeps the latest): the
     // checks after the flows, the failure report and the kept logs cover each of them.
     opened: [],
-    async open(name, opts) {
-      const p = await Person.open(browser, server.base, name, opts);
+    async open(name, device) {
+      const p = await Person.open(browser, server.base, name, device);
       const again = t.opened.filter((q) => q.name === name).length;
       p.tag = again ? `${name}-${again + 1}` : name;
       t.opened.push(p);

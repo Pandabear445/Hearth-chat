@@ -2,7 +2,7 @@
 // Everything goes through the real UI; the only shortcuts are reading state the UI already shows.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { exact, makePng, totp, newPassword, Person } from './harness.mjs';
+import { exact, makePng, totp, newPassword, Person, PHONE } from './harness.mjs';
 
 export function check(ok, message) { if (!ok) throw new Error(message); }
 const SERVER = 'E2E Hall';
@@ -379,7 +379,7 @@ async function phonePictures(t) {
   }
 
   // The same messages on bob's phone.
-  const phone = await t.open('bob-phone', { phone: true });
+  const phone = await t.open('bob-phone', PHONE);
   await phone.login('bob', t.pw.bob);
   const nav = phone.$('#main-head .nav-toggle');
   if (await nav.isVisible()) await nav.tap();
@@ -3512,6 +3512,132 @@ async function discordHabits(t) {
   await unread.waitFor({ state: 'detached' });
 }
 
+// ------------------------------------------------------------------ phones: held sideways, the drawer, Back
+// A phone held sideways gets the phone layout too: the chat, with the servers and channels in a drawer. A swipe from
+// the left edge opens the drawer. Back (the gesture, or the Android app's back button: both go back in the page's
+// history) closes the drawer, the side panel, a picture or a dialog instead of leaving Hearth, and closing them with
+// their own buttons leaves nothing behind in the history. A desktop adds nothing to it.
+async function phoneNavigation(t) {
+  const { bob } = t.people;
+  // Bob on his phone (one more new account would go over the sign-ups allowed from one network in an hour).
+  const phone = await t.open('bob-phone', PHONE);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  const app = page.url();
+  const drawerOpen = () => page.evaluate(() => document.body.classList.contains('nav-open'));
+  const drawerShut = () => page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  const hist = () => page.evaluate(() => ({ length: history.length, step: !!(history.state && history.state.hearthBack) }));
+  const stillHere = async (what) => {
+    check(page.url() === app && (await phone.$('#app:not([hidden])').count()) === 1, `Back ${what} should stay in Hearth (now at ${page.url()}).`);
+  };
+  const openNav = async () => { await page.locator('#main-head button[aria-label="Open navigation"]').tap(); await page.waitForTimeout(250); };
+  const showMembers = async () => { await page.locator('#main-head button[aria-label="Show members"]').tap(); await phone.$('#members .member-list').waitFor(); };
+  const membersGone = () => phone.$('#members .member-list').waitFor({ state: 'detached' });
+  // One finger from one point to another, as a phone sends it; then the drawer settles.
+  const cdp = await phone.context.newCDPSession(page);
+  const swipe = async (x0, y0, x1, y1) => {
+    const at = (x, y) => [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }];
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(x0, y0) });
+    for (let i = 1; i <= 10; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(x0 + ((x1 - x0) * i) / 10, y0 + ((y1 - y0) * i) / 10) });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await page.waitForTimeout(300);
+  };
+
+  // A server of its own, with a picture in #general.
+  await openNav();
+  await phone.createServer('Pocket');
+  await page.waitForSelector('#composer-input[placeholder="Message #general"]');
+  await phone.$('.cw-main input[type=file]').setInputFiles({ name: 'sunset.png', mimeType: 'image/png', buffer: makePng(320, 200) });
+  await phone.send('A picture from my phone');
+  const picture = phone.message('A picture from my phone').first().locator('.att-img');
+  await page.waitForFunction(() => { const i = document.querySelector('#messages .att-img'); return i && i.complete && i.naturalWidth > 0; });
+
+  // Sideways: still one column, with no server rail beside the chat and the drawer's button in the header.
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.waitForFunction(() => document.querySelector('#rail').getBoundingClientRect().right <= 0 && document.querySelector('#main').getBoundingClientRect().width >= 800);
+  check(await phone.$('#main-head .nav-toggle').isVisible(), 'A phone held sideways should have the button that opens the drawer.');
+  check(!(await hist()).step, 'With nothing open, Hearth should have added nothing to the history.');
+
+  // A swipe from the left edge opens the drawer; Back closes it, and stays in Hearth.
+  await swipe(10, 200, 330, 205);
+  check(await drawerOpen(), 'A swipe from the left edge should open the drawer.');
+  check((await hist()).step, 'The open drawer should have a step in the history for Back to take.');
+  await page.goBack();
+  await drawerShut();
+  await stillHere('from the drawer');
+  // Back closes the members panel, then the picture viewer.
+  await showMembers();
+  await page.goBack();
+  await membersGone();
+  await stillHere('from the members panel');
+  await picture.tap();
+  await phone.$('.viewer').waitFor();
+  await page.goBack();
+  await phone.$('.viewer').waitFor({ state: 'detached' });
+  await stillHere('from a picture');
+  // And a menu.
+  await page.locator('#main-head button[aria-label="More"]').tap();
+  await phone.$('#layer > .popover').waitFor();
+  await page.goBack();
+  await phone.$('#layer > .popover').waitFor({ state: 'detached' });
+  await stillHere('from a menu');
+  // Settings opened from the drawer: Back closes settings, then the drawer under it.
+  await openNav();
+  await page.locator('#user-panel button[aria-label="Settings"]').tap();
+  await phone.$('.settings-modal').waitFor();
+  await page.goBack();
+  await phone.$('.settings-modal').waitFor({ state: 'detached' });
+  check(await drawerOpen(), 'Back from settings should leave the drawer it was opened from.');
+  await page.goBack();
+  await drawerShut();
+  await stillHere('from settings and the drawer');
+
+  // Swipes put them away too: left on the open drawer, and right from the left edge on the members panel. Esc closes
+  // the panel as well (it covers the chat on a phone).
+  await openNav();
+  await swipe(250, 200, 30, 195);
+  await drawerShut();
+  await showMembers();
+  await swipe(8, 200, 600, 205);
+  await membersGone();
+  await showMembers();
+  await page.keyboard.press('Escape');
+  await membersGone();
+  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+
+  // Closed with their own buttons (or a tap beside the drawer), nothing is left behind: the history doesn't grow, and
+  // the page isn't left on a step of Hearth's (the next Back would seem to do nothing).
+  const cycle = async () => {
+    await openNav();
+    await page.touchscreen.tap(820, 200); // beside the drawer
+    await drawerShut();
+    await showMembers();
+    await page.locator('#members button[aria-label="Close panel"]').tap();
+    await membersGone();
+    await picture.tap();
+    await phone.$('.viewer').waitFor();
+    await page.locator('.viewer button[aria-label^="Close"]').first().tap();
+    await phone.$('.viewer').waitFor({ state: 'detached' });
+    await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+  };
+  await cycle();
+  const before = await hist();
+  await cycle();
+  await cycle();
+  const after = await hist();
+  check(after.length === before.length && !after.step, `Closing with their own buttons should leave no steps behind (history ${before.length} → ${after.length}).`);
+  await page.setViewportSize(PHONE.viewport);
+
+  // A desktop adds nothing to the history when the side panel or settings open and close.
+  const desk =() => bob.page.evaluate(() => JSON.stringify({ length: history.length, state: history.state }));
+  const d0 = await desk();
+  for (let i = 0; i < 2; i++) await bob.$('#main-head button[aria-label="Show members"], #main-head button[aria-label="Hide members"]').first().click();
+  await bob.openSettings();
+  await bob.closeSettings();
+  const d1 = await desk();
+  check(d1 === d0, `A desktop should add nothing to the history (${d0} → ${d1}).`);
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -3559,4 +3685,5 @@ export const FLOWS = [
   ['alert channels: add a signed webhook, its secret shown once, Test reaches it, masked address; off and remove need the password; the page stays put', alertChannels],
   ['discord habits: # picks a channel and the link opens it (unknown ones stay plain); headings, lists and >>> quotes; a spoiler picture with a description; Ctrl+/ and Shift+Esc', discordHabits],
   ['staff deletion: the owner deletes an account for someone who can’t sign in, from Admin → Users', staffDelete],
+  ['phones: held sideways it’s still the phone layout; a swipe from the left edge opens the drawer; Back closes the drawer, members, a picture, a menu and settings without leaving; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
 ];

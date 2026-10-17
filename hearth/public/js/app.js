@@ -46,6 +46,7 @@ import { bindNew, bindEdit, describe as describeBinding, createVersions, createC
 import { trackViewport } from './viewport.js';
 import { isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
 import { touchGestures } from './viewer-touch.js';
+import { backStack, edgeSwipes } from './phone-nav.js';
 import { initAway, CLEAR_AFTER, clearAfterMs, clearsLabel, onlyPresenceChanged } from './presence.js';
 import { createWordFilter, filterLabel, previewLabel } from './wordfilter-app.js';
 import { inviteMessage, movingMessage, joinNote, signUpMode, canShare, nudgeWanted, nudgeDismissed, dismissNudge } from './invite-share.js';
@@ -130,8 +131,9 @@ function later(fn) {
   drawFrame = document.hidden ? setTimeout(run, 250) : requestAnimationFrame(run);
 }
 const mine = (k) => `hearth.${k}.${S.me.id}`;
-// Below this width the member list floats over the chat, so it only opens when asked (not on every channel).
-const wideEnoughForPanel = () => matchMedia('(min-width: 1241px)').matches;
+// Below this width the member list floats over the chat, so it only opens when asked (not on every channel). In the
+// phone layout it covers the chat, whatever the width (a phone held sideways).
+const wideEnoughForPanel = () => matchMedia('(min-width: 1241px)').matches && !isPhoneLayout();
 const P = {
   get favorites() { return LS.get(mine('favs'), []); },
   set favorites(v) { LS.set(mine('favs'), v); },
@@ -981,6 +983,7 @@ function startApp() {
   document.addEventListener('keydown', globalKeys);
   document.querySelector('.nav-scrim').addEventListener('click', () => document.body.classList.remove('nav-open'));
   $('#sidebar').append(resizeHandle('sidebar'));
+  phoneNav();
 }
 
 // Relay logins run out 12 to 18 hours after they're handed out, and an app can stay open for days without
@@ -2028,6 +2031,8 @@ function globalKeys(e) {
   if (e.key === 'Escape' && !document.querySelector('.modal-backdrop, .popover')) {
     // Phones: the navigation drawer closes first, and focus goes back to the button that opened it.
     if (document.body.classList.contains('nav-open')) { document.body.classList.remove('nav-open'); const t = $('.nav-toggle'); if (t) t.focus(); }
+    // Phones: the side panel covers the conversation, so it closes next (beside the chat on wider screens, it stays).
+    else if (isPhoneLayout() && panelMode()) closePanel();
     // Picking messages to delete ends first (wherever focus is: often the bar's own buttons), and only that.
     else if (S.select) { e.preventDefault(); endSelect({ refocus: true }); }
     else if (S.editing) { S.editing = null; renderMessages(false); }
@@ -2832,6 +2837,53 @@ function renderMain() {
   }
 }
 const navToggle = () => ibtn('menu', 'Open navigation', () => document.body.classList.toggle('nav-open'), { cls: 'nav-toggle' });
+const navOpen = () => document.body.classList.contains('nav-open');
+function closeNav() {
+  const inside = !!document.activeElement && !!document.activeElement.closest('#rail, #sidebar');
+  document.body.classList.remove('nav-open');
+  // Focus doesn't stay behind in the hidden drawer: it goes back to the button that opens it.
+  const t = inside && $('.nav-toggle');
+  if (t) t.focus({ preventScroll: true });
+}
+// What the side panel's close button does (a thread opened from the Threads list goes back to the list, as with Esc).
+function closePanel() {
+  const panel = $('#members');
+  const hadFocus = !!panel && panel.contains(document.activeElement);
+  const mode = panelMode();
+  if (mode === 'chat') toggleVoiceChat(false);
+  else if (mode === 'thread') closeThread();
+  else if (mode) togglePanel(S.panel);
+  if (hadFocus && !panelMode()) $('#main').focus({ preventScroll: true });
+}
+// Phones (phone-nav.js): Back closes the picture, menu, dialog, side panel or drawer on top instead of leaving Hearth,
+// and a swipe from the screen's left edge opens the drawer (or closes the side panel, which covers the chat there).
+function phoneNav() {
+  const viewer = () => document.querySelector('.viewer:not(.closing)');
+  const popup = () => document.querySelector('#layer > .popover');
+  const dialog = () => [...document.querySelectorAll('#layer > .modal-backdrop:not(.closing)')].pop();
+  const back = backStack({
+    enabled: isPhoneLayout,
+    layers: [
+      { open: () => !!viewer(), close: () => viewer()._close() },
+      { open: () => !!popup(), close: closePopover },
+      { open: () => !!dialog(), close: () => dialog()._close() },
+      { open: () => !!panelMode(), close: closePanel },
+      { open: navOpen, close: closeNav },
+    ],
+  });
+  // Whatever opens or closes them: the drawer and panel are classes on the body; pictures, menus and dialogs are added
+  // and removed.
+  const watch = new MutationObserver(() => back.sync());
+  watch.observe(document.body, { attributes: true, attributeFilter: ['class'], childList: true });
+  watch.observe($('#layer'), { childList: true });
+  const swipes = edgeSwipes({
+    enabled: () => isPhoneLayout() && isTouchUI(),
+    blocked: () => !!(viewer() || popup() || dialog()),
+    drawer: { isOpen: navOpen, parts: () => [$('#rail'), $('#sidebar')], scrim: () => $('.nav-scrim'), setOpen: (on) => (on ? document.body.classList.add('nav-open') : closeNav()) },
+    panel: { isOpen: () => !!panelMode(), el: () => $('#members'), close: closePanel },
+  });
+  onDeviceChange(() => { swipes.update(); back.sync(); });
+}
 function headTools(...items) { return h('div', { class: 'head-tools', role: 'toolbar', 'aria-label': 'Conversation tools' }, items.filter(Boolean)); }
 // The channel's Threads panel. Its badge counts pings in the channel's threads; a dot means new replies in a thread
 // this app has seen (the panel itself has the full list).
@@ -3267,6 +3319,13 @@ function chatView() {
   scroller.addEventListener('scroll', onMessagesScroll);
   scroller.addEventListener('click', onMessageAreaClick);
   messageListKeys(scroller);
+  // Phones: the keyboard coming up (or the phone turning) makes the list shorter. If you were at the newest messages,
+  // they stay in view instead of sliding down behind the message box.
+  if (typeof ResizeObserver === 'function') {
+    let newest = true;
+    scroller.addEventListener('scroll', () => { newest = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8; }, { passive: true });
+    new ResizeObserver(() => { if (newest && isPhoneLayout()) scroller.scrollTop = scroller.scrollHeight; }).observe(scroller);
+  }
   const jump = h('button', { class: 'jump-latest', id: 'jump-latest', hidden: true, onclick: () => jumpToLatest() }, icon('arrowDown'), 'Jump to latest');
   const unreadBar = h('div', { class: 'unread-bar', id: 'unread-bar', role: 'status', hidden: true });
   const selectBar = h('div', { class: 'select-bar', id: 'select-bar', role: 'region', 'aria-label': 'Selected messages', hidden: true });

@@ -1638,3 +1638,49 @@ name. Shift+Esc marks the server you're in as read (not in a group chat, nor whi
 **Tests**: `test/markdown-client.test.js`, `test/attachments-client.test.js`, `test/shortcuts-client.test.js` (every
 key `globalKeys` handles is in the sheet), the e2e flow "discord habits", and the shortcuts sheet and the attachment
 dialog in `npm run test:a11y`.
+
+## Phones: held sideways, swipes and Back
+
+Phone-only: a desktop with a mouse looks and behaves as before. Two definitions decide, kept in one place
+(`public/js/device.js`, and the same media queries in `public/css/app.css`):
+- **Phone layout**: `(max-width: 760px), (pointer: coarse) and (max-height: 500px)`. A narrow window, as before, and
+  now also a phone held sideways (about 844×390), which used to get the desktop's server rail, channel list, chat and
+  member list side by side, leaving the chat a sliver. Sideways it gets the one-column layout with the drawer, a
+  slimmer header (44 px), and no header while the keyboard is up (the page is then only about 170 px tall). Rules for
+  wider screens use the opposite query.
+- **Touch UI**: `(pointer: coarse)`, phones and tablets: the swipes below, and a sideways swipe in the chat no longer
+  takes the browser back out of Hearth (`overscroll-behavior-x`).
+
+**Back closes what's open** (`backStack` in `public/js/phone-nav.js`, wired up by `phoneNav` in app.js). In the phone
+layout the drawer, the side panel (members, threads, pins, a voice channel's chat), a picture, a menu and every
+dialog (settings too) cover the screen. While one is open, the page's history has one extra step at the same
+address; Back (the gesture, or the Android app's back button, which calls `WebView.goBack()`) lands on the page's own
+entry, and the one on top closes, as with its own close button (a thread opened from the Threads list goes back to
+the list; a dialog that can't be dismissed stays). While more stay open, the step comes back. Closing one with its own
+button, Esc or a tap beside it takes the step back out (`history.back()`), so the history never grows and the next
+Back after that leaves Hearth as before. Nothing is added on a desktop, before the page has been tapped (browsers
+skip such steps), or while a `#c/…` link waits for app.js to follow it (it rewrites that entry's address). A link
+followed while something is open isn't taken for Back. A step left over from before a reload is turned into an
+ordinary entry. Esc on a phone also closes the side panel (after the drawer); on a desktop it doesn't, as before.
+
+**Swipes** (`edgeSwipes`). Only in the phone layout on a touch screen, and only for swipes that start where they
+mean something: from the left 28 px of the screen, the drawer slides out under the finger; on the open drawer (or the
+dimmed chat beside it), a swipe left puts it away; with the side panel open, the swipe from the left edge closes the
+panel instead, like Back. Let go past halfway, or flick, and it finishes; otherwise it springs back. Swipes that go up
+and down, start a long press (selecting text), or begin anywhere else are left to the page. Every swipe has a button
+doing the same. Where Android's own back gesture takes the screen's edge, a touch that starts there never reaches the
+page, and Back closes things the same way.
+
+**Room for the text**: the phone layout's messages have a 40 px avatar column (32 px avatars) instead of 56 px, so a
+line of text gets about 22 px more; follow-up messages, replies and "Uploading…" notes line up with it. When the list
+gets shorter (the keyboard coming up, the phone turning) while you're at the newest messages, they stay in view.
+
+**Notches and the home bar**: with `viewport-fit=cover`, the header, drawer, side panel, settings, full-screen search,
+toasts and the message box keep `env(safe-area-inset-*)` away from the screen's edges (not the bottom one while the
+keyboard is up).
+
+**Tests**: `test/phone-nav-client.test.js` (the history and swipe logic, against stand-ins for the browser), and the
+e2e flow "phones" on an Android-sized touch phone: sideways it's the phone layout, an edge swipe opens the drawer,
+Back closes the drawer, the members panel, a picture, a menu and settings (then the drawer under it) and stays in Hearth,
+swipes and Esc close them, closing by their own buttons leaves `history.length` unchanged, and on a desktop opening
+members and settings adds nothing to the history.

@@ -1285,7 +1285,7 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .search-foot .ic { width: 12px; height: 12px; }
 .search-foot kbd { font-size: 10.5px; padding: 0 5px; }
 /* phones: search takes the whole screen, with a close button instead of the Esc hint */
-@media (max-width: 760px) {
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   .modal-backdrop:has(.modal-search) { padding: 0; grid-template-columns: minmax(0, 1fr); }
   .modal.modal-search { max-width: none; min-width: 0; height: 100vh; height: 100dvh; max-height: none; margin: 0; border-radius: 0; border: 0; }
   .search-modal .modal-body { flex: 1; min-height: 0; }
@@ -1676,13 +1676,16 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
 .grad-colors { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .grad-preview { height: 90px; border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line-2); }
 /* ------------------------------------------------------------------ responsive */
+/* The phone layout (one column, servers and channels in a drawer) is for narrow windows and for phones held sideways:
+   (max-width: 760px), (pointer: coarse) and (max-height: 500px). js/device.js has the same query: change them together.
+   Rules for wider screens use its opposite: (min-width: 761px) with a fine pointer, no pointer, or more height. */
 /* Laptops: the right panel floats over the conversation instead of squeezing it. */
 @media (max-width: 1240px) {
   #members { position: absolute; right: var(--gap); top: var(--gap); bottom: var(--gap); z-index: 20; box-shadow: var(--pop-shadow); background: rgb(var(--s1)); }
   [data-panel-side='left'] #members { right: auto; left: var(--gap); }
   body #app, body:not(.panel-open) #app { grid-template-columns: var(--cols-np, var(--rail-w) var(--side-w) minmax(0, 1fr)); }
 }
-@media (max-width: 760px) {
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   :root { --gap: 0px; --island-r: 0px; }
   body #app, body:not(.panel-open) #app { grid-template-columns: minmax(0, 1fr); padding: 0; }
   #rail, #sidebar, #main { order: 0; }
@@ -1727,6 +1730,52 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   .safety { grid-template-columns: repeat(3, 1fr); font-size: 15px; }
   #toasts { top: 62px; left: 12px; right: 12px; align-items: center; }
   .modal-search { margin-top: 0; }
+}
+/* Phones: notches, rounded corners and the home bar (index.html's viewport-fit=cover lets the page draw under them)
+   keep their distance from the header, drawer, composer and panels; the keyboard covers the home bar when it's up. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  body #app, body:not(.panel-open) #app { padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+  #main { padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  html.kb-open #main { padding-bottom: 0; }
+  #rail { width: calc(var(--rail-w) + env(safe-area-inset-left)); padding: calc(10px + env(safe-area-inset-top)) 0 calc(10px + env(safe-area-inset-bottom)) env(safe-area-inset-left); }
+  #sidebar {
+    left: calc(var(--rail-w) + env(safe-area-inset-left)); padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    width: min(var(--side-w), calc(100vw - var(--rail-w) - env(safe-area-inset-left) - 36px));
+    transform: translateX(calc(-100% - var(--rail-w) - env(safe-area-inset-left) - 16px));
+  }
+  #members { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  html.kb-open #members { padding-bottom: 0; }
+  .settings { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  .set-close { top: calc(8px + env(safe-area-inset-top)); right: calc(8px + env(safe-area-inset-right)); }
+  .modal.modal-search { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  #toasts { top: calc(62px + env(safe-area-inset-top)); }
+  /* The drawer or side panel follows the finger while it's swiped (js/phone-nav.js), with the chat dimmed behind the drawer. */
+  body.nav-swiping #rail, body.nav-swiping #sidebar, body.panel-swiping #members { transition: none; }
+  body.nav-swiping .nav-scrim { display: block; position: fixed; inset: 0; z-index: 25; background: var(--scrim); }
+  /* Messages: a narrower avatar column, so the text gets the width (follow-up messages line up with it). */
+  .msg { grid-template-columns: 40px minmax(0, 1fr); padding-left: 6px; }
+  .msg-av { height: 32px; }
+  .msg-av .av { --size: 32px !important; }
+  .msg-hover-time { font-size: 9.5px; }
+  .msg-reply { padding-left: 48px; }
+  .reply-spine { left: 23px; width: 21px; }
+  .sending-note { padding-left: 50px; }
+}
+/* A phone held sideways: a slimmer header leaves more of the short screen to the chat, and none while the keyboard is
+   up (the header comes back with the keyboard gone). Android makes the page shorter for the keyboard; iOS covers it
+   (html.kb-open, js/viewport.js). */
+@media (pointer: coarse) and (max-height: 500px) {
+  :root { --head-h: 44px; }
+  html.kb-open #main-head, html.kb-open #members > .panel-head { display: none; }
+  body .chat > .call-stage { height: 130px; } /* a call going on above the chat (240px upright) */
+}
+@media (pointer: coarse) and (max-height: 260px) {
+  #main-head, #members > .panel-head { display: none; }
+}
+/* Touch screens: a sideways swipe in the chat doesn't take the browser back out of Hearth (Back still works, and
+   closes what's open first: js/phone-nav.js). */
+@media (pointer: coarse) {
+  html { overscroll-behavior-x: none; }
 }
 
 /* ------------------------------------------------------------------ reduced motion */
@@ -1803,10 +1852,10 @@ img.cropped { width: 100%; height: 100%; object-fit: cover; transform: translate
 .media-thumb.mask-square { border-radius: 12%; }
 .media-thumb.mask-hexagon { border-radius: 0; clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0 50%); }
 button.media-thumb:hover { outline: 2px solid var(--accent); outline-offset: 2px; }
-@media (max-width: 760px) { .crop-stage.crop-avatar { width: 240px !important; height: 240px !important; } .crop-stage.crop-banner { width: 300px !important; height: 106px !important; } }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) { .crop-stage.crop-avatar { width: 240px !important; height: 240px !important; } .crop-stage.crop-banner { width: 300px !important; height: 106px !important; } }
 
 /* ------------------------------------------------------------------ custom layouts (wider than phones) */
-@media (min-width: 761px) {
+@media (min-width: 761px) and (pointer: fine), (min-width: 761px) and (pointer: none), (min-width: 761px) and (min-height: 501px) {
   [data-rail='top'] #app { grid-template-rows: auto minmax(0, 1fr); padding-top: 0; }
   [data-rail='top'] #rail { grid-column: 1 / -1; grid-row: 1; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 6px 2px; }
   [data-rail='top'] .rail-item { width: auto; }
@@ -1980,7 +2029,7 @@ img.cemoji.big { width: 40px; height: 40px; }
 .tri-btn.on { background: var(--active); color: var(--text); }
 .tri-btn.deny.on { background: rgb(239 84 102 / .9); color: #fff; }
 .tri-btn.allow.on { background: rgb(63 207 131 / .9); color: #0b1f14; }
-@media (max-width: 760px) { .roles-layout, .ov-layout { grid-template-columns: 1fr; } .role-list { position: static; } }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) { .roles-layout, .ov-layout { grid-template-columns: 1fr; } .role-list { position: static; } }
 
 /* ------------------------------------------------------------------ GIFs */
 .gif-picker { width: 420px; max-width: calc(100vw - 16px); }
@@ -2208,7 +2257,7 @@ img.cemoji.big { width: 40px; height: 40px; }
 .cam-row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
 .cam-row .stack { flex: 1; min-width: 200px; }
 .cam-preview { width: 240px; aspect-ratio: 16 / 9; border-radius: 12px; background: rgb(var(--field)); object-fit: cover; transform: scaleX(-1); border: 1px solid var(--line); }
-@media (max-width: 760px) {
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   .cs-spot { flex-direction: column; } .cs-strip { width: auto; flex-direction: row; overflow-x: auto; } .cs-strip .cs-tile { width: 140px; }
   .chat > .call-stage { height: 240px; margin: 6px 6px 0; }
   .ring-card { right: 12px; bottom: 12px; }
@@ -2488,7 +2537,7 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 .wt-dock.mini .wt { gap: 0; }
 .wt-dock.mini .wt-stage { border-radius: 0; min-height: 0; max-height: none; }
 .wt-dock.mini .wt-bar, .wt-dock.mini .wt-queue { display: none; }
-@media (max-width: 760px) { .wt-dock.mini { width: min(62vw, 280px); right: 10px; bottom: 84px; } }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) { .wt-dock.mini { width: min(62vw, 280px); right: 10px; bottom: 84px; } }
 .wt { display: flex; flex-direction: column; gap: 8px; }
 .wt-stage { position: relative; width: 100%; aspect-ratio: 16 / 9; max-height: min(62vh, calc(100vh - 380px)); min-height: 200px; background: #000; border-radius: 12px; overflow: hidden; }
 .wt-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }

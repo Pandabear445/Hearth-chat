@@ -21,8 +21,10 @@ What the app adds on top of the web page (in `native/MainActivity.java`):
   links and billing pages, and Ko-fi) don't open at all, wherever the link comes from.
 * **Nothing copied off the phone:** Android's backup and phone-to-phone transfer are off for the app, so your
   sign-in and unlocked keys stay on the phone. On a new phone you sign in again.
-* **Back button** goes back; on the first screen it sends the app to the background (so messages keep
-  arriving) instead of closing it.
+* **Back button** first closes whatever is open (a picture, a menu or dialog, the members panel, the channel
+  drawer), then goes back; on the first screen it sends the app to the background (so messages keep arriving)
+  instead of closing it. The page adds a history step while something is open (`public/js/phone-nav.js`), so the
+  app's usual `WebView.goBack()` does this with no change on the Android side.
 * **Switch server:** Settings → Apps & devices → *Switch server*.
 * **Status bar and keyboard:** the page sits between Android's status bar and navigation bar and above the
   keyboard on every Android version (Android 15+ would otherwise draw it underneath them).

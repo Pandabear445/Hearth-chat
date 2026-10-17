@@ -1,6 +1,7 @@
 // What kind of screen the app is on, for the few things phones and tablets do differently. The same two media
-// queries are in app.css, so the styles and the code always agree:
-//  - phone layout: a narrow window, or a short touch screen (a phone held sideways) — one column, drawers;
+// queries are in app.css, so the styles and the code always agree (change them together):
+//  - phone layout: a narrow window, or a short touch screen (a phone held sideways) — one column, with the servers
+//    and channels in a drawer;
 //  - touch UI: a finger is the main pointer (phones and tablets) — bigger tap targets, long-press and gestures.
 // A desktop with a mouse matches neither, and looks and works as it always has.
 export const PHONE_LAYOUT = '(max-width: 760px), (pointer: coarse) and (max-height: 500px)';
