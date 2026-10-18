@@ -3,6 +3,10 @@
 // the Android app leaves them out, as it offers no way to pay (noPayments in android.js).
 const pay = (text) => ({ text, pay: true });
 export const CHANGES = [
+  { version: '1.30.1', items: [
+    'The “new version of Hearth is ready” bar: Reload works again. It had done nothing when clicked.',
+    'Pictures on computers are the usual size again on touch screens (tablets and touch-screen laptops) and in narrow windows; only phones get the big phone-sized pictures. On a short screen, such as a small laptop’s, a picture takes at most 40% of the window’s height.',
+  ] },
   { version: '1.30.0', items: [
     'Pictures on phones are as big as the message allows (a tall screenshot up to most of the screen), never cropped, and sharp: the full picture replaces the small preview once it’s on screen.',
     'The picture viewer on touch screens: pinch to zoom, double-tap to zoom in where you tap, swipe left or right for the next picture and down to close. On a phone it fills the screen, with bigger buttons.',
