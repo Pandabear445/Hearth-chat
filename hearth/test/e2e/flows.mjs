@@ -487,6 +487,16 @@ async function phonePictures(t) {
   await bob.message(Object.keys(sent)[0]).first().locator('.att-img').click();
   await bob.$('.viewer').waitFor();
   check(await bob.page.$eval('.viewer-name', (el) => !el.childElementCount && /\.png$/.test(el.textContent)), 'On a desktop the viewer should name the picture in plain text, as before.');
+  // The whole picture fits the screen, as tall as there's room for: a tall one was once drawn at the window's
+  // width and cut off below.
+  await bob.page.waitForFunction(() => { const i = document.querySelector('.viewer-img'); return i && i.complete && i.naturalWidth === 1170 && !document.querySelector('.viewer-stage.loading-full') && !i.getAnimations().length; });
+  const fitted = await bob.page.evaluate(() => {
+    const r = document.querySelector('.viewer-img').getBoundingClientRect();
+    const stage = document.querySelector('.viewer-stage'); const q = stage.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, w: r.width, h: r.height, stageTop: q.top, stageBottom: q.bottom, room: q.height - parseFloat(getComputedStyle(stage).paddingBottom) };
+  });
+  check(fitted.top >= fitted.stageTop - 0.5 && fitted.bottom <= fitted.stageBottom + 0.5 && Math.abs(fitted.h - fitted.room) < 1.5 && Math.abs(fitted.w / fitted.h - 1170 / 2532) < 0.01,
+    `On a desktop the viewer should show the whole screenshot, as tall as it has room for (got ${JSON.stringify(fitted)}).`);
   await bob.page.keyboard.press('Escape');
   await bob.$('.viewer').waitFor({ state: 'detached' });
   // A short window (a small laptop's screen) keeps a picture to 40% of its height, in its shape; a narrow one (half
@@ -3922,7 +3932,7 @@ export const FLOWS = [
   ['direct messages: both ways, block and unblock, friends', directMessages],
   ['disappearing messages: turn on in a DM, a picture vanishes on both screens with its file and inbox entry, turn off, day dividers, asked before sending under a weaker timer; a channel message goes by the apps’ own timer', disappearing],
   ['attachments: image preview, byte-exact download, storage', attachments],
-  ['pictures on a phone: as big as the message allows, never cropped, sharp; the viewer zooms with a double tap and a pinch, swipes to the next and down to close; the desktop is as before, a touch laptop or tablet and a narrow window too, a short window keeps them to 40% of its height', phonePictures],
+  ['pictures on a phone: as big as the message allows, never cropped, sharp; the viewer zooms with a double tap and a pinch, swipes to the next and down to close; on a desktop the viewer fits the whole picture and the chat is as before, a touch laptop or tablet and a narrow window too, a short window keeps them to 40% of its height', phonePictures],
   ['pictures: avatar, custom emoji, server icon, GIF library', pictures],
   ['search: Ctrl+K words, from:, jump to the message', search],
   ['settings: display name, username, signed-in devices', settings],

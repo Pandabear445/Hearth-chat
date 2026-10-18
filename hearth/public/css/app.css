@@ -1308,7 +1308,9 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .viewer-bar .icon-btn:hover { background: rgb(255 255 255 / .1); color: #fff; }
 .viewer-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
 .viewer-count { font-size: 13px; color: #a39bb4; margin-left: 10px; }
-.viewer-stage { flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; padding: 0 64px 32px; }
+/* The picture fits the screen however tall or wide it is: the grid's one cell is the stage's size (an auto-sized row
+   grew to the picture, so a tall photo was drawn at the window's width and cut off below). */
+.viewer-stage { flex: 1; min-height: 0; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; overflow: hidden; padding: 0 64px 32px; }
 .viewer-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; transition: transform .12s ease; animation: viewer-in .2s var(--ease); cursor: zoom-in; user-select: none; }
 .viewer-stage.zoomed .viewer-img { cursor: grab; transition: none; }
 @keyframes viewer-in { from { opacity: 0; transform: scale(.96); } }
@@ -2345,11 +2347,6 @@ img.cemoji.big { width: 40px; height: 40px; }
   }
   .att-media.sized .att-img { object-fit: contain; }
   .att-img { max-height: 560px; max-height: 70svh; }
-}
-/* PHONE LAYOUT or TOUCH UI: the viewer's picture fits the screen however tall or wide it is (an auto-sized grid row
-   would grow to it). */
-@media (max-width: 760px), (pointer: coarse) and (max-height: 500px), (pointer: coarse) {
-  .viewer-stage { grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
 }
 /* TOUCH UI: the viewer takes the fingers itself (viewer-touch.js: pinch, double tap, swipes), so the page never zooms
    or scrolls underneath. The picture follows a finger directly and glides when it's let go. */
