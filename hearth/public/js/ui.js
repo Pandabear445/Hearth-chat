@@ -1,8 +1,10 @@
-// Modals, popovers and menus.
+// Modals, popovers, menus and bottom sheets.
 import { h, icon } from './util.js';
+import { isTouchUI } from './device.js';
 
 const layer = () => document.getElementById('layer');
 let openPop = null;
+let openSheet = null;
 
 // Everything a keyboard user can reach inside `root`, in tab order.
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled):not([type=hidden]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
@@ -43,6 +45,7 @@ document.addEventListener('mousedown', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (openPop) { const pop = openPop; const inside = pop.contains(document.activeElement); closePopover(); if (!inside) restoreFocus(pop._anchor, pop._returnTo); e.stopPropagation(); return; }
+  if (openSheet) { openSheet._close(); e.stopPropagation(); return; }
   const modals = document.querySelectorAll('.modal-backdrop:not(.closing)');
   const top = modals[modals.length - 1];
   if (top && top._close) top._close();
@@ -148,6 +151,97 @@ export function contextMenu(e, items) {
   pt.remove();
   return pop;
 }
+
+// ---- bottom sheets (phones and tablets)
+// A panel that slides up from the bottom of the screen, for picking with a finger (a message's long-press actions).
+// It closes on a tap outside it, a swipe down, Esc and the back gesture, keeps Tab inside while it's open, and when
+// it closes with focus inside, focus goes to returnTo (or back to what had it before).
+export function sheet(content, { label = 'Actions', returnTo = null, onClose } = {}) {
+  closePopover();
+  const opener = document.activeElement;
+  if (openSheet) openSheet._close({ replaced: true });
+  let closed = false;
+  const box = h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': label, tabindex: '-1' },
+    h('div', { class: 'sheet-grip', 'aria-hidden': 'true' }), content);
+  const backdrop = h('div', { class: 'sheet-backdrop', onclick: (e) => { if (e.target === backdrop) close(); } }, box);
+  // replaced: another sheet takes this one's place (and its step in the history). back: that step is already gone.
+  function close({ replaced = false, back = false } = {}) {
+    if (closed) return;
+    closed = true;
+    if (openSheet === backdrop) openSheet = null;
+    const hadFocus = backdrop.contains(document.activeElement) || document.activeElement === document.body;
+    backdrop.classList.add('closing');
+    setTimeout(() => backdrop.remove(), 180);
+    if (!replaced && !back) dropSheetStep();
+    if (onClose) onClose({ replaced });
+    if (hadFocus && !replaced) restoreFocus(returnTo, opener);
+  }
+  backdrop._close = close;
+  box.addEventListener('keydown', (e) => trapTab(e, box));
+  swipeToClose(box, close);
+  layer().append(backdrop);
+  openSheet = backdrop;
+  addSheetStep();
+  // The sheet itself takes focus, so screen readers start at its name.
+  requestAnimationFrame(() => { if (!closed && !box.contains(document.activeElement)) box.focus({ preventScroll: true }); });
+  return { close: () => close(), box };
+}
+// Swiping a sheet down puts it away: it follows the finger and goes if pulled far or fast enough, else it springs
+// back. Only while its list is scrolled to the top, so a long list still scrolls.
+function swipeToClose(box, close) {
+  let g = null; // { y, dy, t, v, on }
+  box.addEventListener('touchstart', (e) => {
+    g = e.touches.length === 1 && box.scrollTop <= 0 ? { y: e.touches[0].clientY, dy: 0, t: e.timeStamp, v: 0, on: false } : null;
+  }, { passive: true });
+  box.addEventListener('touchmove', (e) => {
+    if (!g) return;
+    const dy = e.touches[0].clientY - g.y;
+    if (!g.on) {
+      // Upwards (or a move the page has already taken as a scroll) is the list's.
+      if (dy <= 0 || !e.cancelable) { g = null; return; }
+      g.on = true;
+      box.classList.add('dragging');
+    }
+    e.preventDefault();
+    const dt = e.timeStamp - g.t;
+    if (dt > 0) g.v = 0.6 * ((dy - g.dy) / dt) + 0.4 * g.v; // px per ms, smoothed
+    g.dy = dy; g.t = e.timeStamp;
+    box.style.transform = `translateY(${Math.max(0, dy)}px)`;
+  }, { passive: false });
+  const end = (e) => {
+    const was = g;
+    g = null;
+    if (!was || !was.on) return;
+    box.classList.remove('dragging');
+    // (The closing animation slides it on down from where the finger left it.)
+    if (e.type === 'touchend' && (was.dy > Math.min(120, box.offsetHeight / 3) || was.v > 0.5)) close();
+    else box.style.transform = '';
+  };
+  box.addEventListener('touchend', end);
+  box.addEventListener('touchcancel', end);
+}
+// Back closes the sheet on phones: while one is open, the page's history has one extra step of its own, at the same
+// address, and going back from it closes the sheet. Closing it any other way takes that step back out, so the history
+// never fills up with them and the next Back does what it always did. Nothing is added on a desktop.
+let sheetBack = false; // our own history.back() is on its way
+const onSheetStep = () => !!(history.state && history.state.hearthSheet);
+// A step left over from before a reload (going back from it would do nothing) becomes an ordinary one.
+if (onSheetStep()) { const st = { ...history.state }; delete st.hearthSheet; history.replaceState(Object.keys(st).length ? st : null, ''); }
+function addSheetStep() {
+  if (sheetBack || onSheetStep() || !isTouchUI()) return;
+  const st = history.state && typeof history.state === 'object' ? history.state : {};
+  history.pushState({ ...st, hearthSheet: true }, '');
+}
+function dropSheetStep() {
+  if (!onSheetStep()) return;
+  sheetBack = true;
+  history.back();
+}
+window.addEventListener('popstate', () => {
+  // Our own step going: if another sheet opened meanwhile, it gets one of its own.
+  if (sheetBack) { sheetBack = false; if (openSheet) addSheetStep(); return; }
+  if (openSheet && !onSheetStep()) openSheet._close({ back: true });
+});
 
 // Tooltips for anything with data-tip (icon buttons). Shown on hover and keyboard focus.
 let tipEl = null;

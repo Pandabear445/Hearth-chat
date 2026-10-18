@@ -14,7 +14,7 @@ import { prepareImage, makeQueue, whenVisible, whenOnScreen, previewThumb } from
 import { isUploadUrl, safeDownloadHref, ALT_MAX } from './attachments.js';
 import { outsideMode, outsideHost, imageDecision, openedLinks } from './outside.js';
 import { CHUNKED_ABOVE, uploadResumable, uploadSimple, download, makeUrlCache, mediaKind, typeLabel } from './files.js';
-import { EMOJI, EMOJI_NAMES, CATEGORY_ICONS, recentEmoji, pushRecentEmoji, searchEmoji } from './emoji.js';
+import { EMOJI, EMOJI_NAMES, CATEGORY_ICONS, QUICK_REACTIONS, recentEmoji, pushRecentEmoji, searchEmoji } from './emoji.js';
 import { Voice } from './voice.js';
 import { openCallDiagnostics } from './call-diagnostics.js';
 import { createSecure, mergeUser, callRefusedText, noSafetyNumbersText } from './secure.js';
@@ -27,7 +27,7 @@ import { watchConnection } from './conn.js';
 import { unseenChanges } from './whatsnew.js';
 import { initKeybinds, getKeybinds, comboLabel, reportCall, flashTaskbar, installUpdate, shortcutGroups, comboParts, keyName } from './keybinds.js';
 import { initActivity, activityLine, openActivityPicker, startDesktopDetection } from './activity.js';
-import { modal, popover, closePopover, menu, contextMenu, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
+import { modal, popover, closePopover, menu, contextMenu, sheet, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
 import { openSettings, applyAppearance, confirmedCall, displayNameDialog } from './settings.js';
 import { createFolders, dragDrop } from './folders.js';
 import { createUpdates } from './updates.js';
@@ -981,6 +981,9 @@ function startApp() {
   window.addEventListener('pagehide', () => { drafts.flush(); if (voice && voice.channelId) socket.emit('voice:leave', {}); });
   window.addEventListener('hashchange', () => openLinkFromHash());
   document.addEventListener('keydown', globalKeys);
+  initLongPress();
+  // A window narrowed past the phone layout (or a phone turned): the message boxes' + follows (createComposer).
+  onDeviceChange(() => Object.values(composers).forEach((c) => c && c.fitAttach()));
   document.querySelector('.nav-scrim').addEventListener('click', () => document.body.classList.remove('nav-open'));
   $('#sidebar').append(resizeHandle('sidebar'));
   phoneNav();
@@ -2028,7 +2031,7 @@ function globalKeys(e) {
       return;
     }
   }
-  if (e.key === 'Escape' && !document.querySelector('.modal-backdrop, .popover')) {
+  if (e.key === 'Escape' && !document.querySelector('.modal-backdrop, .popover, .sheet-backdrop')) {
     // Phones: the navigation drawer closes first, and focus goes back to the button that opened it.
     if (document.body.classList.contains('nav-open')) { document.body.classList.remove('nav-open'); const t = $('.nav-toggle'); if (t) t.focus(); }
     // Phones: the side panel covers the conversation, so it closes next (beside the chat on wider screens, it stays).
@@ -3833,8 +3836,13 @@ function messageEl(m, prev, ctx = 'main') {
   const el = h('div', {
     class: `msg${isGrouped ? ' grouped' : ''}${mentioned ? ' mentioned' : ''}${replying ? ' replying' : ''}${m.pinnedAt ? ' pinned' : ''}`,
     dataset: { mid: m.id, ctx, wf: filterState(m, prev) }, tabindex: '-1',
-    oncontextmenu: (e) => { if (!e.target.closest('a, .md-code, .md-pre') || e.shiftKey) contextMenu(e, messageMenuItems(m, ctx)); },
+    oncontextmenu: (e) => {
+      // On a touch screen this is a long press (Android reports one this way): the actions sheet instead.
+      if (isTouchUI() && e.pointerType !== 'mouse') { e.preventDefault(); longPressed(el, e.target); return; }
+      if (!e.target.closest('a, .md-code, .md-pre') || e.shiftKey) contextMenu(e, messageMenuItems(m, ctx));
+    },
   });
+  el._actions = (target) => messageSheet(m, ctx, el, target);
   if (S.blocked.has(m.authorId) && !el._reveal) {
     el.classList.add('blocked');
     el.append(h('div', { class: 'msg-gutter' }), h('div', { class: 'msg-body' }, h('div', { class: 'blocked-note' }, icon('ban'), 'Message from someone you blocked. ',
@@ -4308,26 +4316,110 @@ function messageMenuItems(m, ctx) {
   // Pins are the channel's notice board: in servers they need Manage Messages, even for your own messages.
   const canPin = m.dmId || isGroup(server) || canModerate(m);
   return [
-    { label: 'Add reaction', icon: 'smile', action: () => { const el = $(`[data-mid="${m.id}"] .msg-tools .tool:nth-child(2)`); emojiPicker(el || $('#main'), (em) => react(m, em)); } },
-    ok ? { label: 'Reply', icon: 'reply', action: () => startReply(m, ctx) } : null,
-    ok && threadable(m) && ctx === 'main' ? { label: m.threadCount ? 'Open thread' : 'Reply in thread', icon: 'thread', action: () => openThread(m) } : null,
+    // (Beside the message's hover toolbar; on a touch screen, which has none showing, beside the message itself.)
+    { key: 'react', label: 'Add reaction', icon: 'smile', action: () => { const el = $(`[data-mid="${m.id}"] .msg-tools .tool:nth-child(2)`); emojiPicker((el && el.getClientRects().length ? el : $(`[data-mid="${m.id}"]`)) || $('#main'), (em) => react(m, em)); } },
+    ok ? { key: 'reply', label: 'Reply', icon: 'reply', action: () => startReply(m, ctx) } : null,
+    ok && threadable(m) && ctx === 'main' ? { key: 'thread', label: m.threadCount ? 'Open thread' : 'Reply in thread', icon: 'thread', action: () => openThread(m) } : null,
     ok ? { label: 'Forward', icon: 'forward', action: () => openForward(m) } : null,
     '-',
     canPin ? { label: m.pinnedAt ? 'Unpin message' : 'Pin message', icon: 'pin', action: () => togglePin(m) } : null,
     ok ? { label: saved ? 'Remove from saved' : 'Save message', icon: 'bookmark', action: () => toggleSaved(m) } : null,
     ctx === 'main' ? { label: 'Mark unread', icon: 'eye', action: () => markUnread(keyOfMessage(m), m.id) } : null,
-    ...(ok ? remindItems(m, keyOfMessage(m), quoteOf(m, m.dec && m.dec.p ? `Poll: ${m.dec.p.q}` : 'Attachment')) : []),
+    ...(ok ? remindItems(m, keyOfMessage(m), quoteOf(m, m.dec && m.dec.p ? `Poll: ${m.dec.p.q}` : 'Attachment')).map((it) => it && { ...it, key: 'remind' }) : []),
     '-',
     // Not while the word filter hides or blurs it: Show first.
-    ok && textOf(m) && !veiled(m) ? { label: 'Copy text', icon: 'copy', action: () => { copyText(textOf(m)); toast('Copied.'); } } : null,
+    ok && textOf(m) && !veiled(m) ? { key: 'copy', label: 'Copy text', icon: 'copy', action: () => { copyText(textOf(m)); toast('Copied.'); } } : null,
     { label: 'Copy message link', icon: 'link', action: () => { copyText(messageLink(m)); toast('Message link copied. It only works for people who can see this conversation.'); } },
-    mine && ok ? { label: 'Edit message', icon: 'edit', hint: '\u2191', action: () => { S.editing = m.id; replaceMessageEl(m); } } : null,
+    mine && ok ? { key: 'edit', label: 'Edit message', icon: 'edit', hint: '\u2191', action: () => { S.editing = m.id; replaceMessageEl(m); } } : null,
     mine || canModerate(m) ? { label: 'Delete message', icon: 'trash', danger: true, action: () => deleteMessage(m) } : null,
     canModerate(m) && ctx === 'main' && !m.threadId && !S.select && !tooOldForBulk(m) ? { label: 'Select messages to delete\u2026', icon: 'check', action: () => startSelect(m) } : null,
     !mine && readable(m) ? { label: 'Report message', icon: 'shield', danger: true, action: () => openReport({ message: m, ctx }) } : null,
   ];
 }
 const messageLink = (m) => `${location.origin}/#m/${m.id}`;
+
+// ---- a message's actions on a touch screen
+// There's no hover there, so a long press on a message opens its actions in a sheet from the bottom of the screen:
+// the quick reactions, then what its ⋯ menu offers (messageMenuItems, so the same permissions), everyday ones
+// first and the ones that delete or report last. Several reminder times wait behind one "Remind me…" row, so the
+// list stays short. target: what the finger was on (a link adds Copy link).
+function messageSheet(m, ctx, el, target) {
+  const all = messageMenuItems(m, ctx);
+  const pick = all.find((it) => it && it.key === 'react');
+  const first = ['reply', 'thread', 'copy', 'edit'].map((k) => all.find((it) => it && it.key === k)).filter(Boolean);
+  const last = all.filter((it) => it && it !== '-' && it.danger);
+  const reminders = all.filter((it) => it && it.key === 'remind');
+  const remind = reminders.length > 1 ? { label: 'Remind me\u2026', icon: 'bell', more: reminders } : null;
+  // The rest keep the menu's own groups.
+  const groups = [first, []];
+  for (const it of all) {
+    if (it === '-') groups.push([]);
+    else if (remind && it === reminders[0]) groups[groups.length - 1].push(remind);
+    else if (it && it !== pick && !(remind && reminders.includes(it)) && !first.includes(it) && !last.includes(it)) groups[groups.length - 1].push(it);
+  }
+  groups.push(last);
+  // The browser's own menu for a link (which would offer this) doesn't open over the sheet.
+  const a = target && target.closest && target.closest('a[href]:not(.mention)');
+  if (a && /^https?:/i.test(a.href)) first.unshift({ label: 'Copy link', icon: 'link', action: () => { copyText(a.href); toast('Link copied.'); } });
+  const mineR = (e) => (m.reactions || []).some((r) => r.emoji === e && r.userIds.includes(S.me.id));
+  let sh = null;
+  const run = (fn) => () => { sh.close(); fn(); };
+  // (Remind me… opens a second sheet in this one's place: the message stays marked, and focus goes back to it after.)
+  const open = (content, label) => { sh = sheet(content, { label, returnTo: el, onClose: ({ replaced }) => { if (!replaced) el.classList.remove('pressed'); } }); };
+  const rows = (list) => list.map((it) => h('button', {
+    class: `sheet-row${it.danger ? ' danger' : ''}`, 'aria-haspopup': it.more ? 'dialog' : null, 'aria-expanded': it.more ? 'false' : null,
+    onclick: it.more ? () => open(h('div', { class: 'sheet-list' }, rows(it.more)), 'Remind me') : run(it.action),
+  }, icon(it.icon), h('span', null, it.label)));
+  const reacts = h('div', { class: 'sheet-reacts', role: 'group', 'aria-label': 'Quick reactions' },
+    QUICK_REACTIONS.map((e) => h('button', { class: `sheet-react${mineR(e) ? ' mine' : ''}`, 'aria-label': `React with ${e}`, 'aria-pressed': String(mineR(e)), onclick: run(() => react(m, e)) }, e)),
+    pick ? h('button', { class: 'sheet-react more', 'aria-label': 'More reactions', onclick: run(pick.action) }, icon('plus')) : null);
+  const list = h('div', { class: 'sheet-list' }, groups.filter((g) => g.length).map((g, i) => [i ? h('div', { class: 'sheet-sep', role: 'separator' }) : null, rows(g)]));
+  el.classList.add('pressed');
+  open([reacts, list], 'Message actions');
+}
+// A finger held still on a message for a moment opens that sheet, with a short buzz where the phone can. Moving the
+// finger (a scroll, a swipe), a second finger or lifting it first cancels it, so taps on links, pictures, mentions and
+// reactions are left alone. Android also reports the long press as a right-click (messageEl's oncontextmenu):
+// whichever comes first opens the sheet, once. Only on a touch screen (device.js).
+const PRESS_MS = 450;
+let press = null; // the touch under way: { el, target, x, y, timer, done }
+function initLongPress() {
+  const stop = () => { if (press && !press.done) { clearTimeout(press.timer); press = null; } };
+  document.addEventListener('touchstart', (e) => {
+    stop();
+    press = null;
+    if (e.touches.length !== 1 || !isTouchUI() || S.select) return;
+    const el = e.target.closest && e.target.closest('.msg[data-mid]');
+    if (!el || !el._actions || e.target.closest('textarea, input, select, .edit-wrap')) return;
+    const t = e.touches[0];
+    const p = { el, target: e.target, x: t.clientX, y: t.clientY, done: false };
+    p.timer = setTimeout(() => longPressed(el, p.target), PRESS_MS);
+    press = p;
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!press || press.done) return;
+    const t = e.touches[0];
+    if (e.touches.length > 1 || Math.hypot(t.clientX - press.x, t.clientY - press.y) > 10) stop();
+  }, { passive: true });
+  // Lifting the finger after a long press doesn't also tap what's under it (now the sheet, or its backdrop).
+  document.addEventListener('touchend', (e) => {
+    if (press && press.done && e.cancelable) e.preventDefault();
+    stop();
+    press = null;
+  }, { passive: false });
+  document.addEventListener('touchcancel', () => { stop(); press = null; }, { passive: true });
+  document.addEventListener('scroll', stop, { capture: true, passive: true });
+}
+function longPressed(el, target) {
+  if (press) {
+    if (press.done) return;
+    clearTimeout(press.timer);
+    press.done = true;
+  }
+  if (!el.isConnected || !el._actions) return;
+  try { if (navigator.vibrate) navigator.vibrate(10); } catch { /* not allowed here */ }
+  el._actions(target);
+}
 
 // A word filter list changed (yours, here or on another device, or a server's): what it changes on screen is drawn
 // again. Only message rows whose filtering changed are redrawn, never one being edited, so scroll, focus and
@@ -5852,17 +5944,40 @@ function createComposer({ id, key, threadId, placeholder }) {
   const suggest = h('div', { class: 'suggest', role: 'listbox', hidden: true });
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 260) + 'px'; };
   const update = () => { sendBtn.disabled = !ta.value.trim() && !state.pending.length; laterBtn.disabled = sendBtn.disabled; };
+  const openGifs = (anchor) => gifPicker(anchor, (url) => send(url), { onEmoji: (em) => insertAtCursor(ta, em) });
+  const gifBtn = (S.config.features || {}).gifs === false ? null : h('button', { class: 'icon-btn composer-more', 'aria-label': 'GIFs', 'data-tip': 'GIFs', 'data-pop-anchor': '', onclick: (e) => openGifs(e.currentTarget) }, icon('gif'));
+  const micBtn = voiceButton(() => box, (file, dur) => send('', { files: [{ file, voice: true, dur }] }));
+  micBtn.classList.add('composer-more');
+  laterBtn.classList.add('composer-more');
+  let canAttach = true; // here (renderExtras)
+  // The + menu. On a phone it also has GIFs, voice messages and Send later, whose buttons beside the box are hidden
+  // there (app.css) so the box has room to type in.
+  const attachItems = () => {
+    const more = isPhoneLayout() ? [
+      gifBtn ? { label: 'GIFs', icon: 'gif', action: () => openGifs(attachBtn) } : null,
+      { label: 'Voice message', icon: 'mic', action: () => micBtn.click() },
+      laterBtn.hidden ? null : { label: 'Send later', icon: 'clock', action: () => (sendBtn.disabled ? toast('Write your message first, then choose when it goes.') : sendLater(attachBtn)) },
+    ].filter(Boolean) : [];
+    return [
+      canAttach ? { label: 'Upload a file', icon: 'file', action: () => fileIn.click() } : null,
+      canAttach ? { label: 'Create a poll', icon: 'check', action: () => openPollCreator((poll) => send('', { poll })) } : null,
+      canAttach && more.length ? '-' : null,
+      ...more,
+    ];
+  };
+  const attachBtn = h('button', { class: 'icon-btn attach', 'aria-label': 'Attach a file or create a poll', 'data-tip': 'Attach or poll', 'data-pop-anchor': '', onclick: (e) => menu(e.currentTarget, attachItems(), { side: 'top' }) }, icon('plus'));
+  // On a phone the + stays without permission to attach files: GIFs, voice messages and Send later are in it there.
+  const fitAttach = () => {
+    const phone = isPhoneLayout();
+    attachBtn.hidden = !canAttach && !phone;
+    attachBtn.setAttribute('aria-label', phone ? 'Attach, GIFs, voice message and more' : 'Attach a file or create a poll');
+  };
   const box = h('div', { class: 'composer' },
-    h('button', { class: 'icon-btn attach', 'aria-label': 'Attach a file or create a poll', 'data-tip': 'Attach or poll', 'data-pop-anchor': '', onclick: (e) => menu(e.currentTarget, [
-      { label: 'Upload a file', icon: 'file', action: () => fileIn.click() },
-      { label: 'Create a poll', icon: 'check', action: () => openPollCreator((poll) => send('', { poll })) },
-    ], { side: 'top' }) }, icon('plus')),
+    attachBtn,
     ta,
     h('div', { class: 'composer-tools' },
       h('button', { class: 'icon-btn', 'aria-label': 'Emoji', 'data-tip': 'Emoji', 'data-pop-anchor': '', onclick: (e) => emojiPicker(e.currentTarget, (em) => insertAtCursor(ta, em), { keepOpen: true }) }, icon('smile')),
-      voiceButton(() => box, (file, dur) => send('', { files: [{ file, voice: true, dur }] })),
-      (S.config.features || {}).gifs === false ? null : h('button', { class: 'icon-btn', 'aria-label': 'GIFs', 'data-tip': 'GIFs', 'data-pop-anchor': '', onclick: (e) => gifPicker(e.currentTarget, (url) => send(url), { onEmoji: (em) => insertAtCursor(ta, em) }) }, icon('gif')),
-      laterBtn, sendBtn),
+      micBtn, gifBtn, laterBtn, sendBtn),
     fileIn);
   const slowNote = h('div', { class: 'slow-note', hidden: true });
   const disNote = h('div', { class: 'dis-note', hidden: true });
@@ -6226,7 +6341,8 @@ function createComposer({ id, key, threadId, placeholder }) {
     const ch = kk && kk.startsWith('c:') ? channelById(kk.slice(2)) : null;
     const noSend = ch && !canIn(ch, threadId() ? PERMS.CREATE_THREADS : PERMS.SEND_MESSAGES);
     ta.disabled = !!blockedNote || !!noSend;
-    box.querySelector('.attach').hidden = !!ch && !canIn(ch, PERMS.ATTACH_FILES);
+    canAttach = !ch || canIn(ch, PERMS.ATTACH_FILES);
+    fitAttach();
     laterBtn.hidden = !kk || !!blockedNote || !!noSend;
     // This conversation's scheduled messages (on the main composer only: the list covers its threads too).
     const schedBar = id === 'main' && kk ? SCHED.bar(kk) : null;
@@ -6340,7 +6456,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     }
   }
   setTimeout(() => { autosize(); update(); renderEph(); }, 0);
-  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph };
+  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph, fitAttach };
 }
 const fmtDuration = (sec) => (sec >= 3600 ? `${Math.round(sec / 3600)}h` : sec >= 60 ? `${Math.round(sec / 60)}m` : `${sec}s`);
 function placeholderFor(k) {

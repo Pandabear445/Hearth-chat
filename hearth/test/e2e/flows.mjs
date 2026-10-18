@@ -3638,6 +3638,163 @@ async function phoneNavigation(t) {
   check(d1 === d0, `A desktop should add nothing to the history (${d0} → ${d1}).`);
 }
 
+// ------------------------------------------------------------------ phones: a message's actions, the message box
+// A touch screen has no hover: a long press on a message opens its actions in a sheet from the bottom (the quick
+// reactions, Reply, Copy text, Edit, Delete…), which goes with a tap outside it, a swipe down, Esc and Back. The
+// message box keeps +, the words, emoji and Send, with GIFs, voice messages and Send later in the + menu, and its text
+// is 16px so iOS doesn't zoom in. A desktop with a mouse keeps its hover toolbar and all six buttons.
+async function phoneMessageActions(t) {
+  const { bob } = t.people;
+  // Bob on his phone (one more new account would go over the sign-ups allowed from one network in an hour).
+  const phone = await t.open('bob-thumbs', PHONE);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  await catchCopies(phone);
+  const openNav = async () => {
+    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
+  };
+  await openNav();
+  await page.locator(`#rail button[aria-label="${SERVER}"]`).tap();
+  await openNav();
+  await phone.openChannel('general');
+  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  const text = 'Held down on a phone: what can I do with this?';
+  await phone.send(text);
+  const mine = page.locator(`#messages .msg[data-mid="${await phone.message(text).first().getAttribute('data-mid')}"]`);
+  const sheet = page.locator('.sheet-backdrop:not(.closing) .sheet');
+  const sheetGone = () => page.locator('.sheet-backdrop').waitFor({ state: 'detached' });
+  const backStep = () => page.evaluate(() => !!(history.state && history.state.hearthSheet));
+  // A finger held still on the message's words, as a phone sends it.
+  const cdp = await phone.context.newCDPSession(page);
+  const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+  const hold = async () => {
+    const b = await mine.locator('.msg-text').boundingBox();
+    await touch('touchStart', b.x + 40, b.y + b.height / 2);
+    await page.waitForTimeout(700);
+    await touch('touchEnd');
+    await sheet.waitFor();
+  };
+  const row = (label) => sheet.locator('.sheet-row', { hasText: exact(label) });
+
+  // No hover toolbar on a touch screen; a quick tap opens nothing.
+  check(await page.evaluate(() => [...document.querySelectorAll('#messages .msg-tools')].every((el) => getComputedStyle(el).display === 'none')), 'A touch screen should not show the hover toolbar.');
+  await mine.locator('.msg-text').tap();
+  await page.waitForTimeout(700);
+  check(!(await page.locator('.sheet').count()), 'A quick tap on a message should not open its actions.');
+
+  // A long press: a short buzz, and the sheet with the quick reactions and what the ⋯ menu offers, without selecting
+  // any words.
+  await page.evaluate(() => { window.__buzz = []; navigator.vibrate = (ms) => { window.__buzz.push(ms); return true; }; });
+  await hold();
+  check((await page.evaluate(() => window.__buzz.join())) === '10', 'A long press should give one short buzz.');
+  check((await sheet.locator('.sheet-reacts button').count()) === 7, 'The sheet should start with six quick reactions and +.');
+  for (const label of ['Reply', 'Reply in thread', 'Copy text', 'Edit message', 'Delete message']) await row(label).waitFor();
+  check((await row('Reply').boundingBox()).height >= 48, 'The sheet’s rows should be at least 48px tall.');
+  check(await page.evaluate(() => String(getSelection()) === ''), 'A long press should not select the message’s words.');
+  check(await backStep(), 'An open sheet should have a step in the history for Back to take.');
+  // A reaction from the sheet; the sheet goes, and its history step with it.
+  await sheet.locator('button[aria-label="React with 👍"]').tap();
+  await sheetGone();
+  await mine.locator('.reaction.mine[aria-label="👍 1"]').waitFor();
+  await page.waitForFunction(() => !(history.state && history.state.hearthSheet));
+  // A tap on the reaction still does what it did: takes it back.
+  await mine.locator('.reaction.mine[aria-label="👍 1"]').tap();
+  await mine.locator('.reactions').waitFor({ state: 'detached' });
+  // Reply puts the message box in reply mode.
+  await hold();
+  await row('Reply').tap();
+  await sheetGone();
+  await phone.$('.cw-main .reply-bar', { hasText: text }).waitFor();
+  await phone.$('.cw-main .reply-bar button[aria-label="Cancel reply (Esc)"]').tap();
+  await phone.$('.cw-main .reply-bar').waitFor({ state: 'detached' });
+  // Copy text copies the words.
+  await hold();
+  await row('Copy text').tap();
+  await phone.toast('Copied.');
+  check((await lastCopy(phone)) === text, `Copy text should copy the message (got “${await lastCopy(phone)}”).`);
+  // Edit opens the edit box (Esc leaves it as it was).
+  await hold();
+  await row('Edit message').tap();
+  await mine.locator('.edit-input').waitFor();
+  await page.keyboard.press('Escape');
+  await mine.locator('.edit-input').waitFor({ state: 'detached' });
+
+  // It goes with Back (staying in Hearth), Esc, a tap above it and a swipe down.
+  const app = page.url();
+  await hold();
+  await page.goBack();
+  await sheetGone();
+  check(page.url() === app && (await phone.$('#app:not([hidden])').count()) === 1, `Back from the sheet should stay in Hearth (now at ${page.url()}).`);
+  await hold();
+  await page.keyboard.press('Escape');
+  await sheetGone();
+  check(!(await page.locator('.cw-main .reply-bar').count()), 'Esc on the sheet should only close the sheet.');
+  // (Just above the sheet, at the side: an announcement from the instance's owner may sit at the top in the middle.)
+  await hold();
+  await page.locator('.sheet-backdrop').tap({ position: { x: 12, y: Math.max(4, (await sheet.boundingBox()).y - 10) } });
+  await sheetGone();
+  await hold();
+  const top = await sheet.boundingBox();
+  await touch('touchStart', 195, top.y + 10);
+  for (let i = 1; i <= 8; i++) await touch('touchMove', 195, top.y + 10 + i * 50);
+  await touch('touchEnd');
+  await sheetGone();
+  await page.waitForFunction(() => !(history.state && history.state.hearthSheet));
+
+  // The message box: +, the words, emoji and Send, 44px each; 16px text.
+  const shown = await page.evaluate(() => [...document.querySelectorAll('.cw-main .composer button')].filter((b) => b.getClientRects().length && getComputedStyle(b).display !== 'none')
+    .map((b) => ({ label: b.getAttribute('aria-label'), h: Math.round(b.getBoundingClientRect().height) })));
+  check(shown.map((b) => b.label).join(' | ') === 'Attach, GIFs, voice message and more | Emoji | Send message', `On a phone the message box should show only +, emoji and Send (got ${shown.map((b) => b.label).join(', ')}).`);
+  check(shown.every((b) => b.h >= 44), `The message box’s buttons should be 44px tall on a phone (got ${shown.map((b) => b.h).join(', ')}).`);
+  check(await page.$eval('#composer-input', (el) => parseFloat(getComputedStyle(el).fontSize) >= 16), 'The message box’s text should be at least 16px on a touch screen.');
+  // GIFs, voice messages and Send later are in the + menu.
+  const plus = page.locator('.cw-main .composer .attach');
+  await plus.tap();
+  for (const label of ['Upload a file', 'Create a poll', 'GIFs', 'Voice message', 'Send later']) await phone.menuItem(label).waitFor();
+  await phone.menuItem('GIFs').tap();
+  await page.locator('.popover .gif-picker').waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('.popover').waitFor({ state: 'detached' });
+  await page.locator('#composer-input').fill('Later, from my phone');
+  await plus.tap();
+  await phone.menuItem('Send later').tap();
+  await page.locator('.popover .menu-header', { hasText: 'Send later' }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('#composer-input').fill('');
+
+  // Delete from the sheet, after the usual question.
+  await hold();
+  await row('Delete message').tap();
+  await (await phone.dialog('Delete message?')).locator('.modal-foot .btn.danger').click();
+  await mine.waitFor({ state: 'detached' });
+  await phone.close();
+
+  // A desktop with a mouse: the hover toolbar, all six buttons in the message box, a + menu of two, a right-click menu.
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await bob.send('Typed at a desk with a mouse');
+  const desk = bob.message('Typed at a desk with a mouse').first();
+  await desk.hover();
+  await bob.page.waitForFunction(() => { const tb = [...document.querySelectorAll('#messages .msg')].find((m) => m.textContent.includes('Typed at a desk with a mouse')).querySelector('.msg-tools'); return getComputedStyle(tb).opacity === '1'; });
+  const tools = await desk.locator('.msg-tools button').evaluateAll((list) => list.map((b) => `${b.getAttribute('aria-label')} ${Math.round(b.getBoundingClientRect().width)}x${Math.round(b.getBoundingClientRect().height)}`));
+  check(tools.join(', ') === 'React with thumbs up 30x28, Add reaction 30x28, Reply 30x28, Reply in thread 30x28, More actions 30x28', `The desktop hover toolbar should be as it was (got ${tools.join(', ')}).`);
+  const boxBtns = await bob.page.evaluate(() => [...document.querySelectorAll('.cw-main .composer button')].filter((b) => b.getClientRects().length).map((b) => `${b.getAttribute('aria-label')} ${Math.round(b.getBoundingClientRect().width)}x${Math.round(b.getBoundingClientRect().height)}`));
+  check(boxBtns.join(', ') === 'Attach a file or create a poll 34x34, Emoji 34x34, Record a voice message 34x34, GIFs 34x34, Send later 34x34, Send message 34x34', `The desktop message box should be as it was (got ${boxBtns.join(', ')}).`);
+  check(await bob.page.$eval('#composer-input', (el) => getComputedStyle(el).fontSize === '15px'), 'The desktop message box’s text should stay 15px.');
+  check(await desk.evaluate((el) => getComputedStyle(el).userSelect !== 'none'), 'On a desktop, message words should stay selectable.');
+  await bob.$('.cw-main button[aria-label="Attach a file or create a poll"]').click();
+  await bob.menuItem('Create a poll').waitFor();
+  check((await bob.$('.popover .menu-item').count()) === 2, 'The desktop + menu should have just Upload a file and Create a poll.');
+  await bob.page.keyboard.press('Escape');
+  await desk.locator('.msg-text').click({ button: 'right' });
+  await bob.menuItem('Copy text').waitFor();
+  check(!(await bob.$('.sheet').count()) && !(await bob.page.evaluate(() => !!(history.state && history.state.hearthSheet))), 'A right-click on a desktop should open the menu, not a sheet.');
+  await bob.page.keyboard.press('Escape');
+  await bob.messageAction('Typed at a desk with a mouse', 'Delete message');
+  await (await bob.dialog('Delete message?')).locator('.modal-foot .btn.danger').click();
+  await desk.waitFor({ state: 'detached' });
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -3686,4 +3843,5 @@ export const FLOWS = [
   ['discord habits: # picks a channel and the link opens it (unknown ones stay plain); headings, lists and >>> quotes; a spoiler picture with a description; Ctrl+/ and Shift+Esc', discordHabits],
   ['staff deletion: the owner deletes an account for someone who can’t sign in, from Admin → Users', staffDelete],
   ['phones: held sideways it’s still the phone layout; a swipe from the left edge opens the drawer; Back closes the drawer, members, a picture, a menu and settings without leaving; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
+  ['phone message actions: a long press opens a sheet (react, reply, copy, edit, delete; closes with Back, Esc, a tap or a swipe); a roomier message box with GIFs and Send later under +; the desktop keeps its hover toolbar and buttons', phoneMessageActions],
 ];

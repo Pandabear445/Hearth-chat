@@ -190,6 +190,18 @@ On a 390×844 touch phone:
   of the scrolling tab names;
 - in a voice channel, the call controls are on screen after joining.
 
+**Touch screens** (`pointer: coarse`; `public/js/device.js` and the matching media queries at the end of `app.css`;
+a desktop with a mouse is unchanged):
+- There's no hover, so the message toolbar is hidden and a long press on a message (or the context-menu key) opens
+  its actions in a bottom sheet (`ui.js` `sheet`): the quick reactions, then the same items as the ⋯ menu. The sheet
+  is a labelled modal dialog: it takes focus, keeps Tab inside, and closes with Esc, Back, a tap outside or a swipe
+  down, sending focus back to the message. Holding a finger on a message doesn't select its words; **Copy text** is
+  in the sheet.
+- Buttons and rows you tap (header buttons, channel, DM and member rows, settings tabs, menu items, dialog close
+  buttons) are at least 44 px tall, and text boxes use 16 px text so iOS doesn't zoom in on them.
+- In the phone layout the message box keeps +, the text, emoji and Send (44 px each); GIFs, voice messages and Send
+  later are in the + menu.
+
 **Mobile keyboard.** iOS Safari, and Chrome without an opt-in, don't resize the page when the on-screen keyboard
 opens, so it covered the message box. Two changes handle this:
 - `public/js/viewport.js` follows `visualViewport`: the app's height becomes the visible height (`--app-h`), and

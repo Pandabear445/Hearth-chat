@@ -3118,3 +3118,76 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 .sc-row dd { margin: 0; color: var(--text-2); font-size: 13.5px; }
 .sc-combo { display: inline-flex; align-items: center; gap: 2px; }
 .sc-plus, .sc-or, .sc-none { color: var(--muted); font-size: 12px; }
+
+/* ------------------------------------------------------------------ phones and tablets
+   The same two media queries as device.js, so the styles and the code agree:
+     (max-width: 760px), (pointer: coarse) and (max-height: 500px)   the phone layout: a narrow window, or a phone held sideways
+     (pointer: coarse)                                                the touch UI: a finger is the main pointer
+   A desktop with a mouse matches neither, so nothing below changes it. */
+
+/* Bottom sheets (ui.js sheet): a message's actions after a long press (app.js messageSheet). Only touch screens open them. */
+@media (pointer: coarse) {
+  .sheet-backdrop { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; background: var(--scrim); animation: fade .16s ease; }
+  .sheet-backdrop.closing { animation: fadeout .18s ease forwards; pointer-events: none; }
+  .sheet {
+    width: min(100%, 560px); max-height: 85vh; max-height: 85dvh; overflow-y: auto; overscroll-behavior: contain;
+    padding: 0 max(8px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    background: rgb(var(--elev)); border: 1px solid var(--line-2); border-bottom: 0; border-radius: 20px 20px 0 0; box-shadow: var(--pop-shadow);
+    animation: sheet-up .22s var(--ease); transition: transform .2s var(--ease);
+  }
+  .sheet:focus { outline: none; }
+  .sheet.dragging { transition: none; }
+  .sheet-backdrop.closing .sheet { animation: sheet-down .18s ease forwards; }
+  @keyframes sheet-up { from { transform: translateY(100%); } }
+  @keyframes sheet-down { to { transform: translateY(100%); } }
+  .sheet-grip { width: 40px; height: 5px; margin: 8px auto 4px; border-radius: 3px; background: var(--line-2); }
+  .sheet-reacts { display: flex; justify-content: space-between; gap: 6px; padding: 8px 4px 12px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+  .sheet-react { flex: 1 1 0; max-width: 52px; min-height: 44px; aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center; font-size: 24px; background: var(--hover); transition: transform .1s; }
+  .sheet-react:active { transform: scale(.92); }
+  .sheet-react.mine { background: rgb(var(--accent-rgb) / .2); box-shadow: inset 0 0 0 2px rgb(var(--accent-rgb) / .6); }
+  .sheet-react.more { color: var(--text-2); }
+  .sheet-react.more .ic { width: 22px; height: 22px; }
+  .sheet-list { display: flex; flex-direction: column; }
+  .sheet-row { display: flex; align-items: center; gap: 14px; min-height: 48px; padding: 0 12px; border-radius: 12px; font-size: 16px; font-weight: 500; text-align: left; color: var(--text); }
+  .sheet-row:active, .sheet-row:focus-visible { background: var(--active); }
+  .sheet-row .ic { width: 20px; height: 20px; flex: none; color: var(--text-2); }
+  .sheet-row.danger, .sheet-row.danger .ic { color: var(--danger); }
+  .sheet-sep { height: 1px; margin: 4px 8px; background: var(--line); }
+  .msg.pressed { background: var(--active); }
+}
+
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  /* The message box gets the room: GIFs, voice messages and Send later are in the + menu (app.js createComposer). */
+  .composer .composer-more { display: none; }
+  .composer { padding: 3px; gap: 0; }
+  .composer .attach, .composer-tools .icon-btn, .send-btn { width: 44px; height: 44px; border-radius: 11px; }
+  .composer-tools .icon-btn .ic { width: 22px; height: 22px; }
+  .composer textarea { min-height: 44px; padding: 11px 6px; }
+  .send-btn .ic { width: 20px; height: 20px; }
+  .send-btn:disabled { background: var(--hover); opacity: 1; }
+}
+
+@media (pointer: coarse) {
+  /* Nothing hovers on a touch screen: a long press opens a message's actions instead (app.js messageSheet). Holding a
+     finger on a message doesn't select its words or open the browser's own menu; Copy text is in the sheet. */
+  .msg-tools { display: none; }
+  .msg { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .msg textarea, .msg input { -webkit-user-select: text; user-select: text; }
+  .msg img, .msg a { -webkit-user-drag: none; }
+  .reaction { height: 32px; padding: 0 10px; }
+  .reaction.add-r { opacity: .75; }
+  /* Room for a finger: 44px to tap. */
+  #main-head .icon-btn { width: 40px; height: 44px; }
+  .panel-head .icon-btn, .modal-x, .set-close, .me-actions .icon-btn { width: 44px; height: 44px; }
+  .reply-bar .icon-btn { width: 36px; height: 36px; }
+  .ch-main, .nav-row, .server-head, .find-btn, .panel-search .input, .emoji-search { height: 44px; }
+  .dm-row, .member, .ev-row, .me-btn, .set-nav-btn, .set-subtab, .ss-tab, .seg-btn, .tab, .chip, .menu-item, .toggle-row { min-height: 44px; }
+  /* (A min-height would let a row with more on it shrink below its content in a scrolling column: they keep it.) */
+  .ev-row, .member, .set-nav-btn, .set-subtab, .ss-tab, .menu-item, .toggle-row { flex-shrink: 0; }
+  .cat-toggle { min-height: 32px; }
+  /* (Taller items: a long menu scrolls rather than running off a short screen.) */
+  .menu { max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; }
+  /* 16px or more in text boxes: iOS zooms the page in when a smaller one gets focus. */
+  input:where(:not([type=checkbox], [type=radio], [type=range], [type=color], [type=file])), textarea, select { font-size: max(16px, 1em); }
+  .input.mono, .hex-in, .panel-search .input, .xp-input, .edit-input { font-size: 16px; }
+}
