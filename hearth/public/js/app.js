@@ -2858,30 +2858,35 @@ function closePanel() {
   else if (mode) togglePanel(S.panel);
   if (hadFocus && !panelMode()) $('#main').focus({ preventScroll: true });
 }
-// Phones (phone-nav.js): Back closes the picture, menu, dialog, side panel or drawer on top instead of leaving Hearth,
-// and a swipe from the screen's left edge opens the drawer (or closes the side panel, which covers the chat there).
+// Phones and tablets (phone-nav.js): Back closes the menu, picture, message actions, dialog, side panel or drawer on
+// top instead of leaving Hearth, and in the phone layout a swipe from the screen's left edge opens the drawer (or closes
+// the side panel, which covers the chat there).
 function phoneNav() {
   const viewer = () => document.querySelector('.viewer:not(.closing)');
   const popup = () => document.querySelector('#layer > .popover');
+  const actions = () => document.querySelector('#layer > .sheet-backdrop:not(.closing)');
   const dialog = () => [...document.querySelectorAll('#layer > .modal-backdrop:not(.closing)')].pop();
   const back = backStack({
-    enabled: isPhoneLayout,
+    // The phone layout, and touch screens (a tablet's back gesture). A desktop with a mouse adds nothing.
+    enabled: () => isPhoneLayout() || isTouchUI(),
     layers: [
+      { open: () => !!popup(), close: closePopover }, // (a menu can sit on the picture viewer: its More)
       { open: () => !!viewer(), close: () => viewer()._close() },
-      { open: () => !!popup(), close: closePopover },
+      { open: () => !!actions(), close: () => actions()._close() },
       { open: () => !!dialog(), close: () => dialog()._close() },
-      { open: () => !!panelMode(), close: closePanel },
+      // Beside the chat on a wider screen, the side panel is part of the page rather than something on top of it.
+      { open: () => isPhoneLayout() && !!panelMode(), close: closePanel },
       { open: navOpen, close: closeNav },
     ],
   });
-  // Whatever opens or closes them: the drawer and panel are classes on the body; pictures, menus and dialogs are added
-  // and removed.
+  // Whatever opens or closes them: the drawer and panel are classes on the body; pictures, menus, sheets and dialogs
+  // are added and removed.
   const watch = new MutationObserver(() => back.sync());
   watch.observe(document.body, { attributes: true, attributeFilter: ['class'], childList: true });
   watch.observe($('#layer'), { childList: true });
   const swipes = edgeSwipes({
     enabled: () => isPhoneLayout() && isTouchUI(),
-    blocked: () => !!(viewer() || popup() || dialog()),
+    blocked: () => !!(viewer() || popup() || actions() || dialog()),
     drawer: { isOpen: navOpen, parts: () => [$('#rail'), $('#sidebar')], scrim: () => $('.nav-scrim'), setOpen: (on) => (on ? document.body.classList.add('nav-open') : closeNav()) },
     panel: { isOpen: () => !!panelMode(), el: () => $('#members'), close: closePanel },
   });

@@ -93,8 +93,9 @@ Each item is checked by `npm run test:a11y` unless marked otherwise.
 - On phones, Esc closes the navigation drawer and returns focus to its button, then the side panel (members, a
   thread, pins), which covers the chat on a phone; focus goes back to the conversation. On wider screens Esc leaves
   the panel open beside the chat, as before.
-- On phones, Back (the gesture, or Android's back button) closes the picture, menu, dialog, side panel or drawer on
-  top, like Esc, instead of leaving Hearth (`public/js/phone-nav.js`). The swipes from the screen's left edge that
+- On phones, Back (the gesture, or Android's back button) closes the menu, picture, message actions, dialog, side
+  panel or drawer on top, like Esc, instead of leaving Hearth (`public/js/phone-nav.js`; on touch tablets the same,
+  except the side panel, which sits beside the chat there). The swipes from the screen's left edge that
   open and close the drawer, or close the side panel, only add a way: every one has a button that does the same.
 
 ### Announcements

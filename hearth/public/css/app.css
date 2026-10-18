@@ -1761,21 +1761,21 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   .reply-spine { left: 23px; width: 21px; }
   .sending-note { padding-left: 50px; }
 }
-/* A phone held sideways: a slimmer header leaves more of the short screen to the chat, and none while the keyboard is
-   up (the header comes back with the keyboard gone). Android makes the page shorter for the keyboard; iOS covers it
-   (html.kb-open, js/viewport.js). */
-@media (pointer: coarse) and (max-height: 500px) {
-  :root { --head-h: 44px; }
-  html.kb-open #main-head, html.kb-open #members > .panel-head { display: none; }
-  body .chat > .call-stage { height: 130px; } /* a call going on above the chat (240px upright) */
-}
-@media (pointer: coarse) and (max-height: 260px) {
-  #main-head, #members > .panel-head { display: none; }
-}
 /* Touch screens: a sideways swipe in the chat doesn't take the browser back out of Hearth (Back still works, and
    closes what's open first: js/phone-nav.js). */
 @media (pointer: coarse) {
   html { overscroll-behavior-x: none; }
+  /* A phone held sideways (the short half of the phone layout): a slimmer header leaves more of the short screen to
+     the chat, and none while the keyboard is up (the header comes back with the keyboard gone). Android makes the page
+     shorter for the keyboard; iOS covers it (html.kb-open, js/viewport.js). */
+  @media (max-height: 500px) {
+    :root { --head-h: 44px; }
+    html.kb-open #main-head, html.kb-open #members > .panel-head { display: none; }
+    body .chat > .call-stage { height: 130px; } /* a call going on above the chat (240px upright) */
+  }
+  @media (max-height: 260px) {
+    #main-head, #members > .panel-head { display: none; }
+  }
 }
 
 /* ------------------------------------------------------------------ reduced motion */

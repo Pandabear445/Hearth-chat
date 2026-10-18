@@ -1,12 +1,15 @@
 // Phone navigation: the back gesture closes what's open, and swipes from the screen's edge work the drawer.
-// Both only run in the phone layout (device.js); app.js says what the drawer, side panel and dialogs are.
+// Back runs in the phone layout and on touch screens, the swipes in the phone layout on a touch screen (device.js);
+// app.js (phoneNav) says what the drawer, side panel, sheets and dialogs are. It is the one place Hearth adds history
+// steps of its own for these.
 
 // ------------------------------------------------------------------ Back closes what's open
-// On a phone the drawer, the side panel, a picture or a dialog covers the screen, and the back gesture (or the Android
-// app's back button, which goes back in the page's history) is how people close it. So while one is open, the page's
-// history has one extra step of Hearth's own, at the same address: going back from it closes the one on top (and the
-// step comes back while more are open). Closing one with its own button takes the step back out, so the history never
-// fills up with them and the next Back still leaves the app. Nothing is added while enabled() is false (desktops).
+// On a phone the drawer, the side panel, a picture, a message's actions or a dialog covers the screen, and the back
+// gesture (or the Android app's back button, which goes back in the page's history) is how people close it. So while
+// one is open, the page's history has one extra step of Hearth's own, at the same address: going back from it closes
+// the one on top (and the step comes back while more are open). Closing one with its own button takes the step back
+// out, so the history never fills up with them and the next Back still leaves the app. Nothing is added while
+// enabled() is false (desktops).
 //   layers: [{ open: () => bool, close: () => void }], the top-most first.
 // Call sync() whenever one may have opened or closed.
 export function backStack({ win = window, layers, enabled }) {

@@ -3663,7 +3663,7 @@ async function phoneMessageActions(t) {
   const mine = page.locator(`#messages .msg[data-mid="${await phone.message(text).first().getAttribute('data-mid')}"]`);
   const sheet = page.locator('.sheet-backdrop:not(.closing) .sheet');
   const sheetGone = () => page.locator('.sheet-backdrop').waitFor({ state: 'detached' });
-  const backStep = () => page.evaluate(() => !!(history.state && history.state.hearthSheet));
+  const backStep = () => page.evaluate(() => !!(history.state && history.state.hearthBack));
   // A finger held still on the message's words, as a phone sends it.
   const cdp = await phone.context.newCDPSession(page);
   const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
@@ -3696,7 +3696,7 @@ async function phoneMessageActions(t) {
   await sheet.locator('button[aria-label="React with 👍"]').tap();
   await sheetGone();
   await mine.locator('.reaction.mine[aria-label="👍 1"]').waitFor();
-  await page.waitForFunction(() => !(history.state && history.state.hearthSheet));
+  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
   // A tap on the reaction still does what it did: takes it back.
   await mine.locator('.reaction.mine[aria-label="👍 1"]').tap();
   await mine.locator('.reactions').waitFor({ state: 'detached' });
@@ -3739,7 +3739,7 @@ async function phoneMessageActions(t) {
   for (let i = 1; i <= 8; i++) await touch('touchMove', 195, top.y + 10 + i * 50);
   await touch('touchEnd');
   await sheetGone();
-  await page.waitForFunction(() => !(history.state && history.state.hearthSheet));
+  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
 
   // The message box: +, the words, emoji and Send, 44px each; 16px text.
   const shown = await page.evaluate(() => [...document.querySelectorAll('.cw-main .composer button')].filter((b) => b.getClientRects().length && getComputedStyle(b).display !== 'none')
@@ -3788,7 +3788,7 @@ async function phoneMessageActions(t) {
   await bob.page.keyboard.press('Escape');
   await desk.locator('.msg-text').click({ button: 'right' });
   await bob.menuItem('Copy text').waitFor();
-  check(!(await bob.$('.sheet').count()) && !(await bob.page.evaluate(() => !!(history.state && history.state.hearthSheet))), 'A right-click on a desktop should open the menu, not a sheet.');
+  check(!(await bob.$('.sheet').count()) && !(await bob.page.evaluate(() => !!(history.state && history.state.hearthBack))), 'A right-click on a desktop should open the menu, not a sheet.');
   await bob.page.keyboard.press('Escape');
   await bob.messageAction('Typed at a desk with a mouse', 'Delete message');
   await (await bob.dialog('Delete message?')).locator('.modal-foot .btn.danger').click();

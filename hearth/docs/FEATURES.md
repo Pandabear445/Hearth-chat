@@ -1651,9 +1651,12 @@ Phone-only: a desktop with a mouse looks and behaves as before. Two definitions 
 - **Touch UI**: `(pointer: coarse)`, phones and tablets: the swipes below, and a sideways swipe in the chat no longer
   takes the browser back out of Hearth (`overscroll-behavior-x`).
 
-**Back closes what's open** (`backStack` in `public/js/phone-nav.js`, wired up by `phoneNav` in app.js). In the phone
-layout the drawer, the side panel (members, threads, pins, a voice channel's chat), a picture, a menu and every
-dialog (settings too) cover the screen. While one is open, the page's history has one extra step at the same
+**Back closes what's open** (`backStack` in `public/js/phone-nav.js`, wired up by `phoneNav` in app.js; the one
+place Hearth adds history steps of its own). In the phone layout the drawer, the side panel (members, threads, pins,
+a voice channel's chat), a picture, a menu, a message's long-press actions and every dialog (settings too) cover the
+screen; on a touch tablet, pictures, menus, message actions and dialogs do (its side panel sits beside the chat, and
+Back leaves it). The top-most goes first: a menu, then the picture viewer (its More menu sits on it), the message
+actions, a dialog, the side panel, the drawer. While one is open, the page's history has one extra step at the same
 address; Back (the gesture, or the Android app's back button, which calls `WebView.goBack()`) lands on the page's own
 entry, and the one on top closes, as with its own close button (a thread opened from the Threads list goes back to
 the list; a dialog that can't be dismissed stays). While more stay open, the step comes back. Closing one with its own

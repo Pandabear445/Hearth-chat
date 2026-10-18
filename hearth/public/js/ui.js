@@ -1,6 +1,5 @@
 // Modals, popovers, menus and bottom sheets.
 import { h, icon } from './util.js';
-import { isTouchUI } from './device.js';
 
 const layer = () => document.getElementById('layer');
 let openPop = null;
@@ -154,8 +153,9 @@ export function contextMenu(e, items) {
 
 // ---- bottom sheets (phones and tablets)
 // A panel that slides up from the bottom of the screen, for picking with a finger (a message's long-press actions).
-// It closes on a tap outside it, a swipe down, Esc and the back gesture, keeps Tab inside while it's open, and when
-// it closes with focus inside, focus goes to returnTo (or back to what had it before).
+// It closes on a tap outside it, a swipe down, Esc and the back gesture (app.js phoneNav: Back closes it like the
+// other things that cover the screen), keeps Tab inside while it's open, and when it closes with focus inside, focus
+// goes to returnTo (or back to what had it before).
 export function sheet(content, { label = 'Actions', returnTo = null, onClose } = {}) {
   closePopover();
   const opener = document.activeElement;
@@ -164,15 +164,14 @@ export function sheet(content, { label = 'Actions', returnTo = null, onClose } =
   const box = h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': label, tabindex: '-1' },
     h('div', { class: 'sheet-grip', 'aria-hidden': 'true' }), content);
   const backdrop = h('div', { class: 'sheet-backdrop', onclick: (e) => { if (e.target === backdrop) close(); } }, box);
-  // replaced: another sheet takes this one's place (and its step in the history). back: that step is already gone.
-  function close({ replaced = false, back = false } = {}) {
+  // replaced: another sheet takes this one's place (and its step in the history).
+  function close({ replaced = false } = {}) {
     if (closed) return;
     closed = true;
     if (openSheet === backdrop) openSheet = null;
     const hadFocus = backdrop.contains(document.activeElement) || document.activeElement === document.body;
     backdrop.classList.add('closing');
     setTimeout(() => backdrop.remove(), 180);
-    if (!replaced && !back) dropSheetStep();
     if (onClose) onClose({ replaced });
     if (hadFocus && !replaced) restoreFocus(returnTo, opener);
   }
@@ -181,7 +180,6 @@ export function sheet(content, { label = 'Actions', returnTo = null, onClose } =
   swipeToClose(box, close);
   layer().append(backdrop);
   openSheet = backdrop;
-  addSheetStep();
   // The sheet itself takes focus, so screen readers start at its name.
   requestAnimationFrame(() => { if (!closed && !box.contains(document.activeElement)) box.focus({ preventScroll: true }); });
   return { close: () => close(), box };
@@ -220,29 +218,6 @@ function swipeToClose(box, close) {
   box.addEventListener('touchend', end);
   box.addEventListener('touchcancel', end);
 }
-// Back closes the sheet on phones: while one is open, the page's history has one extra step of its own, at the same
-// address, and going back from it closes the sheet. Closing it any other way takes that step back out, so the history
-// never fills up with them and the next Back does what it always did. Nothing is added on a desktop.
-let sheetBack = false; // our own history.back() is on its way
-const onSheetStep = () => !!(history.state && history.state.hearthSheet);
-// A step left over from before a reload (going back from it would do nothing) becomes an ordinary one.
-if (onSheetStep()) { const st = { ...history.state }; delete st.hearthSheet; history.replaceState(Object.keys(st).length ? st : null, ''); }
-function addSheetStep() {
-  if (sheetBack || onSheetStep() || !isTouchUI()) return;
-  const st = history.state && typeof history.state === 'object' ? history.state : {};
-  history.pushState({ ...st, hearthSheet: true }, '');
-}
-function dropSheetStep() {
-  if (!onSheetStep()) return;
-  sheetBack = true;
-  history.back();
-}
-window.addEventListener('popstate', () => {
-  // Our own step going: if another sheet opened meanwhile, it gets one of its own.
-  if (sheetBack) { sheetBack = false; if (openSheet) addSheetStep(); return; }
-  if (openSheet && !onSheetStep()) openSheet._close({ back: true });
-});
-
 // Tooltips for anything with data-tip (icon buttons). Shown on hover and keyboard focus.
 let tipEl = null;
 let tipTimer = 0;
