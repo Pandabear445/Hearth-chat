@@ -2304,8 +2304,11 @@ img.cemoji.big { width: 40px; height: 40px; }
 .att-retry .ic { width: 15px; height: 15px; }
 .att-media.sized .att-img { width: 100%; height: 100%; object-fit: cover; max-height: none; }
 /* A short window (a small laptop's screen) keeps a picture to 40% of its height, so one never fills the chat; it
-   shrinks in its shape (app.js attachmentEl gives it --att-w and --att-h). From 850px tall it's the usual 340px. */
-.att-media.sized { max-width: min(440px, 100%, calc(40vh * var(--att-w) / var(--att-h))); }
+   shrinks in its shape (app.js attachmentEl gives it --att-w and --att-h). From 850px tall it's the usual 340px. While
+   it loads, the box already has the picture's size (so it doesn't jump), and a box made wider than that (a spoiler's,
+   one that failed to load) is still no taller. */
+.att-media.sized { max-width: min(440px, 100%, calc(40vh * var(--att-w) / var(--att-h))); max-height: max(150px, min(340px, 40vh)); }
+.att-media.sized.locked { min-width: 0; min-height: 0; }
 /* Download progress for big files, a "no longer available" state, and click-to-load for big videos and songs. */
 .att-meter { position: absolute; left: 10px; right: 10px; bottom: 10px; height: 4px; border-radius: 2px; background: rgb(0 0 0 / .35); overflow: hidden; z-index: 2; }
 .att-meter[hidden] { display: none; }
@@ -2336,11 +2339,10 @@ img.cemoji.big { width: 40px; height: 40px; }
    the usual size, a narrow window or a touch screen too (sized like this, one filled a laptop's whole chat). */
 @media (max-width: 760px) and (pointer: coarse), (pointer: coarse) and (max-height: 500px) {
   .att-media { max-width: 100%; }
-  .att-media.sized { max-width: 100%; width: min(100%, calc(var(--att-w) * 1px), calc(560px * var(--att-w) / var(--att-h))) !important; }
+  .att-media.sized { max-width: 100%; max-height: none; width: min(100%, calc(var(--att-w) * 1px), calc(560px * var(--att-w) / var(--att-h))) !important; }
   @supports (height: 1svh) {
     .att-media.sized { width: min(100%, calc(var(--att-w) * 1px), calc(70svh * var(--att-w) / var(--att-h))) !important; }
   }
-  .att-media.sized.locked { min-width: 0; min-height: 0; }
   .att-media.sized .att-img { object-fit: contain; }
   .att-img { max-height: 560px; max-height: 70svh; }
 }

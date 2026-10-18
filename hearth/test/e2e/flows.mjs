@@ -489,14 +489,17 @@ async function phonePictures(t) {
   check(await bob.page.$eval('.viewer-name', (el) => !el.childElementCount && /\.png$/.test(el.textContent)), 'On a desktop the viewer should name the picture in plain text, as before.');
   await bob.page.keyboard.press('Escape');
   await bob.$('.viewer').waitFor({ state: 'detached' });
-  // A short window (a small laptop's screen) keeps a picture to 40% of its height, in its shape.
-  await bob.page.setViewportSize({ width: 1366, height: 620 });
-  for (const [text, [w, h]] of Object.entries(sent)) {
-    const m = bob.message(text).first();
-    await m.scrollIntoViewIfNeeded();
-    const r = await measure(m);
-    const want = Math.min(440, w, (340 * w) / h, (0.4 * 620 * w) / h);
-    check(Math.abs(r.w - want) < 1.5 && Math.abs(r.h - (want * h) / w) < 1.5, `In a short window “${text}” should be ${Math.round(want)}×${Math.round((want * h) / w)} (got ${r.w}×${r.h}).`);
+  // A short window (a small laptop's screen) keeps a picture to 40% of its height, in its shape; a narrow one (half
+  // a laptop's screen, with the phone layout) keeps a computer's sizes.
+  for (const [width, height] of [[1366, 620], [700, 900]]) {
+    await bob.page.setViewportSize({ width, height });
+    for (const [text, [w, h]] of Object.entries(sent)) {
+      const m = bob.message(text).first();
+      await m.scrollIntoViewIfNeeded();
+      const r = await measure(m);
+      const want = Math.min(440, w, (340 * w) / h, (0.4 * height * w) / h, r.col);
+      check(Math.abs(r.w - want) < 1.5 && Math.abs(r.h - (want * h) / w) < 1.5, `In a ${width}×${height} window “${text}” should be ${Math.round(want)}×${Math.round((want * h) / w)} (got ${r.w}×${r.h}).`);
+    }
   }
   await bob.page.setViewportSize({ width: 1400, height: 900 });
   await phone.close();
@@ -3919,7 +3922,7 @@ export const FLOWS = [
   ['direct messages: both ways, block and unblock, friends', directMessages],
   ['disappearing messages: turn on in a DM, a picture vanishes on both screens with its file and inbox entry, turn off, day dividers, asked before sending under a weaker timer; a channel message goes by the apps’ own timer', disappearing],
   ['attachments: image preview, byte-exact download, storage', attachments],
-  ['pictures on a phone: as big as the message allows, never cropped, sharp; the viewer zooms with a double tap and a pinch, swipes to the next and down to close; the desktop is as before, a touch laptop or tablet too, a short window keeps them to 40% of its height', phonePictures],
+  ['pictures on a phone: as big as the message allows, never cropped, sharp; the viewer zooms with a double tap and a pinch, swipes to the next and down to close; the desktop is as before, a touch laptop or tablet and a narrow window too, a short window keeps them to 40% of its height', phonePictures],
   ['pictures: avatar, custom emoji, server icon, GIF library', pictures],
   ['search: Ctrl+K words, from:, jump to the message', search],
   ['settings: display name, username, signed-in devices', settings],

@@ -1289,7 +1289,9 @@ function walk(dir, base = '') {
 const CORE_FONTS = /^fonts\/(fonts\.css|(figtree|bricolage-grotesque)-[\w-]+\.woff2)$/;
 const APP_ASSETS = ['/', '/manifest.webmanifest', '/vendor/argon2.js', '/socket.io/socket.io.js',
   ...walk(PUBLIC_DIR).filter((f) => /^(js|css|icons)\//.test(f) || f === 'favicon.svg' || CORE_FONTS.test(f)).map((f) => '/' + f)];
-const BUILD = crypto.createHash('sha256').update(walk(PUBLIC_DIR).sort().map((f) => f + fs.readFileSync(path.join(PUBLIC_DIR, f)).length + fs.statSync(path.join(PUBLIC_DIR, f)).mtimeMs).join('|')).digest('hex').slice(0, 12);
+// (The end-to-end tests restart the server as a new version with TEST_BUILD_SALT, without touching the files.)
+const BUILD = crypto.createHash('sha256').update(walk(PUBLIC_DIR).sort().map((f) => f + fs.readFileSync(path.join(PUBLIC_DIR, f)).length + fs.statSync(path.join(PUBLIC_DIR, f)).mtimeMs).join('|')
+  + (process.env.NODE_ENV === 'test' && process.env.TEST_BUILD_SALT ? `|${process.env.TEST_BUILD_SALT}` : '')).digest('hex').slice(0, 12);
 app.get('/sw.js', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Content-Type', 'application/javascript; charset=utf-8');

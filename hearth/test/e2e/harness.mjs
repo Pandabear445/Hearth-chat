@@ -146,15 +146,12 @@ export async function startServer() {
       throw new Error(`No email to ${to} matching ${match} arrived.`);
     },
     // Stops the server and starts it again on the same address and data, as installing an update does. With
-    // newVersion the app's files count as changed, so open pages find a new service worker, as after a real update
-    // (its version is a hash of the files' sizes and times): one file's time moves on while the server starts, and
-    // is put back once it's up.
+    // newVersion the app counts as changed, so open pages find a new service worker, as after a real update (its
+    // version is a hash of the app's files, and of TEST_BUILD_SALT in a test).
     async restart({ newVersion = false } = {}) {
       await halt();
-      const file = path.join(ROOT, 'public', 'favicon.svg');
-      const was = newVersion && fs.statSync(file);
-      if (was) fs.utimesSync(file, was.atime, new Date(was.mtimeMs + 1000));
-      try { await launch(); } finally { if (was) fs.utimesSync(file, was.atime, was.mtime); }
+      if (newVersion) env.TEST_BUILD_SALT = String(Number(env.TEST_BUILD_SALT || 0) + 1);
+      await launch();
     },
     async stop({ keep = false } = {}) {
       await halt();
