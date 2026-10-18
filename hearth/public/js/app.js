@@ -44,7 +44,7 @@ import { label as disLabel, deadline, expired as isExpired, disappears, serverKe
 import { createScheduled } from './scheduled.js';
 import { bindNew, bindEdit, describe as describeBinding, createVersions, createCopies, createOriginals, noteMessage, bindingState } from './binding.js';
 import { trackViewport } from './viewport.js';
-import { isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
+import { isPhone, isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
 import { touchGestures } from './viewer-touch.js';
 import { backStack, edgeSwipes } from './phone-nav.js';
 import { initAway, CLEAR_AFTER, clearAfterMs, clearsLabel, onlyPresenceChanged } from './presence.js';
@@ -4787,8 +4787,9 @@ const loadQueue = makeQueue(3);
 // same queue, with the same progress bar) and takes the thumbnail's place once it's ready to draw, without a flash.
 // Not with Data Saver on or for a very big file; what's sent and stored stays the same.
 // standIn: the row a message the word filter hides is drawn as (filteredEl). Its picture isn't on screen, so it's
-// sized as it would be there (app.css: the message's width, at most 70% of the screen's height) and loads the same
-// way when the row comes on screen: the server sees the same downloads either way.
+// sized as it would be there (app.css: on a phone the message's width, at most 70% of the screen's height; elsewhere
+// at most 440 x 340, and 40% of the window's height) and loads the same way when the row comes on screen: the server
+// sees the same downloads either way.
 function sharpenWhenShown(el, holder, f, full, standIn) {
   if (!(isTouchUI() || isPhoneLayout()) || !holder.classList.contains('sized')) return;
   if ((navigator.connection && navigator.connection.saveData) || (f.size || 0) > AUTOLOAD_MAX) return;
@@ -4797,7 +4798,7 @@ function sharpenWhenShown(el, holder, f, full, standIn) {
     const nw = el.naturalWidth; const nh = el.naturalHeight;
     if (!nw || !nh || !(standIn || el).isConnected) return false;
     const body = standIn && standIn.querySelector('.msg-body');
-    const drawn = standIn ? Math.min(body ? body.clientWidth : 0, w, (0.7 * innerHeight * w) / h)
+    const drawn = standIn ? Math.min(body ? body.clientWidth : 0, w, isPhone() ? (0.7 * innerHeight * w) / h : Math.min(440, (340 * w) / h, (0.4 * innerHeight * w) / h))
       : Math.min(el.clientWidth, (el.clientHeight * nw) / nh); // (the box may be letterboxed)
     return drawn * (window.devicePixelRatio || 1) > 1.25 * nw && w > nw * 1.1;
   };
@@ -4830,12 +4831,12 @@ function attachmentEl(f, m) {
     if (f.alt && media !== 'audio') { holder.classList.add('has-alt'); holder.append(altChip(f.alt)); }
     if (f.sp) spoilerCover(holder, el, media);
     // Reserve the right space up front so the chat doesn't jump while images load.
-    if (media === 'img' && f.w && f.h) {
+    if (media === 'img' && Number(f.w) > 0 && Number(f.h) > 0) {
       const w = Math.min(440, f.w, Math.round(340 * f.w / f.h));
       holder.style.width = `${w}px`;
       holder.style.aspectRatio = `${f.w} / ${f.h}`;
-      // Phones and touch screens size it from its shape instead, up to the message's width (app.css).
-      if (Number(f.w) > 0 && Number(f.h) > 0) { holder.style.setProperty('--att-w', String(Number(f.w))); holder.style.setProperty('--att-h', String(Number(f.h))); }
+      // Its shape, for app.css: a short window shrinks it to fit, and a phone sizes it up to the message's width.
+      holder.style.setProperty('--att-w', String(Number(f.w))); holder.style.setProperty('--att-h', String(Number(f.h)));
       holder.classList.add('sized');
     }
     const meter = h('div', { class: 'att-meter', hidden: true }, h('i'));
@@ -8610,11 +8611,12 @@ function setupServiceWorker() {
   hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('/sw.js').then((reg) => {
     const offer = (w) => {
-      // A new version finished installing in the background: offer to switch.
+      // A new version finished installing in the background: offer to switch. It usually takes over by itself a
+      // moment later (sw.js), so Reload can't wait for that to happen: it reloads either way (updateAndReload).
       if (S.autoUpdating) { w.postMessage('skipWaiting'); return; }
       if (document.querySelector('.update-bar')) return;
       const bar = h('div', { class: 'update-bar', role: 'status' }, icon('arrowUp'), h('span', null, 'A new version of Hearth is ready.'),
-        h('button', { class: 'btn primary sm', onclick: () => { wantReload = true; w.postMessage('skipWaiting'); } }, 'Reload'),
+        h('button', { class: 'btn primary sm', onclick: (e) => { e.currentTarget.disabled = true; updateAndReload(); } }, 'Reload'),
         ibtn('close', 'Later', () => bar.remove(), { cls: 'sm' }));
       document.body.append(bar);
     };
@@ -8631,7 +8633,7 @@ function setupServiceWorker() {
     // A new version took over in the background: the next reload uses it. Let people do it when it suits them.
     if (S.me && !document.querySelector('.update-bar') && hadController) {
       document.body.append(h('div', { class: 'update-bar', role: 'status' }, icon('arrowUp'), h('span', null, 'Hearth was updated.'),
-        h('button', { class: 'btn primary sm', onclick: () => location.reload() }, 'Reload'), ibtn('close', 'Later', (e) => e.currentTarget.closest('.update-bar').remove(), { cls: 'sm' })));
+        h('button', { class: 'btn primary sm', onclick: (e) => { e.currentTarget.disabled = true; updateAndReload(); } }, 'Reload'), ibtn('close', 'Later', (e) => e.currentTarget.closest('.update-bar').remove(), { cls: 'sm' })));
     }
   });
   navigator.serviceWorker.addEventListener('message', (e) => {

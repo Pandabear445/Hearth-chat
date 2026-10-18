@@ -342,7 +342,8 @@ async function attachments(t) {
 // A tall phone screenshot and a panorama, seen on a phone (390×844, touch) and on a desktop. On the phone they're as
 // big as the message allows (the screenshot up to about 70% of the screen's height), never cropped, sharp (the full
 // picture replaces the thumbnail), and the viewer takes fingers: double tap, pinch, swipes. The desktop's sizes are
-// the same as ever: at most 440 wide and 340 tall, the thumbnail cropped to fit.
+// the same as ever: at most 440 wide and 340 tall (and 40% of a short window's height), the thumbnail cropped to fit;
+// a touch screen with a computer's layout (a tablet, a laptop's) has the same.
 async function phonePictures(t) {
   const { alice, bob } = t.people;
   await alice.railButton(SERVER);
@@ -464,6 +465,19 @@ async function phonePictures(t) {
   await fingers.swipe({ x: 200, y: 300 }, { x: 200, y: 600 });
   await phone.$('.viewer').waitFor({ state: 'detached' });
 
+  // A touch screen that isn't a phone's (a tablet, a laptop's) has a computer's layout and its picture sizes too:
+  // sized like a phone's, a picture once filled a laptop's whole chat. Its window here is short, so they're also
+  // kept to 40% of its height (below).
+  await phone.page.setViewportSize({ width: 1366, height: 700 });
+  await phone.page.waitForSelector('#sidebar-body', { state: 'visible' });
+  for (const [text, [w, h]] of Object.entries(sent)) {
+    const m = phone.message(text).first();
+    await m.scrollIntoViewIfNeeded();
+    const r = await measure(m);
+    const want = Math.min(440, w, (340 * w) / h, (0.4 * 700 * w) / h);
+    check(Math.abs(r.w - want) < 1.5 && Math.abs(r.h - (want * h) / w) < 1.5, `On a touch screen with a computer's layout “${text}” should be ${Math.round(want)}×${Math.round((want * h) / w)}, as on a computer (got ${r.w}×${r.h}).`);
+  }
+
   // Nothing of this reached the desktop: the same sizes, and still the thumbnail; the viewer names the picture in
   // plain text, as it did (only a phone keeps the ending apart).
   for (const text of Object.keys(sent)) {
@@ -475,6 +489,16 @@ async function phonePictures(t) {
   check(await bob.page.$eval('.viewer-name', (el) => !el.childElementCount && /\.png$/.test(el.textContent)), 'On a desktop the viewer should name the picture in plain text, as before.');
   await bob.page.keyboard.press('Escape');
   await bob.$('.viewer').waitFor({ state: 'detached' });
+  // A short window (a small laptop's screen) keeps a picture to 40% of its height, in its shape.
+  await bob.page.setViewportSize({ width: 1366, height: 620 });
+  for (const [text, [w, h]] of Object.entries(sent)) {
+    const m = bob.message(text).first();
+    await m.scrollIntoViewIfNeeded();
+    const r = await measure(m);
+    const want = Math.min(440, w, (340 * w) / h, (0.4 * 620 * w) / h);
+    check(Math.abs(r.w - want) < 1.5 && Math.abs(r.h - (want * h) / w) < 1.5, `In a short window “${text}” should be ${Math.round(want)}×${Math.round((want * h) / w)} (got ${r.w}×${r.h}).`);
+  }
+  await bob.page.setViewportSize({ width: 1400, height: 900 });
   await phone.close();
 }
 // Fingers on a phone's screen, through the browser's own touch input (two at once for a pinch).
@@ -3847,6 +3871,46 @@ async function phoneMessageActions(t) {
   await desk.waitFor({ state: 'detached' });
 }
 
+// ------------------------------------------------------------------ an update: the "new version" bar
+// An update reaches an open page as a new service worker, and the bar offers to reload. The new version takes over
+// by itself a moment later (sw.js), so by the time Reload is clicked there's nothing left to wait for: Reload once
+// did nothing at all. It reloads onto the new version, in the same place, with a message being typed still there.
+async function updateBar(t) {
+  const { alice } = t.people;
+  const page = alice.page;
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await page.waitForFunction(() => navigator.serviceWorker.controller);
+  const swVersion = async () => (await (await fetch(`${t.server.base}/sw.js`)).text()).match(/VERSION = '(\w+)'/)[1];
+  const cacheNames = () => page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith('hearth-')).sort());
+  const before = await swVersion();
+  const draft = 'Half a message, typed before the update';
+  await alice.$('#composer-input').fill(draft);
+
+  await t.server.restart({ newVersion: true });
+  const after = await swVersion();
+  check(after !== before, `The restarted server should be a new version (${before} both times).`);
+  await alice.waitApp();
+  // The browser checks for a new version every so often; here, now.
+  await page.evaluate(() => navigator.serviceWorker.getRegistration().then((r) => r.update()));
+  const bar = page.locator('.update-bar').filter({ has: page.locator('button', { hasText: 'Reload' }) });
+  await bar.waitFor();
+  // Wait until the new version has taken over, as it has by the time anyone clicks.
+  for (let i = 0; JSON.stringify(await cacheNames()) !== JSON.stringify([`hearth-${after}`]); i++) {
+    check(i < 100, `The new version should take over by itself (caches: ${JSON.stringify(await cacheNames())}).`);
+    await page.waitForTimeout(100);
+  }
+  await page.evaluate(() => { window.__beforeReload = true; });
+  await Promise.all([page.waitForEvent('load'), bar.locator('button', { hasText: 'Reload' }).click()]);
+  await alice.waitApp();
+  check(await page.evaluate(() => !window.__beforeReload), 'Reload should reload the page.');
+  check(JSON.stringify(await cacheNames()) === JSON.stringify([`hearth-${after}`]) && await page.evaluate(() => !!navigator.serviceWorker.controller), 'It should run the new version.');
+  await alice.$('#composer-input[placeholder="Message #general"]').waitFor();
+  check(await alice.$('#composer-input').inputValue() === draft, 'The message being typed should still be there.');
+  check(!(await page.locator('.update-bar').count()), 'No update bar should be left.');
+  await alice.$('#composer-input').fill('');
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -3855,7 +3919,7 @@ export const FLOWS = [
   ['direct messages: both ways, block and unblock, friends', directMessages],
   ['disappearing messages: turn on in a DM, a picture vanishes on both screens with its file and inbox entry, turn off, day dividers, asked before sending under a weaker timer; a channel message goes by the apps’ own timer', disappearing],
   ['attachments: image preview, byte-exact download, storage', attachments],
-  ['pictures on a phone: as big as the message allows, never cropped, sharp; the viewer zooms with a double tap and a pinch, swipes to the next and down to close; the desktop is as before', phonePictures],
+  ['pictures on a phone: as big as the message allows, never cropped, sharp; the viewer zooms with a double tap and a pinch, swipes to the next and down to close; the desktop is as before, a touch laptop or tablet too, a short window keeps them to 40% of its height', phonePictures],
   ['pictures: avatar, custom emoji, server icon, GIF library', pictures],
   ['search: Ctrl+K words, from:, jump to the message', search],
   ['settings: display name, username, signed-in devices', settings],
@@ -3896,4 +3960,6 @@ export const FLOWS = [
   ['staff deletion: the owner deletes an account for someone who can’t sign in, from Admin → Users', staffDelete],
   ['phones: held sideways it’s still the phone layout; a swipe from the left edge opens the drawer; Back closes the drawer, members, a picture, a menu and settings without leaving; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
   ['phone message actions: a long press opens a sheet (react, reply, copy, edit, delete; closes with Back, Esc, a tap or a swipe); a roomier message box with GIFs and Send later under +; the desktop keeps its hover toolbar and buttons', phoneMessageActions],
+  // Last: it restarts the server.
+  ['an update: the "new version" bar’s Reload reloads onto it, in the same place, keeping a half-typed message', updateBar],
 ];

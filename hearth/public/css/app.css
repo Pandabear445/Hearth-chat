@@ -859,7 +859,7 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .att-media { position: relative; border-radius: 12px; overflow: hidden; max-width: min(440px, 100%); background: var(--hover); border: 1px solid var(--line); }
 .att-media.locked { min-width: 220px; min-height: 150px; }
 .att-media.locked::after { content: ''; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 30%, rgb(var(--text-rgb) / .06) 50%, transparent 70%) 0 0 / 200% 100%; animation: shimmer 1.4s linear infinite; }
-.att-img { max-width: 100%; max-height: 340px; cursor: zoom-in; object-fit: contain; display: block; }
+.att-img { max-width: 100%; max-height: 340px; max-height: min(340px, 40vh); cursor: zoom-in; object-fit: contain; display: block; }
 .att-video { max-width: 100%; max-height: 360px; display: block; background: #000; }
 .att-audio { width: 340px; max-width: 100%; display: block; }
 .att-audio-name { display: flex; align-items: center; gap: 6px; padding: 8px 10px 0; font-size: 13px; font-weight: 600; }
@@ -2303,6 +2303,9 @@ img.cemoji.big { width: 40px; height: 40px; }
 .att-retry { position: absolute; inset: auto 0 0 0; margin: auto; top: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text-2); }
 .att-retry .ic { width: 15px; height: 15px; }
 .att-media.sized .att-img { width: 100%; height: 100%; object-fit: cover; max-height: none; }
+/* A short window (a small laptop's screen) keeps a picture to 40% of its height, so one never fills the chat; it
+   shrinks in its shape (app.js attachmentEl gives it --att-w and --att-h). From 850px tall it's the usual 340px. */
+.att-media.sized { max-width: min(440px, 100%, calc(40vh * var(--att-w) / var(--att-h))); }
 /* Download progress for big files, a "no longer available" state, and click-to-load for big videos and songs. */
 .att-meter { position: absolute; left: 10px; right: 10px; bottom: 10px; height: 4px; border-radius: 2px; background: rgb(0 0 0 / .35); overflow: hidden; z-index: 2; }
 .att-meter[hidden] { display: none; }
@@ -2323,23 +2326,27 @@ img.cemoji.big { width: 40px; height: 40px; }
 .viewer-stage { position: relative; }
 
 /* ------------------------------------------------------------------ phones and touch screens: pictures and the viewer
-   The same two media queries as device.js. PHONE LAYOUT: (max-width: 760px), (pointer: coarse) and (max-height: 500px),
-   a narrow window or a phone held sideways. TOUCH UI: (pointer: coarse), phones and tablets. A desktop with a mouse
-   matches neither and looks as it always has. */
-/* PHONE LAYOUT or TOUCH UI: a picture in the chat takes the message's whole width when its shape allows, and a tall
-   one up to about 70% of the screen's height instead of 340px, so a phone screenshot can be read. The box keeps the
-   picture's shape (app.js attachmentEl gives it --att-w and --att-h), so nothing jumps while it loads, and the picture
-   is never cropped: should the box ever disagree with it, it's letterboxed. In the viewer it always fits the screen. */
-@media (max-width: 760px), (pointer: coarse) and (max-height: 500px), (pointer: coarse) {
+   The same media queries as device.js. PHONE LAYOUT: (max-width: 760px), (pointer: coarse) and (max-height: 500px),
+   a narrow window or a phone held sideways. TOUCH UI: (pointer: coarse), phones and tablets. A PHONE is both at once.
+   A desktop with a mouse matches none and looks as it always has. */
+/* A PHONE (PHONE LAYOUT and TOUCH UI at once): a picture in the chat takes the message's whole width when its shape
+   allows, and a tall one up to about 70% of the screen's height instead of 340px, so a phone screenshot can be read.
+   The box keeps the picture's shape (app.js attachmentEl gives it --att-w and --att-h), so nothing jumps while it
+   loads, and the picture is never cropped: should the box ever disagree with it, it's letterboxed. A computer keeps
+   the usual size, a narrow window or a touch screen too (sized like this, one filled a laptop's whole chat). */
+@media (max-width: 760px) and (pointer: coarse), (pointer: coarse) and (max-height: 500px) {
   .att-media { max-width: 100%; }
-  .att-media.sized { width: min(100%, calc(var(--att-w) * 1px), calc(560px * var(--att-w) / var(--att-h))) !important; }
+  .att-media.sized { max-width: 100%; width: min(100%, calc(var(--att-w) * 1px), calc(560px * var(--att-w) / var(--att-h))) !important; }
   @supports (height: 1svh) {
     .att-media.sized { width: min(100%, calc(var(--att-w) * 1px), calc(70svh * var(--att-w) / var(--att-h))) !important; }
   }
   .att-media.sized.locked { min-width: 0; min-height: 0; }
   .att-media.sized .att-img { object-fit: contain; }
   .att-img { max-height: 560px; max-height: 70svh; }
-  /* The viewer's picture fits the screen however tall or wide it is (an auto-sized grid row would grow to it). */
+}
+/* PHONE LAYOUT or TOUCH UI: the viewer's picture fits the screen however tall or wide it is (an auto-sized grid row
+   would grow to it). */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px), (pointer: coarse) {
   .viewer-stage { grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
 }
 /* TOUCH UI: the viewer takes the fingers itself (viewer-touch.js: pinch, double tap, swipes), so the page never zooms

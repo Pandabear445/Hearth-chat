@@ -100,14 +100,25 @@ export async function startServer() {
     ALERT_PRIVATE_HOSTS: `${site.host}:${site.port}`,
   };
   let log = '';
-  const child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  child.stdout.on('data', (d) => { log += d; });
-  child.stderr.on('data', (d) => { log += d; });
-  for (let i = 0; ; i++) {
-    try { const r = await fetch(base + '/api/config'); if (r.ok) break; } catch { /* not up yet */ }
-    if (i > 300 || child.exitCode !== null) { await sink.close(); await site.close(); throw new Error(`Hearth didn't start:\n${log}`); }
-    await sleep(100);
-  }
+  let child;
+  const launch = async () => {
+    child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.on('data', (d) => { log += d; });
+    child.stderr.on('data', (d) => { log += d; });
+    for (let i = 0; ; i++) {
+      try { const r = await fetch(base + '/api/config'); if (r.ok) break; } catch { /* not up yet */ }
+      if (i > 300 || child.exitCode !== null) { await sink.close(); await site.close(); throw new Error(`Hearth didn't start:\n${log}`); }
+      await sleep(100);
+    }
+  };
+  const halt = async () => {
+    if (child.exitCode !== null) return;
+    child.kill('SIGTERM');
+    for (let i = 0; i < 60 && child.exitCode === null; i++) await sleep(50);
+    if (child.exitCode === null) child.kill('SIGKILL');
+    for (let i = 0; i < 60 && child.exitCode === null; i++) await sleep(50);
+  };
+  await launch();
   return {
     base, dir, port, site, get log() { return log; },
     // Every email the server has sent so far, oldest first: { to, subject, text }. Waits until mail has stopped
@@ -134,12 +145,19 @@ export async function startServer() {
       }
       throw new Error(`No email to ${to} matching ${match} arrived.`);
     },
+    // Stops the server and starts it again on the same address and data, as installing an update does. With
+    // newVersion the app's files count as changed, so open pages find a new service worker, as after a real update
+    // (its version is a hash of the files' sizes and times): one file's time moves on while the server starts, and
+    // is put back once it's up.
+    async restart({ newVersion = false } = {}) {
+      await halt();
+      const file = path.join(ROOT, 'public', 'favicon.svg');
+      const was = newVersion && fs.statSync(file);
+      if (was) fs.utimesSync(file, was.atime, new Date(was.mtimeMs + 1000));
+      try { await launch(); } finally { if (was) fs.utimesSync(file, was.atime, was.mtime); }
+    },
     async stop({ keep = false } = {}) {
-      if (child.exitCode === null) {
-        child.kill('SIGTERM');
-        for (let i = 0; i < 60 && child.exitCode === null; i++) await sleep(50);
-        if (child.exitCode === null) child.kill('SIGKILL');
-      }
+      await halt();
       await sink.close(); await site.close();
       if (!keep) fs.rmSync(dir, { recursive: true, force: true });
     },

@@ -63,14 +63,17 @@ test('a zoomed picture can be moved, but never so far that it can be lost off sc
 test('the two kinds of screen are the agreed media queries, asked of the browser as they are', () => {
   assert.equal(D.PHONE_LAYOUT, '(max-width: 760px), (pointer: coarse) and (max-height: 500px)');
   assert.equal(D.TOUCH_UI, '(pointer: coarse)');
-  // Without a browser (no matchMedia) neither is true.
+  // A phone is both at once: each part of the phone layout, on a touch screen.
+  assert.equal(D.PHONE, D.PHONE_LAYOUT.split(', ').map((q) => (q.includes(D.TOUCH_UI) ? q : `${q} and ${D.TOUCH_UI}`)).join(', '));
+  // Without a browser (no matchMedia) none is true.
   assert.equal(D.isPhoneLayout(), false);
   assert.equal(D.isTouchUI(), false);
+  assert.equal(D.isPhone(), false);
 });
 
-test('app.css asks the same questions: every rule for touch screens uses one of the two, or both', () => {
+test('app.css asks the same questions: every rule for touch screens uses one of the two, either or both', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'app.css'), 'utf8');
-  const allowed = new Set([D.TOUCH_UI, D.PHONE_LAYOUT, `${D.PHONE_LAYOUT}, ${D.TOUCH_UI}`]);
+  const allowed = new Set([D.TOUCH_UI, D.PHONE_LAYOUT, `${D.PHONE_LAYOUT}, ${D.TOUCH_UI}`, D.PHONE]);
   const coarse = [...css.matchAll(/@media\s+([^{]+)\{/g)].map((m) => m[1].trim()).filter((q) => /pointer:\s*coarse/.test(q));
   assert.ok(coarse.length >= 3, 'the pictures and the viewer have rules for both');
   for (const q of coarse) assert.ok(allowed.has(q), `@media ${q}`);
