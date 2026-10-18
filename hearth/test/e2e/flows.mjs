@@ -464,11 +464,17 @@ async function phonePictures(t) {
   await fingers.swipe({ x: 200, y: 300 }, { x: 200, y: 600 });
   await phone.$('.viewer').waitFor({ state: 'detached' });
 
-  // Nothing of this reached the desktop: the same sizes, and still the thumbnail.
+  // Nothing of this reached the desktop: the same sizes, and still the thumbnail; the viewer names the picture in
+  // plain text, as it did (only a phone keeps the ending apart).
   for (const text of Object.keys(sent)) {
     const r = await measure(bob.message(text).first());
     check(r.w === desk[text].w && r.h === desk[text].h && r.nw <= 480 && r.nh <= 480, `On a desktop “${text}” should keep its size and thumbnail (got ${r.w}×${r.h}, ${r.nw}×${r.nh}).`);
   }
+  await bob.message(Object.keys(sent)[0]).first().locator('.att-img').click();
+  await bob.$('.viewer').waitFor();
+  check(await bob.page.$eval('.viewer-name', (el) => !el.childElementCount && /\.png$/.test(el.textContent)), 'On a desktop the viewer should name the picture in plain text, as before.');
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
   await phone.close();
 }
 // Fingers on a phone's screen, through the browser's own touch input (two at once for a pinch).
@@ -1080,7 +1086,8 @@ function fakeAndroidBridge({ invite }) {
 async function androidApp(t) {
   const code = t.state.invite.split('/invite/')[1];
   const droid = await t.open('droid');
-  await droid.register('droid', newPassword());
+  t.pw.droid = newPassword();
+  await droid.register('droid', t.pw.droid);
   const subs = [];
   await droid.page.route('**/api/push/subscribe', (route) => { subs.push(route.request().postDataJSON()); route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }); });
   await droid.context.addInitScript(fakeAndroidBridge, { invite: code });
@@ -1201,9 +1208,10 @@ function fakeIPhone() {
   Object.defineProperty(Notification, 'permission', { get: () => 'default' });
 }
 async function iPhoneNotifications(t) {
-  // Bob, signed in on a new device (a new account would go over the server's sign-ups-per-hour limit for one address).
   const phone = await t.open('iphone');
-  await phone.login('bob', t.pw.bob);
+  // The Android flow's account, signed in on this iPhone (what's checked here belongs to the device): the server takes
+  // five sign-ups an hour from one network, and the flows' own come to that already.
+  await phone.login('droid', t.pw.droid);
   await phone.context.addInitScript(fakeIPhone);
   const restart = async () => { await phone.page.reload(); await phone.waitApp(); await phone.page.waitForTimeout(400); };
   await restart();
@@ -3719,8 +3727,52 @@ async function phoneMessageActions(t) {
   await page.keyboard.press('Escape');
   await mine.locator('.edit-input').waitFor({ state: 'detached' });
 
-  // It goes with Back (staying in Hearth), Esc, a tap above it and a swipe down.
+  // Back cancels a reply, an edit and a voice message being recorded (they take the screen on a phone), as Esc and
+  // their own Cancel buttons do, and stays in Hearth.
   const app = page.url();
+  const stayed = async (what) => check(page.url() === app && (await phone.$('#app:not([hidden])').count()) === 1, `Back ${what} should stay in Hearth (now at ${page.url()}).`);
+  const quietly = (what) => mine.evaluate((el) => document.activeElement === el && getComputedStyle(el).outlineStyle === 'none')
+    .then((ok) => check(ok, `${what}, focus should be back on the message, without a focus ring.`));
+  await hold();
+  await row('Reply').tap();
+  await sheetGone();
+  await phone.$('.cw-main .reply-bar', { hasText: text }).waitFor();
+  check(await backStep(), 'A reply being written should have a step in the history for Back to take.');
+  await page.goBack();
+  await phone.$('.cw-main .reply-bar').waitFor({ state: 'detached' });
+  await stayed('from a reply');
+  await hold();
+  await row('Edit message').tap();
+  await mine.locator('.edit-input').waitFor();
+  await page.keyboard.type(' (half done)');
+  check(await backStep(), 'A message being edited should have a step in the history for Back to take.');
+  await page.goBack();
+  await mine.locator('.edit-input').waitFor({ state: 'detached' });
+  await stayed('from an edit');
+  check((await mine.locator('.msg-text').textContent()).trim() === text, 'Back from an edit should leave the message as it was.');
+  await quietly('After Back from an edit');
+  const voiceBefore = await phone.$('#messages .vm').count();
+  await page.locator('.cw-main .composer .attach').tap();
+  await phone.menuItem('Voice message').tap();
+  await phone.$('.cw-main .rec-bar').waitFor();
+  check(await backStep(), 'A voice message being recorded should have a step in the history for Back to take.');
+  await page.goBack();
+  await phone.$('.cw-main .rec-bar').waitFor({ state: 'detached' });
+  await stayed('while recording');
+  await page.waitForTimeout(800);
+  check((await phone.$('#messages .vm').count()) === voiceBefore, 'Back while recording should send nothing.');
+  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+  // Focus goes back to the message from the sheet without a ring, also after typing in the message box (which the
+  // browser would otherwise pass on as keyboard focus).
+  await page.locator('#composer-input').tap();
+  await page.keyboard.type('half a thought');
+  await hold();
+  await page.goBack();
+  await sheetGone();
+  await quietly('After Back from the sheet');
+  await page.locator('#composer-input').fill('');
+
+  // It goes with Back (staying in Hearth), Esc, a tap above it and a swipe down.
   await hold();
   await page.goBack();
   await sheetGone();

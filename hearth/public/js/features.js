@@ -129,6 +129,7 @@ export function voiceButton(getComposer, onSend) {
       h('button', { class: 'icon-btn', 'aria-label': 'Cancel recording', 'data-tip': 'Cancel', onclick: () => stop(false) }, icon('trash')),
       h('span', { class: 'rec-dot' }), h('span', null, 'Recording'), time, level,
       h('button', { class: 'btn primary sm', onclick: () => stop(true) }, icon('send'), 'Send'));
+    bar._cancel = () => stop(false); // (Back on a phone, as Cancel: app.js phoneNav)
     function stop(send) {
       if (rec.state === 'inactive') return;
       cancelled = !send;

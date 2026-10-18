@@ -2349,14 +2349,17 @@ img.cemoji.big { width: 40px; height: 40px; }
   .viewer-stage.touching .viewer-img { transition: none; }
   .viewer-stage.easing .viewer-img { transition: transform .2s var(--ease); }
 }
+/* PHONE LAYOUT or TOUCH UI (a tablet's too): the viewer bar's buttons are 44px, for a finger. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px), (pointer: coarse) {
+  .viewer-bar .icon-btn { width: 44px; height: 44px; border-radius: 12px; }
+  .viewer-bar .icon-btn .ic { width: 22px; height: 22px; }
+}
 /* PHONE LAYOUT: the viewer goes edge to edge on an opaque backdrop, clear of the notch and the home bar. Its bar keeps
-   the name, the count on one line, Download, More (app.js openViewer) and Close, as 44px buttons; swipes stand in for
-   the arrow buttons. */
+   the name, the count on one line, Download, More (app.js openViewer) and Close; swipes stand in for the arrow
+   buttons. */
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   .viewer { background: rgb(8 7 11); }
   .viewer-bar { gap: 2px; padding: max(4px, env(safe-area-inset-top)) max(4px, env(safe-area-inset-right)) 4px max(14px, env(safe-area-inset-left)); }
-  .viewer-bar .icon-btn { width: 44px; height: 44px; border-radius: 12px; }
-  .viewer-bar .icon-btn .ic { width: 22px; height: 22px; }
   .viewer-name { display: flex; min-width: 0; max-width: none; }
   .viewer-name-base { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .viewer-name-ext { flex: none; }
@@ -3156,14 +3159,19 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
   .msg.pressed { background: var(--active); }
 }
 
-@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
-  /* The message box gets the room: GIFs, voice messages and Send later are in the + menu (app.js createComposer). */
-  .composer .composer-more { display: none; }
-  .composer { padding: 3px; gap: 0; }
+/* PHONE LAYOUT or TOUCH UI: the message box's buttons are 44px, for a finger (a tablet keeps all of them beside the
+   box), and focus handed back after a gesture shows no ring (ui.js quietFocus: the next key press brings it back). */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px), (pointer: coarse) {
   .composer .attach, .composer-tools .icon-btn, .send-btn { width: 44px; height: 44px; border-radius: 11px; }
   .composer-tools .icon-btn .ic { width: 22px; height: 22px; }
   .composer textarea { min-height: 44px; padding: 11px 6px; }
   .send-btn .ic { width: 20px; height: 20px; }
+  .quiet-focus:focus-visible { outline: none; }
+}
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  /* The message box gets the room: GIFs, voice messages and Send later are in the + menu (app.js createComposer). */
+  .composer .composer-more { display: none; }
+  .composer { padding: 3px; gap: 0; }
   .send-btn:disabled { background: var(--hover); opacity: 1; }
 }
 
@@ -3174,17 +3182,39 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
   .msg { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .msg textarea, .msg input { -webkit-user-select: text; user-select: text; }
   .msg img, .msg a { -webkit-user-drag: none; }
-  .reaction { height: 32px; padding: 0 10px; }
   .reaction.add-r { opacity: .75; }
   /* Room for a finger: 44px to tap. */
-  #main-head .icon-btn { width: 40px; height: 44px; }
-  .panel-head .icon-btn, .modal-x, .set-close, .me-actions .icon-btn { width: 44px; height: 44px; }
-  .reply-bar .icon-btn { width: 36px; height: 36px; }
+  #main-head .icon-btn, .panel-head .icon-btn, .modal-x, .set-close, .me-actions .icon-btn, .rec-bar .icon-btn, .pc-actions .icon-btn,
+  .icon-btn.search-close { width: 44px; height: 44px; }
+  .btn { min-height: 44px; }
+  .reply-bar { padding: 0 0 0 12px; }
+  .reply-bar .icon-btn { width: 44px; height: 44px; }
   .ch-main, .nav-row, .server-head, .find-btn, .panel-search .input, .emoji-search { height: 44px; }
-  .dm-row, .member, .ev-row, .me-btn, .set-nav-btn, .set-subtab, .ss-tab, .seg-btn, .tab, .chip, .menu-item, .toggle-row { min-height: 44px; }
+  .dm-row, .member, .ev-row, .me-btn, .set-nav-btn, .set-subtab, .ss-tab, .seg-btn, .tab, .chip, .menu-item, .toggle-row, .cat-toggle,
+  .pc-mutual { min-height: 44px; }
+  .search-clear { display: inline-flex; align-items: center; min-height: 44px; padding: 0 10px; }
+  .seg-btn, .chip.search-chip { min-width: 44px; justify-content: center; }
   /* (A min-height would let a row with more on it shrink below its content in a scrolling column: they keep it.) */
-  .ev-row, .member, .set-nav-btn, .set-subtab, .ss-tab, .menu-item, .toggle-row { flex-shrink: 0; }
-  .cat-toggle { min-height: 32px; }
+  .ev-row, .member, .set-nav-btn, .set-subtab, .ss-tab, .menu-item, .toggle-row, .pc-mutual { flex-shrink: 0; }
+  .vm { padding: 6px 12px 6px 6px; }
+  .vm-play { width: 44px; height: 44px; font-size: 14px; }
+  /* A call's own buttons above it: their room reaches past the line they sit on, which stays as low as it was. */
+  .cs-head-tools .icon-btn { width: 44px; height: 44px; margin: -11px 0; }
+  /* Where the look stays small, the room to tap is bigger than what's drawn (the ::before): reactions under a message
+     (their rows a little further apart, and from the next message, so the rooms don't overlap), the voice message
+     player's speed, the × that removes a filter or a role, and Download on a picture. */
+  .reactions { gap: 8px 6px; margin-bottom: 2px; }
+  .reaction { height: 36px; min-width: 44px; justify-content: center; padding: 0 10px; }
+  .vm-speed { min-width: 36px; min-height: 30px; }
+  .chip-x { width: 28px; height: 28px; }
+  .chip.active.search-chip { padding-right: 8px; }
+  .att-dl { width: 36px; height: 36px; }
+  :where(.reaction, .vm-speed, .chip-x) { position: relative; }
+  .reaction::before, .vm-speed::before, .chip-x::before, .att-dl::before { content: ''; position: absolute; }
+  .reaction::before { inset: -5px 0; } /* (measured from inside its border: 4px past it) */
+  .vm-speed::before { inset: -7px -4px; }
+  .chip-x::before { inset: -8px; }
+  .att-dl::before { inset: -4px; }
   /* (Taller items: a long menu scrolls rather than running off a short screen.) */
   .menu { max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; }
   /* 16px or more in text boxes: iOS zooms the page in when a smaller one gets focus. */

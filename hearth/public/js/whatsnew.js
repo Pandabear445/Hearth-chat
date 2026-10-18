@@ -7,7 +7,7 @@ export const CHANGES = [
     'Pictures on phones are as big as the message allows (a tall screenshot up to most of the screen), never cropped, and sharp: the full picture replaces the small preview once it’s on screen.',
     'The picture viewer on touch screens: pinch to zoom, double-tap to zoom in where you tap, swipe left or right for the next picture and down to close. On a phone it fills the screen, with bigger buttons.',
     'A phone held sideways gets the phone layout instead of a squeezed desktop one, and messages on phones use more of the screen’s width.',
-    'Phones: swipe from the left edge to open your servers and channels. Back (the gesture, or Android’s back button) closes the picture, menu, dialog or panel on top instead of leaving Hearth.',
+    'Phones: swipe from the left edge to open your servers and channels. Back (the gesture, or Android’s back button) closes the picture, menu, dialog or panel on top, or cancels an edit, a reply or a voice message you’re recording, instead of leaving Hearth.',
     'Touch screens: hold a message to react, reply, copy, edit or delete it. Buttons and rows are bigger to tap.',
     'A roomier message box on phones: GIFs, voice messages and Send later are under +.',
   ] },

@@ -27,7 +27,7 @@ import { watchConnection } from './conn.js';
 import { unseenChanges } from './whatsnew.js';
 import { initKeybinds, getKeybinds, comboLabel, reportCall, flashTaskbar, installUpdate, shortcutGroups, comboParts, keyName } from './keybinds.js';
 import { initActivity, activityLine, openActivityPicker, startDesktopDetection } from './activity.js';
-import { modal, popover, closePopover, menu, contextMenu, sheet, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
+import { modal, popover, closePopover, menu, contextMenu, sheet, quietFocus, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
 import { openSettings, applyAppearance, confirmedCall, displayNameDialog } from './settings.js';
 import { createFolders, dragDrop } from './folders.js';
 import { createUpdates } from './updates.js';
@@ -2859,38 +2859,60 @@ function closePanel() {
   if (hadFocus && !panelMode()) $('#main').focus({ preventScroll: true });
 }
 // Phones and tablets (phone-nav.js): Back closes the menu, picture, message actions, dialog, side panel or drawer on
-// top instead of leaving Hearth, and in the phone layout a swipe from the screen's left edge opens the drawer (or closes
-// the side panel, which covers the chat there).
+// top instead of leaving Hearth, and cancels a voice message being recorded, a message being edited or a reply (as Esc
+// does); in the phone layout a swipe from the screen's left edge opens the drawer (or closes the side panel, which
+// covers the chat there).
 function phoneNav() {
   const viewer = () => document.querySelector('.viewer:not(.closing)');
   const popup = () => document.querySelector('#layer > .popover');
   const actions = () => document.querySelector('#layer > .sheet-backdrop:not(.closing)');
   const dialog = () => [...document.querySelectorAll('#layer > .modal-backdrop:not(.closing)')].pop();
+  // What's under way in a message box or the message list, the recording first: each one's element says how it's
+  // cancelled (_cancel). The one in the side panel (a thread's) goes before the panel, the chat's after the drawer.
+  const underWay = (inPanel) => {
+    if (inPanel && !panelMode()) return null;
+    const panel = $('#members');
+    for (const sel of ['.rec-bar', '.edit-wrap', '.reply-bar']) {
+      const el = $$(sel).find((x) => x._cancel && panel.contains(x) === inPanel);
+      if (el) return el;
+    }
+    return null;
+  };
+  const enabled = () => isPhoneLayout() || isTouchUI();
   const back = backStack({
     // The phone layout, and touch screens (a tablet's back gesture). A desktop with a mouse adds nothing.
-    enabled: () => isPhoneLayout() || isTouchUI(),
+    enabled,
     layers: [
       { open: () => !!popup(), close: closePopover }, // (a menu can sit on the picture viewer: its More)
       { open: () => !!viewer(), close: () => viewer()._close() },
       { open: () => !!actions(), close: () => actions()._close() },
       { open: () => !!dialog(), close: () => dialog()._close() },
+      { open: () => !!underWay(true), close: () => underWay(true)._cancel() },
       // Beside the chat on a wider screen, the side panel is part of the page rather than something on top of it.
       { open: () => isPhoneLayout() && !!panelMode(), close: closePanel },
       { open: navOpen, close: closeNav },
+      { open: () => !!underWay(false), close: () => underWay(false)._cancel() },
     ],
   });
   // Whatever opens or closes them: the drawer and panel are classes on the body; pictures, menus, sheets and dialogs
-  // are added and removed.
+  // are added and removed. Recording, editing and replying come and go inside the chat and the side panel, which are
+  // watched only while Back is Hearth's (they change with every message).
   const watch = new MutationObserver(() => back.sync());
   watch.observe(document.body, { attributes: true, attributeFilter: ['class'], childList: true });
   watch.observe($('#layer'), { childList: true });
+  const inside = new MutationObserver(() => back.sync());
+  const watchInside = () => {
+    inside.disconnect();
+    if (enabled()) for (const el of [$('#main'), $('#members')]) inside.observe(el, { childList: true, subtree: true });
+  };
+  watchInside();
   const swipes = edgeSwipes({
     enabled: () => isPhoneLayout() && isTouchUI(),
     blocked: () => !!(viewer() || popup() || actions() || dialog()),
     drawer: { isOpen: navOpen, parts: () => [$('#rail'), $('#sidebar')], scrim: () => $('.nav-scrim'), setOpen: (on) => (on ? document.body.classList.add('nav-open') : closeNav()) },
     panel: { isOpen: () => !!panelMode(), el: () => $('#members'), close: closePanel },
   });
-  onDeviceChange(() => { swipes.update(); back.sync(); });
+  onDeviceChange(() => { swipes.update(); watchInside(); back.sync(); });
 }
 function headTools(...items) { return h('div', { class: 'head-tools', role: 'toolbar', 'aria-label': 'Conversation tools' }, items.filter(Boolean)); }
 // The channel's Threads panel. Its badge counts pings in the channel's threads; a dot means new replies in a thread
@@ -4460,7 +4482,8 @@ function replaceMessageEl(m) {
     const hadFocus = el.contains(document.activeElement);
     el.replaceWith(fresh);
     if (wasCurrent) setCurrentMessage(fresh.parentElement, fresh);
-    if (hadFocus) fresh.focus({ preventScroll: true });
+    // (Focus given back after a gesture stays without its ring: ui.js quietFocus.)
+    if (hadFocus) { if (el.classList.contains('quiet-focus')) quietFocus(fresh); else fresh.focus({ preventScroll: true }); }
     if (S.editing === m.id) { const ta = fresh.querySelector('textarea'); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }
   });
 }
@@ -4599,7 +4622,18 @@ function editBox(m, ctx) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); }
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(); }
   });
-  return h('div', { class: 'edit-wrap' }, ta, h('div', { class: 'edit-hint' }, 'Esc to ', h('button', { class: 'link-btn', onclick: done }, 'cancel'), ' \u00b7 Enter to ', h('button', { class: 'link-btn', onclick: save }, 'save')));
+  const wrap = h('div', { class: 'edit-wrap' }, ta, h('div', { class: 'edit-hint' }, 'Esc to ', h('button', { class: 'link-btn', onclick: done }, 'cancel'), ' \u00b7 Enter to ', h('button', { class: 'link-btn', onclick: save }, 'save')));
+  // Back on a phone (phoneNav) cancels too. Focus stays on the message, without a ring (it came from a gesture), and
+  // the keyboard doesn't come back up for the message box.
+  wrap._cancel = () => {
+    const had = wrap.contains(document.activeElement);
+    if (had) document.activeElement.blur();
+    S.editing = null;
+    replaceMessageEl(m);
+    const el = had && $(`[data-mid="${m.id}"][data-ctx="${ctx}"]`);
+    if (el) quietFocus(el);
+  };
+  return wrap;
 }
 async function deleteMessage(m) {
   if (!(await confirmDialog({ title: 'Delete message?', text: m.threadCount ? 'This removes the message and its thread for everyone.' : 'This removes it for everyone.', confirm: 'Delete', danger: true }))) return;
@@ -4891,8 +4925,12 @@ function openViewer(fromImg, { name, download } = {}) {
   let scale = 1; let tx = 0; let ty = 0;
   const img = h('img', { class: 'viewer-img', alt: '' });
   const caption = h('span', { class: 'viewer-name' });
-  // The name in two parts, so a phone can shorten it and still show how it ends (".jpg").
+  // The picture's name. On a phone it's in two parts, so it can be shortened and still show how it ends (".jpg");
+  // elsewhere it's the plain text it always was (fit() below redoes it when the screen changes over).
+  let captionText = '';
   const setCaption = (text) => {
+    captionText = text;
+    if (!isPhoneLayout()) { caption.textContent = text; return; }
     const parts = /^(.+?)(\.[a-z0-9]{1,8})$/i.exec(text) || [text, text, ''];
     caption.replaceChildren(h('span', { class: 'viewer-name-base' }, parts[1]), h('span', { class: 'viewer-name-ext' }, parts[2]));
   };
@@ -4907,7 +4945,7 @@ function openViewer(fromImg, { name, download } = {}) {
     stage.classList.add('loading-full');
     if (src._full) {
       src._full().then((u) => { if (imgs[idx] === src) { img.src = u; } })
-        .catch((e) => { if (imgs[idx] === src && e && e.code === 'gone') setCaption(`${caption.textContent} \u2014 no longer available`); })
+        .catch((e) => { if (imgs[idx] === src && e && e.code === 'gone') setCaption(`${captionText} \u2014 no longer available`); })
         .finally(() => { if (imgs[idx] === src) stage.classList.remove('loading-full'); });
     }
     else stage.classList.remove('loading-full');
@@ -4964,7 +5002,7 @@ function openViewer(fromImg, { name, download } = {}) {
       { label: 'Copy image', icon: 'copy', action: copy },
     ], { align: 'end', className: 'viewer-menu' });
   }, { attrs: { 'data-pop-anchor': '' } });
-  const fit = () => { const phone = isPhoneLayout(); extras.forEach((b) => { b.hidden = phone; }); more.hidden = !phone; };
+  const fit = () => { const phone = isPhoneLayout(); extras.forEach((b) => { b.hidden = phone; }); more.hidden = !phone; setCaption(captionText); };
   fit();
   const stopFitting = onDeviceChange(fit);
   const bar = h('div', { class: 'viewer-bar' }, caption, counter, h('span', { class: 'spacer' }),
@@ -6321,10 +6359,12 @@ function createComposer({ id, key, threadId, placeholder }) {
     if (id === 'main') { const notice = keyNotice(); if (notice) extras.append(notice); }
     if (state.replyTo) {
       const ru = getUser(state.replyTo.authorId);
-      extras.append(h('div', { class: 'reply-bar' }, icon('reply', 'ic'),
+      const bar = h('div', { class: 'reply-bar' }, icon('reply', 'ic'),
         h('span', { class: 'reply-bar-text' }, 'Replying to ', h('strong', null, nameInMsg(state.replyTo, ru)),
           h('span', { class: 'reply-bar-quote' }, quoteOf(state.replyTo).slice(0, 120))),
-        ibtn('close', 'Cancel reply (Esc)', () => setReply(null), { cls: 'sm' })));
+        ibtn('close', 'Cancel reply (Esc)', () => setReply(null), { cls: 'sm' }));
+      bar._cancel = () => setReply(null); // (Back on a phone: phoneNav)
+      extras.append(bar);
     }
     // A preview belongs to the conversation it was made in, and goes when previews stop being allowed here.
     if (state.link && (state.link.key !== convKey() || !linksAllowedHere())) { linkGen++; clearTimeout(linkHide); state.link = null; }

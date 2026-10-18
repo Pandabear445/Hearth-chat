@@ -1655,8 +1655,12 @@ Phone-only: a desktop with a mouse looks and behaves as before. Two definitions 
 place Hearth adds history steps of its own). In the phone layout the drawer, the side panel (members, threads, pins,
 a voice channel's chat), a picture, a menu, a message's long-press actions and every dialog (settings too) cover the
 screen; on a touch tablet, pictures, menus, message actions and dialogs do (its side panel sits beside the chat, and
-Back leaves it). The top-most goes first: a menu, then the picture viewer (its More menu sits on it), the message
-actions, a dialog, the side panel, the drawer. While one is open, the page's history has one extra step at the same
+Back leaves it). A voice message being recorded, a message being edited and a reply being written take the screen
+too, and Back cancels them as Esc or their own Cancel does (the recording is never sent; the edit leaves the message
+as it was). The top-most goes first: a menu, then the picture viewer (its More menu sits on it), the message
+actions, a dialog, whatever is under way in the side panel (a thread's), the side panel, the drawer, then whatever is
+under way in the chat: a recording, an edit, a reply. They come and go inside the chat, so `phoneNav` watches it (and
+the side panel) only while Back is Hearth's. While one is open, the page's history has one extra step at the same
 address; Back (the gesture, or the Android app's back button, which calls `WebView.goBack()`) lands on the page's own
 entry, and the one on top closes, as with its own close button (a thread opened from the Threads list goes back to
 the list; a dialog that can't be dismissed stays). While more stay open, the step comes back. Closing one with its own
@@ -1686,4 +1690,5 @@ keyboard is up).
 e2e flow "phones" on an Android-sized touch phone: sideways it's the phone layout, an edge swipe opens the drawer,
 Back closes the drawer, the members panel, a picture, a menu and settings (then the drawer under it) and stays in Hearth,
 swipes and Esc close them, closing by their own buttons leaves `history.length` unchanged, and on a desktop opening
-members and settings adds nothing to the history.
+members and settings adds nothing to the history; the flow "phone message actions": Back cancels a reply, an edit and
+a recording and stays in Hearth, and focus goes back to the message without a ring.

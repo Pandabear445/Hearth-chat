@@ -21,11 +21,31 @@ export function trapTab(e, root) {
   if (e.shiftKey && (at === first || !root.contains(at))) { e.preventDefault(); last.focus(); }
   else if (!e.shiftKey && (at === last || !root.contains(at))) { e.preventDefault(); first.focus(); }
 }
-// Puts focus back where it was before a dialog or popup opened, if that place still exists.
+// Puts focus back where it was before a dialog or popup opened, if that place still exists (quietly: quietFocus).
+const stillThere = (targets) => targets.find((el) => el && el.isConnected && el.getClientRects().length);
 function restoreFocus(...targets) {
-  const t = targets.find((el) => el && el.isConnected && el.getClientRects().length);
+  const t = stillThere(targets);
   if (t) t.focus({ preventScroll: true });
 }
+function restoreQuietly(...targets) {
+  const t = stillThere(targets);
+  if (t) quietFocus(t);
+}
+// Focus handed back after something done with a finger (a sheet put away, Back on a phone): it goes where it belongs,
+// for screen readers, but without the keyboard's focus ring, which a browser draws after typing in a text box and
+// which would be left as a stray box on the screen. The ring is back with the next key press (app.css .quiet-focus).
+export function quietFocus(el) {
+  el.classList.add('quiet-focus');
+  const off = () => { el.classList.remove('quiet-focus'); el.removeEventListener('blur', off); document.removeEventListener('keydown', off, true); };
+  el.addEventListener('blur', off);
+  document.addEventListener('keydown', off, true);
+  el.focus({ preventScroll: true, focusVisible: false });
+}
+// Whether the last thing done was a key press (or a finger, pen or mouse): a sheet opened from the keyboard gives focus
+// back as dialogs do, one opened with a finger quietly.
+let byKeys = false;
+document.addEventListener('keydown', () => { byKeys = true; }, true);
+document.addEventListener('pointerdown', () => { byKeys = false; }, true);
 
 export function closePopover() {
   if (!openPop) return;
@@ -155,10 +175,11 @@ export function contextMenu(e, items) {
 // A panel that slides up from the bottom of the screen, for picking with a finger (a message's long-press actions).
 // It closes on a tap outside it, a swipe down, Esc and the back gesture (app.js phoneNav: Back closes it like the
 // other things that cover the screen), keeps Tab inside while it's open, and when it closes with focus inside, focus
-// goes to returnTo (or back to what had it before).
+// goes to returnTo (or back to what had it before): quietly when it was opened with a finger (quietFocus).
 export function sheet(content, { label = 'Actions', returnTo = null, onClose } = {}) {
   closePopover();
   const opener = document.activeElement;
+  const keys = byKeys;
   if (openSheet) openSheet._close({ replaced: true });
   let closed = false;
   const box = h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': label, tabindex: '-1' },
@@ -173,7 +194,7 @@ export function sheet(content, { label = 'Actions', returnTo = null, onClose } =
     backdrop.classList.add('closing');
     setTimeout(() => backdrop.remove(), 180);
     if (onClose) onClose({ replaced });
-    if (hadFocus && !replaced) restoreFocus(returnTo, opener);
+    if (hadFocus && !replaced) (keys ? restoreFocus : restoreQuietly)(returnTo, opener);
   }
   backdrop._close = close;
   box.addEventListener('keydown', (e) => trapTab(e, box));
