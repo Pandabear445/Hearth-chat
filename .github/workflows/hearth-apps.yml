@@ -252,11 +252,11 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: hearth-desktop-Windows
           path: hearth/desktop/dist
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: hearth-desktop-Linux
           path: hearth/desktop/dist
@@ -445,7 +445,7 @@ jobs:
     env:
       HAS_PLAY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: env.HAS_PLAY == 'true'
         with:
           name: hearth-android-play-bundle
@@ -471,12 +471,12 @@ jobs:
     steps:
       # Only the final files: the desktop builds with their update signatures, and the signed APK. Never SignPath's
       # unsigned inputs (hearth-windows-unsigned-*), an unsigned APK, or the Play bundle (not installable by itself).
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: hearth-desktop-*
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: needs.android.outputs.signed == '1'
         with:
           name: hearth-android
@@ -531,13 +531,13 @@ jobs:
     steps:
       # Only the final files, as for the release: the desktop builds once their update files are signed, and the
       # signed APK. Nothing unsigned or intermediate ever reaches the download folder people's apps update from.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: env.HAS_VPS == 'true' && needs.sign-updates.result == 'success'
         with:
           pattern: hearth-desktop-*
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: env.HAS_VPS == 'true' && needs.android.result == 'success' && needs.android.outputs.signed == '1'
         with:
           name: hearth-android
