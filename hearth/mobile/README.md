@@ -149,8 +149,8 @@ which the build follows:
   Google Play asks apps to explain each foreground service type when they're submitted.
 
 The service keeps the microphone, not the camera: video may pause while the screen is off; the call's audio
-carries on. Anything that loads a new page (*Reload now* after a server update, switching server, a connection
-error) ends the call, and the notification goes with it.
+carries on. Anything that loads a new page (reloading it, switching server, a connection
+error) ends the call, and the notification goes with it. A server update never does: it waits until the call is over.
 
 ## Invite links
 
@@ -178,7 +178,7 @@ still need a real phone (checklist: `docs/design/ANDROID-PUSH.md` §17) before a
   default or "Always" picked (no question), with none installed, and *Change* (Hearth's list of every push app,
   including one Android's list can't show; backing out keeps the current one);
 * the call notification: the call carrying on with the screen locked for several minutes, *Hang up*, Android 14+
-  accepting the `microphone` service, and the notification going away after *Reload now* or switching server;
+  accepting the `microphone` service, and the notification going away after reloading the page or switching server;
 * the ringing channel for calls (sound, 45-second timeout), the missed-call case, and opening Hearth from the
   launcher while a call rings (the ringtone stops and the call's conversation opens);
 * the lock screen with Android's default ("show all notification content"): only "<server>" / "New message" and

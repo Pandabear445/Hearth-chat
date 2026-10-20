@@ -4,6 +4,7 @@
 // screen locked (androidApp.callState) and invite links that open in the app.
 // Does nothing in browsers or the desktop app.
 import { createAndroidPush, safeOpenHash, safeInviteHash } from './android-push.js';
+import { underWay } from './auto-update.js';
 
 const A = window.HearthAndroid;
 // push: null until the app says it can (an older app can't). ready: settles once the app answered (or didn't
@@ -121,13 +122,13 @@ if (A) {
   const savable = (a) => a && a.hasAttribute('download') && (/^(blob|data):/.test(a.href) || a.origin === location.origin);
   const click = HTMLAnchorElement.prototype.click;
   HTMLAnchorElement.prototype.click = function () {
-    if (savable(this)) { save(this.href, this.getAttribute('download')).catch(() => {}); return; }
+    if (savable(this)) { underWay(save(this.href, this.getAttribute('download'))).catch(() => {}); return; }
     return click.call(this);
   };
   document.addEventListener('click', (e) => {
     const a = e.target && e.target.closest && e.target.closest('a[download]');
     if (!savable(a)) return;
     e.preventDefault();
-    save(a.href, a.getAttribute('download')).catch(() => {});
+    underWay(save(a.href, a.getAttribute('download'))).catch(() => {});
   }, true);
 }

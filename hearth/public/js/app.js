@@ -21,7 +21,7 @@ import { createSecure, mergeUser, callRefusedText, noSafetyNumbersText } from '.
 import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong } from './profile-ui.js';
 import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
-import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice } from './features.js';
+import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice, voicePlaying } from './features.js';
 import { rankRelays, chooseIce, relayTime, iceStale } from './relays.js';
 import { watchConnection } from './conn.js';
 import { unseenChanges } from './whatsnew.js';
@@ -45,7 +45,7 @@ import { createScheduled } from './scheduled.js';
 import { bindNew, bindEdit, describe as describeBinding, createVersions, createCopies, createOriginals, noteMessage, bindingState } from './binding.js';
 import { trackViewport } from './viewport.js';
 import { isPhone, isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
-import { createUpdater } from './auto-update.js';
+import { createUpdater, underWay, jobsUnderWay } from './auto-update.js';
 import { touchGestures } from './viewer-touch.js';
 import { backStack, edgeSwipes } from './phone-nav.js';
 import { initAway, CLEAR_AFTER, clearAfterMs, clearsLabel, onlyPresenceChanged } from './presence.js';
@@ -2140,8 +2140,9 @@ const updates = createUpdates({
   onUnread: () => { if (!S.view.serverId) renderSidebar(); renderRail(); },
 });
 // Study tools: Recall in a sandboxed frame, with its decks end-to-end encrypted and synced (recall-host.js).
-// Input in its frame doesn't reach this page, so the frame says when it's in use (for automatic Away).
-const study = createRecall({ S, onEnabled: () => { if (!S.view.serverId) renderSidebar(); }, onActive: () => { if (away) away.used(); } });
+// Input in its frame doesn't reach this page, so the frame says when it's in use (for automatic Away, and so an update
+// waits; while Study is open an update waits anyway: updateBlockedBy).
+const study = createRecall({ S, onEnabled: () => { if (!S.view.serverId) renderSidebar(); }, onActive: () => { if (away) away.used(); autoUpdate.input(); } });
 const folders = createFolders({
   S, servers: () => realServers(), favorites: () => new Set(P.favorites.filter((f) => f.startsWith('s:')).map((f) => f.slice(2))),
   rerender: () => renderRail(), serverUnread: (s) => serverUnread(s), setNotify: (k, v) => setNotify(k, v), railSide: () => railSide(),
@@ -6147,7 +6148,7 @@ function createComposer({ id, key, threadId, placeholder }) {
       ta.value = `/${c.cmd.name} ` + ta.value.slice(ta.selectionStart).trimStart();
       const at = c.cmd.name.length + 2;
       ta.setSelectionRange(at, at);
-      closeSuggest(); update(); renderCmdBar(); ta.focus();
+      keepDraft(); closeSuggest(); update(); renderCmdBar(); ta.focus();
       return;
     }
     const insert = c.chan ? `<#${c.chan.id}>` : c.emoji ? (c.custom ? emojiToken(c.custom) : c.emoji) : c.role ? `<@&${c.role.id}>` : '@' + (c.special || c.username);
@@ -6155,7 +6156,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     ta.value = ta.value.slice(0, sugg.start) + insert + ' ' + ta.value.slice(ta.selectionStart);
     const at = sugg.start + insert.length + 1;
     ta.setSelectionRange(at, at);
-    closeSuggest(); update(); ta.focus();
+    keepDraft(); closeSuggest(); update(); ta.focus();
   };
 
   // ---- link previews
@@ -6268,9 +6269,11 @@ function createComposer({ id, key, threadId, placeholder }) {
     linkBox.append(chip);
   }
 
+  // What's in the box is its draft (kept across channels and reloads), also when it was changed by the app.
+  const keepDraft = () => { const k = key(); if (k) drafts.set(k + (threadId() || ''), ta.value); };
   ta.addEventListener('input', () => {
     autosize(); update(); checkSuggest(); renderCmdBar(); onTypeForLink();
-    drafts.set(key() + (threadId() || ''), ta.value);
+    keepDraft();
     const kk = key();
     if (ta.value && Date.now() - lastTypingSent > 3000 && !threadId()) {
       lastTypingSent = Date.now();
@@ -6450,7 +6453,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     // The disappearing timer they wrote it under (the note above the box): a weaker one by the time it goes out asks
     // first. A scheduled message is encrypted now, for the timer in force now, like one sent now.
     const wrote = convSecs(kk);
-    queue = queue.then(() => deliver({ kk, tid, text, files, replyTo, nonce, poll, links, linkState, wrote, sendAt }));
+    queue = queue.then(() => underWay(deliver({ kk, tid, text, files, replyTo, nonce, poll, links, linkState, wrote, sendAt })));
     return queue;
   }
   // Send later: when, from the quick picks or a date and time; then it goes like a send, scheduled.
@@ -6493,7 +6496,7 @@ function createComposer({ id, key, threadId, placeholder }) {
       else toast(e.message, 'error');
       // Give the words back so nothing is lost (unless they've already typed something new).
       if (!poll && !files.some((f) => f.voice) && !ta.value.trim() && key() === kk) {
-        ta.value = text; if (!state.pending.length) state.pending = files;
+        ta.value = text; drafts.set(kk + (tid || ''), text); if (!state.pending.length) state.pending = files;
         if (linkState && !state.link && linkState.status === 'ready') state.link = linkState; // and its preview
         renderExtras(); autosize(); update();
       }
@@ -6503,7 +6506,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     }
   }
   setTimeout(() => { autosize(); update(); renderEph(); }, 0);
-  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph, fitAttach };
+  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph, fitAttach, keepDraft: () => { if (ta.isConnected) keepDraft(); } };
 }
 const fmtDuration = (sec) => (sec >= 3600 ? `${Math.round(sec / 3600)}h` : sec >= 60 ? `${Math.round(sec / 60)}m` : `${sec}s`);
 function placeholderFor(k) {
@@ -9281,16 +9284,26 @@ function onNewVersion(version) {
   if (updateBlockedBy()) { hideUpdating(); loadBootstrap().catch(() => {}); }
   autoUpdate.due(version, { soon: true });
 }
-// What a reload would cut off or lose. Messages being typed in a message box aren't on the list: their drafts
-// are kept across the reload (saveResume).
+// What a reload would cut off or lose. Words typed in a message box aren't on the list: their drafts are kept
+// across the reload (saveResume); files attached to one, or a reply being set up, are.
 function updateBlockedBy() {
-  if (voice && voice.channelId) return 'call';
-  if (pendingSends.size) return 'sending';
-  if ($('.rec-bar, .edit-wrap')) return 'composing';
-  if ($$('.upload-status').some((x) => !x.hidden) || $('.att-dl.busy, .att-file .btn.busy')) return 'transfer';
-  if (wtDock.el && !wtDock.el.hidden) return 'watching';
-  if ($('#layer > .modal-backdrop:not(.closing)')) return 'dialog';
+  if (voice && (voice.channelId || voice.joinPromise)) return 'call';
+  if (ringing.size) return 'ringing';
+  if (pendingSends.size || jobsUnderWay()) return 'sending';
+  if ($('.rec-bar, .edit-wrap, .pending-files, .reply-bar')) return 'composing';
+  if ($$('.upload-status, .att-meter').some((x) => !x.hidden) || $('.att-dl.busy, .att-file .btn.busy')) return 'transfer';
+  // A video, song or voice message playing (calls' own live streams, srcObject, are the call check's business).
+  if ($$('video, audio').some((m) => !m.paused && !m.ended && !m.srcObject) || voicePlaying() || (wtDock.el && !wtDock.el.hidden)) return 'playing';
+  if (choosingFile) return 'choosing';
+  // Study (its rounds and timer live in its frame) and the admin dashboard (forms without a save bar).
+  if (S.view && (S.view.type === 'study' || S.view.type === 'admin')) return S.view.type;
+  if ($('.viewer:not(.closing), .settings')) return 'open';
+  // A dialog with something in it to lose: one that only tells you something (What's new) doesn't hold updates up.
+  if ($$('#layer > .modal-backdrop:not(.closing)').some((d) => d.querySelector('input:not([type=hidden]), textarea, select, [contenteditable="true"]'))) return 'dialog';
   if ($$('.save-bar').some((x) => !x.hidden)) return 'unsaved';
+  // Signing in or up, partly filled in (or being checked).
+  const auth = $('#auth');
+  if (!S.me && auth && !auth.hidden && ($$('#auth input:not([type=checkbox]):not([type=hidden])').some((i) => i.value) || $('#auth button[type=submit]:disabled'))) return 'signing-in';
   const a = document.activeElement;
   if (a && a.matches('input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button]), textarea, [contenteditable="true"]')
     && !a.closest('.composer') && String(a.value ?? a.textContent ?? '').trim()) return 'typing';
@@ -9306,11 +9319,35 @@ const autoUpdate = createUpdater({
     updateAndReload();
   },
 });
-for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'input']) addEventListener(type, () => autoUpdate.input(), { capture: true, passive: true });
+for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart', 'input']) addEventListener(type, () => autoUpdate.input(), { capture: true, passive: true });
 document.addEventListener('visibilitychange', () => autoUpdate.poke());
+// A phone's file picker or camera covers the page while it's open: that isn't "out of sight", and a reload would
+// lose the files being picked. File inputs are mostly opened from code (input.click()), often off the page.
+let choosingFile = false;
+const choosing = (input) => {
+  if (!input || input.type !== 'file') return;
+  choosingFile = true;
+  const done = () => { choosingFile = false; clearTimeout(t); };
+  const t = setTimeout(done, 10 * 60 * 1000);
+  input.addEventListener('change', done, { once: true });
+  input.addEventListener('cancel', done, { once: true });
+};
+const inputClick = HTMLInputElement.prototype.click;
+HTMLInputElement.prototype.click = function () { choosing(this); return inputClick.call(this); };
+addEventListener('click', (e) => { if (e.isTrusted && e.target instanceof HTMLInputElement) choosing(e.target); }, true);
 // Remember where you were (and unsent messages) across the reload.
 function saveResume() {
-  try { sessionStorage.setItem('hearth.resume', JSON.stringify({ view: S.view, drafts: [...drafts.entries()].filter(([, v]) => v) })); } catch { /* ignore */ }
+  for (const c of Object.values(composers)) c.keepDraft();
+  // Scrolled up into older messages: come back to the one at the top of the screen.
+  let at;
+  const sc = $('#messages');
+  if (sc && !$('#jump-latest[hidden]') && $('#jump-latest')) {
+    const top = sc.getBoundingClientRect().top;
+    const first = [...sc.querySelectorAll(':scope > .msg[data-mid]')].find((m) => m.getBoundingClientRect().bottom > top + 8);
+    if (first) at = first.dataset.mid;
+  }
+  const thread = S.panel === 'thread' && S.thread ? { id: S.thread.rootId, channelId: S.thread.channelId, serverId: S.thread.serverId } : null;
+  try { sessionStorage.setItem('hearth.resume', JSON.stringify({ view: { ...S.view, jumpTo: at }, thread, drafts: [...drafts.entries()].filter(([, v]) => v) })); } catch { /* ignore */ }
 }
 function restoreResume() {
   let r = null;
@@ -9318,7 +9355,11 @@ function restoreResume() {
   if (!r) return;
   for (const [k, v] of r.drafts || []) drafts.set(k, v);
   const v = r.view || {};
-  if ((v.type === 'channel' && channelById(v.channelId)) || (v.type === 'dm' && S.dms.some((d) => d.id === v.dmId)) || ['home', 'friends', 'saved'].includes(v.type)) setView({ ...v, jumpTo: undefined });
+  const ok = ((v.type === 'channel' || v.type === 'voice') && channelById(v.channelId)) || (v.type === 'dm' && S.dms.some((d) => d.id === v.dmId))
+    || ['home', 'friends', 'saved', 'updates', 'people'].includes(v.type) || (v.type === 'study' && S.me.studyEnabled) || (v.type === 'admin' && S.me.staffRole);
+  if (!ok) return;
+  setView({ ...v, jumpTo: typeof v.jumpTo === 'string' ? v.jumpTo : undefined });
+  if (r.thread && r.thread.channelId === v.channelId && channelById(r.thread.channelId)) openThread({ id: r.thread.id, channelId: r.thread.channelId, serverId: r.thread.serverId }).catch(() => {});
 }
 async function updateAndReload() {
   saveResume();

@@ -45,3 +45,10 @@ export function createUpdater({ now = () => Date.now(), hidden, blockedBy, apply
     pending: () => !!due,
   };
 }
+
+// Jobs elsewhere in the app that a reload would cut off say they're under way here, so an update waits for them (a
+// message being delivered, a backup or an export downloading, the Android app saving a file). underWay(promise)
+// passes the promise through.
+let jobs = 0;
+export function underWay(p) { jobs++; return Promise.resolve(p).finally(() => { jobs--; }); }
+export const jobsUnderWay = () => jobs > 0;

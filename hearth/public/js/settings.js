@@ -11,6 +11,7 @@ import { runExport, EXPORT_LIMITS, quietNow } from './usability.js';
 import { androidApp } from './android.js';
 import { reasonText } from './android-push.js';
 import { desktopSettingsSection } from './desktop-settings.js';
+import { underWay } from './auto-update.js';
 import { OUTSIDE_MODES, OUTSIDE_LABELS, outsideMode } from './outside.js';
 import { pickGame, gameImg, openActivityPicker, startDesktopDetection } from './activity.js';
 import { getKeybinds, saveKeybinds, comboLabel, recordCombo, DEFAULT_KEYBINDS } from './keybinds.js';
@@ -1660,8 +1661,8 @@ function exportSection(app) {
     ctl = new AbortController();
     start.disabled = true; cancel.hidden = false; bar.hidden = false;
     try {
-      const { blob, manifest } = await runExport({ token: res.token, S: app.S, sec: app.sec, decryptMessage: app.decryptMessage, signal: ctl.signal, wordFilter: app.wordFilter ? app.wordFilter.exportable() : null,
-        onProgress: (text, f) => { status.textContent = text; bar.firstChild.style.width = Math.round(f * 100) + '%'; } });
+      const { blob, manifest } = await underWay(runExport({ token: res.token, S: app.S, sec: app.sec, decryptMessage: app.decryptMessage, signal: ctl.signal, wordFilter: app.wordFilter ? app.wordFilter.exportable() : null,
+        onProgress: (text, f) => { status.textContent = text; bar.firstChild.style.width = Math.round(f * 100) + '%'; } }));
       const url = URL.createObjectURL(blob);
       h('a', { href: url, download: `hearth-export-${app.S.me.username}-${new Date().toISOString().slice(0, 10)}.zip` }).click();
       setTimeout(() => URL.revokeObjectURL(url), 60000);

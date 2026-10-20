@@ -129,5 +129,19 @@ test('the web app has no reload bar left to click; the desktop app still asks be
   assert.deepEqual(bars, ['update-bar app-update']);
   // Reloading never cuts off a call, a recording, an upload, a message being sent or an open dialog.
   const blocked = app.slice(app.indexOf('function updateBlockedBy()'), app.indexOf('const autoUpdate = createUpdater'));
-  for (const what of ['voice.channelId', 'pendingSends.size', '.rec-bar', '.upload-status', 'modal-backdrop', '.save-bar']) assert.ok(blocked.includes(what), what);
+  for (const what of ['voice.channelId', 'voice.joinPromise', 'ringing.size', 'pendingSends.size', 'jobsUnderWay()', '.rec-bar', '.pending-files', '.reply-bar',
+    '.upload-status', '.att-meter', 'voicePlaying()', "'video, audio'", 'choosingFile', "'study'", "'admin'", '.viewer', '.settings', 'modal-backdrop', '.save-bar', '#auth']) assert.ok(blocked.includes(what), what);
+});
+
+test('jobs that say they are under way hold updates back until they finish, also when they fail', async () => {
+  assert.equal(U.jobsUnderWay(), false);
+  let finish;
+  const p = U.underWay(new Promise((resolve) => { finish = resolve; }));
+  const q = U.underWay(Promise.reject(new Error('nope')));
+  assert.equal(U.jobsUnderWay(), true);
+  await assert.rejects(q, /nope/);
+  assert.equal(U.jobsUnderWay(), true, 'the other one is still going');
+  finish(42);
+  assert.equal(await p, 42, 'the result passes through');
+  assert.equal(U.jobsUnderWay(), false);
 });

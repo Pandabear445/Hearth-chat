@@ -5,6 +5,7 @@ import { avatarEl } from './profile-ui.js';
 import { modal, confirmDialog, field, menu } from './ui.js';
 import { renderDoc, render as md } from './markdown.js';
 import { rankRelays, relayTime } from './relays.js';
+import { underWay } from './auto-update.js';
 
 // [key, label, icon, lowest role that sees it]. The server enforces the same rules.
 const TABS = [['overview', 'Overview', 'home', 1], ['online', 'Online', 'people', 1], ['reports', 'Reports', 'shield', 1], ['users', 'Users', 'user', 1], ['servers', 'Servers', 'compass', 2], ['bots', 'Bots', 'bot', 2], ['security', 'Security', 'lock', 2], ['admins', 'Team & roles', 'star', 1], ['registration', 'Registration & Terms', 'book', 2], ['log', 'Audit log', 'file', 1], ['regions', 'Regions', 'globe', 2], ['health', 'Health', 'chart', 2], ['money', 'Money', 'coin', 2], ['owner', 'Owner', 'flame', 3]];
@@ -912,7 +913,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       note: h('input', { class: 'input', maxlength: '300', value: F.note, placeholder: 'Optional: your own message' }) };
     const supQuota = h('input', { class: 'input', type: 'number', min: '0', value: String(o.supporterQuotaMb || '') , placeholder: '0 = same as everyone' });
     const keep = h('input', { class: 'input', type: 'number', min: '1', max: '60', value: String(o.autoBackup.keep), 'aria-label': 'Number of daily backups to keep' });
-    const download = async (b) => {
+    const download = (b) => underWay((async () => {
       try {
         const r = await fetch(`/api/admin/backups/${encodeURIComponent(b.name)}`, { headers: { authorization: 'Bearer ' + localStorage.getItem('hearth.token') } });
         if (!r.ok) throw new Error('Download failed.');
@@ -920,7 +921,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
         h('a', { href: url, download: b.name }).click();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
       } catch (e) { toast(e.message, 'error'); }
-    };
+    })());
     clear(body).append(
       h('div', { class: 'admin-head' }, h('h3', null, 'Name and welcome')),
       h('div', { class: 'grid-2' }, field('Server name', name, 'Shown in the browser tab, on the login screen and in installed apps.'), field('Tagline', tagline, 'One line under the name on the login screen.')),

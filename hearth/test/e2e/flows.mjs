@@ -1193,7 +1193,7 @@ async function androidApp(t) {
   await droid.page.evaluate(() => window.dispatchEvent(new CustomEvent('hearth-hangup', { detail: true })));
   await droid.page.waitForSelector('#voice-panel', { state: 'hidden' });
   await droid.page.waitForFunction(() => window.__androidSent.some((m) => m.type === 'callEnd'));
-  // Reloading the page in a call (the "Reload now" after an update, say) ends the call, and the notification too.
+  // Reloading the page in a call ends the call, and the notification too (an update never does that: it waits).
   const startsBefore = (await callStarts()).length;
   const endsBefore = (await sent('callEnd')).length;
   await droid.$('.cs-controls .btn.primary', { hasText: exact('Join call') }).click(); // still looking at the Lounge
@@ -3900,9 +3900,11 @@ async function updateBar(t) {
   const before = await swVersion();
   const draft = 'Half a message, typed before the update';
   await alice.$('#composer-input').fill(draft);
-  // A dialog is open: a reload would close it.
-  await page.keyboard.press('Control+/');
-  await alice.dialog('Keyboard shortcuts');
+  // A dialog is open with something typed in it: a reload would lose that.
+  await alice.railButton('Add a server');
+  await page.locator('.modal .choice', { hasText: 'Create my own' }).click();
+  const dialog = await alice.dialog('Create a server');
+  await dialog.locator('input.input').fill('Half a server name');
 
   await t.server.restart({ newVersion: true });
   const after = await swVersion();
@@ -3920,7 +3922,8 @@ async function updateBar(t) {
   await page.waitForTimeout(7000);
   check(await page.evaluate(() => window.__beforeReload === true), 'It should never reload while a dialog is open.');
   check(!(await page.locator('.update-bar').count()), 'There should be no bar to click.');
-  // Once the dialog is closed it reloads into the new version by itself.
+  // Once the dialog is closed it reloads into the new version by itself (the What's new it may show doesn't hold
+  // later updates up: there's nothing in it to lose).
   await Promise.all([page.waitForEvent('load', { timeout: 15000 }), page.keyboard.press('Escape')]);
   await alice.waitApp();
   check(await page.evaluate(() => !window.__beforeReload), 'It should have reloaded by itself.');
