@@ -18,7 +18,7 @@ import { EMOJI, EMOJI_NAMES, CATEGORY_ICONS, QUICK_REACTIONS, recentEmoji, pushR
 import { Voice } from './voice.js';
 import { openCallDiagnostics } from './call-diagnostics.js';
 import { createSecure, mergeUser, callRefusedText, noSafetyNumbersText } from './secure.js';
-import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong } from './profile-ui.js';
+import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong, songPlaying } from './profile-ui.js';
 import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
 import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice, voicePlaying } from './features.js';
@@ -3371,7 +3371,15 @@ function chatView() {
   wrap.addEventListener('dragover', (e) => { e.preventDefault(); wrap.classList.add('dropping'); });
   wrap.addEventListener('dragleave', (e) => { if (!wrap.contains(e.relatedTarget)) wrap.classList.remove('dropping'); });
   wrap.addEventListener('drop', (e) => { e.preventDefault(); wrap.classList.remove('dropping'); comp.addFiles(e.dataTransfer.files); });
-  queueMicrotask(() => { comp.renderExtras(); if (S.view.jumpTo) { const id = S.view.jumpTo; S.view.jumpTo = null; jumpToMessage(key, id); } else loadMessages(key); });
+  queueMicrotask(() => {
+    comp.renderExtras();
+    if (S.view.jumpTo) { const id = S.view.jumpTo; S.view.jumpTo = null; jumpToMessage(key, id); }
+    // Back after an update's reload, where you'd scrolled to: that message at the top, quietly.
+    else if (S.view.restoreAt) {
+      const id = S.view.restoreAt; S.view.restoreAt = null;
+      loadMessages(key, { around: id }).then(() => { const el = $(`#messages [data-mid="${id}"]`); if (el) el.scrollIntoView({ block: 'start' }); else loadMessages(key); }).catch(() => {});
+    } else loadMessages(key);
+  });
   return wrap;
 }
 function onMessageAreaClick(e) {
@@ -4844,7 +4852,7 @@ function attachmentEl(f, m) {
     const meter = h('div', { class: 'att-meter', hidden: true }, h('i'));
     const onProgress = (x) => { meter.hidden = x >= 1; meter.firstChild.style.width = `${Math.round(x * 100)}%`; };
     const full = () => (enc ? decryptedUrl(m, f) : direct());
-    const fullWatched = () => { const p = full(); watchFile(f.url, onProgress); return p; };
+    const fullWatched = () => { const p = full(); watchFile(f.url, onProgress); const hide = () => { meter.hidden = true; }; p.then(hide, hide); return p; };
     if (media === 'img') {
       el._full = fullWatched;
       el.addEventListener('click', () => openViewer(el, { name: f.name, download: () => downloadAttachment(m, f) }));
@@ -5973,6 +5981,7 @@ function createComposer({ id, key, threadId, placeholder }) {
   const ta = h('textarea', { class: 'composer-input', rows: '1', maxlength: '4000', 'aria-label': 'Message', id: id === 'main' ? 'composer-input' : null });
   ta.placeholder = placeholder || placeholderFor(k);
   ta.value = drafts.get(k + (threadId() || '')) || '';
+  let synced = ta.value; // what this box last read from or wrote to the drafts
   const extras = h('div', { class: 'composer-extras' });
   // Upload progress for the message being sent: kept across redraws of the extras, with a Cancel button.
   const upText = h('span', { class: 'upload-text' });
@@ -6270,7 +6279,7 @@ function createComposer({ id, key, threadId, placeholder }) {
   }
 
   // What's in the box is its draft (kept across channels and reloads), also when it was changed by the app.
-  const keepDraft = () => { const k = key(); if (k) drafts.set(k + (threadId() || ''), ta.value); };
+  const keepDraft = () => { const k = key(); if (k) { drafts.set(k + (threadId() || ''), ta.value); synced = ta.value; } };
   ta.addEventListener('input', () => {
     autosize(); update(); checkSuggest(); renderCmdBar(); onTypeForLink();
     keepDraft();
@@ -6427,7 +6436,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     if (cmd) {
       SLASH.run(slashIn, cmd, text.trim(), serverOfChannel(slashIn)).then((sent) => {
         if (!sent || ta.value.trim() !== text.trim()) return;
-        ta.value = ''; drafts.delete(key()); autosize(); update(); renderCmdBar();
+        ta.value = ''; synced = ''; drafts.delete(key()); autosize(); update(); renderCmdBar();
       });
       return;
     }
@@ -6439,7 +6448,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     const linkState = overrideText == null ? state.link : null;
     const links = linkState && linkState.status === 'ready' && !poll && !extra.files && linkedUrls(text, { skipSpoilers: true }).includes(linkState.url) ? [linkState.entry] : null;
     if (overrideText == null) {
-      ta.value = '';
+      ta.value = ''; synced = '';
       drafts.delete(kk + (tid || ''));
       state.pending = [];
       linkGen++; clearTimeout(linkHide); state.link = null; linkDismissed.clear();
@@ -6495,8 +6504,8 @@ function createComposer({ id, key, threadId, placeholder }) {
       if (e.cancelled) toast('Upload cancelled. Your message and files are back in the box.');
       else toast(e.message, 'error');
       // Give the words back so nothing is lost (unless they've already typed something new).
-      if (!poll && !files.some((f) => f.voice) && !ta.value.trim() && key() === kk) {
-        ta.value = text; drafts.set(kk + (tid || ''), text); if (!state.pending.length) state.pending = files;
+      if (!poll && !files.some((f) => f.voice) && !ta.value.trim() && !(drafts.get(kk + (tid || '')) || '').trim() && key() === kk) {
+        ta.value = text; drafts.set(kk + (tid || ''), text); synced = text; if (!state.pending.length) state.pending = files;
         if (linkState && !state.link && linkState.status === 'ready') state.link = linkState; // and its preview
         renderExtras(); autosize(); update();
       }
@@ -6506,7 +6515,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     }
   }
   setTimeout(() => { autosize(); update(); renderEph(); }, 0);
-  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph, fitAttach, keepDraft: () => { if (ta.isConnected) keepDraft(); } };
+  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph, fitAttach, keepDraft: () => { if (ta.isConnected && ta.value !== synced) keepDraft(); } };
 }
 const fmtDuration = (sec) => (sec >= 3600 ? `${Math.round(sec / 3600)}h` : sec >= 60 ? `${Math.round(sec / 60)}m` : `${sec}s`);
 function placeholderFor(k) {
@@ -9287,23 +9296,27 @@ function onNewVersion(version) {
 // What a reload would cut off or lose. Words typed in a message box aren't on the list: their drafts are kept
 // across the reload (saveResume); files attached to one, or a reply being set up, are.
 function updateBlockedBy() {
-  if (voice && (voice.channelId || voice.joinPromise)) return 'call';
+  // A call that failed (and didn't come back by itself within a few minutes) has nothing left to cut off.
+  if (voice && (voice.joinPromise || (voice.channelId && (voice.state !== 'failed' || Date.now() - (voice.stateSince || 0) < 5 * 60 * 1000)))) return 'call';
   if (ringing.size) return 'ringing';
   if (pendingSends.size || jobsUnderWay()) return 'sending';
   if ($('.rec-bar, .edit-wrap, .pending-files, .reply-bar')) return 'composing';
+  if (S.select && S.select.ids.size) return 'selecting';
   if ($$('.upload-status, .att-meter').some((x) => !x.hidden) || $('.att-dl.busy, .att-file .btn.busy')) return 'transfer';
   // A video, song or voice message playing (calls' own live streams, srcObject, are the call check's business).
-  if ($$('video, audio').some((m) => !m.paused && !m.ended && !m.srcObject) || voicePlaying() || (wtDock.el && !wtDock.el.hidden)) return 'playing';
+  if ($$('video, audio').some((m) => !m.paused && !m.ended && !m.error && !m.srcObject && m.networkState !== HTMLMediaElement.NETWORK_NO_SOURCE)
+    || voicePlaying() || songPlaying() || (wtDock.el && !wtDock.el.hidden)) return 'playing';
   if (choosingFile) return 'choosing';
   // Study (its rounds and timer live in its frame) and the admin dashboard (forms without a save bar).
   if (S.view && (S.view.type === 'study' || S.view.type === 'admin')) return S.view.type;
   if ($('.viewer:not(.closing), .settings')) return 'open';
-  // A dialog with something in it to lose: one that only tells you something (What's new) doesn't hold updates up.
-  if ($$('#layer > .modal-backdrop:not(.closing)').some((d) => d.querySelector('input:not([type=hidden]), textarea, select, [contenteditable="true"]'))) return 'dialog';
+  // Any dialog, except the ones that only tell you something and come back by themselves after the reload (What's
+  // new, the terms to accept), or one left open would hold every later update up.
+  if ($$('#layer > .modal-backdrop:not(.closing)').some((d) => !d.querySelector('.modal.whatsnew, .modal.terms-modal'))) return 'dialog';
   if ($$('.save-bar').some((x) => !x.hidden)) return 'unsaved';
   // Signing in or up, partly filled in (or being checked).
   const auth = $('#auth');
-  if (!S.me && auth && !auth.hidden && ($$('#auth input:not([type=checkbox]):not([type=hidden])').some((i) => i.value) || $('#auth button[type=submit]:disabled'))) return 'signing-in';
+  if (!S.me && auth && !auth.hidden && ((authTyped && $$('#auth input:not([type=checkbox]):not([type=hidden])').some((i) => i.value)) || $('#auth button[type=submit]:disabled'))) return 'signing-in';
   const a = document.activeElement;
   if (a && a.matches('input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button]), textarea, [contenteditable="true"]')
     && !a.closest('.composer') && String(a.value ?? a.textContent ?? '').trim()) return 'typing';
@@ -9324,14 +9337,22 @@ document.addEventListener('visibilitychange', () => autoUpdate.poke());
 // A phone's file picker or camera covers the page while it's open: that isn't "out of sight", and a reload would
 // lose the files being picked. File inputs are mostly opened from code (input.click()), often off the page.
 let choosingFile = false;
+let choosingTimer = 0;
+let choosingSeq = 0;
 const choosing = (input) => {
   if (!input || input.type !== 'file') return;
+  const me = ++choosingSeq; // only the latest picker's answer (or its time running out) counts
   choosingFile = true;
-  const done = () => { choosingFile = false; clearTimeout(t); };
-  const t = setTimeout(done, 10 * 60 * 1000);
+  clearTimeout(choosingTimer);
+  const done = () => { if (me !== choosingSeq) return; choosingFile = false; clearTimeout(choosingTimer); };
+  choosingTimer = setTimeout(done, 10 * 60 * 1000);
   input.addEventListener('change', done, { once: true });
   input.addEventListener('cancel', done, { once: true });
 };
+// Sign-in fields only count once someone has typed in them (a browser filling them in by itself isn't someone
+// half-way through signing in).
+let authTyped = false;
+for (const type of ['keydown', 'paste', 'input']) $('#auth').addEventListener(type, (e) => { if (e.isTrusted) authTyped = true; }, true);
 const inputClick = HTMLInputElement.prototype.click;
 HTMLInputElement.prototype.click = function () { choosing(this); return inputClick.call(this); };
 addEventListener('click', (e) => { if (e.isTrusted && e.target instanceof HTMLInputElement) choosing(e.target); }, true);
@@ -9358,7 +9379,7 @@ function restoreResume() {
   const ok = ((v.type === 'channel' || v.type === 'voice') && channelById(v.channelId)) || (v.type === 'dm' && S.dms.some((d) => d.id === v.dmId))
     || ['home', 'friends', 'saved', 'updates', 'people'].includes(v.type) || (v.type === 'study' && S.me.studyEnabled) || (v.type === 'admin' && S.me.staffRole);
   if (!ok) return;
-  setView({ ...v, jumpTo: typeof v.jumpTo === 'string' ? v.jumpTo : undefined });
+  setView({ ...v, jumpTo: undefined, restoreAt: typeof v.jumpTo === 'string' ? v.jumpTo : undefined });
   if (r.thread && r.thread.channelId === v.channelId && channelById(r.thread.channelId)) openThread({ id: r.thread.id, channelId: r.thread.channelId, serverId: r.thread.serverId }).catch(() => {});
 }
 async function updateAndReload() {

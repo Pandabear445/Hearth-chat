@@ -130,7 +130,9 @@ test('the web app has no reload bar left to click; the desktop app still asks be
   // Reloading never cuts off a call, a recording, an upload, a message being sent or an open dialog.
   const blocked = app.slice(app.indexOf('function updateBlockedBy()'), app.indexOf('const autoUpdate = createUpdater'));
   for (const what of ['voice.channelId', 'voice.joinPromise', 'ringing.size', 'pendingSends.size', 'jobsUnderWay()', '.rec-bar', '.pending-files', '.reply-bar',
-    '.upload-status', '.att-meter', 'voicePlaying()', "'video, audio'", 'choosingFile', "'study'", "'admin'", '.viewer', '.settings', 'modal-backdrop', '.save-bar', '#auth']) assert.ok(blocked.includes(what), what);
+    '.upload-status', '.att-meter', 'voicePlaying()', 'songPlaying()', "'video, audio'", 'S.select', 'choosingFile', "'study'", "'admin'", '.viewer', '.settings', 'modal-backdrop', '.save-bar', '#auth']) assert.ok(blocked.includes(what), what);
+  // Every dialog holds it, except the ones that only tell you something and come back by themselves.
+  assert.match(blocked, /modal-backdrop:not\(\.closing\)'\)\.some\(\(d\) => !d\.querySelector\('\.modal\.whatsnew, \.modal\.terms-modal'\)\)/);
 });
 
 test('jobs that say they are under way hold updates back until they finish, also when they fail', async () => {

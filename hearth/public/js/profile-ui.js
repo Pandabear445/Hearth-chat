@@ -155,6 +155,8 @@ export function bannerEl(u, height = 110) {
 let songAudio = null;
 let songOwner = null;
 export function stopSong() { if (songAudio) songAudio.pause(); }
+// A profile song is playing (its Audio isn't on the page either).
+export const songPlaying = () => !!songAudio && !songAudio.paused && !songAudio.ended && !songAudio.error;
 export function songPlayer(u, p) {
   const btn = h('button', { class: 'pc-song', 'aria-label': `Play ${p.songTitle || 'profile song'}` },
     h('span', { class: 'pc-song-ic' }, '\u25B6'), h('span', { class: 'pc-song-title' }, p.songTitle || 'Profile song'), h('span', { class: 'pc-song-bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')));

@@ -3905,6 +3905,8 @@ async function updateBar(t) {
   await page.locator('.modal .choice', { hasText: 'Create my own' }).click();
   const dialog = await alice.dialog('Create a server');
   await dialog.locator('input.input').fill('Half a server name');
+  // (Not in the field any more: it's the open dialog itself that holds the update.)
+  await dialog.locator('input.input').evaluate((el) => el.blur());
 
   await t.server.restart({ newVersion: true });
   const after = await swVersion();

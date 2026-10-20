@@ -158,7 +158,7 @@ const fmtDur = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padSta
 // isn't in the page, so taking the message off the screen alone wouldn't stop it).
 const voiceAudio = new Map(); // file url -> Audio
 // A voice message is playing (its Audio isn't on the page, so a look at the page's media misses it).
-export const voicePlaying = () => [...voiceAudio.values()].some((a) => !a.paused && !a.ended);
+export const voicePlaying = () => [...voiceAudio.values()].some((a) => !a.paused && !a.ended && !a.error);
 export function stopVoice(urls) {
   for (const u of urls) {
     const a = voiceAudio.get(u);
