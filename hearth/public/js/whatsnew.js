@@ -3,6 +3,9 @@
 // the Android app leaves them out, as it offers no way to pay (noPayments in android.js).
 const pay = (text) => ({ text, pay: true });
 export const CHANGES = [
+  { version: '1.31.0', items: [
+    'Updates put themselves in place: Hearth switches to a new version by itself, with no Reload to click. It waits until nothing is under way (a call, an upload, a recording, a video or song playing, an open dialog, Study, unsaved settings…), then brings you back where you were with anything half-typed kept. An app that was closed or asleep switches as soon as it’s opened.',
+  ] },
   { version: '1.30.2', items: [
     'The picture viewer on computers shows the whole picture: a tall photo or screenshot was drawn as wide as the window and cut off below, so it looked zoomed in.',
   ] },
