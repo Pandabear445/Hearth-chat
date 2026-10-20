@@ -1,13 +1,14 @@
 // Hearth service worker. The server fills in the version and asset list (see /sw.js in server/index.js).
-// - App files load from cache instantly; a new version installs in the background and the page offers a reload.
+// - App files load from cache instantly; a new version installs in the background, and open pages switch to it by
+//   themselves (app.js autoUpdate).
 // - API calls, uploads and the realtime socket always go to the network.
 // - Push notifications open the right conversation when tapped.
 const VERSION = '__VERSION__';
 const ASSETS = '__ASSETS__';
 const CACHE = `hearth-${VERSION}`;
 
-// A new version takes over right away (the page shows a "reload" bar for the app itself). Waiting for
-// someone to click it once left a broken old version in charge for days.
+// A new version takes over right away, and open pages reload into it by themselves when that interrupts nothing.
+// Waiting for someone to click a reload bar once left a broken old version in charge for days.
 self.addEventListener('install', (e) => {
   self.skipWaiting();
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' })))).catch(() => {}));

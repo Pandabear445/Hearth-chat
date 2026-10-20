@@ -45,6 +45,7 @@ import { createScheduled } from './scheduled.js';
 import { bindNew, bindEdit, describe as describeBinding, createVersions, createCopies, createOriginals, noteMessage, bindingState } from './binding.js';
 import { trackViewport } from './viewport.js';
 import { isPhone, isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
+import { createUpdater } from './auto-update.js';
 import { touchGestures } from './viewer-touch.js';
 import { backStack, edgeSwipes } from './phone-nav.js';
 import { initAway, CLEAR_AFTER, clearAfterMs, clearsLabel, onlyPresenceChanged } from './presence.js';
@@ -8610,31 +8611,23 @@ function setupServiceWorker() {
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
   hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('/sw.js').then((reg) => {
-    const offer = (w) => {
-      // A new version finished installing in the background: offer to switch. It usually takes over by itself a
-      // moment later (sw.js), so Reload can't wait for that to happen: it reloads either way (updateAndReload).
-      if (S.autoUpdating) { w.postMessage('skipWaiting'); return; }
-      if (document.querySelector('.update-bar')) return;
-      const bar = h('div', { class: 'update-bar', role: 'status' }, icon('arrowUp'), h('span', null, 'A new version of Hearth is ready.'),
-        h('button', { class: 'btn primary sm', onclick: (e) => { e.currentTarget.disabled = true; updateAndReload(); } }, 'Reload'),
-        ibtn('close', 'Later', () => bar.remove(), { cls: 'sm' }));
-      document.body.append(bar);
-    };
-    if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
+    // A new version finished installing in the background: it takes over by itself (sw.js does that as soon as it
+    // has installed; a browser that kept it waiting is told to). The page then switches to it (controllerchange).
+    const takeOver = (w) => w.postMessage('skipWaiting');
+    if (reg.waiting && navigator.serviceWorker.controller) takeOver(reg.waiting);
     reg.addEventListener('updatefound', () => {
       const w = reg.installing;
-      if (w) w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) offer(w); });
+      if (w) w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) takeOver(w); });
     });
     setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
   }).catch(() => {});
-  // Only reload when the person asked for the update — the very first install also fires this event.
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (wantReload) { wantReload = false; location.reload(); return; }
-    // A new version took over in the background: the next reload uses it. Let people do it when it suits them.
-    if (S.me && !document.querySelector('.update-bar') && hadController) {
-      document.body.append(h('div', { class: 'update-bar', role: 'status' }, icon('arrowUp'), h('span', null, 'Hearth was updated.'),
-        h('button', { class: 'btn primary sm', onclick: (e) => { e.currentTarget.disabled = true; updateAndReload(); } }, 'Reload'), ibtn('close', 'Later', (e) => e.currentTarget.closest('.update-bar').remove(), { cls: 'sm' })));
-    }
+    // A new version took over in the background, while this page still runs the one it opened with: it reloads
+    // into the new one by itself when that interrupts nothing (autoUpdate). The very first install also fires
+    // this event, with nothing to switch from (and the page runs that version already).
+    if (hadController) autoUpdate.due();
+    hadController = true;
   });
   navigator.serviceWorker.addEventListener('message', (e) => {
     if (e.data && e.data.type === 'open' && e.data.url) {
@@ -9257,7 +9250,8 @@ if (window.hearthDesktop && window.hearthDesktop.onPickScreen) {
 // ======================================================================= updates without the fuss
 // When the server restarts (an update), it tells everyone first. We show "Updating…", wait for it to
 // come back, then either carry on (same version) or switch to the new version, landing right where
-// you were with any unsent message kept. During a call we don't interrupt you.
+// you were with any unsent message kept. A new version is never something to click: every open Hearth
+// switches to it by itself (auto-update.js), at a moment that interrupts nothing (never during a call).
 let updatingTimer = null;
 function showUpdating(text = 'Updating Hearth\u2026', sub = 'You\u2019ll be right back \u2014 this usually takes a few seconds.') {
   S.restarting = S.restarting || Date.now();
@@ -9283,20 +9277,37 @@ function hideUpdating() {
   if (el) { el.classList.add('done'); setTimeout(() => el.remove(), 250); }
 }
 function onNewVersion(version) {
-  if (voice && voice.channelId) {
-    // Don't cut off a call: offer the update for when they're done.
-    hideUpdating();
-    loadBootstrap().catch(() => {});
-    if (!document.querySelector('.update-bar')) {
-      const bar = h('div', { class: 'update-bar', role: 'status' }, icon('arrowUp'), h('span', null, `Hearth ${version} is ready. Reload after your call.`),
-        h('button', { class: 'btn primary sm', onclick: () => updateAndReload() }, 'Reload now'), ibtn('close', 'Later', () => bar.remove(), { cls: 'sm' }));
-      document.body.append(bar);
-    }
-    return;
-  }
-  showUpdating('Updated!', `Loading Hearth ${version}\u2026`);
-  updateAndReload();
+  // Something under way (a call, say) carries on with this version for now; it switches by itself once that's done.
+  if (updateBlockedBy()) { hideUpdating(); loadBootstrap().catch(() => {}); }
+  autoUpdate.due(version, { soon: true });
 }
+// What a reload would cut off or lose. Messages being typed in a message box aren't on the list: their drafts
+// are kept across the reload (saveResume).
+function updateBlockedBy() {
+  if (voice && voice.channelId) return 'call';
+  if (pendingSends.size) return 'sending';
+  if ($('.rec-bar, .edit-wrap')) return 'composing';
+  if ($$('.upload-status').some((x) => !x.hidden) || $('.att-dl.busy, .att-file .btn.busy')) return 'transfer';
+  if (wtDock.el && !wtDock.el.hidden) return 'watching';
+  if ($('#layer > .modal-backdrop:not(.closing)')) return 'dialog';
+  if ($$('.save-bar').some((x) => !x.hidden)) return 'unsaved';
+  const a = document.activeElement;
+  if (a && a.matches('input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button]), textarea, [contenteditable="true"]')
+    && !a.closest('.composer') && String(a.value ?? a.textContent ?? '').trim()) return 'typing';
+  return null;
+}
+const autoUpdate = createUpdater({
+  hidden: () => document.hidden,
+  blockedBy: updateBlockedBy,
+  lastApplied: () => { try { return Number(sessionStorage.getItem('hearth.updatedAt')) || 0; } catch { return 0; } },
+  apply: (version) => {
+    try { sessionStorage.setItem('hearth.updatedAt', String(Date.now())); } catch { /* ignore */ }
+    if (!document.hidden) showUpdating('Updated!', version ? `Loading Hearth ${version}\u2026` : 'Loading the new version of Hearth\u2026');
+    updateAndReload();
+  },
+});
+for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'input']) addEventListener(type, () => autoUpdate.input(), { capture: true, passive: true });
+document.addEventListener('visibilitychange', () => autoUpdate.poke());
 // Remember where you were (and unsent messages) across the reload.
 function saveResume() {
   try { sessionStorage.setItem('hearth.resume', JSON.stringify({ view: S.view, drafts: [...drafts.entries()].filter(([, v]) => v) })); } catch { /* ignore */ }
@@ -9311,7 +9322,6 @@ function restoreResume() {
 }
 async function updateAndReload() {
   saveResume();
-  S.autoUpdating = true;
   wantReload = true;
   const fallback = setTimeout(() => location.reload(), 8000);
   try {

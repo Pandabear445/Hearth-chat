@@ -3884,10 +3884,11 @@ async function phoneMessageActions(t) {
   await desk.waitFor({ state: 'detached' });
 }
 
-// ------------------------------------------------------------------ an update: the "new version" bar
-// An update reaches an open page as a new service worker, and the bar offers to reload. The new version takes over
-// by itself a moment later (sw.js), so by the time Reload is clicked there's nothing left to wait for: Reload once
-// did nothing at all. It reloads onto the new version, in the same place, with a message being typed still there.
+// ------------------------------------------------------------------ an update puts itself in place
+// An update reaches an open page as a new service worker. There's nothing to click: the page reloads into the new
+// version by itself, keeping its place and a message being typed, but never while something is under way (here a
+// dialog is open): then it waits until that's done. Out of sight (simulated here) it doesn't wait for the person to
+// leave it alone first (test/auto-update.test.js has the timing).
 async function updateBar(t) {
   const { alice } = t.people;
   const page = alice.page;
@@ -3899,28 +3900,34 @@ async function updateBar(t) {
   const before = await swVersion();
   const draft = 'Half a message, typed before the update';
   await alice.$('#composer-input').fill(draft);
+  // A dialog is open: a reload would close it.
+  await page.keyboard.press('Control+/');
+  await alice.dialog('Keyboard shortcuts');
 
   await t.server.restart({ newVersion: true });
   const after = await swVersion();
   check(after !== before, `The restarted server should be a new version (${before} both times).`);
   await alice.waitApp();
-  // The browser checks for a new version every so often; here, now.
+  await page.evaluate(() => { window.__beforeReload = true; });
+  // The browser checks for a new version every so often; here, now. It takes over by itself.
   await page.evaluate(() => navigator.serviceWorker.getRegistration().then((r) => r.update()));
-  const bar = page.locator('.update-bar').filter({ has: page.locator('button', { hasText: 'Reload' }) });
-  await bar.waitFor();
-  // Wait until the new version has taken over, as it has by the time anyone clicks.
   for (let i = 0; JSON.stringify(await cacheNames()) !== JSON.stringify([`hearth-${after}`]); i++) {
     check(i < 100, `The new version should take over by itself (caches: ${JSON.stringify(await cacheNames())}).`);
     await page.waitForTimeout(100);
   }
-  await page.evaluate(() => { window.__beforeReload = true; });
-  await Promise.all([page.waitForEvent('load'), bar.locator('button', { hasText: 'Reload' }).click()]);
+  // Hearth goes out of sight, but the dialog is still open: no reload, and nothing to click either.
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { value: true, configurable: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.waitForTimeout(7000);
+  check(await page.evaluate(() => window.__beforeReload === true), 'It should never reload while a dialog is open.');
+  check(!(await page.locator('.update-bar').count()), 'There should be no bar to click.');
+  // Once the dialog is closed it reloads into the new version by itself.
+  await Promise.all([page.waitForEvent('load', { timeout: 15000 }), page.keyboard.press('Escape')]);
   await alice.waitApp();
-  check(await page.evaluate(() => !window.__beforeReload), 'Reload should reload the page.');
+  check(await page.evaluate(() => !window.__beforeReload), 'It should have reloaded by itself.');
   check(JSON.stringify(await cacheNames()) === JSON.stringify([`hearth-${after}`]) && await page.evaluate(() => !!navigator.serviceWorker.controller), 'It should run the new version.');
   await alice.$('#composer-input[placeholder="Message #general"]').waitFor();
   check(await alice.$('#composer-input').inputValue() === draft, 'The message being typed should still be there.');
-  check(!(await page.locator('.update-bar').count()), 'No update bar should be left.');
+  check(!(await page.locator('.update-bar, #update-overlay').count()), 'Nothing about the update should be left on screen.');
   await alice.$('#composer-input').fill('');
 }
 
@@ -3974,5 +3981,5 @@ export const FLOWS = [
   ['phones: held sideways it’s still the phone layout; a swipe from the left edge opens the drawer; Back closes the drawer, members, a picture, a menu and settings without leaving; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
   ['phone message actions: a long press opens a sheet (react, reply, copy, edit, delete; closes with Back, Esc, a tap or a swipe); a roomier message box with GIFs and Send later under +; the desktop keeps its hover toolbar and buttons', phoneMessageActions],
   // Last: it restarts the server.
-  ['an update: the "new version" bar’s Reload reloads onto it, in the same place, keeping a half-typed message', updateBar],
+  ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
 ];
