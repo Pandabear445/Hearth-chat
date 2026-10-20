@@ -568,9 +568,10 @@ test('study page: input in the Recall frame counts as using Hearth, and says not
   const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
   // The frame: at most every 30 seconds, an empty "active".
   assert.match(recall, /if \(t - lastActive < 30000\) return; lastActive = t; hbSend\('active', \{\}\);/);
-  // The host: only from its own frame (onMessage checks the source first), handed to the away tracker.
+  // The host: only from its own frame (onMessage checks the source first), handed to the away tracker (and to the
+  // automatic updates, which wait while someone is using Hearth).
   assert.match(host, /if \(!frame \|\| e\.source !== frame\.contentWindow\) return;[\s\S]*if \(m\.t === 'active'\) \{ if \(ctx\.onActive\) ctx\.onActive\(\); return; \}/);
-  assert.match(app, /onActive: \(\) => \{ if \(away\) away\.used\(\); \}/);
+  assert.match(app, /onActive: \(\) => \{ if \(away\) away\.used\(\); autoUpdate\.input\(\); \}/);
 });
 
 test('desktop: the idle time comes only from the main window showing the server, through the preload bridge', () => {
