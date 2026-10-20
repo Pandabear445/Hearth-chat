@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 20;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1542,6 +1542,11 @@ if (hasData && fromVersion < 19) {
 addColumn('users', 'keys_reset_at', 'INTEGER');
 addColumn('users', 'keys_vouched_by', 'TEXT');
 addColumn('users', 'keys_vouched_at', 'INTEGER');
+// v20 (owner reset links): who made the reset link that gave an account its keys still waiting to be verified: the
+// owner, with a link from Admin → Users (server/accounts.js); NULL after an emailed link. That person can't be the one
+// who verifies them (POST /users/:id/keys/verify and /admin/users/:id/keys/verify): they could have opened the link
+// themselves.
+addColumn('users', 'keys_reset_by', 'TEXT');
 db.exec(`CREATE INDEX IF NOT EXISTS idx_users_keys_reset ON users(keys_reset_at) WHERE keys_reset_at IS NOT NULL;
 CREATE TABLE IF NOT EXISTS key_vouches (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

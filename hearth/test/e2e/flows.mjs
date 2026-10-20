@@ -3884,6 +3884,59 @@ async function phoneMessageActions(t) {
   await desk.waitFor({ state: 'detached' });
 }
 
+// ------------------------------------------------------------------ the owner's password reset link
+// For someone who can't sign in and has no email to reset it with (droid has none): the owner (bob, since "instance:
+// new owner…") makes a one-time link in Admin → Users, with his password. Droid opens it on her own device and chooses
+// her own new password; her other devices are signed out. The new keys it made can't be verified by bob: someone
+// else has to (server/accounts.js, test/owner-reset-link.test.js).
+async function ownerResetLink(t) {
+  const { bob } = t.people;
+  await bob.noModals();
+  const openDroid = async () => {
+    await bob.railButton('Admin');
+    await bob.$('.admin-tabs .admin-tab', { hasText: exact('Users') }).click();
+    await bob.$('.admin-body input.search-input').fill('droid');
+    await bob.$('.admin-body .adm-row .adm-user', { hasText: '@droid' }).click();
+    return bob.dialog('(@droid)');
+  };
+  let m = await openDroid();
+  await m.locator('button.chip', { hasText: 'Make a password reset link' }).click();
+  await bob.confirmPassword('Make a password reset link for droid?', t.pw.bob);
+  const shown = await bob.dialog('Reset link for droid');
+  const link = await shown.locator('input[aria-label="Reset link"]').inputValue();
+  check(/\/#reset=[\w-]{20,}$/.test(link), `The dialog should show the link (got ${link}).`);
+  await shown.locator('.modal-foot button', { hasText: 'Done' }).click();
+  m = await bob.dialog('(@droid)');
+  await m.locator('.field-hint', { hasText: 'A reset link you made works until' }).waitFor();
+  await bob.page.keyboard.press('Escape');
+  await bob.noModals();
+
+  // Droid, on a device of hers: the link, her own new password, and she's in.
+  const droid = await t.open('droid');
+  await droid.page.goto(link);
+  const fresh = newPassword();
+  const form = await droid.dialog('Choose a new password for droid');
+  await form.locator('.field', { hasText: exact('New password') }).locator('input').fill(fresh);
+  await form.locator('.field', { hasText: 'Confirm new password' }).locator('input').fill(fresh);
+  await form.locator('.modal-foot .btn.primary').click();
+  await droid.toast('Password reset with new keys');
+  t.pw.droid = fresh;
+  await droid.waitApp();
+
+  // Bob can't vouch for the keys his link made: another admin or a member who knew her has to.
+  m = await openDroid();
+  await m.locator('.field-hint', { hasText: 'You made the reset link these keys came from' }).waitFor();
+  check(!(await m.locator('button.chip', { hasText: 'Mark as verified' }).count()), 'The owner who made the link shouldn\u2019t be offered to verify the keys it made.');
+  await bob.page.keyboard.press('Escape');
+  await bob.noModals();
+  // And it's all in the audit log.
+  await bob.$('.admin-tabs .admin-tab', { hasText: 'Audit log' }).click();
+  await bob.$('.admin-body', { hasText: 'a one-time reset link for 24 hours, made by the owner' }).waitFor();
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await droid.close();
+}
+
 // ------------------------------------------------------------------ an update puts itself in place
 // An update reaches an open page as a new service worker. There's nothing to click: the page reloads into the new
 // version by itself, keeping its place and a message being typed, but never while something is under way (here a
@@ -3985,6 +4038,7 @@ export const FLOWS = [
   ['staff deletion: the owner deletes an account for someone who can’t sign in, from Admin → Users', staffDelete],
   ['phones: held sideways it’s still the phone layout; a swipe from the left edge opens the drawer; Back closes the drawer, members, a picture, a menu and settings without leaving; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
   ['phone message actions: a long press opens a sheet (react, reply, copy, edit, delete; closes with Back, Esc, a tap or a swipe); a roomier message box with GIFs and Send later under +; the desktop keeps its hover toolbar and buttons', phoneMessageActions],
+  ['owner reset link: the owner makes a one-time link in Admin → Users for someone who can\u2019t sign in; they choose their own new password with it; the owner can\u2019t verify the keys it made', ownerResetLink],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
 ];

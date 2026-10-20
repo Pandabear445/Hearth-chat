@@ -1081,7 +1081,9 @@ async function userModal(id, refresh, myRank = 2) {
       u.keysResetAt ? h('div', { class: 'row gap wrap' },
         h('span', { class: 'badge-tag bad' }, `New keys from a password reset without the recovery key, ${ago(u.keysResetAt)} \u2014 not verified yet${u.keysWaiting ? ` in ${u.keysWaiting} ${u.keysWaiting === 1 ? 'server or group' : 'servers and groups'} they were in before` : ''}`),
         // It can't be taken back, so it takes your password (and a fresh two-factor code when that's on), in one dialog.
-        myRank >= 2 && !u.self ? h('button', { class: 'chip', onclick: async () => {
+        // Not by whoever made the reset link that gave them these keys (they could have opened it themselves).
+        u.keysResetByMe ? h('span', { class: 'field-hint' }, 'You made the reset link these keys came from, so a member who knew them before, or another admin, has to verify them.') : null,
+        myRank >= 2 && !u.self && !u.keysResetByMe ? h('button', { class: 'chip', onclick: async () => {
           try {
             const r = await withPassword((x) => api('POST', `/admin/users/${u.id}/keys/verify`, x), { title: `Mark ${u.username}\u2019s new keys as verified?`, button: 'Mark as verified',
               text: 'Only once you\u2019re sure it\u2019s really them and not someone who got into their email: for example, they read you the safety number from your profile in person or on a call. Everyone\u2019s apps then share the keys to all their servers and groups with them, including ones where nobody has verified them yet. This goes in the audit log.' });
@@ -1132,6 +1134,7 @@ async function userModal(id, refresh, myRank = 2) {
           await withPassword((x) => api('PUT', '/admin/staff', { userId: id, role: r, ...x }), { title: 'Confirm the team change', text: 'Changing the team needs your password.' })
             .then((ok) => { if (!ok) return; toast(r ? `Now ${l.toLowerCase()}.` : 'Removed from staff.'); m.close(); userModal(id, refresh, myRank); refresh(); }, (x) => { if (!x.cancelled) toast(x.message, 'error'); });
         } }, l))) : null,
+      u.myRole === 'owner' && u.canAct && !u.bot && !u.deletedAt ? resetLinkRow(u, () => { m.close(); userModal(id, refresh, myRank); }) : null,
       u.canAct ? null : h('p', { class: 'field-hint' }, 'You can look, but only someone ranked above this account can suspend, sign out or reset it.')),
     actions: !u.canAct ? [] : [
       { label: 'Reset profile', action: async () => {
@@ -1145,6 +1148,48 @@ async function userModal(id, refresh, myRank = 2) {
       myRank >= 2 && !u.deletedAt && !u.bot ? { label: 'Delete account\u2026', kind: 'danger', action: () => { m.close(); deleteAccountDialog(u, refresh); return false; } } : null,
     ].filter(Boolean),
   });
+}
+// The owner's password reset link, for someone who can't sign in and can't reset it by email (no address on the
+// account, or email isn't set up). They choose their own new password with it: the owner never sees it (it unlocks
+// their private key). server/accounts.js has the rules: one at a time, 24 hours, their two-factor code still asked
+// for, new keys verified by someone other than the owner who made it, an email to them, the audit log.
+function resetLinkRow(u, reopen) {
+  const make = async () => {
+    try {
+      const r = await withPassword((x) => api('POST', `/admin/users/${u.id}/reset-link`, x),
+        { title: `Make a password reset link for ${u.username}?`, button: 'Make the link', text: 'For someone who can\u2019t sign in and can\u2019t reset their password by email. They choose their own new password with it.' });
+      if (r) showResetLink(u, r, reopen);
+    } catch (e) { if (!e.cancelled) toast(e.message, 'error'); }
+  };
+  const cancel = async () => {
+    try { await api('DELETE', `/admin/users/${u.id}/reset-link`); toast('Reset link cancelled.'); reopen(); } catch (e) { toast(e.message, 'error'); }
+  };
+  return h('div', { class: 'stack' },
+    h('div', { class: 'row gap wrap' }, h('span', { class: 'field-label' }, 'Password'),
+      h('button', { class: 'chip', onclick: make }, u.resetLinkUntil ? 'Make a new reset link' : 'Make a password reset link')),
+    u.resetLinkUntil
+      ? h('p', { class: 'field-hint' }, `A reset link you made works until ${fmtStamp(u.resetLinkUntil)}. `, h('button', { class: 'link-btn', onclick: cancel }, 'Cancel it'))
+      : h('p', { class: 'field-hint' }, 'For someone who can\u2019t sign in: a one-time link they use to choose a new password themselves. You never see their password.'));
+}
+function showResetLink(u, r, reopen) {
+  const url = `${location.origin}/#reset=${r.token}`;
+  const inp = h('input', { class: 'input mono', readonly: true, value: url, 'aria-label': 'Reset link' });
+  modal({
+    title: `Reset link for ${u.username}`, size: 'sm',
+    body: h('div', { class: 'stack' },
+      h('p', { class: 'muted-p' }, `Give it to ${u.displayName} only, privately: whoever opens it can choose the password. It works once, until ${fmtStamp(r.expiresAt)}, and nothing changes until it\u2019s used.`),
+      inp,
+      h('p', { class: 'muted-p' }, u.hasRecovery
+        ? 'They have a recovery key: with it, all their messages stay readable.'
+        : 'They have no recovery key, so the reset gives them new encryption keys: their old direct messages can\u2019t be read any more, and someone who knew them before (not you, since you made the link) has to verify them before they can read their servers again.'),
+      u.totpEnabled ? h('p', { class: 'muted-p' }, 'Two-factor sign-in is on for them, so they\u2019ll still need their code.') : null,
+      h('p', { class: 'muted-p' }, 'Using it signs them out everywhere. They\u2019re told by email if they have an address, and it\u2019s in the audit log.')),
+    actions: [
+      { label: 'Copy link', kind: 'primary', action: () => { copyText(url); toast('Link copied.'); return false; } },
+      { label: 'Done', action: () => { reopen(); } },
+    ],
+  });
+  setTimeout(() => inp.select(), 50);
 }
 // Deleting someone's account for them: a child under 13, or a person who asked by email because they can't sign in.
 // The server does what Settings → Delete account does (eraseAccount in server/index.js), without their password.

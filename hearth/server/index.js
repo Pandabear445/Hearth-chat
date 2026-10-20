@@ -3225,7 +3225,7 @@ api.post('/servers/:id/keys/self', auth, (req, res) => {
 // it the hold in servers they joined since. An instance admin can lift it everywhere at once from Admin → Users. All
 // of it goes in the audit log.
 function markVerified(target, byId) {
-  if (db.prepare('UPDATE users SET keys_reset_at = NULL, keys_vouched_by = ?, keys_vouched_at = ? WHERE id = ? AND keys_reset_at = ?')
+  if (db.prepare('UPDATE users SET keys_reset_at = NULL, keys_reset_by = NULL, keys_vouched_by = ?, keys_vouched_at = ? WHERE id = ? AND keys_reset_at = ?')
     .run(byId, now(), target.id, target.keys_reset_at).changes !== 1) return false;
   db.prepare('DELETE FROM key_vouches WHERE user_id = ?').run(target.id);
   return true;
@@ -3243,6 +3243,8 @@ function vouchDone(target, serverIds, everywhere) {
   serverIds.forEach((sid) => emitKeyState(sid));
 }
 const resetDay = (t) => new Date(t).toISOString().slice(0, 10);
+// Keys that came from a reset link the owner made can't be verified by that owner (they could have opened it).
+const MADE_THE_LINK = 'You made the reset link that gave them these keys, so someone else has to verify them: a member who knew them before, or another admin.';
 function vouchTarget(id) {
   const target = getUserRow(String(id || ''));
   if (!target || target.deleted_at || target.is_bot) fail(404, 'User not found.');
@@ -3253,6 +3255,7 @@ api.post('/users/:id/keys/verify', auth, (req, res) => {
   const target = vouchTarget(req.params.id);
   if (target.id === req.userId) fail(403, 'Someone else has to verify you: ask a member who knew you before to compare safety numbers with you.', 'self');
   if (!target.keys_reset_at) return res.json({ ok: true, verified: false, released: [], everywhere: true });
+  if (target.keys_reset_by === req.userId) fail(403, MADE_THE_LINK, 'made_the_link');
   if (keysUnverified(req.userId)) fail(403, 'Your own password was reset without your recovery key, so a member has to verify you before you can verify anyone.', 'keys_unverified');
   if ((req.body || {}).publicKey !== target.public_key) fail(409, `${target.username}\u2019s keys changed again. Compare safety numbers with them once more.`, 'stale_keys');
   const r = target.keys_reset_at;
@@ -3321,6 +3324,7 @@ api.post('/admin/users/:id/keys/verify', auth, wrap(async (req, res) => {
   rateLimit('adminkeysverify:' + req.userId, 30, 60 * 60 * 1000);
   const target = vouchTarget(req.params.id);
   if (target.id === req.userId) fail(403, 'Another admin, or a member who knew you before, has to verify you.', 'self');
+  if (target.keys_reset_at && target.keys_reset_by === req.userId) fail(403, MADE_THE_LINK, 'made_the_link');
   if (keysUnverified(req.userId)) fail(403, 'Your own password was reset without your recovery key, so a member has to verify you before you can verify anyone.', 'keys_unverified');
   if (!target.keys_reset_at) fail(400, 'Their keys don\u2019t need verifying.');
   await stepUp(req, req.body);
@@ -4781,7 +4785,8 @@ const requireInstanceAdmin = (uid) => { if (!isInstanceAdmin(uid)) fail(403, 'On
 // Email, recovery key and two-factor sign-in (server/accounts.js).
 ACCT = require('./accounts')({ api, auth, db, fail, wrap, rateLimit, countHit, limitNet, getSetting, setSetting, getUserRow, selfUser, broadcastUser, bcrypt, seal, unseal,
   tokenId, requireInstanceAdmin: (uid) => requireInstanceAdmin(uid), requireOutranks: (req, id) => requireOutranks(req, id), auditLog, secEvent: (...a) => secEvent(...a), cleanIp,
-  emitKeyState: (sid) => emitKeyState(sid), brandName: () => brand().name, isB64ish, isSalt, atRestKey, stepUp, createSession, revokeSessions, rotateToken, hitsSoFar, refundHit, refundNet, verifyCaptcha: (...a) => verifyCaptcha(...a) });
+  emitKeyState: (sid) => emitKeyState(sid), brandName: () => brand().name, isB64ish, isSalt, atRestKey, stepUp, createSession, revokeSessions, rotateToken, hitsSoFar, refundHit, refundNet, verifyCaptcha: (...a) => verifyCaptcha(...a),
+  staffRole: (uid) => staffRole(uid) });
 // The key saved in the app wins over .env, so the admin never has to edit files. Keys saved in the app are
 // sealed with data/secret.key (sealSecret in db.js), like the SMTP password.
 const giphyKey = () => openSecret(getSetting('giphyKey')) || GIPHY_API_KEY;
@@ -5600,6 +5605,8 @@ api.get('/admin/users/:id', auth, staffOnly, (req, res) => {
     storage: quotaOf(r.id), quotaOverride: r.upload_quota_mb, profileLocked: !!r.profile_locked, supporter: !!r.supporter,
     emailMasked: ACCT ? ACCT.mask(r.email) : '', totpEnabled: !!r.totp_enabled, hasRecovery: !!r.enc_private_key_recovery,
     keysResetAt: r.keys_reset_at || null, keysWaiting: r.keys_reset_at ? stillWaiting(r).length : 0, keysVouched: r.keys_vouched_at ? { at: r.keys_vouched_at, by: brief(r.keys_vouched_by) } : null, self: r.id === req.userId,
+    keysResetByMe: !!r.keys_reset_at && r.keys_reset_by === req.userId,
+    resetLinkUntil: staffRole(req.userId) === 'owner' && ACCT ? ACCT.ownerLinkUntil(r.id) : null,
     deletedAt: r.deleted_at || null,
     commentsWritten: db.prepare('SELECT COUNT(*) n FROM profile_comments WHERE author_id = ?').get(r.id).n,
     notes: db.prepare('SELECT id, author_id, text, created_at FROM staff_notes WHERE user_id = ? ORDER BY created_at DESC LIMIT 100').all(r.id)
