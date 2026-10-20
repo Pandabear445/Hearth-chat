@@ -135,7 +135,9 @@ module.exports = function setupAccounts(ctx) {
     if (!row || row.deleted_at || row.is_bot) return null;
     let d = {};
     try { d = JSON.parse(t.data || '{}') || {}; } catch { /* treated as not matching */ }
-    if (d.owner) return d.owner !== row.id && staffRole(d.owner) === 'owner' ? { t, row, owner: d.owner } : null;
+    // (and isn't marked: a reset gave them new keys nobody has verified, so whoever reset their password could be
+    // anyone who got into their email).
+    if (d.owner) return d.owner !== row.id && staffRole(d.owner) === 'owner' && !(getUserRow(d.owner) || {}).keys_reset_at ? { t, row, owner: d.owner } : null;
     return d.email && row.email === d.email && row.email_verified ? { t, row } : null;
   };
   // Outstanding reset links stop working: after a password change, and when the email changes or goes away.
@@ -439,9 +441,12 @@ module.exports = function setupAccounts(ctx) {
         // earlier reset stays so, from now (whoever verifies must have known them before this reset), and what
         // anyone verified for the old keys no longer counts.
         const shares = db.prepare('SELECT 1 FROM members m JOIN members o ON o.server_id = m.server_id AND o.user_id != m.user_id WHERE m.user_id = ? LIMIT 1').get(row.id);
-        // From the owner's link: that owner can't be the one who verifies them (index.js).
+        // From the owner's link: that owner can't be the one who verifies them (index.js). One who made the link for
+        // the keys still waiting stays on record through a later reset (say, an emailed one from an address they added
+        // as this person), until someone else verifies them (markVerified). Read from the row as it is now.
         const at = shares || row.keys_reset_at ? now() : null;
-        db.prepare('UPDATE users SET keys_reset_at = ?, keys_reset_by = ?, keys_vouched_by = NULL, keys_vouched_at = NULL WHERE id = ?').run(at, at ? owner || null : null, row.id);
+        db.prepare(`UPDATE users SET keys_reset_at = @at, keys_reset_by = CASE WHEN @at IS NULL THEN NULL ELSE COALESCE(@owner, CASE WHEN keys_reset_at IS NOT NULL THEN keys_reset_by END) END,
+            keys_vouched_by = NULL, keys_vouched_at = NULL WHERE id = @id`).run({ at, owner: owner || null, id: row.id });
         db.prepare('DELETE FROM key_vouches WHERE user_id = ?').run(row.id);
       }
       db.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND kind = 'reset'").run(row.id);
@@ -476,13 +481,16 @@ module.exports = function setupAccounts(ctx) {
     const t = db.prepare("SELECT * FROM auth_tokens WHERE user_id = ? AND kind = 'reset' AND expires_at > ?").get(uid, now());
     let d = {};
     try { d = JSON.parse((t && t.data) || '{}') || {}; } catch { /* not one */ }
-    return t && d.owner ? { id: t.id, expiresAt: t.expires_at } : null;
+    return t && d.owner ? { id: t.id, expiresAt: t.expires_at, by: d.owner } : null;
   }
   api.post('/admin/users/:id/reset-link', auth, wrap(async (req, res) => {
     ownerHere(req);
     rateLimit('ownerresetlink:' + req.userId, 20, 3600000);
     const r = requireOutranks(req, String(req.params.id)); // never your own account
     if (r.is_bot || r.deleted_at) fail(400, 'That account can\u2019t sign in.');
+    // Not while your own password was reset without your recovery key (and nobody has verified you since): whoever
+    // got into your email could otherwise get into every account on the server (like PUT /admin/staff, row 137).
+    if (getUserRow(req.userId).keys_reset_at) fail(403, 'Your password was reset without your recovery key, so you can\u2019t make reset links until you\u2019re verified in your servers and groups. Ask a member who knew you before to compare safety numbers with you.', 'keys_unverified');
     await stepUp(req, req.body);
     const raw = newToken(r.id, 'reset', { owner: req.userId }, OWNER_LINK_MS);
     const me = getUserRow(req.userId);
@@ -503,5 +511,5 @@ module.exports = function setupAccounts(ctx) {
 
   // What selfUser() adds about these settings (only ever sent to the account itself).
   const selfExtras = (row) => ({ email: row.email || null, emailVerified: !!row.email_verified, emailMasked: mask(row.email), hasRecovery: !!row.enc_private_key_recovery, totpEnabled: !!row.totp_enabled, backupCodesLeft: row.totp_enabled ? JSON.parse(row.backup_codes || '[]').length : 0 });
-  return { require2fa, selfExtras, mailReady, sendMail, mask, notify, dropResetLinks, ownerLinkUntil: (uid) => (ownerLinkOf(uid) || {}).expiresAt || null };
+  return { require2fa, selfExtras, mailReady, sendMail, mask, notify, dropResetLinks, ownerLinkUntil: (uid, viewer) => { const l = ownerLinkOf(uid); return l && l.by === viewer ? l.expiresAt : null; } };
 };

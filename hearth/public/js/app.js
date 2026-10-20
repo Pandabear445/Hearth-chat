@@ -7585,7 +7585,9 @@ async function openSafetyNumber(u) {
     const groupsN = await E2EE.safetyNumber(S.me, user);
     const changed = sec.keyChanged(user);
     // They're waiting to be verified, and you may be the one to do it (the server checks you knew them before).
-    const vouch = user.id !== S.me.id && sec.awaitingVerify(user) && !sec.awaitingVerify(S.me);
+    // Not keys from a reset link you made yourself (the owner): someone else has to vouch for those.
+    const madeTheLink = !!user.keysResetBy && user.keysResetBy === S.me.id;
+    const vouch = user.id !== S.me.id && sec.awaitingVerify(user) && !sec.awaitingVerify(S.me) && !madeTheLink;
     const name = displayName(user);
     modal({
       title: changed ? 'Security key changed' : 'Verify encryption',
@@ -7593,6 +7595,7 @@ async function openSafetyNumber(u) {
       body: h('div', { class: 'stack' },
         changed ? h('p', { class: 'key-bar bad' }, icon('shield'), h('span', null, `${name}'s keys are different from the ones this browser saw before. That happens if someone \u2014 including whoever runs this server \u2014 tries to listen in. Only continue once the numbers match on both screens.`)) : null,
         vouch ? h('p', { class: 'key-bar bad' }, icon('shield'), h('span', null, `${name} reset their password without their recovery key, so their keys are new. Anyone who got into their email could have done that, so nobody\u2019s app shares a server\u2019s or group\u2019s keys with them until someone there who knew them before verifies them. Verifying them shares the keys of the servers and groups you\u2019re both in.`)) : null,
+        madeTheLink && sec.awaitingVerify(user) ? h('p', { class: 'key-bar' }, icon('shield'), h('span', null, `${name}\u2019s keys came from a password reset link you made, so someone else has to verify them: a member who knew them before, or another admin.`)) : null,
         sec.awaitingVerify(S.me) && user.id !== S.me.id ? h('p', { class: 'key-bar' }, icon('shield'), h('span', null, `To get verified, ask ${name} to open your profile (\u22ef \u2192 Verify encryption), check these same numbers and press \u201cNumbers match \u2014 verify and share keys\u201d.`)) : null,
         h('p', { class: 'muted-p' }, `Compare these numbers with ${name} in person or on a call. If they match on both screens, nobody \u2014 not even the server \u2014 can read or fake your messages.`),
         h('div', { class: 'safety' }, groupsN.map((g) => h('span', null, g)))),

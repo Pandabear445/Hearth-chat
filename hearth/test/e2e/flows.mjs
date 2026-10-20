@@ -3913,6 +3913,7 @@ async function ownerResetLink(t) {
 
   // Droid, on a device of hers: the link, her own new password, and she's in.
   const droid = await t.open('droid');
+  await droid.$('#login-form').waitFor(); // the app listens for a #reset= link by then
   await droid.page.goto(link);
   const fresh = newPassword();
   const form = await droid.dialog('Choose a new password for droid');

@@ -230,6 +230,8 @@ function publicUser(row) {
     // crypto-2: when a reset without the recovery key gave them new keys that nobody who knew them has verified yet
     // (only while that's so; apps drop it when a full user object comes without it).
     keysReset: row.keys_reset_at || undefined,
+    // …and whose reset link made them, when it was the owner's (that owner's app doesn't offer to verify them).
+    keysResetBy: (row.keys_reset_at && row.keys_reset_by) || undefined,
     activity: row.deleted_at ? undefined : ACT.activityFor(row) || undefined,
     recentGames: ACT.recentFor(row),
     createdAt: row.created_at,
@@ -3301,11 +3303,11 @@ api.get('/me/verifiers', auth, (req, res) => {
   const by = new Map();
   if (where.length) {
     db.prepare(`SELECT x.user_id, x.server_id FROM members x JOIN users u ON u.id = x.user_id
-        WHERE x.server_id IN (${where.map(() => '?').join(',')}) AND x.user_id != ? AND u.keys_reset_at IS NULL
+        WHERE x.server_id IN (${where.map(() => '?').join(',')}) AND x.user_id != ? AND x.user_id != ? AND u.keys_reset_at IS NULL
           AND u.deleted_at IS NULL AND u.suspended_at IS NULL AND u.is_bot = 0
           AND EXISTS (SELECT 1 FROM members a JOIN members b ON b.server_id = a.server_id AND b.user_id = ?
             WHERE a.user_id = x.user_id AND a.joined_at < ? AND b.joined_at < ?)
-        LIMIT 1000`).all(...where, me.id, me.id, r, r)
+        LIMIT 1000`).all(...where, me.id, me.keys_reset_by || '', me.id, r, r)
       .forEach((x) => { if (!by.has(x.user_id)) by.set(x.user_id, []); by.get(x.user_id).push(x.server_id); });
   }
   const ids = [...by.keys()].slice(0, 50);
@@ -5606,7 +5608,7 @@ api.get('/admin/users/:id', auth, staffOnly, (req, res) => {
     emailMasked: ACCT ? ACCT.mask(r.email) : '', totpEnabled: !!r.totp_enabled, hasRecovery: !!r.enc_private_key_recovery,
     keysResetAt: r.keys_reset_at || null, keysWaiting: r.keys_reset_at ? stillWaiting(r).length : 0, keysVouched: r.keys_vouched_at ? { at: r.keys_vouched_at, by: brief(r.keys_vouched_by) } : null, self: r.id === req.userId,
     keysResetByMe: !!r.keys_reset_at && r.keys_reset_by === req.userId,
-    resetLinkUntil: staffRole(req.userId) === 'owner' && ACCT ? ACCT.ownerLinkUntil(r.id) : null,
+    resetLinkUntil: staffRole(req.userId) === 'owner' && ACCT ? ACCT.ownerLinkUntil(r.id, req.userId) : null,
     deletedAt: r.deleted_at || null,
     commentsWritten: db.prepare('SELECT COUNT(*) n FROM profile_comments WHERE author_id = ?').get(r.id).n,
     notes: db.prepare('SELECT id, author_id, text, created_at FROM staff_notes WHERE user_id = ? ORDER BY created_at DESC LIMIT 100').all(r.id)

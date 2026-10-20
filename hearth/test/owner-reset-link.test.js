@@ -100,11 +100,57 @@ test('another admin can verify keys from the owner’s link', async () => {
 
 test('two-factor sign-in is still asked for', async () => {
   const v = await srv.register();
-  await H.enable2fa(srv, v);
+  const tf = await H.enable2fa(srv, v);
   const { token } = (await makeLink(v)).json;
   const r = await srv.api('POST', '/auth/reset', { ip: H.newIp(), body: resetBody(token) });
-  assert.notEqual(r.status, 200, 'not without their code');
+  assert.equal(r.status, 401, r.text);
+  assert.equal(r.json.code, 'need_2fa');
   assert.equal(srv.sql('SELECT public_key FROM users WHERE id = ?', v.id)[0].public_key, v.publicKey, 'nothing changed');
+  const ok = await srv.api('POST', '/auth/reset', { ip: H.newIp(), body: resetBody(token, { totp: await H.freshCode(tf.secret, tf.used) }) });
+  assert.equal(ok.status, 200, ok.text);
+});
+
+test('the owner who made the link stays on record through a later reset while the keys still wait, and isn\u2019t offered as a verifier', async () => {
+  const bob = await srv.register(); const v = await srv.register();
+  await serverWith(srv.owner, [bob, v]);
+  const { token } = (await makeLink(v)).json;
+  const b1 = resetBody(token);
+  const first = await srv.api('POST', '/auth/reset', { ip: H.newIp(), body: b1 });
+  assert.equal(first.status, 200, first.text);
+  const vs = { ...v, token: first.json.token, authKey: b1.authKey };
+  // Whoever opened it (the owner, say) adds an address of their own and resets again by email.
+  const email = `${v.username}-new@example.test`;
+  await H.confirmEmail(srv, vs, email);
+  await srv.api('POST', '/auth/forgot', { ip: H.newIp(), body: { login: v.username } });
+  const tok = H.resetTokenFrom((await srv.mails()).filter((m) => m.to === email && /reset your password/.test(m.subject)).pop());
+  const again = resetBody(tok);
+  assert.equal((await srv.api('POST', '/auth/reset', { ip: H.newIp(), body: again })).status, 200);
+  const row = srv.sql('SELECT keys_reset_at, keys_reset_by FROM users WHERE id = ?', v.id)[0];
+  assert.ok(row.keys_reset_at);
+  assert.equal(row.keys_reset_by, srv.owner.id, 'still the owner who made the first link');
+  assert.equal((await as(srv.owner, 'POST', `/users/${v.id}/keys/verify`, { publicKey: again.publicKey })).json.code, 'made_the_link');
+  assert.equal((await as(srv.owner, 'POST', `/admin/users/${v.id}/keys/verify`, { authKey: srv.owner.authKey })).json.code, 'made_the_link');
+  // Their "ask a member to verify you" lists bob, not the owner.
+  const signedIn = await srv.api('POST', '/auth/login', { ip: H.newIp(), body: { username: v.username, authKey: again.authKey } });
+  assert.equal(signedIn.status, 200, signedIn.text);
+  const who = (await srv.api('GET', '/me/verifiers', { token: signedIn.json.token, ip: H.newIp() })).json.users.map((u) => u.id);
+  assert.ok(who.includes(bob.id), JSON.stringify(who));
+  assert.ok(!who.includes(srv.owner.id), JSON.stringify(who));
+  // Everyone's apps learn whose link it was (the owner's app then doesn't offer to verify them).
+  assert.equal((await as(bob, 'GET', `/users/${v.id}`)).json.keysResetBy, srv.owner.id);
+});
+
+test('an owner whose own password was reset without the recovery key makes no links, and their earlier links stop working', async () => {
+  const v = await srv.register();
+  const { token } = (await makeLink(v)).json;
+  const was = srv.sql('SELECT keys_reset_at FROM users WHERE id = ?', srv.owner.id)[0].keys_reset_at;
+  srv.sql('UPDATE users SET keys_reset_at = ? WHERE id = ?', Date.now(), srv.owner.id);
+  try {
+    const r = await makeLink(v);
+    assert.equal(r.status, 403, r.text);
+    assert.equal(r.json.code, 'keys_unverified');
+    assert.equal((await srv.api('POST', '/auth/reset/info', { ip: H.newIp(), body: { token } })).status, 400);
+  } finally { srv.sql('UPDATE users SET keys_reset_at = ? WHERE id = ?', was, srv.owner.id); }
 });
 
 test('one link at a time; it can be cancelled; it stops working when its maker is no longer the owner', async () => {
@@ -127,6 +173,8 @@ test('one link at a time; it can be cancelled; it stops working when its maker i
   try {
     assert.equal((await srv.api('POST', '/auth/reset/info', { ip: H.newIp(), body: { token: third } })).status, 400);
     assert.equal((await makeLink(v)).status, 403);
+    // …and the new owner isn't told it's one they made.
+    assert.equal((await as(next, 'GET', `/admin/users/${v.id}`)).json.resetLinkUntil, null);
   } finally { srv.sql("UPDATE instance_settings SET value = ? WHERE key = 'owner'", was); }
   assert.equal((await srv.api('POST', '/auth/reset/info', { ip: H.newIp(), body: { token: third } })).status, 200, 'theirs again once they own it again');
 });
@@ -142,5 +190,10 @@ test('the person is told by email when they have an address; bots and deleted ac
   assert.doesNotMatch(mail.text, /#reset=/, 'without the link itself');
   const gone = await srv.register();
   assert.equal((await as(gone, 'DELETE', '/me', { authKey: gone.authKey, confirm: gone.username })).status, 200);
-  assert.notEqual((await makeLink(gone)).status, 200);
+  assert.equal((await makeLink(gone)).status, 400);
+  const bot = await as(srv.owner, 'POST', '/bots', { name: `rb${H.hex(2)}`, description: 'a bot', scopes: [] });
+  assert.equal(bot.status, 200, bot.text);
+  assert.equal(srv.sql('SELECT is_bot FROM users WHERE id = ?', bot.json.bot.id)[0].is_bot, 1);
+  assert.equal((await makeLink({ id: bot.json.bot.id })).status, 400);
+  assert.equal(srv.sql("SELECT COUNT(*) n FROM auth_tokens WHERE kind = 'reset' AND user_id IN (?, ?)", gone.id, bot.json.bot.id)[0].n, 0);
 });
