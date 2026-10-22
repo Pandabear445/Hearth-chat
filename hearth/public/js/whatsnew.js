@@ -3,6 +3,9 @@
 // the Android app leaves them out, as it offers no way to pay (noPayments in android.js).
 const pay = (text) => ({ text, pay: true });
 export const CHANGES = [
+  { version: '1.33.0', items: [
+    'Phone videos send: a video bigger than this server’s limit is made smaller on your device first (up to 1280 px, keeping the sound), then encrypted and sent as usual. It takes about as long as the video lasts; keep Hearth open meanwhile. A video too long to fit even made smaller says so, with how much fits.',
+  ] },
   { version: '1.32.0', items: [
     'The server’s owner can make a one-time password reset link for someone who can’t sign in and can’t reset it by email (Admin → Users). They choose their own new password with it: the owner never sees it. It lasts 24 hours, their two-factor code is still asked for, and new encryption keys it makes are verified by someone other than the owner.',
   ] },
