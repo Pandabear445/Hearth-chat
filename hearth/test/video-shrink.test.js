@@ -32,8 +32,22 @@ test('a longer video gets fewer bits and fewer pixels, until it would be mush: t
   const most = V.longestFitting(25 * MB);
   assert.ok(V.plan({ duration: most, width: 1920, height: 1080, maxBytes: 25 * MB }));
   assert.equal(V.plan({ duration: most * 1.2, width: 1920, height: 1080, maxBytes: 25 * MB }), null);
-  // A length the browser couldn't read (a live recording) isn't guessed at.
+  // A length the browser couldn't read (a live recording) isn't guessed at, and neither is a picture it can't show.
   for (const duration of [0, NaN, Infinity]) assert.equal(V.plan({ duration, width: 1280, height: 720, maxBytes: 25 * MB }), null);
+  for (const [width, height] of [[0, 0], [undefined, undefined], [1280, 0]]) assert.equal(V.plan({ duration: 10, width, height, maxBytes: 25 * MB }), null);
+});
+
+test('what the app says fits, and the room it checks against is the room it sends with', () => {
+  // The encryption and the upload add a little, so a video gets a bit less than the whole limit.
+  assert.equal(V.budgetFor(25 * MB), 25 * MB - 64 * 1024);
+  const room = V.budgetFor(25 * MB);
+  assert.ok(V.plan({ duration: V.longestFitting(room), width: 1920, height: 1080, maxBytes: room }), 'the length it names fits');
+  // Seconds under two minutes, whole minutes (rounded down: never more than fits) from there.
+  assert.equal(V.fitsText(25), '25 seconds');
+  assert.equal(V.fitsText(119), '119 seconds');
+  assert.equal(V.fitsText(179), '2 minutes');
+  assert.equal(V.fitsText(V.longestFitting(room)), '10 minutes');
+  assert.equal(V.fitsText(V.longestFitting(V.budgetFor(1 * MB))), '23 seconds');
 });
 
 test('the recording format: MP4 where the browser can, otherwise WebM, otherwise none', () => {

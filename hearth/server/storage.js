@@ -78,8 +78,9 @@ module.exports = function setupStorage(ctx) {
     if (!Number.isSafeInteger(size) || size < 1) fail(400, 'Say how big the file is, in bytes.', 'bad_size');
     const q = quotaOf(req.userId);
     if (q.blocked) fail(403, 'Uploads are turned off for your account. Ask an admin if you think that\u2019s a mistake.');
-    // The same per-file limit as one-request uploads, with the same allowance for the encryption overhead.
-    if (size > q.fileMb * MB + MB) fail(413, `That file is too big. Files can be up to ${q.fileMb} MB.`, 'too_big');
+    // The same per-file limit as one-request uploads, with the same allowance for the encryption overhead (none
+    // for the owner: fileMb 0; the disk check below still holds).
+    if (q.fileMb && size > q.fileMb * MB + MB) fail(413, `That file is too big. Files can be up to ${q.fileMb} MB.`, 'too_big');
     if (db.prepare('SELECT COUNT(*) n FROM upload_sessions WHERE user_id = ?').get(req.userId).n >= MAX_SESSIONS) {
       fail(429, 'You have too many uploads going at once. Let one finish (or cancel one), then try again.', 'too_many_uploads');
     }

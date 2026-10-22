@@ -874,7 +874,8 @@ function removeUpload(url) {
 // ---------------------------------------------------------------- upload limits
 // fileMb: largest attachment · imageMb: avatars, banners, icons, emoji sources · songMb: profile songs
 // quotaMb: total storage per person · dailyMb: uploads per person per 24 hours. 0 = no limit.
-// Admins and the owner aren't limited by quota/daily (per-file limits still apply).
+// Admins and the owner aren't limited by quota/daily (per-file limits still apply), and the owner's files in
+// messages have no size limit at all (fileMb 0): only the disk's free space (storage.js) and their device's memory.
 const LIMIT_DEFAULTS = { fileMb: MAX_UPLOAD_MB, imageMb: 12, songMb: 10, quotaMb: 1000, dailyMb: 500 };
 function uploadLimits() {
   let v = {};
@@ -898,6 +899,7 @@ function quotaOf(uid) {
   // Supporters can also send bigger files, if the owner set that perk (Admin → Money).
   const sf = row && row.supporter ? MONEY.supporterFileMb() : 0;
   if (sf > lim.fileMb) lim.fileMb = sf;
+  if (staffRole(uid) === 'owner') lim.fileMb = 0;
   return { ...lim, quotaMb, dailyMb: exempt ? 0 : lim.dailyMb, used: usedBytes(uid), today: dayBytes(uid), blocked: !!(row && row.uploads_blocked), exempt };
 }
 const fmtMb = (b) => `${(b / MB).toFixed(b < 10 * MB ? 1 : 0)} MB`;
@@ -966,7 +968,8 @@ function limited(kind, base, field) {
     const q = quotaOf(req.userId);
     if (q.blocked) return next(new HttpError(403, 'Uploads are turned off for your account. Ask an admin if you think that\u2019s a mistake.'));
     const perFileMb = kind === 'gif' ? LIB_MAX_MB : q[perFile];
-    const fileCap = perFileMb * MB + (kind === 'file' ? MB : 0); // encrypted attachments carry a little overhead
+    // Encrypted attachments carry a little overhead. 0: no limit (the owner's files in messages).
+    const fileCap = perFileMb ? perFileMb * MB + (kind === 'file' ? MB : 0) : Infinity;
     const quotaLeft = q.quotaMb ? q.quotaMb * MB - q.used : Infinity;
     const dayLeft = q.dailyMb ? q.dailyMb * MB - q.today : Infinity;
     if (quotaLeft <= 0) return next(new HttpError(413, `You\u2019ve used all ${q.quotaMb} MB of your storage. Delete some old files or ask an admin for more room.`, 'quota'));

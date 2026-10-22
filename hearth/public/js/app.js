@@ -46,7 +46,7 @@ import { bindNew, bindEdit, describe as describeBinding, createVersions, createC
 import { trackViewport } from './viewport.js';
 import { isPhone, isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
 import { createUpdater, underWay, jobsUnderWay } from './auto-update.js';
-import { canShrink, startShrink, probe as probeVideo, plan as shrinkPlan, longestFitting } from './video-shrink.js';
+import { canShrink, startShrink, probe as probeVideo, plan as shrinkPlan, longestFitting, budgetFor, fitsText } from './video-shrink.js';
 import { touchGestures } from './viewer-touch.js';
 import { backStack, edgeSwipes } from './phone-nav.js';
 import { initAway, CLEAR_AFTER, clearAfterMs, clearsLabel, onlyPresenceChanged } from './presence.js';
@@ -5999,7 +5999,9 @@ function createComposer({ id, key, threadId, placeholder }) {
   sendBtn.addEventListener('contextmenu', (e) => { if (sendBtn.disabled || laterBtn.hidden) return; e.preventDefault(); sendLater(sendBtn); });
   const suggest = h('div', { class: 'suggest', role: 'listbox', hidden: true });
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 260) + 'px'; };
-  const update = () => { sendBtn.disabled = !ta.value.trim() && !state.pending.length; laterBtn.disabled = sendBtn.disabled; };
+  // A video still being looked at (checkShrink) can't go yet: whether it fits isn't known.
+  const checking = () => state.pending.some((p) => p.shrink === 'checking');
+  const update = () => { sendBtn.disabled = (!ta.value.trim() && !state.pending.length) || checking(); laterBtn.disabled = sendBtn.disabled; };
   const openGifs = (anchor) => gifPicker(anchor, (url) => send(url), { onEmoji: (em) => insertAtCursor(ta, em) });
   const gifBtn = (S.config.features || {}).gifs === false ? null : h('button', { class: 'icon-btn composer-more', 'aria-label': 'GIFs', 'data-tip': 'GIFs', 'data-pop-anchor': '', onclick: (e) => openGifs(e.currentTarget) }, icon('gif'));
   const micBtn = voiceButton(() => box, (file, dur) => send('', { files: [{ file, voice: true, dur }] }));
@@ -6012,7 +6014,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     const more = isPhoneLayout() ? [
       gifBtn ? { label: 'GIFs', icon: 'gif', action: () => openGifs(attachBtn) } : null,
       { label: 'Voice message', icon: 'mic', action: () => micBtn.click() },
-      laterBtn.hidden ? null : { label: 'Send later', icon: 'clock', action: () => (sendBtn.disabled ? toast('Write your message first, then choose when it goes.') : sendLater(attachBtn)) },
+      laterBtn.hidden ? null : { label: 'Send later', icon: 'clock', action: () => (sendBtn.disabled ? toast(checking() ? 'Still checking the video\u2026' : 'Write your message first, then choose when it goes.') : sendLater(attachBtn)) },
     ].filter(Boolean) : [];
     return [
       canAttach ? { label: 'Upload a file', icon: 'file', action: () => fileIn.click() } : null,
@@ -6320,8 +6322,8 @@ function createComposer({ id, key, threadId, placeholder }) {
   });
 
   function addFiles(list) {
-    const mb = S.config.maxUploadMb || 25;
-    const max = mb * 1024 * 1024;
+    const mb = fileLimitMb();
+    const max = mb ? mb * 1024 * 1024 : Infinity;
     for (const f of list) {
       if (state.pending.length >= 10) { toast('You can attach up to 10 files at once.', 'error'); break; }
       // A video over the limit (a phone's, usually) is made smaller to fit when it's sent (video-shrink.js).
@@ -6338,16 +6340,17 @@ function createComposer({ id, key, threadId, placeholder }) {
     renderExtras(); update(); ta.focus();
   }
   // Can this video be made small enough? Its length decides: a long one would be mush, so it's turned down now.
+  // (The same room as when it's sent: uploadEncryptedFiles.) No picture to read means this browser can't show it.
   async function checkShrink(p, max, mb) {
     p.shrink = 'checking';
+    const room = budgetFor(max);
     const info = await probeVideo(p.file);
-    const fits = info && shrinkPlan({ ...info, maxBytes: max });
+    const fits = info && shrinkPlan({ ...info, maxBytes: room });
     if (!state.pending.includes(p)) return;
     if (fits) { p.shrink = 'yes'; p.shrinkTo = Math.round((fits.videoBps + fits.audioBps) * info.duration / 8); }
     else {
       state.pending.splice(state.pending.indexOf(p), 1);
-      const most = longestFitting(max);
-      toast(info ? `${p.file.name} is too long to send here, even made smaller: about ${Math.max(1, Math.round(most / 60))} minute${most >= 90 ? 's' : ''} of video fit in ${mb} MB. Trim it first.`
+      toast(info ? `${p.file.name} is too long to send here, even made smaller: about ${fitsText(longestFitting(room))} of video fits in ${mb} MB. Trim it first.`
         : `${p.file.name} can\u2019t be opened here, so it can\u2019t be made smaller to fit the ${mb} MB limit.`, 'error');
     }
     renderExtras(); update();
@@ -6455,6 +6458,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     const poll = extra.poll || null;
     const sendAt = extra.sendAt || null;
     if (!text.trim() && !files.length && !poll) return;
+    if (overrideText == null && !extra.files && checking()) { toast('Still checking the video\u2026 It can go in a moment.'); return; }
     // A bot's slash command goes to the bot (after the warning), not into the channel.
     const slashIn = overrideText == null && !poll && slashChannel();
     const cmd = slashIn && SLASH.match(slashIn, text.trim());
@@ -6514,7 +6518,7 @@ function createComposer({ id, key, threadId, placeholder }) {
         shrunk = true;
         upStatus.hidden = false;
         bar.style.width = Math.round(shrinking * 100) + '%';
-        upText.textContent = `Making the video smaller to send\u2026 ${Math.round(shrinking * 100)}% (keep Hearth open)`;
+        upText.textContent = `Making the video smaller to send\u2026 ${Math.round(shrinking * 100)}% (keep Hearth on screen)`;
         return;
       }
       retrying = r ? wait : null;
@@ -6544,7 +6548,13 @@ function createComposer({ id, key, threadId, placeholder }) {
       else toast(e.message, 'error');
       // Give the words back so nothing is lost (unless they've already typed something new).
       if (!poll && !files.some((f) => f.voice) && !ta.value.trim() && !(drafts.get(kk + (tid || '')) || '').trim() && key() === kk) {
-        ta.value = text; drafts.set(kk + (tid || ''), text); synced = text; if (!state.pending.length) state.pending = files;
+        ta.value = text; drafts.set(kk + (tid || ''), text); synced = text;
+        if (!state.pending.length) {
+          state.pending = files;
+          // A video that was still being looked at when it was sent is looked at again.
+          const mb = S.config.maxUploadMb || 25;
+          for (const p of files) if (p.shrink === 'checking') checkShrink(p, mb * 1024 * 1024, mb);
+        }
         if (linkState && !state.link && linkState.status === 'ready') state.link = linkState; // and its preview
         renderExtras(); autosize(); update();
       }
@@ -6617,6 +6627,11 @@ function blockedDmNotice() {
     h('button', { class: 'btn sm ghost', onclick: () => toggleBlock(d.userId, false) }, 'Unblock'));
 }
 
+// The largest file someone can put in a message, in MB; 0: no limit (the server's owner: quotaOf in server/index.js).
+const fileLimitMb = () => (S.me && S.me.staffRole === 'owner' ? 0 : S.config.maxUploadMb || 25);
+// A file is encrypted on the device in one piece, so a very big one can be more than a phone has room for.
+const BIG_FOR_A_DEVICE = 256 * 1024 * 1024;
+
 // ---- sending (every file gets its own random key, carried inside the encrypted message)
 // Small files go up in one request; bigger ones (CHUNKED_ABOVE) in resumable chunks that survive a dropped
 // connection (files.js). onStatus reports "connection lost, retrying"; signal cancels.
@@ -6631,7 +6646,7 @@ async function uploadEncryptedFiles(key, files, onProgress, { signal, onStatus }
     let file = p.file;
     if (p.session) {
       const s = p.session; p.session = null;
-      file = await s.run({ maxBytes: (S.config.maxUploadMb || 25) * 1024 * 1024 - 64 * 1024, signal, onProgress: (x) => onStatus && onStatus({ shrinking: x }) });
+      file = await s.run({ maxBytes: budgetFor((S.config.maxUploadMb || 25) * 1024 * 1024), signal, onProgress: (x) => onStatus && onStatus({ shrinking: x }) });
     }
     prepared.push({ ...(p.voice ? { file } : await prepareImage(file, { compress })), orig: p.file, voice: p.voice, dur: p.dur, alt: p.alt, spoiler: p.spoiler });
   }
@@ -6640,7 +6655,12 @@ async function uploadEncryptedFiles(key, files, onProgress, { signal, onStatus }
   onProgress(0);
   const send = async (blobLike, weight) => {
     if (signal && signal.aborted) throw Object.assign(new Error('Upload cancelled.'), { cancelled: true });
-    const { blob, k } = await E2EE.encryptFile(await blobLike.arrayBuffer());
+    let sealed;
+    try { sealed = await E2EE.encryptFile(await blobLike.arrayBuffer()); } catch (e) {
+      if (blobLike.size < BIG_FOR_A_DEVICE) throw e;
+      throw new Error(`This device ran out of memory encrypting a file that big (${fmtSize(blobLike.size)}). Try it from a computer, or send a smaller file.`);
+    }
+    const { blob, k } = sealed;
     const progress = (x) => onProgress((done + x * weight) / total);
     const url = blob.byteLength > CHUNKED_ABOVE ? await uploadResumable(blob, { onProgress: progress, onStatus, signal }) : await uploadSimple(blob, { onProgress: progress, signal });
     done += weight;

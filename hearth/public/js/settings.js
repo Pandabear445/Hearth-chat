@@ -473,7 +473,7 @@ function accountTab(app, setDirty, go) {
       h('div', { class: 'kv' }, h('span', null, 'Used'), h('strong', null, q.quotaMb ? `${mb(q.used)} of ${q.quotaMb} MB` : `${mb(q.used)} (no limit)`)),
       q.quotaMb ? h('div', { class: `storage-bar${pct > 90 ? ' warn' : ''}` }, h('i', { style: { width: `${pct}%` } })) : null,
       h('div', { class: 'kv' }, h('span', null, 'Uploaded today'), h('strong', null, q.dailyMb ? `${mb(q.today)} of ${q.dailyMb} MB` : mb(q.today))),
-      h('div', { class: 'kv' }, h('span', null, 'Largest file'), h('strong', null, `${q.fileMb} MB (pictures ${q.imageMb} MB, songs ${q.songMb} MB)`)),
+      h('div', { class: 'kv' }, h('span', null, 'Largest file'), h('strong', null, `${q.fileMb ? `${q.fileMb} MB` : 'No limit (you own this server)'} (pictures ${q.imageMb} MB, songs ${q.songMb} MB)`)),
       ...q.byKind.map((k) => h('div', { class: 'kv' }, h('span', null, kinds[k.kind] || k.kind), h('span', null, `${k.files} \u00b7 ${mb(k.bytes)}`))),
       go ? h('button', { class: 'btn ghost sm', onclick: () => go('storage') }, 'See your biggest files') : null].filter(Boolean));
   }).catch((e) => clear(storage).append(h('p', { class: 'form-error' }, e.message)));
@@ -1496,7 +1496,7 @@ function storageTab(app) {
       h('div', { class: 'kv' }, h('span', null, 'Used'), h('strong', null, q.quotaMb ? `${size(q.used)} of ${q.quotaMb} MB` : `${size(q.used)} (no limit)`)),
       q.quotaMb ? h('div', { class: `storage-bar${pct > 90 ? ' warn' : ''}` }, h('i', { style: { width: `${pct}%` } })) : null,
       h('div', { class: 'kv' }, h('span', null, 'Uploaded today'), h('strong', null, q.dailyMb ? `${size(q.today)} of ${q.dailyMb} MB` : size(q.today))),
-      h('div', { class: 'kv' }, h('span', null, 'Largest file'), h('strong', null, `${q.fileMb} MB`))].filter(Boolean));
+      h('div', { class: 'kv' }, h('span', null, 'Largest file'), h('strong', null, q.fileMb ? `${q.fileMb} MB` : 'No limit (you own this server)'))].filter(Boolean));
     clear(files);
     if (!mine.files.length) files.append(h('p', { class: 'field-hint' }, 'You haven\u2019t uploaded anything yet.'));
     const rows = mine.files.map((f) => {

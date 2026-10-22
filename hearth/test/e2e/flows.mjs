@@ -3892,7 +3892,7 @@ async function videoShrink(t) {
   const { alice, bob } = t.people;
   const setLimit = (fileMb) => bob.page.evaluate(async (mb) => (await fetch('/api/admin/limits', { method: 'PUT',
     headers: { authorization: `Bearer ${localStorage.getItem('hearth.token')}`, 'content-type': 'application/json' }, body: JSON.stringify({ fileMb: mb }) })).status, fileMb);
-  // About 4 seconds of video that doesn't compress, as a phone's would be (a browser recording: no length in it).
+  // About 8 seconds of video that doesn't compress, as a phone's would be (a browser recording: no length in it).
   const video = await alice.page.evaluate(async () => {
     const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
     const g = c.getContext('2d');
@@ -3908,7 +3908,7 @@ async function videoShrink(t) {
     };
     const tick = setInterval(draw, 33);
     rec.start(500);
-    await new Promise((r) => setTimeout(r, 4000));
+    await new Promise((r) => setTimeout(r, 8000));
     const stopped = new Promise((r) => { rec.onstop = r; }); rec.stop(); await stopped;
     clearInterval(tick); osc.stop(); ac.close();
     const b = new Uint8Array(await new Blob(chunks).arrayBuffer());
@@ -3916,7 +3916,8 @@ async function videoShrink(t) {
     return btoa(bin);
   });
   const buffer = Buffer.from(video, 'base64');
-  check(buffer.length > 1.5 * 1024 * 1024, `The test video should be well over 1 MB (it's ${buffer.length} bytes).`);
+  // Over what the server takes from anyone but the owner at a 1 MB limit (1 MB, plus 1 MB for the encryption).
+  check(buffer.length > 2.2 * 1024 * 1024, `The test video should be well over 2 MB (it's ${buffer.length} bytes).`);
   check(await setLimit(1) === 200, 'The owner should be able to set the limit to 1 MB.');
   try {
     await alice.railButton(SERVER);
@@ -3927,6 +3928,19 @@ async function videoShrink(t) {
     await alice.$('.cw-main input[type=file]').setInputFiles([{ name: 'from-my-phone.webm', mimeType: 'video/webm', buffer }]);
     await alice.$('.pending-files .pending .pending-note', { hasText: 'Made smaller when you send it' }).waitFor({ timeout: 20000 });
     await alice.$('#composer-input').fill('A video from my phone');
+    // Watch what the phone would care about: the video starts playing in the tap (or it couldn't later, with sound),
+    // and no error turns up on the way (a toast can come and go before anyone looks).
+    await alice.page.evaluate(() => {
+      const w = window.__shrinkWatch = { plays: [], errors: [] };
+      const play = HTMLMediaElement.prototype.play;
+      w.restore = () => { HTMLMediaElement.prototype.play = play; w.seen.disconnect(); };
+      HTMLMediaElement.prototype.play = function (...a) {
+        if (this.classList.contains('shrink-source')) w.plays.push(!!(navigator.userActivation && navigator.userActivation.isActive));
+        return play.apply(this, a);
+      };
+      w.seen = new MutationObserver(() => document.querySelectorAll('#toasts .toast-error').forEach((x) => w.errors.includes(x.textContent) || w.errors.push(x.textContent)));
+      w.seen.observe(document.getElementById('toasts'), { childList: true, subtree: true });
+    });
     await alice.$('.send-btn').click();
     await alice.$('.upload-text', { hasText: 'Making the video smaller to send' }).waitFor();
     const m = bob.message('A video from my phone').first();
@@ -3940,8 +3954,39 @@ async function videoShrink(t) {
       return v && v.readyState >= 1 && !v.error ? { w: v.videoWidth, h: v.videoHeight } : null;
     }, null, { timeout: 30000 }).then((x) => x.jsonValue());
     check(played.w > 0 && played.w <= 1280 && played.h > 0, `Bob should be able to play it (got ${JSON.stringify(played)}).`);
-    check(!(await alice.$('.toast.toast-error').count()), 'No error on the way.');
-  } finally { await setLimit(25); }
+    // It has a picture (not one colour) and sound: Bob plays a second of it (muted) and the browser decodes both.
+    const plays = await bob.page.evaluate(async () => {
+      const msg = [...document.querySelectorAll('#messages .msg')].find((x) => x.textContent.includes('A video from my phone'));
+      const v = msg.querySelector('video');
+      v.muted = true;
+      await v.play();
+      await new Promise((r) => setTimeout(r, 1500));
+      v.pause();
+      const c = document.createElement('canvas'); c.width = 64; c.height = 36;
+      const g = c.getContext('2d'); g.drawImage(v, 0, 0, 64, 36);
+      const px = g.getImageData(0, 0, 64, 36).data;
+      const colours = new Set();
+      for (let i = 0; i < px.length; i += 4) colours.add(`${px[i] >> 4},${px[i + 1] >> 4},${px[i + 2] >> 4}`);
+      return { frames: v.getVideoPlaybackQuality().totalVideoFrames, sound: v.webkitAudioDecodedByteCount, colours: colours.size };
+    });
+    check(plays.frames > 0 && plays.colours > 20, `Bob's video should have a picture (got ${JSON.stringify(plays)}).`);
+    check(plays.sound > 0, `Bob's video should have sound (got ${JSON.stringify(plays)}).`);
+    const watch = await alice.page.evaluate(() => ({ plays: window.__shrinkWatch.plays, errors: window.__shrinkWatch.errors }));
+    check(watch.plays.length >= 1 && watch.plays[0] === true, `The video should start playing in the tap that sends it (got ${JSON.stringify(watch.plays)}).`);
+    check(!watch.errors.length && !(await alice.$('.toast.toast-error').count()), `No error on the way (got ${JSON.stringify(watch.errors)}).`);
+    // The server's owner (bob) has no limit: the same video goes as it is, not made smaller.
+    await bob.$('.cw-main input[type=file]').setInputFiles([{ name: 'owners-video.webm', mimeType: 'video/webm', buffer }]);
+    await bob.$('.pending-files .pending', { hasText: 'owners-video.webm' }).waitFor();
+    check(!(await bob.$('.pending-files .pending-note').count()) && !(await bob.$('.toast.toast-error').count()), 'The owner\u2019s video should be taken as it is.');
+    await bob.$('#composer-input').fill('The owner\u2019s video, as it is');
+    await bob.$('.send-btn').click();
+    await alice.message('The owner\u2019s video, as it is').first().waitFor({ timeout: 60000 });
+    const ownerStored = Math.max(...t.server.rows("SELECT size FROM user_files WHERE kind = 'attachment' ORDER BY created_at DESC LIMIT 2").map((r) => r.size));
+    check(ownerStored > buffer.length, `The owner's video should be stored whole (${ownerStored} bytes stored, ${buffer.length} sent).`);
+  } finally {
+    await alice.page.evaluate(() => window.__shrinkWatch && window.__shrinkWatch.restore()).catch(() => {});
+    await setLimit(25);
+  }
 }
 
 // ------------------------------------------------------------------ the owner's password reset link
@@ -4099,7 +4144,7 @@ export const FLOWS = [
   ['staff deletion: the owner deletes an account for someone who can’t sign in, from Admin → Users', staffDelete],
   ['phones: held sideways it’s still the phone layout; a swipe from the left edge opens the drawer; Back closes the drawer, members, a picture, a menu and settings without leaving; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
   ['phone message actions: a long press opens a sheet (react, reply, copy, edit, delete; closes with Back, Esc, a tap or a swipe); a roomier message box with GIFs and Send later under +; the desktop keeps its hover toolbar and buttons', phoneMessageActions],
-  ['a video over the limit: made smaller on the device to fit, sent, and it plays', videoShrink],
+  ['a video over the limit: made smaller on the device to fit, sent, and it plays; the owner has no limit', videoShrink],
   ['owner reset link: the owner makes a one-time link in Admin → Users for someone who can\u2019t sign in; they choose their own new password with it; the owner can\u2019t verify the keys it made', ownerResetLink],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],

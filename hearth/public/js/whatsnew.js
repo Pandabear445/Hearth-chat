@@ -4,7 +4,8 @@
 const pay = (text) => ({ text, pay: true });
 export const CHANGES = [
   { version: '1.33.0', items: [
-    'Phone videos send: a video bigger than this server’s limit is made smaller on your device first (up to 1280 px, keeping the sound), then encrypted and sent as usual. It takes about as long as the video lasts; keep Hearth open meanwhile. A video too long to fit even made smaller says so, with how much fits.',
+    'Phone videos send: a video bigger than this server’s limit is made smaller on your device first (up to 1280 px, keeping the sound), then encrypted and sent as usual. It takes about as long as the video lasts; keep Hearth on screen meanwhile (it pauses while Hearth is out of sight, and goes on when you’re back). A video too long to fit even made smaller says so, with how much fits.',
+    'The server’s owner can send files of any size: the limit in Admin → Security → Storage & limits is for everyone else (admins included). Only the free disk space limits it, and very big files need a device with the memory to encrypt them (a computer, for files of hundreds of MB).',
   ] },
   { version: '1.32.0', items: [
     'The server’s owner can make a one-time password reset link for someone who can’t sign in and can’t reset it by email (Admin → Users). They choose their own new password with it: the owner never sees it. It lasts 24 hours, their two-factor code is still asked for, and new encryption keys it makes are verified by someone other than the owner.',
