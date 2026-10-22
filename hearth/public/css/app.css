@@ -950,6 +950,7 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .pending-ic .ic { width: 34px; height: 34px; }
 .pending-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
 .pending-size { font-size: 11px; color: var(--muted); }
+.pending-note { font-size: 11px; color: var(--accent-ink); line-height: 1.25; }
 .pending-x { position: absolute; top: -6px; right: -6px; width: 24px; height: 24px; border-radius: 50%; background: rgb(var(--elev)); border: 1px solid var(--line-2); color: var(--text-2); display: grid; place-items: center; }
 .pending-x:hover { background: var(--danger-fill); color: #fff; }
 .pending-x .ic { width: 13px; height: 13px; }

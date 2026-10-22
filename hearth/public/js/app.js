@@ -46,6 +46,7 @@ import { bindNew, bindEdit, describe as describeBinding, createVersions, createC
 import { trackViewport } from './viewport.js';
 import { isPhone, isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
 import { createUpdater, underWay, jobsUnderWay } from './auto-update.js';
+import { canShrink, startShrink, probe as probeVideo, plan as shrinkPlan, longestFitting } from './video-shrink.js';
 import { touchGestures } from './viewer-touch.js';
 import { backStack, edgeSwipes } from './phone-nav.js';
 import { initAway, CLEAR_AFTER, clearAfterMs, clearsLabel, onlyPresenceChanged } from './presence.js';
@@ -6319,13 +6320,37 @@ function createComposer({ id, key, threadId, placeholder }) {
   });
 
   function addFiles(list) {
-    const max = (S.config.maxUploadMb || 25) * 1024 * 1024;
+    const mb = S.config.maxUploadMb || 25;
+    const max = mb * 1024 * 1024;
     for (const f of list) {
-      if (f.size > max) { toast(`${f.name} is larger than ${S.config.maxUploadMb || 25} MB.`, 'error'); continue; }
       if (state.pending.length >= 10) { toast('You can attach up to 10 files at once.', 'error'); break; }
-      state.pending.push({ file: f, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : null });
+      // A video over the limit (a phone's, usually) is made smaller to fit when it's sent (video-shrink.js).
+      const video = mediaKind(f.type || '', f.name) === 'video';
+      if (f.size > max && !(video && canShrink())) {
+        toast(video ? `${f.name} is ${fmtSize(f.size)}, and files here can be up to ${mb} MB. This browser can\u2019t make videos smaller, so trim it first, or send it from a phone or another browser.`
+          : `${f.name} is ${fmtSize(f.size)}, and files here can be up to ${mb} MB.`, 'error');
+        continue;
+      }
+      const p = { file: f, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : null };
+      state.pending.push(p);
+      if (f.size > max) checkShrink(p, max, mb);
     }
     renderExtras(); update(); ta.focus();
+  }
+  // Can this video be made small enough? Its length decides: a long one would be mush, so it's turned down now.
+  async function checkShrink(p, max, mb) {
+    p.shrink = 'checking';
+    const info = await probeVideo(p.file);
+    const fits = info && shrinkPlan({ ...info, maxBytes: max });
+    if (!state.pending.includes(p)) return;
+    if (fits) { p.shrink = 'yes'; p.shrinkTo = Math.round((fits.videoBps + fits.audioBps) * info.duration / 8); }
+    else {
+      state.pending.splice(state.pending.indexOf(p), 1);
+      const most = longestFitting(max);
+      toast(info ? `${p.file.name} is too long to send here, even made smaller: about ${Math.max(1, Math.round(most / 60))} minute${most >= 90 ? 's' : ''} of video fit in ${mb} MB. Trim it first.`
+        : `${p.file.name} can\u2019t be opened here, so it can\u2019t be made smaller to fit the ${mb} MB limit.`, 'error');
+    }
+    renderExtras(); update();
   }
   // A file's Edit button: a description (alt text) for pictures and videos, and "Mark as spoiler" for any file.
   // Both go inside the encrypted message with the file (uploadEncryptedFiles), so the server never sees them.
@@ -6390,7 +6415,8 @@ function createComposer({ id, key, threadId, placeholder }) {
         p.url ? h('img', { src: p.url, alt: '' }) : h('div', { class: 'pending-ic' }, icon('file')),
         p.spoiler || p.alt ? h('span', { class: 'pending-tags' }, p.spoiler ? h('span', { class: 'pending-tag' }, 'SPOILER') : null, p.alt ? h('span', { class: 'pending-tag' }, 'ALT') : null) : null,
         h('span', { class: 'pending-name', title: p.file.name }, p.file.name),
-        h('span', { class: 'pending-size' }, fmtSize(p.file.size)),
+        h('span', { class: 'pending-size' }, p.shrink ? (p.shrinkTo ? `${fmtSize(p.file.size)} \u2192 about ${fmtSize(p.shrinkTo)}` : fmtSize(p.file.size)) : fmtSize(p.file.size)),
+        p.shrink ? h('span', { class: 'pending-note' }, p.shrink === 'checking' ? 'Checking the video\u2026' : 'Made smaller when you send it') : null,
         h('button', { class: 'pending-edit', type: 'button', 'aria-label': `Edit ${p.file.name} (description, spoiler)`, 'data-tip': 'Edit', 'data-pending': String(i), onclick: () => editPending(p) }, icon('edit')),
         h('button', { class: 'pending-x', 'aria-label': `Remove ${p.file.name}`, 'data-tip': 'Remove', onclick: () => { if (p.url) URL.revokeObjectURL(p.url); state.pending.splice(i, 1); renderExtras(); update(); } }, icon('close'))))));
     }
@@ -6457,6 +6483,8 @@ function createComposer({ id, key, threadId, placeholder }) {
     state.replyTo = null;
     if (old) replaceMessageEl(old);
     renderExtras(); autosize(); update();
+    // A video to make smaller starts in this tap: phones only let it play (to record it smaller) after one.
+    for (const p of files) if (p.shrink && !p.session) p.session = startShrink(p.file);
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join('');
     if (id === 'main' && !tid && !sendAt) showPendingSend(kk, nonce, poll ? `\uD83D\uDCCA ${poll.q}` : files.some((f) => f.voice) ? '\uD83C\uDFA4 Voice message' : text, files.some((f) => f.voice) ? 0 : files.length, replyTo);
     // The disappearing timer they wrote it under (the note above the box): a weaker one by the time it goes out asks
@@ -6474,12 +6502,21 @@ function createComposer({ id, key, threadId, placeholder }) {
     const bar = upStatus.querySelector('.bar');
     const totalBytes = files.reduce((a, p) => a + (p.file ? p.file.size : 0), 0);
     let retrying = null;
+    let shrunk = false; // a video was made smaller: its size isn't what was picked any more
     const setProgress = (f) => {
       upStatus.hidden = !files.length || f >= 1;
       bar.style.width = Math.round(f * 100) + '%';
-      if (!retrying) upText.textContent = `Uploading ${files.length === 1 ? files[0].file.name : `${files.length} files`} — ${fmtSize(Math.round(f * totalBytes))} of ${fmtSize(totalBytes)} (${Math.round(f * 100)}%)`;
+      const what = files.length === 1 ? files[0].file.name : `${files.length} files`;
+      if (!retrying) upText.textContent = shrunk ? `Uploading ${what} (${Math.round(f * 100)}%)` : `Uploading ${what} — ${fmtSize(Math.round(f * totalBytes))} of ${fmtSize(totalBytes)} (${Math.round(f * 100)}%)`;
     };
-    const onStatus = ({ retrying: r, wait }) => {
+    const onStatus = ({ retrying: r, wait, shrinking }) => {
+      if (shrinking != null) {
+        shrunk = true;
+        upStatus.hidden = false;
+        bar.style.width = Math.round(shrinking * 100) + '%';
+        upText.textContent = `Making the video smaller to send\u2026 ${Math.round(shrinking * 100)}% (keep Hearth open)`;
+        return;
+      }
       retrying = r ? wait : null;
       upStatus.classList.toggle('retrying', !!r);
       if (r) upText.textContent = `Connection lost. Trying again in ${Math.max(1, Math.round(wait / 1000))} s… (nothing sent so far is lost)`;
@@ -6498,6 +6535,8 @@ function createComposer({ id, key, threadId, placeholder }) {
       const sch = kk.startsWith('c:') ? channelById(kk.slice(2)) : null;
       if (sch && sch.slowmode > 0 && !canIn(sch, PERMS.MANAGE_MESSAGES)) startSlow(sch.slowmode);
     } catch (e) {
+      // Videos still waiting to be made smaller let go of what they'd started; sending again starts afresh.
+      files.forEach((p) => { if (p.session) { p.session.stop(); p.session = null; } });
       dropPendingSend(nonce);
       const wait = /in (\d+)s/.exec(e.message || '');
       if (e.code === 'slowmode' && wait) startSlow(+wait[1]);
@@ -6587,7 +6626,15 @@ async function uploadEncryptedFiles(key, files, onProgress, { signal, onStatus }
   const compress = P.chat.compressImages !== false;
   // Optimize images first (resize big photos, make thumbnails), then encrypt and upload.
   const prepared = [];
-  for (const p of files) prepared.push({ ...(p.voice ? { file: p.file } : await prepareImage(p.file, { compress })), orig: p.file, voice: p.voice, dur: p.dur, alt: p.alt, spoiler: p.spoiler });
+  for (const p of files) {
+    // A video over the limit is made smaller first (video-shrink.js; started in the tap that sent it).
+    let file = p.file;
+    if (p.session) {
+      const s = p.session; p.session = null;
+      file = await s.run({ maxBytes: (S.config.maxUploadMb || 25) * 1024 * 1024 - 64 * 1024, signal, onProgress: (x) => onStatus && onStatus({ shrinking: x }) });
+    }
+    prepared.push({ ...(p.voice ? { file } : await prepareImage(file, { compress })), orig: p.file, voice: p.voice, dur: p.dur, alt: p.alt, spoiler: p.spoiler });
+  }
   const total = prepared.reduce((a, p) => a + p.file.size + (p.thumb ? p.thumb.size : 0), 0) || 1;
   let done = 0;
   onProgress(0);

@@ -3884,6 +3884,66 @@ async function phoneMessageActions(t) {
   await desk.waitFor({ state: 'detached' });
 }
 
+// ------------------------------------------------------------------ a video over the limit is made smaller
+// Phone videos are nearly always bigger than the server's limit (25 MB unless the owner changes it), and the server
+// can't shrink an encrypted file. So the app makes the video smaller first (video-shrink.js), then sends it. Here the
+// limit is 1 MB, and a video recorded in the page (a few MB, noisy, with sound) goes out small enough and plays.
+async function videoShrink(t) {
+  const { alice, bob } = t.people;
+  const setLimit = (fileMb) => bob.page.evaluate(async (mb) => (await fetch('/api/admin/limits', { method: 'PUT',
+    headers: { authorization: `Bearer ${localStorage.getItem('hearth.token')}`, 'content-type': 'application/json' }, body: JSON.stringify({ fileMb: mb }) })).status, fileMb);
+  // About 4 seconds of video that doesn't compress, as a phone's would be (a browser recording: no length in it).
+  const video = await alice.page.evaluate(async () => {
+    const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
+    const g = c.getContext('2d');
+    const ac = new AudioContext(); const osc = ac.createOscillator(); const to = ac.createMediaStreamDestination();
+    osc.connect(to); osc.start();
+    const stream = c.captureStream(30); to.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
+    const rec = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9,opus', videoBitsPerSecond: 9000000 });
+    const chunks = []; rec.ondataavailable = (e) => chunks.push(e.data);
+    let n = 0;
+    const draw = () => {
+      g.fillStyle = `hsl(${(n += 7) % 360} 70% 50%)`; g.fillRect(0, 0, 1280, 720);
+      for (let k = 0; k < 400; k++) { g.fillStyle = `rgb(${Math.random() * 255 | 0},${Math.random() * 255 | 0},${Math.random() * 255 | 0})`; g.fillRect(Math.random() * 1280, Math.random() * 720, 32, 32); }
+    };
+    const tick = setInterval(draw, 33);
+    rec.start(500);
+    await new Promise((r) => setTimeout(r, 4000));
+    const stopped = new Promise((r) => { rec.onstop = r; }); rec.stop(); await stopped;
+    clearInterval(tick); osc.stop(); ac.close();
+    const b = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    let bin = ''; for (let i = 0; i < b.length; i += 32768) bin += String.fromCharCode(...b.subarray(i, i + 32768));
+    return btoa(bin);
+  });
+  const buffer = Buffer.from(video, 'base64');
+  check(buffer.length > 1.5 * 1024 * 1024, `The test video should be well over 1 MB (it's ${buffer.length} bytes).`);
+  check(await setLimit(1) === 200, 'The owner should be able to set the limit to 1 MB.');
+  try {
+    await alice.railButton(SERVER);
+    await alice.openChannel('general');
+    await bob.railButton(SERVER);
+    await bob.openChannel('general');
+    await alice.page.waitForTimeout(500); // the new limit reaches the app live
+    await alice.$('.cw-main input[type=file]').setInputFiles([{ name: 'from-my-phone.webm', mimeType: 'video/webm', buffer }]);
+    await alice.$('.pending-files .pending .pending-note', { hasText: 'Made smaller when you send it' }).waitFor({ timeout: 20000 });
+    await alice.$('#composer-input').fill('A video from my phone');
+    await alice.$('.send-btn').click();
+    await alice.$('.upload-text', { hasText: 'Making the video smaller to send' }).waitFor();
+    const m = bob.message('A video from my phone').first();
+    await m.waitFor({ timeout: 60000 });
+    const stored = t.server.rows("SELECT size FROM user_files WHERE kind = 'attachment' ORDER BY created_at DESC LIMIT 1")[0].size;
+    check(stored < 1024 * 1024 + 64 * 1024, `What's stored should fit the 1 MB limit (it's ${stored} bytes).`);
+    await m.scrollIntoViewIfNeeded();
+    const played = await bob.page.waitForFunction(() => {
+      const msg = [...document.querySelectorAll('#messages .msg')].find((x) => x.textContent.includes('A video from my phone'));
+      const v = msg && msg.querySelector('video');
+      return v && v.readyState >= 1 && !v.error ? { w: v.videoWidth, h: v.videoHeight } : null;
+    }, null, { timeout: 30000 }).then((x) => x.jsonValue());
+    check(played.w > 0 && played.w <= 1280 && played.h > 0, `Bob should be able to play it (got ${JSON.stringify(played)}).`);
+    check(!(await alice.$('.toast.toast-error').count()), 'No error on the way.');
+  } finally { await setLimit(25); }
+}
+
 // ------------------------------------------------------------------ the owner's password reset link
 // For someone who can't sign in and has no email to reset it with (droid has none): the owner (bob, since "instance:
 // new owner…") makes a one-time link in Admin → Users, with his password. Droid opens it on her own device and chooses
@@ -4039,6 +4099,7 @@ export const FLOWS = [
   ['staff deletion: the owner deletes an account for someone who can’t sign in, from Admin → Users', staffDelete],
   ['phones: held sideways it’s still the phone layout; a swipe from the left edge opens the drawer; Back closes the drawer, members, a picture, a menu and settings without leaving; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
   ['phone message actions: a long press opens a sheet (react, reply, copy, edit, delete; closes with Back, Esc, a tap or a swipe); a roomier message box with GIFs and Send later under +; the desktop keeps its hover toolbar and buttons', phoneMessageActions],
+  ['a video over the limit: made smaller on the device to fit, sent, and it plays', videoShrink],
   ['owner reset link: the owner makes a one-time link in Admin → Users for someone who can\u2019t sign in; they choose their own new password with it; the owner can\u2019t verify the keys it made', ownerResetLink],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
