@@ -1660,6 +1660,24 @@ name. Shift+Esc marks the server you're in as read (not in a group chat, nor whi
 key `globalKeys` handles is in the sheet), the e2e flow "discord habits", and the shortcuts sheet and the attachment
 dialog in `npm run test:a11y`.
 
+## Update notes ("What's new"): only the owner publishes them
+
+Hearth comes with no update notes of its own: nothing about an update is shown to anyone unless the server's owner
+publishes it. `public/js/whatsnew.js` holds no notes, the Android stores' changelog
+(`mobile/fastlane/.../changelogs/default.txt`) ships empty, and the release workflows don't make GitHub release notes
+up from commits (`test/update-notes.test.js` checks all three). In Admin → Owner → Update notes the owner writes a
+note (an optional title and up to 20 lines, plain text), previews it, publishes it, and can change or delete it later
+(`server/updatenotes.js`: `GET /api/update-notes` for everyone signed in, `POST/PUT/DELETE /api/admin/update-notes` for
+the owner alone; at most 50 kept, in `instance_settings`, so backups have them; each publish, change and deletion is
+in the audit log). A published note shows on each device in a "What's new" window until that window is closed
+(`unseenNotes`, `markNotesSeen`; by the note's id): at once in apps that are open (the `update-notes` event) and on
+every start and reconnect, but never on top of something the person is in the middle of (a dialog, sheet, menu, the
+picture viewer, typing) or while the app is out of sight: then it waits and looks again. A device that has never been
+here sees none from before; one that ran an older version sees what was published since. The owner's own notes count
+as seen on all their devices. Notes are drawn as text, never HTML or Markdown. A note can be kept out of the Android
+app ("Show it in the Android app too" off), for notes about paying, which Google Play doesn't allow there; switched on
+later, it shows there too.
+
 ## Phones: held sideways, swipes and Back
 
 Phone-only: a desktop with a mouse looks and behaves as before. Two definitions decide, kept in one place

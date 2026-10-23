@@ -115,34 +115,25 @@ test('play-1: noPayments is androidApp.on (or the app’s user agent), and every
   }
 });
 
-test('play-2: What’s new leaves out the items about paying in the Android app, and keeps them elsewhere', async () => {
+test('play-2: What’s new (the owner’s update notes) leaves out the notes not for the Android app there, and keeps them elsewhere', async () => {
   const store = new Map();
   const ls = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
   const had = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true, writable: true });
   try {
     const W = await import(pathToFileURL(path.join(ROOT, 'public', 'js', 'whatsnew.js')).href);
-    const items = (opts) => { store.set('hearth.seenVersion', '1.17.0'); return W.unseenChanges('1.29.0', opts); };
-    const web = items();
-    const app = items({ payments: false });
-    const text = (list) => list.flatMap((c) => c.items);
-    for (const t of [...text(web), ...text(app)]) assert.equal(typeof t, 'string', 'items are plain text');
-    assert.ok(text(web).some((t) => /Creator memberships/.test(t)) && text(web).some((t) => /become a supporter/.test(t)), 'the web keeps them');
-    assert.ok(!text(app).some((t) => /Stripe|supporter|memberships|pay /i.test(t)), 'the app has none of them');
-    assert.equal(text(app).length, text(web).length - 2, 'only those two are left out');
-    assert.ok(app.every((c) => c.items.length), 'no empty versions');
-    // Every version after 1.17.0 up to 1.29.0 (CHANGES is newest first; later releases are newer than 1.29.0).
-    const upTo = W.CHANGES.slice(W.CHANGES.findIndex((c) => c.version === '1.29.0'));
-    assert.deepEqual(web.map((c) => c.version), upTo.filter((c) => c.version !== '1.17.0').map((c) => c.version));
-    // Seen everything already, or a first visit: nothing, as before.
-    store.set('hearth.seenVersion', '1.29.0');
-    assert.deepEqual(W.unseenChanges('1.29.0', { payments: false }), []);
-    store.delete('hearth.seenVersion');
-    assert.deepEqual(W.unseenChanges('1.29.0'), []);
+    const notes = [
+      { id: 'a', title: 'Paying', items: ['Become a supporter from the card on Home.'], android: false, at: 3000 },
+      { id: 'b', title: 'Calls', items: ['Calls reconnect by themselves.'], android: true, at: 2000 },
+    ];
+    const items = (opts) => { store.set('hearth.seenNoteIds', '[]'); return W.unseenNotes(notes, opts).notes; };
+    assert.deepEqual(items().map((n) => n.title), ['Paying', 'Calls'], 'the web shows both, newest first');
+    assert.deepEqual(items({ android: true }).map((n) => n.title), ['Calls'], 'the app leaves the one about paying out');
+    for (const t of items().flatMap((n) => n.items)) assert.equal(typeof t, 'string', 'items are plain text');
   } finally {
     if (had) Object.defineProperty(globalThis, 'localStorage', had); else delete globalThis.localStorage;
   }
-  assert.match(read('public', 'js', 'app.js'), /const news = unseenChanges\(S\.config\.version, \{ payments: !noPayments \}\);/);
+  assert.match(read('public', 'js', 'app.js'), /const \{ notes: news, ids \} = unseenNotes\(notes, \{ android: noPayments \}\);/);
 });
 
 // ================================================================== 2. no APK download page inside the app

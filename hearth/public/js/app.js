@@ -24,7 +24,7 @@ import { watchPlayer, dropWatchPlayer } from './watch.js';
 import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice, voicePlaying } from './features.js';
 import { rankRelays, chooseIce, relayTime, iceStale } from './relays.js';
 import { watchConnection } from './conn.js';
-import { unseenChanges } from './whatsnew.js';
+import { unseenNotes, markNotesSeen } from './whatsnew.js';
 import { initKeybinds, getKeybinds, comboLabel, reportCall, flashTaskbar, installUpdate, shortcutGroups, comboParts, keyName } from './keybinds.js';
 import { initActivity, activityLine, openActivityPicker, startDesktopDetection } from './activity.js';
 import { modal, popover, closePopover, menu, contextMenu, sheet, quietFocus, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
@@ -748,6 +748,8 @@ function startApp() {
   // Another admin added, changed, tested or removed an alert channel: the Health tab shows it at once.
   socket.on('admin:alert-channels', refreshHealth);
   socket.on('profile:comment', ({ from }) => toast(`${displayName(getUser(from))} commented on your profile.`));
+  // The owner published an update note: it shows now, or as soon as the person isn't in the middle of something.
+  socket.on('update-notes', () => showUpdateNotes());
   socket.on('config:update', (c) => {
     Object.assign(S.config, c);
     if ('name' in c || 'tagline' in c) { document.title = S.config.name; $$('[data-instance-name]').forEach((el) => { el.textContent = S.config.name; }); }
@@ -1079,18 +1081,49 @@ async function loadBootstrap() {
   const invite = sessionStorage.getItem('hearth.pendingInvite');
   if (invite) { sessionStorage.removeItem('hearth.pendingInvite'); openJoinModal(invite); }
   else {
-    if (!S.whatsNewShown) {
-      S.whatsNewShown = true;
-      const news = unseenChanges(S.config.version, { payments: !noPayments });
-      if (news.length) {
-        modal({ title: 'What\u2019s new', size: 'md', className: 'whatsnew',
-          body: h('div', { class: 'stack' }, ...news.map((c) => h('section', null, h('h3', { class: 'set-h' }, `Version ${c.version}`), h('ul', { class: 'perk-list' }, c.items.map((t) => h('li', null, t)))))),
-          actions: [{ label: 'Nice', kind: 'primary' }] });
-      }
-    }
+    showUpdateNotes(); // (every start and reconnect: a note published while this app was asleep or offline shows too)
     // A link this page was opened with (a tapped notification, an invite in the Android app) opens on the
     // first start too, not only after a reconnect.
     if (location.hash) openLinkFromHash();
+  }
+}
+
+// "What's new": the update notes the owner published that this device hasn't shown yet (whatsnew.js), as plain text.
+// Never on top of something the person is in the middle of (a dialog or sheet, a menu, the picture viewer, typing),
+// nor while the app is out of sight: then it waits and looks again. A note counts as seen once its window is closed,
+// so one that's cut off (a reload for an update) comes back. The owner's own are seen already: they wrote them.
+let notesBusy = false; // a look at the notes, or their window, is under way
+let notesLater = null;
+let lastTyped = 0;
+document.addEventListener('keydown', () => { lastTyped = Date.now(); }, true);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && notesLater) { clearTimeout(notesLater); notesLater = null; setTimeout(showUpdateNotes, 3000); } });
+function busyForNotes() {
+  if (document.hidden || $$('#layer > .modal-backdrop:not(.closing), .sheet-backdrop, .popover, .viewer:not(.closing)').length) return true;
+  const a = document.activeElement;
+  const editing = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+  return !!editing && (!!(a.value && a.value.trim()) || Date.now() - lastTyped < 10000);
+}
+const notesAfterwards = () => { if (!notesLater) notesLater = setTimeout(() => { notesLater = null; showUpdateNotes(); }, 20000); };
+async function showUpdateNotes() {
+  if (notesBusy || !S.me) return;
+  if (busyForNotes()) { notesAfterwards(); return; }
+  notesBusy = true;
+  let open = false;
+  try {
+    let notes;
+    try { notes = (await api('GET', '/update-notes')).notes; } catch { return; }
+    if (S.me.staffRole === 'owner') { markNotesSeen((notes || []).map((n) => n.id)); return; }
+    const { notes: news, ids } = unseenNotes(notes, { android: noPayments });
+    if (!news.length) return;
+    if (busyForNotes()) { notesAfterwards(); return; } // something began meanwhile
+    open = true;
+    modal({ title: 'What\u2019s new', size: 'md', className: 'whatsnew',
+      body: h('div', { class: 'stack' }, ...news.map((n) => h('section', null, n.title ? h('h3', { class: 'set-h' }, n.title) : null,
+        h('ul', { class: 'perk-list' }, n.items.map((t) => h('li', null, t)))))),
+      onClose: () => { markNotesSeen(ids); notesBusy = false; },
+      actions: [{ label: 'Nice', kind: 'primary' }] });
+  } finally {
+    if (!open) notesBusy = false;
   }
 }
 

@@ -6,6 +6,7 @@ import { modal, confirmDialog, field, menu } from './ui.js';
 import { renderDoc, render as md } from './markdown.js';
 import { rankRelays, relayTime } from './relays.js';
 import { underWay } from './auto-update.js';
+import { markNotesSeen } from './whatsnew.js';
 
 // [key, label, icon, lowest role that sees it]. The server enforces the same rules.
 const TABS = [['overview', 'Overview', 'home', 1], ['online', 'Online', 'people', 1], ['reports', 'Reports', 'shield', 1], ['users', 'Users', 'user', 1], ['servers', 'Servers', 'compass', 2], ['bots', 'Bots', 'bot', 2], ['security', 'Security', 'lock', 2], ['admins', 'Team & roles', 'star', 1], ['registration', 'Registration & Terms', 'book', 2], ['log', 'Audit log', 'file', 1], ['regions', 'Regions', 'globe', 2], ['health', 'Health', 'chart', 2], ['money', 'Money', 'coin', 2], ['owner', 'Owner', 'flame', 3]];
@@ -880,6 +881,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
 
   async function owner() {
     const o = await api('GET', '/admin/owner');
+    const notes = await api('GET', '/update-notes').then((r) => r.notes).catch(() => []);
     const act = await api('GET', '/admin/activity').catch(() => ({}));
     const mail = await api('GET', '/admin/mail').catch(() => ({}));
     const mf = {
@@ -922,7 +924,55 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
         setTimeout(() => URL.revokeObjectURL(url), 10000);
       } catch (e) { toast(e.message, 'error'); }
     })());
+    // Update notes: Hearth's updates come with none; people see only what's published here (server/updatenotes.js).
+    const note = {
+      title: h('input', { class: 'input', maxlength: '100', placeholder: 'e.g. New this week' }),
+      text: h('textarea', { class: 'input', rows: '5', placeholder: 'One line for each thing that\u2019s new' }),
+      android: h('input', { type: 'checkbox', checked: true }),
+    };
+    let editing = null; // the note being changed
+    const noteBody = () => ({ title: note.title.value, text: note.text.value, android: note.android.checked });
+    const lines = () => note.text.value.split('\n').map((t) => t.trim()).filter(Boolean);
+    const publishNote = async () => {
+      try {
+        if (editing) { await api('PUT', `/admin/update-notes/${editing.id}`, noteBody()); toast('Note changed (people who saw it don\u2019t get it again).'); } else {
+          if (!(await confirmDialog({ title: 'Publish this note?', text: 'Everyone sees it once, in a \u201cWhat\u2019s new\u201d window (right away in apps that are open).', confirm: 'Publish' }))) return;
+          markNotesSeen([(await api('POST', '/admin/update-notes', noteBody())).id]);
+          toast('Published.');
+        }
+        owner();
+      } catch (e) { toast(e.message, 'error'); }
+    };
+    const editNote = (n) => {
+      editing = n;
+      note.title.value = n.title; note.text.value = n.items.join('\n'); note.android.checked = n.android;
+      publishBtn.textContent = 'Save changes'; cancelBtn.hidden = false;
+      note.title.focus();
+    };
+    const previewNote = () => modal({ title: 'What\u2019s new', size: 'md', className: 'whatsnew',
+      body: h('div', { class: 'stack' }, h('section', null, note.title.value.trim() ? h('h3', { class: 'set-h' }, note.title.value.trim()) : null,
+        lines().length ? h('ul', { class: 'perk-list' }, lines().map((t) => h('li', null, t))) : h('p', { class: 'field-hint' }, 'Nothing written yet.'))),
+      actions: [{ label: 'Close' }] });
+    const publishBtn = h('button', { class: 'btn primary', onclick: publishNote }, 'Publish');
+    const cancelBtn = h('button', { class: 'btn ghost sm', hidden: true, onclick: () => owner() }, 'Cancel');
     clear(body).append(
+      h('div', { class: 'admin-head' }, h('h3', null, 'Update notes')),
+      h('p', { class: 'field-hint' }, 'Hearth\u2019s updates come with no notes: people see only what you publish here, and only you can. Each note shows once to everyone, in a \u201cWhat\u2019s new\u201d window (right away in apps that are open). Plain text, one line per item.'),
+      field('Title (optional)', note.title),
+      field('What\u2019s new', note.text, 'Up to 20 lines.'),
+      h('label', { class: 'toggle-row' }, h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Show it in the Android app too'),
+        h('span', { class: 'field-hint' }, 'Turn off for a note about paying: Google Play doesn\u2019t allow that in the app.')), h('span', { class: 'switch' }, note.android, h('span', { class: 'switch-track' }))),
+      h('div', { class: 'row gap' }, publishBtn, h('button', { class: 'btn', onclick: previewNote }, 'Preview'), cancelBtn),
+      notes.length ? h('div', { class: 'adm-table update-notes' }, ...notes.map((n) => h('div', { class: 'adm-row' },
+        h('span', null, h('strong', null, n.title || n.items[0]), h('span', { class: 'stat-sub' }, ` \u00b7 ${n.items.length} line${n.items.length === 1 ? '' : 's'}${n.android ? '' : ' \u00b7 not in the Android app'}`)),
+        h('span', { class: 'stat-sub' }, `${fmtStamp(n.at)}${n.editedAt ? ' (changed)' : ''}`),
+        h('button', { class: 'btn ghost sm', onclick: () => editNote(n) }, 'Edit'),
+        h('button', { class: 'btn ghost sm danger-text', onclick: async () => {
+          if (!(await confirmDialog({ title: 'Take this note down?', text: 'It\u2019s deleted, and nobody who hasn\u2019t seen it yet will.', confirm: 'Delete', danger: true }))) return;
+          try { await api('DELETE', `/admin/update-notes/${n.id}`); toast('Note deleted.'); owner(); } catch (e) { toast(e.message, 'error'); }
+        } }, 'Delete'))))
+        : h('p', { class: 'field-hint' }, 'No notes published yet.'),
+
       h('div', { class: 'admin-head' }, h('h3', null, 'Name and welcome')),
       h('div', { class: 'grid-2' }, field('Server name', name, 'Shown in the browser tab, on the login screen and in installed apps.'), field('Tagline', tagline, 'One line under the name on the login screen.')),
       h('div', { class: 'row gap' }, h('button', { class: 'btn primary', onclick: () => save({ brand: { name: name.value, tagline: tagline.value } }) }, 'Save')),

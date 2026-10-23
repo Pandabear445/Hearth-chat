@@ -151,8 +151,9 @@ GitHub Actions builds everything and makes the release (follow it in the reposit
 <https://github.com/Pandabear445/Hearth-chat/releases>: the release should have `Hearth-1.29.1.apk` and
 `Hearth.apk` (the same file under a fixed name, for the website's download button).
 
-**Before every release**, update `changelogs/default.txt` (at most 500 characters): it's the "what's new" text
-IzzyOnDroid (and later F-Droid) shows. Google Play's release notes are typed in Play Console instead (step 4.4).
+`changelogs/default.txt` is the "what's new" text IzzyOnDroid (and later F-Droid) shows. Hearth ships it empty, like
+the app's own update notes (only the owner publishes those): write it yourself when you release, if you want one (at
+most 500 characters), or leave it empty and the store shows none. Google Play's release notes are typed in Play Console instead (step 4.4).
 F-Droid's tools use `default.txt` when there's no changelog for that exact build; IzzyOnDroid runs on the same tools
 *(unverified)*. A changelog for one build is named after its **versionCode**: the workflow sets it to
 `(major × 100 + minor) × 100000 + the workflow's run number`, so you only learn it once the build ran (the

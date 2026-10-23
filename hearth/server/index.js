@@ -5959,6 +5959,8 @@ api.put('/admin/announcement', auth, adminOnly, (req, res) => {
   adminLog(req, a ? 'announcement' : 'announcement_cleared', null, text);
   res.json({ ok: true, announcement: a });
 });
+// Update notes ("What's new"): only the owner writes and publishes them; the app comes with none (server/updatenotes.js).
+require('./updatenotes')({ api, auth, ownerOnly, fail, rateLimit, newId, now, getSetting, setSetting, auditLog, getIo: () => io });
 // Maintenance mode: only admins can use the app until it's turned off.
 api.put('/admin/maintenance', auth, adminOnly, (req, res) => {
   const text = String((req.body || {}).text || '').trim().slice(0, 300);

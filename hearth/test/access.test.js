@@ -114,7 +114,8 @@ test('every admin endpoint refuses normal users (403) and anonymous callers (401
     + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'activity.js'), 'utf8')
     + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'money.js'), 'utf8')
     + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'memberships.js'), 'utf8')
-    + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'regions.js'), 'utf8');
+    + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'regions.js'), 'utf8')
+    + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'updatenotes.js'), 'utf8');
   const routes = [...src.matchAll(/api\.(get|post|put|patch|delete)\('(\/admin\/[^']*)'/g)].map((m) => [m[1].toUpperCase(), m[2].replace(/:(\w+)/g, (x, k) => (k === 'id' ? alice.id : 'x'))]);
   assert.ok(routes.length > 40, `found ${routes.length} admin routes`);
   for (const [m, p] of routes) {

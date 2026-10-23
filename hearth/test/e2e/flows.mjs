@@ -4037,6 +4037,44 @@ async function ownerManyFiles(t) {
   await alice.$('.pending-files').waitFor({ state: 'detached' });
 }
 
+// ------------------------------------------------------------------ update notes: only the owner publishes them
+// Hearth comes with no update notes; the owner (bob) writes one in Admin → Owner and publishes it. Apps that are open
+// show it in "What's new" (as plain text) until it's closed; the owner's own don't (server/updatenotes.js, whatsnew.js).
+async function updateNotes(t) {
+  const { alice, bob } = t.people;
+  await bob.railButton('Admin');
+  await bob.$('.admin-tabs .admin-tab', { hasText: exact('Owner') }).click();
+  await bob.$('.admin-body input[placeholder="e.g. New this week"]').fill('New this week');
+  await bob.$('.admin-body textarea[placeholder="One line for each thing that\u2019s new"]').fill('Calls reconnect by themselves.\n<b>Not bold</b>');
+  await bob.$('.admin-body button', { hasText: exact('Publish') }).click();
+  const ok = await bob.dialog('Publish this note?');
+  await ok.locator('.modal-foot .btn.primary').click();
+  await bob.toast('Published.');
+  await bob.$('.admin-body .update-notes .adm-row', { hasText: 'New this week' }).waitFor();
+  // Everyone else's open app shows it now; dismissed, it doesn't come back.
+  const box = alice.$('.modal.whatsnew');
+  await box.waitFor({ timeout: 40000 }); // (at once, or once she isn't in the middle of something)
+  check(await box.locator('h3', { hasText: 'New this week' }).count() === 1 && await box.locator('li', { hasText: '<b>Not bold</b>' }).count() === 1 && !(await box.locator('li b').count()),
+    'The note should show as plain text.');
+  for (const p of Object.values(t.people)) {
+    if (p === bob || p.page.isClosed()) continue; // (some people's windows were closed by earlier flows)
+    const m = p.page.locator('.modal.whatsnew');
+    if (await m.count()) { await m.locator('.modal-foot button', { hasText: 'Nice' }).click(); await m.waitFor({ state: 'detached' }); }
+  }
+  check(!(await bob.$('.modal.whatsnew').count()), 'The owner who published it shouldn\u2019t get it.');
+  await bob.page.reload();
+  await bob.waitApp();
+  await alice.page.reload();
+  await alice.waitApp();
+  await alice.page.waitForTimeout(1500);
+  check(!(await alice.$('.modal.whatsnew').count()), 'A note shows once.');
+  check(!(await bob.$('.modal.whatsnew').count()), 'The owner doesn\u2019t get their own notes on other devices either.');
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+}
+
 // ------------------------------------------------------------------ the owner's password reset link
 // For someone who can't sign in and has no email to reset it with (droid has none): the owner (bob, since "instance:
 // new owner…") makes a one-time link in Admin → Users, with his password. Droid opens it on her own device and chooses
@@ -4131,8 +4169,8 @@ async function updateBar(t) {
   await page.waitForTimeout(7000);
   check(await page.evaluate(() => window.__beforeReload === true), 'It should never reload while a dialog is open.');
   check(!(await page.locator('.update-bar').count()), 'There should be no bar to click.');
-  // Once the dialog is closed it reloads into the new version by itself (the What's new it may show doesn't hold
-  // later updates up: there's nothing in it to lose).
+  // Once the dialog is closed it reloads into the new version by itself (a What's new window doesn't hold updates
+  // up: its notes count as seen only once it's closed, so after the reload it comes back).
   await Promise.all([page.waitForEvent('load', { timeout: 15000 }), page.keyboard.press('Escape')]);
   await alice.waitApp();
   check(await page.evaluate(() => !window.__beforeReload), 'It should have reloaded by itself.');
@@ -4194,6 +4232,7 @@ export const FLOWS = [
   ['phone message actions: a long press opens a sheet (react, reply, copy, edit, delete; closes with Back, Esc, a tap or a swipe); a roomier message box with GIFs and Send later under +; the desktop keeps its hover toolbar and buttons', phoneMessageActions],
   ['a video over the limit: made smaller on the device to fit, sent, and it plays', videoShrink],
   ['the owner sends 12 files in one message; everyone else still stops at 10', ownerManyFiles],
+  ['update notes: only the owner publishes them; open apps show a new one once, as plain text', updateNotes],
   ['owner reset link: the owner makes a one-time link in Admin → Users for someone who can\u2019t sign in; they choose their own new password with it; the owner can\u2019t verify the keys it made', ownerResetLink],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
