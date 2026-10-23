@@ -134,10 +134,10 @@ function inCode(before) {
   return ((line.match(/`/g) || []).length) % 2 === 1;
 }
 // Whether a word at `start` begins a sentence (or a line): after ! ? or a full stop that isn't a title's (Mr. Noone,
-// a.k.a. Noone) or an initial's (J. Noone, A.J. Noone; not the I of "so do I." nor U.S., a.m., p.m.).
+// a.k.a. Noone) or an initial's (J. Noone, A.J. Noone; not the I of "so do I." nor U.S., P.S. and the like).
 const TITLE = /^\W*(?:mr|mrs|ms|mx|dr|st|vs|prof|sr|jr|mt|a\.k\.a|e\.g|i\.e)\.$/i;
-const INITIAL = /^\W*(?:[A-HJ-Z]|(?:[A-Za-z]\.)+[A-Za-z])\.$/;
-const ENDS_SENTENCE = /^\W*(?:U\.S|U\.K|a\.m|p\.m|A\.M|P\.M)\.$/;
+const INITIAL = /^\W*(?:[A-HJ-Z]|(?:[A-Z]\.)+[A-Z])\.$/;
+const ENDS_SENTENCE = /^\W*(?:U\.S|U\.S\.A|U\.K|E\.U|U\.N|D\.C|L\.A|N\.Y|P\.S|O\.K|T\.V|A\.I|A\.M|P\.M|R\.S\.V\.P)\.$/;
 function startsSentence(text, start) {
   const before = text.slice(0, start);
   const gap = /[\s("'“‘[]*$/.exec(before);
@@ -260,105 +260,68 @@ function replace(ta, start, end, text) {
   return done ? 'native' : 'direct';
 }
 
-// Each box's latest paste or drop while it's there as it came: { start, end, text } (lastWordPasted). Moved along by
-// what's typed before it; gone once it's changed or deleted.
+// What was pasted or dropped into each box lately (its text, the latest last): a word inside such text is left as it
+// came, wherever it has moved to, also when sent (lastWordPasted). Going by the text means that, at worst, a word
+// typed exactly as something pasted is left too. Forgotten once it's no longer there when something is typed, or the
+// box is emptied (so it isn't lost to a Backspace that's undone, nor kept after the message is sent).
 const PASTES = new WeakMap();
-const pasteHolds = (ta, p) => !!p && ta.value.slice(p.start, p.end) === p.text;
-// Whether the last word in a box came in with the latest paste or drop there (so it's sent as it is, too).
+const MAX_PASTES = 5;
+// Whether start..end lies in text that was pasted into the box.
+function pasted(ta, start, end) {
+  for (const t of PASTES.get(ta) || []) {
+    for (let i = ta.value.indexOf(t); i >= 0 && i < end; i = ta.value.indexOf(t, i + 1)) {
+      if (i <= start && end <= i + t.length) return true;
+    }
+  }
+  return false;
+}
+// Whether the last word in a box came in with something pasted or dropped there.
 export function lastWordPasted(ta) {
-  const p = PASTES.get(ta);
-  if (!pasteHolds(ta, p)) return false;
   const m = /([A-Za-z']+)[^A-Za-z']*$/.exec(ta.value);
-  return !!m && m.index >= p.start && m.index + m[1].length <= p.end;
+  return !!m && pasted(ta, m.index, m.index + m[1].length);
 }
 
 // Corrects spelling as people type in a text box. on(): whether it's wanted right now (the setting, a computer).
 // Returns a function that stops it.
 export function autocorrect(ta, { on = () => true } = {}) {
-  // This box's fixes, the latest last: { start, word, fix, run (the punctuation and space that finished it), native,
-  // caret, reverted (by Backspace) }. Undo puts the text before one back as it was, so where it is stays right. last: the latest, until anything else happens; undoing: Ctrl+Z was pressed right after it.
-  const fixes = [];
+  // last: the latest fix ({ start, word, fix, run (the punctuation and space that finished it), caret, native }) until
+  // anything else happens; back: the latest Backspace that turned one down, likewise. undoing: Ctrl+Z was pressed
+  // right after one of them ({ f, put: what the undo brings back }), for the input that follows.
   let last = null;
+  let back = null;
   let undoing = null;
+  let turnedDown = null; // a word Ctrl+Z put back: kept once typing goes on (not if undo or redo goes on instead)
   let fixing = false;
-  let was = ta.value; // the text before the latest change, to see where it changed
-  let stash = null; // a paste an undo took away, for a redo to bring back
-  // Where the text changed (it's compared with what it was), for the paste: the paste itself, or something typed before
-  // it (it moves along), in it (it's gone; an undo's can come back with a redo) or after it. Returns whether it was a
-  // paste.
-  const track = (e) => {
-    const now = ta.value;
-    const max = Math.min(was.length, now.length);
-    let a = 0;
-    while (a < max && was[a] === now[a]) a++;
-    let z = 0;
-    while (z < max - a && was[was.length - 1 - z] === now[now.length - 1 - z]) z++;
-    let oldEnd = was.length - z;
-    let newEnd = now.length - z;
-    // Typing and deleting happen at the caret: where the same letters make the change look further on (a "t" typed
-    // before "the"), it's put where the caret says.
-    const d = now.length - was.length;
-    if (d > 0 && oldEnd === a) {
-      const end = ta.selectionEnd;
-      const st = end - d;
-      if (st >= 0 && st < a && was.slice(0, st) === now.slice(0, st) && was.slice(st) === now.slice(end)) { a = st; oldEnd = st; newEnd = end; }
-    } else if (d < 0 && newEnd === a) {
-      const st = ta.selectionStart;
-      if (st < a && was.slice(0, st) === now.slice(0, st) && was.slice(st - d) === now.slice(st)) { a = st; oldEnd = st - d; newEnd = st; }
-    }
-    was = now;
-    const history = e.inputType === 'historyUndo' || e.inputType === 'historyRedo';
-    if (e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop') {
-      if (newEnd > a) PASTES.set(ta, { start: a, end: newEnd, text: now.slice(a, newEnd) }); else PASTES.delete(ta);
-      stash = null;
-      return true;
-    }
-    const p = PASTES.get(ta);
-    if (!p && stash && e.inputType === 'historyRedo' && pasteHolds(ta, stash)) { PASTES.set(ta, stash); stash = null; return false; }
-    if (!history) stash = null;
-    if (!p || a >= p.end) return false;
-    if (oldEnd <= p.start) { p.start += newEnd - oldEnd; p.end += newEnd - oldEnd; return false; }
-    PASTES.delete(ta);
-    if (history) stash = p;
-    return false;
+  const remember = (text) => {
+    const t = String(text || '').replace(/\r\n?/g, '\n');
+    if (!/[A-Za-z]/.test(t)) return;
+    PASTES.set(ta, [...(PASTES.get(ta) || []).filter((x) => x !== t), t].slice(-MAX_PASTES));
   };
-  const fixAt = (start, end) => {
-    const text = ta.value.slice(start, end);
-    for (let i = fixes.length - 1; i >= 0; i--) {
-      const f = fixes[i];
-      if (f.start === start && (text === f.word || text === f.fix)) return { f, back: text === f.word };
-    }
-    return null;
-  };
-  // The caret after a word put back or fixed again: past what finished it ('teh' → after the closing quote and the
-  // space), if that's still there.
-  const past = (end, f) => (ta.value.startsWith(f.run, end) ? end + f.run.length : end);
+  const onPaste = (e) => remember(e.clipboardData && e.clipboardData.getData('text/plain'));
+  const onDrop = (e) => remember(e.dataTransfer && e.dataTransfer.getData('text/plain'));
   const onInput = (e) => {
-    const pasted = track(e);
+    const history = e.inputType === 'historyUndo' || e.inputType === 'historyRedo';
+    if (!history && (!ta.value || /^insert/.test(e.inputType || ''))) {
+      const list = (PASTES.get(ta) || []).filter((t) => ta.value.includes(t));
+      if (list.length) PASTES.set(ta, list); else PASTES.delete(ta);
+    }
     if (fixing) return;
     const u = undoing;
     last = null;
+    back = null;
     undoing = null;
-    if (pasted) return;
-    if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
-      // Undoing a fix brings the word back selected (the next key would type over it); redoing one leaves the caret
-      // before what finished it. The caret goes after both. Undoing it right after it was made is turning it down, as
-      // Backspace is, and so is redoing a Backspace; undoing either is taking the fix after all.
-      const s = ta.selectionStart;
-      const en = ta.selectionEnd;
-      let hit = s !== en ? fixAt(s, en) : null;
-      if (!hit && s === en && e.inputType === 'historyRedo') {
-        for (let i = fixes.length - 1; i >= 0 && !hit; i--) {
-          const f = fixes[i];
-          if (f.start + f.fix.length === s && ta.value.slice(f.start, s) === f.fix) hit = { f, back: false };
-          else if (f.reverted && f.start + f.word.length === s && ta.value.slice(f.start, s) === f.word) hit = { f, back: true };
-        }
-      }
-      if (!hit) return;
-      const at = past(hit.f.start + (hit.back ? hit.f.word.length : hit.f.fix.length), hit.f);
+    if (turnedDown && !history) keep(turnedDown);
+    turnedDown = null;
+    if (history) {
+      // Ctrl+Z right after a fix brings the typed word back selected, and right after a Backspace the fix (the next
+      // key would type over it): the caret goes after it and what finished it. The first is turning the fix down, as
+      // Backspace is; the second is taking it after all. Any other undo or redo is the browser's own.
+      if (!u || e.inputType !== 'historyUndo') return;
+      const end = u.f.start + u.put.length;
+      if (ta.selectionStart !== u.f.start || ta.selectionEnd !== end || ta.value.slice(u.f.start, end) !== u.put) return;
+      const at = ta.value.startsWith(u.f.run, end) ? end + u.f.run.length : end;
       ta.setSelectionRange(at, at);
-      if (!hit.back) keep(hit.f.word, false);
-      else if (u === hit.f || e.inputType === 'historyRedo') keep(hit.f.word);
+      if (u.put === u.f.word) turnedDown = u.f.word; else keep(u.f.word, false);
       return;
     }
     if (e.isComposing || !(e.inputType === 'insertText' || e.inputType === 'insertLineBreak')) return;
@@ -366,42 +329,51 @@ export function autocorrect(ta, { on = () => true } = {}) {
     const at = ta.selectionStart;
     if (!finishes(ta.value[at - 1]) || !on()) return;
     const c = findCorrection(ta.value, at, { kept: keptWords() });
-    if (!c) return;
-    const p = PASTES.get(ta);
-    if (pasteHolds(ta, p) && c.start >= p.start && c.end <= p.end) return; // pasted: left as it is
+    if (!c || pasted(ta, c.start, c.end)) return;
     fixing = true;
     let done = false;
     try { done = replace(ta, c.start, c.end, c.fix); } finally { fixing = false; }
     if (!done) return;
-    last = { start: c.start, word: c.word, fix: c.fix, run: ta.value.slice(c.start + c.fix.length, ta.selectionStart), native: done === 'native', caret: ta.selectionStart };
-    fixes.push(last);
-    if (fixes.length > 50) fixes.shift();
+    last = { start: c.start, word: c.word, fix: c.fix, run: ta.value.slice(c.start + c.fix.length, ta.selectionStart), caret: ta.selectionStart, native: done === 'native' };
   };
   const onKey = (e) => {
-    if (!last || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return; // (Ctrl on its own, before Ctrl+Z)
+    if (['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return; // (Ctrl on its own, before Ctrl+Z)
     const l = last;
+    const b = back;
     last = null;
+    back = null;
+    undoing = null;
+    const f = l || b;
+    if (!f) return;
     const undo = (e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey;
-    const back = e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey;
-    if (!(undo || back) || ta.selectionStart !== l.caret || ta.selectionEnd !== l.caret) return;
-    if (ta.value.slice(l.start, l.start + l.fix.length) !== l.fix) return;
-    // Ctrl+Z: the browser undoes the fix (an edit of its own), and onInput above notes it was turned down.
-    if (undo && l.native) { undoing = l; return; }
-    // Backspace (or Ctrl+Z where the fix isn't in the browser's undo): what was typed comes back (the space or
-    // punctuation after it stays), for good.
-    if (!fits(ta, l.fix.length, l.word.length)) return;
+    const del = e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey;
+    if (ta.selectionStart !== f.caret || ta.selectionEnd !== f.caret) return;
+    const now = l ? l.fix : b.word; // what's in the box there
+    if (ta.value.slice(f.start, f.start + now.length) !== now) return;
+    // Ctrl+Z: the browser undoes the fix (or the Backspace), an edit of its own; onInput above follows it up.
+    if (undo && f.native) { undoing = { f, put: l ? l.word : b.fix }; return; }
+    // Backspace right after a fix (or Ctrl+Z where it isn't in the browser's undo): what was typed comes back (the
+    // space or punctuation after it stays), for good.
+    if (!l || !(del || undo) || !fits(ta, l.fix.length, l.word.length)) return;
     e.preventDefault();
     fixing = true;
     let done = false;
     try { done = replace(ta, l.start, l.start + l.fix.length, l.word); } finally { fixing = false; }
-    if (done) { keep(l.word); l.reverted = true; }
+    if (!done) return;
+    keep(l.word);
+    back = { ...l, caret: ta.selectionStart, native: done === 'native' };
   };
-  const forget = () => { last = null; undoing = null; };
+  const forget = () => { last = null; back = null; undoing = null; };
+  // (turnedDown stays: clicking somewhere else to go on typing is going on.)
+  ta.addEventListener('paste', onPaste);
+  ta.addEventListener('drop', onDrop);
   ta.addEventListener('input', onInput);
   ta.addEventListener('keydown', onKey);
   ta.addEventListener('pointerdown', forget);
   ta.addEventListener('blur', forget);
   return () => {
+    ta.removeEventListener('paste', onPaste);
+    ta.removeEventListener('drop', onDrop);
     ta.removeEventListener('input', onInput);
     ta.removeEventListener('keydown', onKey);
     ta.removeEventListener('pointerdown', forget);
