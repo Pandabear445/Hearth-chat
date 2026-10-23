@@ -111,7 +111,14 @@ async function startServer(extraEnv = {}) {
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), timeout);
       try {
-        const r = await fetch(base + (p.startsWith('/') ? p : '/' + p), { method, headers: h, body: payload, signal: ctl.signal, redirect: 'manual' });
+        const go = () => fetch(base + (p.startsWith('/') ? p : '/' + p), { method, headers: h, body: payload, signal: ctl.signal, redirect: 'manual' });
+        let r;
+        try { r = await go(); } catch (e) {
+          // A kept-alive connection the server closed (idle past its 5 s keep-alive, while a test was busy) just as it
+          // was used again: a request that changes nothing goes again, on a new one.
+          if (!((method === 'GET' || method === 'HEAD') && e.cause && e.cause.code === 'UND_ERR_SOCKET')) throw e;
+          r = await go();
+        }
         const text = await r.text();
         let json = null;
         try { json = JSON.parse(text); } catch { /* not JSON */ }

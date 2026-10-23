@@ -977,10 +977,11 @@ function limited(kind, base, field) {
     // icons and songs, which share these limits, still count whole: a big message doesn't hold those up), and doesn't
     // use up the share of the network they're on (everyone there has it).
     try {
+      // (Counted in tenths, in whole numbers: 0.1 + 0.1 + … drifts.)
       const pace = kind === 'file' ? uploadPace(req.userId) : 1;
-      rateLimit(`up:user:${req.userId}`, 60, 60000, 1 / pace);
-      rateLimit(`up:userh:${req.userId}`, 600, 3600000, 1 / pace);
-      rateLimit(`up:session:${req.session.id}`, 40, 60000, 1 / pace);
+      rateLimit(`up:user:${req.userId}`, 600, 60000, 10 / pace);
+      rateLimit(`up:userh:${req.userId}`, 6000, 3600000, 10 / pace);
+      rateLimit(`up:session:${req.session.id}`, 400, 60000, 10 / pace);
       if (pace === 1) limitNet(req, 'up', 150, 60000);
     } catch (e) { return next(e); }
     const q = quotaOf(req.userId);

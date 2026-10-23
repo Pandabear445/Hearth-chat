@@ -4062,9 +4062,12 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
     const ru = getUser(m.reply.authorId);
     // A quote the server left out for its size (big: the owner's, with many files): the original says what it was,
     // when it's loaded here (in the conversation, or the thread).
+    // Only that message: the one the reply names, by the author the reply names, in this conversation, opened as theirs
+    // (the server can mark any quote big; it mustn't be able to put someone's words under someone else's name).
     if (m.reply.dec && m.reply.dec.big) {
-      const o = [...(S.msgs[keyOfMessage(m)] || { list: [] }).list, ...threadList()].find((x) => x.id === m.reply.id);
-      if (o && o.dec && !o.dec.error && !o.dec.pending) m.reply.dec = o.dec;
+      const here = [...(S.msgs[keyOfMessage(m)] || { list: [] }).list, ...(S.thread && m.channelId && S.thread.channelId === m.channelId ? threadList() : [])];
+      const o = here.find((x) => x.id === m.reply.id && x.id === m.replyTo && x.authorId === m.reply.authorId && keyOfMessage(x) === keyOfMessage(m));
+      if (o && o.dec && !o.dec.error && !o.dec.pending && !o.dec.forged) m.reply.dec = o.dec;
     }
     const rd = m.reply.dec;
     const rtext = rd && !rd.error && !rd.pending ? rd.t : '';
@@ -4607,7 +4610,7 @@ function openCallFromLink(link) {
 
 // ---- message actions
 function editBox(m, ctx) {
-  const ta = h('textarea', { class: 'edit-input', rows: '1', maxlength: '4000', 'aria-label': 'Edit message' });
+  const ta = h('textarea', { class: 'edit-input', rows: '1', 'aria-label': 'Edit message' });
   ta.value = textOf(m);
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 300) + 'px'; };
   ta.addEventListener('input', autosize);
@@ -4748,7 +4751,7 @@ function decryptedUrl(m, f) {
       // f.size is the plain size; the ciphertext adds a 12-byte IV and a 16-byte tag. Whoever sent the message wrote
       // it (and a thumbnail has none), so the download stops past it (a thumbnail past THUMB_MAX): a message can't
       // make everyone who scrolls past it download big files it calls small.
-      const buf = await download(f.url, { expected: f.size ? f.size + 28 : 0, max: f.thumb ? THUMB_MAX : f.size ? f.size + 28 + 4096 : 0, onProgress: (x) => listeners.forEach((fn) => fn(x)) });
+      const buf = await download(f.url, { expected: f.size ? f.size + 28 : 0, max: f.thumb ? THUMB_MAX : f.size > 0 ? f.size + 28 + 4096 : AUTOLOAD_MAX, onProgress: (x) => listeners.forEach((fn) => fn(x)) });
       const plain = await sec.decryptAttachment(m, f, buf);
       if (isExpired(m, nowServer())) throw goneFile(); // it went while downloading: don't keep a copy
       return fileUrls.put(f.url, new Blob([plain], { type: f.type || 'application/octet-stream' }));
@@ -4823,7 +4826,7 @@ const loadQueue = makeQueue(3);
 // sees the same downloads either way.
 function sharpenWhenShown(el, holder, f, full, standIn) {
   if (!(isTouchUI() || isPhoneLayout()) || !holder.classList.contains('sized')) return;
-  if ((navigator.connection && navigator.connection.saveData) || (f.size || 0) > AUTOLOAD_MAX) return;
+  if ((navigator.connection && navigator.connection.saveData) || !(f.size > 0) || f.size > AUTOLOAD_MAX) return;
   const w = Number(f.w); const h = Number(f.h);
   const soft = () => {
     const nw = el.naturalWidth; const nh = el.naturalHeight;
@@ -4902,7 +4905,8 @@ function attachmentEl(f, m, { many = false } = {}) {
     };
     // Big videos and songs wait for a click (with the size on the button), then download with a progress bar; among
     // many files, every video and song, and big pictures without a thumbnail, too.
-    const waits = media === 'img' ? many && !f.th && (f.size || 0) > MANY_AUTOLOAD_MAX : many || (f.size || 0) > AUTOLOAD_MAX;
+    // (A size the sender left out is unknown, not small.)
+    const waits = media === 'img' ? many && !f.th && !((f.size || 0) > 0 && f.size <= MANY_AUTOLOAD_MAX) : many || !(f.size > 0) || f.size > AUTOLOAD_MAX;
     if (enc && waits) {
       holder.classList.remove('locked');
       holder.classList.add('click-to-load');
@@ -6433,12 +6437,11 @@ function createComposer({ id, key, threadId, placeholder }) {
       ta.value = text; drafts.set(convId(), text); synced = text; autosize();
       if (link && !state.link) state.link = link; // and its preview
     }
-    const all = [...files.filter((p) => !state.pending.includes(p)), ...state.pending];
-    if (all.length > maxFiles()) toast(`Only ${maxFiles()} files fit in the box: send the rest in the next message.`, 'error');
-    state.pending = all.slice(0, maxFiles());
+    // All of them, even past what one message takes: Send says so (send()), and nothing is dropped.
+    state.pending = [...files.filter((p) => !state.pending.includes(p)), ...state.pending];
     // A video that was still being looked at when it was sent is looked at again.
     const mb = S.config.maxUploadMb || 25;
-    for (const p of files) if (p.shrink === 'checking' && state.pending.includes(p)) checkShrink(p, mb * 1024 * 1024, mb);
+    for (const p of files) if (p.shrink === 'checking') checkShrink(p, mb * 1024 * 1024, mb);
   }
   function renderExtras() {
     const back = givenBack.get(convId());
@@ -6472,7 +6475,8 @@ function createComposer({ id, key, threadId, placeholder }) {
         h('button', { class: 'pending-edit', type: 'button', 'aria-label': `Edit ${p.file.name} (description, spoiler)`, 'data-tip': 'Edit', 'data-pending': String(i), onclick: () => editPending(p) }, icon('edit')),
         h('button', { class: 'pending-x', 'aria-label': `Remove ${p.file.name}`, 'data-tip': 'Remove', onclick: () => { if (p.url) URL.revokeObjectURL(p.url); state.pending.splice(i, 1); renderExtras(); update(); } }, icon('close'))))));
     }
-    extras.append(sendingUi.get(convId()) || upStatus);
+    const going = sendingUi.get(convId()) || new Set();
+    extras.append(...going, ...(going.has(upStatus) ? [] : [upStatus]));
     const blockedNote = blockedDmNotice();
     const kk = key();
     const ch = kk && kk.startsWith('c:') ? channelById(kk.slice(2)) : null;
@@ -6508,8 +6512,12 @@ function createComposer({ id, key, threadId, placeholder }) {
     const sendAt = extra.sendAt || null;
     if (!text.trim() && !files.length && !poll) return;
     if (overrideText == null && !extra.files && checking()) { toast('Still checking the video\u2026 It can go in a moment.'); return; }
-    // (More than may go now: the server was handed to someone else since they were added.)
+    // (More than may go: the server was handed to someone else since they were added, or files came back to the box.)
     if (overrideText == null && !extra.files && files.length > maxFiles()) { toast(`You can send up to ${maxFiles()} files in one message. Remove some first.`, 'error'); return; }
+    if (overrideText == null && !extra.files && files.filter((p) => p.shrink && !sentFresh(p)).length > MAX_SHRINK) {
+      toast(`Up to ${MAX_SHRINK} videos that need making smaller can go in one message. Remove some first.`, 'error');
+      return;
+    }
     // A bot's slash command goes to the bot (after the warning), not into the channel.
     const slashIn = overrideText == null && !poll && slashChannel();
     const cmd = slashIn && SLASH.match(slashIn, text.trim());
@@ -6581,7 +6589,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     const ctl = files.length ? new AbortController() : null;
     uploading = ctl;
     const conv = kk + (tid || '');
-    if (files.length) sendingUi.set(conv, upStatus);
+    if (files.length) { if (!sendingUi.has(conv)) sendingUi.set(conv, new Set()); sendingUi.get(conv).add(upStatus); }
     const awake = files.length > MAX_FILES ? keepAwake() : null;
     let posting = false;
     try {
@@ -6590,6 +6598,7 @@ function createComposer({ id, key, threadId, placeholder }) {
       if (f.length > maxFiles()) throw new Error(`You can send up to ${maxFiles()} files in one message now. They\u2019re back in the box: send them in parts.`);
       posting = true;
       const msg = await sendTo(kk, tid, { t: text, f, ...(poll ? { p: poll } : {}), ...(links ? { l: links } : {}) }, replyTo, nonce, { wrote, sendAt });
+      posting = false;
       files.forEach((p) => p.url && URL.revokeObjectURL(p.url));
       if (sendAt) { SCHED.added(msg); toast(`Scheduled for ${SCHED.whenPhrase(msg.sendAt)}.`); return; }
       playSound('sent');
@@ -6601,10 +6610,11 @@ function createComposer({ id, key, threadId, placeholder }) {
     } catch (e) {
       // Videos still waiting to be made smaller let go of what they'd started; sending again starts afresh.
       files.forEach((p) => { if (p.session) { p.session.stop(); p.session = null; } });
-      // The message may have got there after all when its answer was lost (no answer, or the server failing): then
-      // sending again uploads the files again, rather than share them with a message that has them (the server links
-      // a file to the first message only).
-      if (posting && !(e.status >= 400 && e.status < 500)) files.forEach((p) => { delete p.sent; });
+      // The message may have got there after all when its answer was lost (the request failed on the way: fetch's
+      // TypeError, or the server failing): then sending again uploads the files again, rather than share them with a
+      // message that has them (the server links a file to the first message only). Anything refused before or by
+      // the server (a changed key, too long, slow mode…) keeps them.
+      if (posting && (e instanceof TypeError || e.status >= 500)) files.forEach((p) => { delete p.sent; });
       dropPendingSend(nonce);
       const wait = /in (\d+)s/.exec(e.message || '');
       if (e.code === 'slowmode' && wait) startSlow(+wait[1]);
@@ -6613,14 +6623,18 @@ function createComposer({ id, key, threadId, placeholder }) {
       // Give the files and words back so nothing is lost: to this box if it still shows the conversation, else to the
       // one that shows it now or next (takeBack, renderExtras).
       if (!poll && !files.some((f) => f.voice)) {
-        givenBack.set(conv, { files, text, link: linkState && linkState.status === 'ready' ? linkState : null });
+        const prev = givenBack.get(conv); // an earlier send there that stopped too, not picked up yet
+        const link = linkState && linkState.status === 'ready' ? linkState : null;
+        givenBack.set(conv, prev ? { files: [...prev.files, ...files.filter((p) => !prev.files.includes(p))], text: [prev.text, text].filter((t) => t && t.trim()).join('\n'), link: prev.link || link }
+          : { files, text, link });
         const here = ta.isConnected && convId() === conv ? null : Object.values(composers).find((c) => c && c.showing && c.showing() === conv);
         if (here) here.renderExtras();
         else if (ta.isConnected && convId() === conv) { renderExtras(); update(); }
       }
     } finally {
       if (uploading === ctl) uploading = null;
-      if (sendingUi.get(conv) === upStatus) sendingUi.delete(conv);
+      const going = sendingUi.get(conv);
+      if (going) { going.delete(upStatus); if (!going.size) sendingUi.delete(conv); }
       if (awake) awake();
       setProgress(1);
     }
@@ -6697,9 +6711,9 @@ const SENT_KEEP_MS = 6 * 3600 * 1000;
 const sentFresh = (p) => !!p.sent && p.sent.at > Date.now() - SENT_KEEP_MS;
 // Videos made smaller on the device in one message: each plays (into the recording) in its own player, so not too many.
 const MAX_SHRINK = 10;
-// A send still going in a conversation (key + thread): its progress bar, with its Cancel, from the box that started it.
-// A box drawn again meanwhile (another conversation and back, a setting that changed) shows that one instead of its
-// own. And what a send that stopped gives back (its files, and its words), for the box that shows the conversation.
+// The sends still going in a conversation (key + thread): their progress bars, with their Cancel, from the boxes that
+// started them. A box drawn again meanwhile (another conversation and back, a setting that changed) shows those too.
+// And what sends that stopped give back (their files, and words), for the box that shows the conversation.
 const sendingUi = new Map();
 const givenBack = new Map();
 // Keeps a phone's screen on while a long send uploads (a phone puts away an app whose screen goes off, and its uploads
@@ -6730,8 +6744,9 @@ async function uploadEncryptedFiles(key, files, onProgress, { signal, onStatus }
   if (key.startsWith('c:')) await sec.ready(serverOfChannel(key.slice(2)).id);
   const compress = P.chat.compressImages !== false;
   const total = files.reduce((a, p) => a + (p.file.size || 1), 0);
-  let done = 0;
-  onProgress(0);
+  // What went up for an earlier try counts as done.
+  let done = files.reduce((a, p) => a + (sentFresh(p) ? p.file.size || 1 : 0), 0);
+  onProgress(done / total);
   const send = async (blobLike, weight) => {
     if (signal && signal.aborted) throw Object.assign(new Error('Upload cancelled.'), { cancelled: true });
     const { blob, k } = await E2EE.encryptFile(await blobLike.arrayBuffer());
@@ -6742,31 +6757,28 @@ async function uploadEncryptedFiles(key, files, onProgress, { signal, onStatus }
   };
   // Set from the file's Edit button in the box (also after a send that failed); like the rest, inside the message.
   const tags = (p) => ({ ...(p.spoiler ? { sp: 1 } : {}), ...(p.alt ? { alt: String(p.alt).slice(0, ALT_MAX) } : {}) });
-  // Videos over the limit are made smaller first (video-shrink.js; started in the tap that sent them): it takes as
-  // long as they last, with "keep Hearth on screen" up from the start, and their players don't wait behind the rest.
-  const smaller = new Map();
-  for (const p of files) {
-    if (!p.session) continue;
-    const s = p.session; p.session = null;
-    if (sentFresh(p)) { s.stop(); continue; } // made smaller and uploaded already
-    smaller.set(p, await s.run({ maxBytes: budgetFor((S.config.maxUploadMb || 25) * 1024 * 1024), signal, onProgress: (x) => onStatus && onStatus({ shrinking: x }) }));
-  }
-  const out = [];
-  for (const p of files) {
+  // One file: made ready, encrypted and uploaded. What went up is kept for a next try (p.sent).
+  const upload = async (p, file) => {
     const weight = p.file.size || 1;
-    if (sentFresh(p)) { out.push({ ...p.sent.base, ...tags(p) }); done += weight; onProgress(done / total); continue; }
-    const file = smaller.get(p) || p.file;
     const r = p.voice ? { file } : await prepareImage(file, { compress });
     const both = r.file.size + (r.thumb ? r.thumb.size : 0) || 1;
     const th = r.thumb ? await send(r.thumb, (weight * r.thumb.size) / both) : null;
     const main = await send(r.file, weight - (th ? (weight * r.thumb.size) / both : 0));
     // (Names and types as long as readers keep them: attachments.js cleanFiles.)
-    const base = { url: main.url, name: String(r.file.name || '').slice(0, 255), type: String(r.file.type || '').slice(0, 100), size: r.file.size, k: main.k, ...(r.w ? { w: r.w, h: r.h } : {}), ...(th ? { th: { url: th.url, k: th.k } } : {}),
-      ...(p.voice ? { voice: true, dur: p.dur } : {}) };
-    p.sent = { base, at: Date.now() };
-    out.push({ ...base, ...tags(p) });
+    p.sent = { base: { url: main.url, name: String(r.file.name || '').slice(0, 255), type: String(r.file.type || '').slice(0, 100), size: r.file.size, k: main.k, ...(r.w ? { w: r.w, h: r.h } : {}), ...(th ? { th: { url: th.url, k: th.k } } : {}),
+      ...(p.voice ? { voice: true, dur: p.dur } : {}) }, at: Date.now() };
+  };
+  // Videos over the limit go first, each made smaller (video-shrink.js; started in the tap that sent them) and
+  // uploaded before the next: it takes as long as they last, with "keep Hearth on screen" up from the start, their
+  // players don't wait behind the rest, and only one smaller copy is in memory at a time.
+  for (const p of files) {
+    if (!p.session) continue;
+    const s = p.session; p.session = null;
+    if (sentFresh(p)) { s.stop(); continue; } // made smaller and uploaded already
+    await upload(p, await s.run({ maxBytes: budgetFor((S.config.maxUploadMb || 25) * 1024 * 1024), signal, onProgress: (x) => onStatus && onStatus({ shrinking: x }) }));
   }
-  return out;
+  for (const p of files) if (!sentFresh(p)) await upload(p, p.file);
+  return files.map((p) => ({ ...p.sent.base, ...tags(p) }));
 }
 
 function mentionedIds(server, text) {
