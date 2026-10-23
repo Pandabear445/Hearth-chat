@@ -62,7 +62,10 @@ test('a finished word is fixed, keeping its capitals; abbreviations in capitals 
   assert.equal(typed('ok. Dont '), "ok. Don't ");
   assert.equal(typed('ok!\n(Dont '), "ok!\n(Don't ");
   assert.equal(typed('Kelsey Noone '), 'Kelsey Noone ');
-  for (const t of ['I met Mr. Noone ', 'ask Dr. Ive ', 'J. Noone ', 'a.k.a. Noone ', 'cc: Noone ']) assert.equal(typed(t), t, 'a title, an initial or a label isn\u2019t a sentence\u2019s end');
+  for (const t of ['I met Mr. Noone ', 'ask Dr. Ive ', 'J. Noone ', 'Peter J. Noone ', 'a.k.a. Noone ', 'cc: Noone ']) assert.equal(typed(t), t, 'a title, an initial or a label isn\u2019t a sentence\u2019s end');
+  for (const [t, want] of [['So do I. Dont ', "So do I. Don't "], ['so am I. Im ', "so am I. I'm "], ['plan B. Thats ', "plan B. That's "], ['a. Dont ', "a. Don't "], ['love u. Im ', "love u. I'm "], ['in the U.S. Im ', "in the U.S. I'm "]]) {
+    assert.equal(typed(t), want, 'a sentence\u2019s end');
+  }
   assert.equal(typed('see you Wensday '), 'see you Wednesday ', 'a word that always has a capital');
   assert.equal(typed("OK I'LL "), "OK I'LL ", 'already right in capitals');
   assert.equal(typed("YES I'VE "), "YES I'VE ");
@@ -70,6 +73,7 @@ test('a finished word is fixed, keeping its capitals; abbreviations in capitals 
   // A word with a quote only before it is cut short ('im: him); one in quotes is fixed.
   assert.equal(typed("tell 'im "), "tell 'im ");
   assert.equal(typed("get 'im!"), "get 'im!");
+  assert.equal(typed('tell \u2018im '), 'tell \u2018im ', 'a curly quote too');
   assert.equal(typed('he said "dont"'), 'he said "don\'t"');
   assert.equal(typed("'teh' "), "'the' ");
   assert.equal(typed('(alot)'), '(a lot)');
@@ -109,6 +113,12 @@ test('what a box sends: the last word fixed, not a bot command, and for an edit 
   // A fix made on sending, put back by hand: left as typed.
   assert.equal(S.correctSending('as was his wont', { was: "as was his won't", kept }), 'as was his wont');
   assert.equal(S.correctSending('as was his wont.', { was: "as was his won't", kept }), 'as was his wont.');
+  assert.equal(S.correctSending('thanks alot', { was: 'thanks a lot', kept }), 'thanks alot', 'a fix of two words too');
+  assert.equal(S.correctSending('there was noone', { was: 'there was no one', kept }), 'there was noone');
+  // A new last word whose fix happens to be the last word before is new: fixed.
+  assert.equal(S.correctSending('love you, miss yuo', { was: 'love you', kept }), 'love you, miss you');
+  assert.equal(S.correctSending('So do I. Or do i', { was: 'So do I', kept }), 'So do I. Or do I');
+  assert.equal(S.correctSending("That's really wierd", { was: "That's so weird", kept }), "That's really weird");
   assert.equal(S.correctSending('ok dont', { kept: new Set(['dont']) }), 'ok dont');
 });
 
@@ -214,6 +224,52 @@ test('in the browser: Ctrl+Z, redo and Backspace after a fix; what was pasted is
     b = await box();
     await b.k.type('123456789012345678901234567890123456 im ');
     assert.equal((await b.state()).text, '123456789012345678901234567890123456 im ', 'a fix that wouldn\u2019t fit the box isn\u2019t made');
+
+    b = await box();
+    await b.k.type("say 'teh' ");
+    await b.k.press('Control+z');
+    await b.k.type('ok');
+    assert.equal((await b.state()).text, "say 'teh' ok", 'in quotes: the caret after the closing quote and the space');
+
+    b = await box();
+    await b.k.type('a dont ');
+    await b.k.press('Backspace');
+    await b.k.press('Control+z');
+    await b.k.press('Control+y');
+    assert.deepEqual(await b.state(), { text: 'a dont ', caret: 7, end: 7, kept: ['dont'] }, 'redoing a Backspace turns it down again');
+
+    b = await box();
+    await b.k.type('so teh ');
+    await b.k.press('Home');
+    await b.k.type('well ');
+    await b.k.press('End');
+    await b.k.type('ok');
+    for (let i = 0; i < 3; i++) await b.k.press('Control+z'); // ok, well, then the fix
+    assert.deepEqual(await b.state(), { text: 'so teh ', caret: 7, end: 7, kept: [] }, 'a fix moved along by typing before it is still found');
+
+    b = await box();
+    await b.paste('he said i dont');
+    await b.p.click('#t');
+    await b.k.press('End');
+    await b.k.type(' ok');
+    assert.equal((await b.state()).text, 'he said i dont ok', 'pasted: left after a click');
+
+    b = await box();
+    await b.paste('i dont');
+    await b.k.press('Home');
+    await b.k.type('> ');
+    assert.equal(await b.p.evaluate(() => window.sent()), '> i dont', 'pasted: left when something is typed before it');
+    await b.k.press('End');
+    await b.k.press('Backspace');
+    await b.k.type('t ');
+    assert.equal((await b.state()).text, "> i don't ", 'changed: no longer what was pasted');
+
+    b = await box();
+    await b.paste('dont');
+    await b.k.press('Control+a');
+    await b.k.press('Delete');
+    await b.k.type('dont ');
+    assert.equal((await b.state()).text, "don't ", 'gone: the same word typed afterwards is fixed');
 
     b = await box();
     await b.paste('he said i dont');

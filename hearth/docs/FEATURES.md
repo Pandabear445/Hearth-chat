@@ -1674,19 +1674,22 @@ works the same in end-to-end encrypted conversations.
   that aren't words themselves, missing apostrophes, `i` → `I`), keeping its capitals. Left out on purpose: real
   words (`whys`, `underate`), typos of two different words (`hwo`, `wheather`, `wanst`), names (`Grammer`), other
   languages' words (`posible`) and spellings people mean (`probly`). Two or three capitals (IM, CNA) are taken as an
-  abbreviation, and a word with a capital in the middle of a sentence as a name (Jony Ive, Mr. Noone: a title or an
-  initial before it doesn't end a sentence), so they're left, except words that always have one (Wensday). A word
-  with a quote only before it is cut short ('im for him) and left. A full stop waits for what comes after it, so file
+  abbreviation, and a word with a capital in the middle of a sentence as a name (Jony Ive; Mr. Noone and Peter J.
+  Noone: a title's or an initial's full stop doesn't end a sentence, while "so do I." and "plan B." do), so they're
+  left, except words that always have one (Wensday). A word with a quote only before it is cut short ('im for him)
+  and left. A full stop waits for what comes after it, so file
   names and addresses (`dont.js`) stay. Nothing is corrected inside `code` or ``` blocks, in @mentions, #channels,
-  :emoji:, links, paths, words with digits, what was pasted or dropped into the box, or a bot's /command, nor when
-  the fix wouldn't fit in the box's 4000 characters.
+  :emoji:, links, paths, words with digits, what was pasted or dropped into the box (while it's there as it came,
+  wherever typing before it moves it), or a bot's /command, nor when the fix wouldn't fit in the box's 4000
+  characters.
 - The last word is fixed when the message is sent (`correctSending`), as phones do, unless it was just pasted. Saving
   an edit fixes it only if it's new: not one that was already there, nor the word a fix made on sending put back by
-  hand (that word is then left alone, as below).
+  hand where the fix was (that word is then left alone, as below).
 - A fix is typed in as an edit of its own (`insertText`). Backspace or Ctrl+Z right after it puts back what was
   typed, and that word is left alone on this device from then on (`hearth.spellKept`); Ctrl+Z again goes on back
-  through the typing, and undoing a Backspace takes the fix after all. Ctrl+Z later on undoes a fix too, with the
-  caret after the word (no word is kept that way), and redo puts it back. Tests: `test/spelling.test.js` (with a
+  through the typing, undoing a Backspace takes the fix after all, and redoing it turns it down again. Ctrl+Z later on
+  undoes a fix too, with the caret after the word and what finished it (no word is kept that way), and redo puts it
+  back. Tests: `test/spelling.test.js` (with a
   real box in Chromium when Playwright is installed), the e2e flow "spelling".
 
 ## Update notes ("What's new"): only the owner publishes them
