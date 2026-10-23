@@ -268,29 +268,30 @@ function replace(ta, start, end, text) {
 // (not lost to a Backspace that's undone, nor kept after the message is sent).
 const PASTES = new Map(); // key → [line…]
 const KEYS = new WeakMap(); // box → () => its key
-const MAX_CHARS = 20000; // lines kept for a key, beyond the ones still in the box
+const MAX_LINES = 200; // lines kept for a key, and their characters (the ones no longer in the box go first)
+const MAX_CHARS = 20000;
 const keyOf = (ta) => { const k = KEYS.get(ta); return k ? k() : ta; };
 const pastesOf = (ta) => PASTES.get(keyOf(ta)) || [];
 const wordsOf = (line) => line.split(/[^A-Za-z']+/).filter(Boolean);
 // Whether a character joins the word beside it: a letter, or an apostrophe with a letter on its far side (teh's, but
 // not 'teh' in quotes).
 const joins = (ch, far) => /[A-Za-z]/.test(ch || '') || (ch === "'" && /[A-Za-z]/.test(far || ''));
-// Whether a word is in the text as a word of its own.
-function hasWord(v, w) {
-  for (let i = v.indexOf(w); i >= 0; i = v.indexOf(w, i + 1)) {
-    if (!joins(v[i - 1], v[i - 2]) && !joins(v[i + w.length], v[i + w.length + 1])) return true;
-  }
-  return false;
-}
-const size = (list) => list.reduce((n, l) => n + l.length, 0);
 function setPastes(ta, list) {
   const k = keyOf(ta);
   PASTES.delete(k);
   let keep = list;
-  // Over the bound, the oldest go, those with none of their words in the box first.
-  while (size(keep) > MAX_CHARS) {
-    const i = keep.findIndex((l) => !wordsOf(l).some((w) => hasWord(ta.value, w)));
-    keep = keep.filter((_, j) => j !== (i >= 0 ? i : 0));
+  let chars = keep.reduce((n, l) => n + l.length, 0);
+  if (keep.length > MAX_LINES || chars > MAX_CHARS) {
+    // Over the bound: the oldest go, first those no longer in the box, then the rest.
+    const gone = new Set();
+    let n = keep.length;
+    for (const away of [true, false]) {
+      for (let i = 0; i < keep.length && (n > MAX_LINES || chars > MAX_CHARS); i++) {
+        if (gone.has(i) || (away && ta.value.includes(keep[i]))) continue;
+        gone.add(i); n--; chars -= keep[i].length;
+      }
+    }
+    keep = keep.filter((_, i) => !gone.has(i));
   }
   if (keep.length) PASTES.set(k, keep);
   while (PASTES.size > 50) PASTES.delete(PASTES.keys().next().value);
@@ -304,15 +305,15 @@ function pasted(ta, start, end) {
     for (let o = line.indexOf(word); o >= 0; o = line.indexOf(word, o + 1)) {
       const e = o + word.length;
       if (joins(line[o - 1], line[o - 2]) || joins(line[e], line[e + 1])) continue; // (part of a longer word there)
-      // With what came before it on the line, or after it, beside it in the box as whole words (a side with nothing
+      // With what came before it on the line, or after it, beside it in the box as whole words (a side with no word
       // there doesn't count, unless the line is the word).
       // (A line that starts or ends with a word can't be the end of a longer one in the box: "he said" in "she said".)
       const b = start - o;
       const a = start + line.length - o;
       const cutBefore = joins(line[0], line[1]) && joins(v[b - 1], v[b - 2]);
       const cutAfter = joins(line[line.length - 1], line[line.length - 2]) && joins(v[a], v[a + 1]);
-      if ((o > 0 || e === line.length) && b >= 0 && v.slice(b, end) === line.slice(0, e) && !cutBefore) return true;
-      if (e < line.length && v.slice(start, a) === line.slice(o) && !cutAfter) return true;
+      if ((/[A-Za-z]/.test(line.slice(0, o)) || e === line.length) && b >= 0 && v.slice(b, end) === line.slice(0, e) && !cutBefore) return true;
+      if (/[A-Za-z]/.test(line.slice(e)) && v.slice(start, a) === line.slice(o) && !cutAfter) return true;
     }
   }
   return false;

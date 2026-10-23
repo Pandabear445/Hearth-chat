@@ -374,6 +374,8 @@ test('in the browser: Ctrl+Z, redo and Backspace after a fix; what was pasted is
     await b.k.type('Yeah');
     await b.paste(', i dont');
     assert.equal(await b.p.evaluate(() => window.sent()), 'Yeah, i dont', 'a paste starting with punctuation, after a word');
+    await b.k.type('. ok, i ');
+    assert.equal((await b.state()).text, 'Yeah, i dont. ok, I ', 'only the punctuation the same: typed, so fixed');
 
     b = await box();
     await b.paste('dont !');
