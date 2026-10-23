@@ -11,6 +11,7 @@ import { runExport, EXPORT_LIMITS, quietNow } from './usability.js';
 import { androidApp } from './android.js';
 import { reasonText } from './android-push.js';
 import { desktopSettingsSection } from './desktop-settings.js';
+import { englishHere } from './spelling.js';
 import { underWay } from './auto-update.js';
 import { OUTSIDE_MODES, OUTSIDE_LABELS, outsideMode } from './outside.js';
 import { pickGame, gameImg, openActivityPicker, startDesktopDetection } from './activity.js';
@@ -1420,8 +1421,26 @@ function linkPreviewSection(app, c, set) {
     toggle('Show link previews in messages', c.linkCards !== false, (v) => set('linkCards', v), 'Built by the sender and sent inside the encrypted message: your device never contacts the linked site.'));
 }
 
+// Spelling (spelling.js): everything happens on this device; nothing typed is looked up anywhere. In the desktop app,
+// "Check spelling" is also its spell checker's switch (the one place for it), so it shows Off if that was turned off.
+function spellingSection(c, set) {
+  const D = window.hearthDesktop;
+  const desktop = !!(D && typeof D.setDesktopSetting === 'function');
+  const check = toggle('Check spelling', c.spellcheck !== false, (v) => {
+    set('spellcheck', v);
+    if (desktop) D.setDesktopSetting('spellcheck', v).catch(() => {});
+  }, 'Words your browser (or the Hearth app) doesn\u2019t know are underlined, with fixes when you right-click them.');
+  if (desktop && c.spellcheck !== false && typeof D.getDesktopSettings === 'function') {
+    D.getDesktopSettings().then((d) => {
+      if (d && d.spellcheck === false) { check.querySelector('input').checked = false; set('spellcheck', false); }
+    }).catch(() => {});
+  }
+  return section('Spelling', check,
+    toggle('Correct spelling as I type', c.autocorrect ?? englishHere(), (v) => set('autocorrect', v), 'On a computer, common typos in English are fixed when you finish a word (teh \u2192 the, dont \u2192 don\u2019t, i \u2192 I), and the last word when you send. Backspace or Ctrl+Z right after a fix puts back what you typed, and that word is left alone from then on. Never in code, links, @mentions, :emoji:, names or what you paste. Phones and tablets use their keyboard\u2019s own correction.'));
+}
+
 function chatTab(app) {
-  const cur = () => ({ enterToSend: true, embeds: true, markdown: true, jumbo: true, compressImages: true, linkPreviews: 'ask', linkCards: true, ...JSON.parse(localStorage.getItem('hearth.chat') || '{}') });
+  const cur = () => ({ enterToSend: true, embeds: true, markdown: true, jumbo: true, compressImages: true, linkPreviews: 'ask', linkCards: true, spellcheck: true, ...JSON.parse(localStorage.getItem('hearth.chat') || '{}') });
   const set = (k, v) => { const c = cur(); c[k] = v; localStorage.setItem('hearth.chat', JSON.stringify(c)); app.rerender(); };
   const c = cur();
   return h('div', { class: 'set-form narrow' },
@@ -1430,6 +1449,7 @@ function chatTab(app) {
       toggle('Enter sends the message', c.enterToSend, (v) => set('enterToSend', v), c.enterToSend ? 'Shift+Enter adds a new line.' : 'Use Ctrl/⌘+Enter to send; Enter adds a new line.'),
       h('div', { class: 'kv' }, h('span', null, 'Edit your last message'), h('kbd', null, '↑ in an empty box')),
       h('div', { class: 'kv' }, h('span', null, 'Mention someone'), h('kbd', null, '@ then a name'))),
+    spellingSection(c, set),
     section('Display',
       toggle('Optimize photos before sending', c.compressImages !== false, (v) => set('compressImages', v), 'Big photos are resized to 2560 px and made much smaller (also removing hidden location data). Turn off to always send the original file.'),
       toggle('Show image links as previews', c.embeds, (v) => set('embeds', v), 'By default a picture from another site waits for a click, since that site sees your IP address (Privacy & safety \u2192 Outside images).'),

@@ -25,6 +25,7 @@ import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voice
 import { rankRelays, chooseIce, relayTime, iceStale } from './relays.js';
 import { watchConnection } from './conn.js';
 import { unseenNotes, markNotesSeen } from './whatsnew.js';
+import { autocorrect, correctSending, isCommand, englishHere } from './spelling.js';
 import { initKeybinds, getKeybinds, comboLabel, reportCall, flashTaskbar, installUpdate, shortcutGroups, comboParts, keyName } from './keybinds.js';
 import { initActivity, activityLine, openActivityPicker, startDesktopDetection } from './activity.js';
 import { modal, popover, closePopover, menu, contextMenu, sheet, quietFocus, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
@@ -149,7 +150,7 @@ const P = {
   get lastChannel() { return LS.get(mine('lastChannel'), {}); },
   set lastChannel(v) { LS.set(mine('lastChannel'), v); },
   // linkPreviews: 'ask' | 'always' | 'never' (when I send a link); linkCards: show previews in messages.
-  get chat() { return { enterToSend: true, embeds: true, markdown: true, jumbo: true, linkPreviews: 'ask', linkCards: true, ...LS.get('hearth.chat', {}) }; },
+  get chat() { return { enterToSend: true, embeds: true, markdown: true, jumbo: true, linkPreviews: 'ask', linkCards: true, spellcheck: true, ...LS.get('hearth.chat', {}) }; },
   get showMembers() { return localStorage.getItem('hearth.members') !== 'off'; },
   set showMembers(v) { localStorage.setItem('hearth.members', v ? 'on' : 'off'); },
   // The chat beside a voice channel's call: shown or hidden as you last left it (closed until you first open it).
@@ -4642,15 +4643,23 @@ function openCallFromLink(link) {
 }
 
 // ---- message actions
+// Spelling (Settings → Chat; spelling.js): the browser's underlines, and corrections as people type on a computer
+// (phones and tablets have their keyboard's own; on unless chosen otherwise where the browser's language is English).
+// On this device only.
+const spellcheckAttr = () => (P.chat.spellcheck !== false ? 'true' : 'false');
+const correcting = () => (P.chat.autocorrect ?? englishHere()) !== false && !isTouchUI();
+// What a box sends, its last word corrected (not a bot's /command; for an edit, only a last word that changed).
+const spelled = (text, was = null) => (correcting() ? correctSending(text, { was }) : text);
 function editBox(m, ctx) {
-  const ta = h('textarea', { class: 'edit-input', rows: '1', 'aria-label': 'Edit message' });
+  const ta = h('textarea', { class: 'edit-input', rows: '1', 'aria-label': 'Edit message', spellcheck: spellcheckAttr() });
   ta.value = textOf(m);
+  autocorrect(ta, { on: correcting });
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 300) + 'px'; };
   ta.addEventListener('input', autosize);
   setTimeout(autosize);
   const done = () => { S.editing = null; replaceMessageEl(m); const c = composers[ctx]; if (c) c.focus(); };
   const save = async () => {
-    const content = ta.value;
+    const content = ta.value === textOf(m) ? ta.value : spelled(ta.value, textOf(m));
     if (!content.trim() && !filesOf(m).length) return deleteMessage(m);
     if (content === textOf(m)) return done();
     try {
@@ -6043,7 +6052,9 @@ function createComposer({ id, key, threadId, placeholder }) {
   // link: the link preview being offered or built for the link in the box (see checkLink below).
   const state = { replyTo: null, pending: [], link: null };
   const k = key();
-  const ta = h('textarea', { class: 'composer-input', rows: '1', maxlength: '4000', 'aria-label': 'Message', id: id === 'main' ? 'composer-input' : null });
+  const ta = h('textarea', { class: 'composer-input', rows: '1', maxlength: '4000', 'aria-label': 'Message', id: id === 'main' ? 'composer-input' : null, spellcheck: spellcheckAttr() });
+  autocorrect(ta, { on: () => correcting() && !isCommand(ta.value) });
+  ta.addEventListener('focus', () => { ta.spellcheck = P.chat.spellcheck !== false; }); // (changed in Settings meanwhile)
   ta.placeholder = placeholder || placeholderFor(k);
   ta.value = drafts.get(k + (threadId() || '')) || '';
   let synced = ta.value; // what this box last read from or wrote to the drafts
@@ -6539,7 +6550,8 @@ function createComposer({ id, key, threadId, placeholder }) {
   // extra: { poll } for a poll, { files } for a voice message; the typed text stays in the box for those.
   // { sendAt } schedules what's in the box for then (Send later) instead of sending it now.
   function send(overrideText, extra = {}) {
-    const text = overrideText != null ? overrideText : ta.value;
+    // (Typed: its last word is corrected as it goes, as phones do: spelling.js correctSending.)
+    const text = overrideText != null ? overrideText : spelled(ta.value);
     const files = extra.files || (overrideText != null ? [] : state.pending.slice());
     const poll = extra.poll || null;
     const sendAt = extra.sendAt || null;

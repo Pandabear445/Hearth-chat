@@ -4075,6 +4075,42 @@ async function updateNotes(t) {
   await bob.openChannel('general');
 }
 
+// ------------------------------------------------------------------ spelling: corrected as people type (computers)
+// Settings → Chat → Spelling (public/js/spelling.js): a finished word with a common typo is fixed, Backspace or Ctrl+Z
+// right after puts it back (and leaves that word alone from then on), code isn't touched, and the last word is fixed
+// on send.
+async function spelling(t) {
+  const { alice } = t.people;
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  const box = alice.$('#composer-input');
+  check(await box.getAttribute('spellcheck') === 'true', 'The message box should be spell-checked.');
+  await box.click();
+  await box.fill('');
+  await alice.page.keyboard.type('teh ');
+  check(await box.inputValue() === 'the ', `"teh " should become "the " (got ${JSON.stringify(await box.inputValue())}).`);
+  await alice.page.keyboard.press('Backspace');
+  check(await box.inputValue() === 'teh ', `Backspace right after should put "teh" back (got ${JSON.stringify(await box.inputValue())}).`);
+  await alice.page.keyboard.type('and `recieve` recieve dont');
+  check(await box.inputValue() === 'teh and `recieve` receive dont', `Fixed outside code only (got ${JSON.stringify(await box.inputValue())}).`);
+  await alice.page.keyboard.press('Enter');
+  const sent = alice.message("receive don't").first(); // (the code shows without its backticks)
+  await sent.waitFor();
+  check((await sent.locator('.msg-text').textContent()).includes("teh and recieve receive don't"), 'Sent as corrected.');
+  // "teh" was put back: it stays from now on, on this device.
+  await box.click();
+  await alice.page.keyboard.type('teh ');
+  check(await box.inputValue() === 'teh ', 'A word put back is left alone.');
+  // Ctrl+Z right after a fix puts it back too, with the caret where it was; nothing in an inline code span still open.
+  await alice.page.keyboard.type('recieve ');
+  check(await box.inputValue() === 'teh receive ', `"recieve " should be fixed (got ${JSON.stringify(await box.inputValue())}).`);
+  await alice.page.keyboard.press('Control+z');
+  await alice.page.keyboard.type('`x dont ');
+  check(await box.inputValue() === 'teh recieve `x dont ', `Ctrl+Z puts it back, and code is left (got ${JSON.stringify(await box.inputValue())}).`);
+  await box.fill('');
+  await alice.page.evaluate(() => localStorage.removeItem('hearth.spellKept'));
+}
+
 // ------------------------------------------------------------------ the owner's password reset link
 // For someone who can't sign in and has no email to reset it with (droid has none): the owner (bob, since "instance:
 // new owner…") makes a one-time link in Admin → Users, with his password. Droid opens it on her own device and chooses
@@ -4233,6 +4269,7 @@ export const FLOWS = [
   ['a video over the limit: made smaller on the device to fit, sent, and it plays', videoShrink],
   ['the owner sends 12 files in one message; everyone else still stops at 10', ownerManyFiles],
   ['update notes: only the owner publishes them; open apps show a new one once, as plain text', updateNotes],
+  ['spelling: common typos fixed as a word is finished, Backspace or Ctrl+Z puts one back, the last word fixed on send', spelling],
   ['owner reset link: the owner makes a one-time link in Admin → Users for someone who can\u2019t sign in; they choose their own new password with it; the owner can\u2019t verify the keys it made', ownerResetLink],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],

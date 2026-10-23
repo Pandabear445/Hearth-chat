@@ -1660,6 +1660,29 @@ name. Shift+Esc marks the server you're in as read (not in a group chat, nor whi
 key `globalKeys` handles is in the sheet), the e2e flow "discord habits", and the shortcuts sheet and the attachment
 dialog in `npm run test:a11y`.
 
+## Spelling: checked and corrected as you type
+
+Settings → Chat → Spelling (`public/js/spelling.js`), on this device only: nothing typed is looked up anywhere, so it
+works the same in end-to-end encrypted conversations.
+- **Check spelling** (on by default) sets the message and edit boxes' `spellcheck` attribute: the browser's own
+  checker underlines words it doesn't know. In the desktop app it is also that app's spell checker switch (with
+  suggestions and "Add to dictionary" in its right-click menu), so there is one switch for it, not a second one in
+  Apps & devices; if that was turned off before, this shows Off.
+- **Correct spelling as I type** (computers; phones and tablets have their keyboard's; on by default where the
+  browser's language is English, since the list is English: `im`, `dont` and `i` are words in other languages): when
+  a word is finished with a space, a new line or punctuation, a common typo is fixed (`CORRECTIONS`: about 430 typos
+  that aren't words themselves, missing apostrophes, `i` → `I`), keeping its capitals. Left out on purpose: real
+  words (`whys`, `underate`), typos of two different words (`hwo`, `wheather`, `wanst`), names (`Grammer`), other
+  languages' words (`posible`) and spellings people mean (`probly`). Two or three capitals (IM, CNA) are taken as an
+  abbreviation, and a word with a capital in the middle of a sentence as a name (Jony Ive), so they're left. A full
+  stop waits for what comes after it, so file names and addresses (`dont.js`) stay. The last word is fixed when the
+  message is sent (`correctSending`), as phones do; saving an edit fixes it only if the last word changed. Backspace
+  or Ctrl+Z right after a fix puts back what was typed, and that word is left alone on this device from then on
+  (`hearth.spellKept`). Nothing is corrected inside `code` or ``` blocks, in @mentions, #channels, :emoji:, links,
+  paths, words with digits, a word just pasted, or a bot's /command, nor when the fix wouldn't fit in the box's 4000
+  characters. A fix is typed in with `insertText`, so Ctrl+Z later on undoes it too. Tests: `test/spelling.test.js`,
+  the e2e flow "spelling".
+
 ## Update notes ("What's new"): only the owner publishes them
 
 Hearth comes with no update notes of its own: nothing about an update is shown to anyone unless the server's owner
