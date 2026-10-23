@@ -272,17 +272,29 @@ const MAX_CHARS = 20000; // lines kept for a key, beyond the ones still in the b
 const keyOf = (ta) => { const k = KEYS.get(ta); return k ? k() : ta; };
 const pastesOf = (ta) => PASTES.get(keyOf(ta)) || [];
 const wordsOf = (line) => line.split(/[^A-Za-z']+/).filter(Boolean);
+// Whether a character joins the word beside it: a letter, or an apostrophe with a letter on its far side (teh's, but
+// not 'teh' in quotes).
+const joins = (ch, far) => /[A-Za-z]/.test(ch || '') || (ch === "'" && /[A-Za-z]/.test(far || ''));
+// Whether a word is in the text as a word of its own.
+function hasWord(v, w) {
+  for (let i = v.indexOf(w); i >= 0; i = v.indexOf(w, i + 1)) {
+    if (!joins(v[i - 1], v[i - 2]) && !joins(v[i + w.length], v[i + w.length + 1])) return true;
+  }
+  return false;
+}
+const size = (list) => list.reduce((n, l) => n + l.length, 0);
 function setPastes(ta, list) {
   const k = keyOf(ta);
   PASTES.delete(k);
   let keep = list;
-  if (keep.reduce((n, l) => n + l.length, 0) > MAX_CHARS) keep = keep.filter((l) => ta.value.includes(l)); // (the rest go first)
+  // Over the bound, the oldest go, those with none of their words in the box first.
+  while (size(keep) > MAX_CHARS) {
+    const i = keep.findIndex((l) => !wordsOf(l).some((w) => hasWord(ta.value, w)));
+    keep = keep.filter((_, j) => j !== (i >= 0 ? i : 0));
+  }
   if (keep.length) PASTES.set(k, keep);
   while (PASTES.size > 50) PASTES.delete(PASTES.keys().next().value);
 }
-// Whether a character joins the word beside it: a letter, or an apostrophe with a letter on its far side (teh's, but
-// not 'teh' in quotes).
-const joins = (ch, far) => /[A-Za-z]/.test(ch || '') || (ch === "'" && /[A-Za-z]/.test(far || ''));
 // Whether the word at start..end came in with something pasted there.
 function pasted(ta, start, end) {
   const v = ta.value;
@@ -294,10 +306,13 @@ function pasted(ta, start, end) {
       if (joins(line[o - 1], line[o - 2]) || joins(line[e], line[e + 1])) continue; // (part of a longer word there)
       // With what came before it on the line, or after it, beside it in the box as whole words (a side with nothing
       // there doesn't count, unless the line is the word).
+      // (A line that starts or ends with a word can't be the end of a longer one in the box: "he said" in "she said".)
       const b = start - o;
       const a = start + line.length - o;
-      if ((o > 0 || e === line.length) && b >= 0 && v.slice(b, end) === line.slice(0, e) && !joins(v[b - 1], v[b - 2])) return true;
-      if (e < line.length && v.slice(start, a) === line.slice(o) && !joins(v[a], v[a + 1])) return true;
+      const cutBefore = joins(line[0], line[1]) && joins(v[b - 1], v[b - 2]);
+      const cutAfter = joins(line[line.length - 1], line[line.length - 2]) && joins(v[a], v[a + 1]);
+      if ((o > 0 || e === line.length) && b >= 0 && v.slice(b, end) === line.slice(0, e) && !cutBefore) return true;
+      if (e < line.length && v.slice(start, a) === line.slice(o) && !cutAfter) return true;
     }
   }
   return false;
@@ -329,15 +344,21 @@ export function autocorrect(ta, { on = () => true, pasteKey = null } = {}) {
     const lines = String(text || '').split(/\r\n?|\n/).map((l) => l.replace(/[\s.,!?;:]+$/, '').trim()).filter((l) => /[A-Za-z]/.test(l));
     if (lines.length) setPastes(ta, [...pastesOf(ta).filter((x) => !lines.includes(x)), ...lines]);
   };
-  const onPaste = (e) => { coming = { at: Math.min(ta.selectionStart, ta.selectionEnd), text: e.clipboardData && e.clipboardData.getData('text/plain') }; };
-  const onDrop = (e) => { coming = { at: -1, text: e.dataTransfer && e.dataTransfer.getData('text/plain') }; };
+  const onPaste = () => { coming = { at: Math.min(ta.selectionStart, ta.selectionEnd) }; };
+  const onDrop = () => { coming = { at: -1 }; };
+  // Something going into an empty box starts afresh: what was pasted before is gone (the app empties the box when a
+  // message is sent, without telling).
+  const onBeforeInput = (e) => {
+    if (!ta.value && e.inputType !== 'historyUndo' && e.inputType !== 'historyRedo') setPastes(ta, []);
+  };
   const onInput = (e) => {
     const history = e.inputType === 'historyUndo' || e.inputType === 'historyRedo';
     if (coming && (e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop')) {
       // A paste goes in at the caret, a drop is left selected (the browser does that); nothing in, nothing kept.
       if (coming.at >= 0) remember(ta.value.slice(coming.at, Math.max(coming.at, ta.selectionEnd)));
-      else remember(ta.selectionEnd > ta.selectionStart ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : coming.text);
+      else remember(ta.value.slice(ta.selectionStart, ta.selectionEnd));
     } else if (!history && (!ta.value || /^insert/.test(e.inputType || ''))) {
+      // (Still there even glued to what's being typed beside it: "adont" while "and " goes in before a pasted "dont".)
       setPastes(ta, ta.value ? pastesOf(ta).filter((l) => wordsOf(l).some((w) => ta.value.includes(w))) : []);
     }
     coming = null;
@@ -404,6 +425,7 @@ export function autocorrect(ta, { on = () => true, pasteKey = null } = {}) {
   // (turnedDown stays: clicking somewhere else to go on typing is going on.)
   ta.addEventListener('paste', onPaste);
   ta.addEventListener('drop', onDrop);
+  ta.addEventListener('beforeinput', onBeforeInput);
   ta.addEventListener('input', onInput);
   ta.addEventListener('keydown', onKey);
   ta.addEventListener('pointerdown', forget);
@@ -411,6 +433,7 @@ export function autocorrect(ta, { on = () => true, pasteKey = null } = {}) {
   return () => {
     ta.removeEventListener('paste', onPaste);
     ta.removeEventListener('drop', onDrop);
+    ta.removeEventListener('beforeinput', onBeforeInput);
     ta.removeEventListener('input', onInput);
     ta.removeEventListener('keydown', onKey);
     ta.removeEventListener('pointerdown', forget);

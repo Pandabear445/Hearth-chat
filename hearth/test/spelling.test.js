@@ -365,6 +365,17 @@ test('in the browser: Ctrl+Z, redo and Backspace after a fix; what was pasted is
     assert.equal((await b.state()).text, 'i ', 'a pasted i');
 
     b = await box();
+    await b.paste('I dont know');
+    await b.p.evaluate(() => { document.getElementById('t').value = ''; }); // sent: the app empties the box
+    await b.k.type('I dont think so ');
+    assert.equal((await b.state()).text, "I don't think so ", 'the next message starts afresh');
+
+    b = await box();
+    await b.k.type('Yeah');
+    await b.paste(', i dont');
+    assert.equal(await b.p.evaluate(() => window.sent()), 'Yeah, i dont', 'a paste starting with punctuation, after a word');
+
+    b = await box();
     await b.paste('dont !');
     await b.k.press('Backspace');
     await b.k.press('Backspace');
