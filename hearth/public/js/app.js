@@ -6058,7 +6058,7 @@ function createComposer({ id, key, threadId, placeholder }) {
   const state = { replyTo: null, pending: [], link: null };
   const k = key();
   const ta = h('textarea', { class: 'composer-input', rows: '1', maxlength: '4000', 'aria-label': 'Message', id: id === 'main' ? 'composer-input' : null, spellcheck: spellcheckAttr() });
-  autocorrect(ta, { on: () => correcting() && !isCommand(ta.value) });
+  autocorrect(ta, { on: () => correcting() && !isCommand(ta.value), pasteKey: () => k + (threadId() || '') }); // (pastes: as the draft)
   ta.addEventListener('focus', () => { ta.spellcheck = P.chat.spellcheck !== false; }); // (changed in Settings meanwhile)
   ta.placeholder = placeholder || placeholderFor(k);
   ta.value = drafts.get(k + (threadId() || '')) || '';

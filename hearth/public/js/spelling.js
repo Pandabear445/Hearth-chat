@@ -260,30 +260,50 @@ function replace(ta, start, end, text) {
   return done ? 'native' : 'direct';
 }
 
-// What was pasted or dropped into each box lately (its text, the latest last): a word inside such text is left as it
-// came, wherever it has moved to, also when sent (lastWordPasted). Going by the text means that, at worst, a word
-// typed exactly as something pasted is left too. Forgotten once it's no longer there when something is typed, or the
-// box is emptied (so it isn't lost to a Backspace that's undone, nor kept after the message is sent).
-const PASTES = new WeakMap();
-const MAX_PASTES = 5;
-// Whether start..end lies in text that was pasted into the box.
+// What was pasted or dropped into a box lately, line by line (trimmed), the latest last: a word that still has what
+// came before it on its pasted line, or what came after it, next to it is left as it came, wherever it has moved to,
+// also when sent (lastWordPasted). Going by the text means that, at worst, a word typed exactly as something pasted
+// (with the same words beside it) is left too. Kept for the conversation (the box can be made again for it); a line
+// is forgotten once none of its words are there when something is typed, and all of them when the box is emptied
+// (not lost to a Backspace that's undone, nor kept after the message is sent).
+const PASTES = new Map(); // key → [line…]
+const KEYS = new WeakMap(); // box → () => its key
+const MAX_LINES = 20;
+const keyOf = (ta) => { const k = KEYS.get(ta); return k ? k() : ta; };
+const pastesOf = (ta) => PASTES.get(keyOf(ta)) || [];
+const wordsOf = (line) => line.split(/[^A-Za-z']+/).filter((w) => w.length > 1);
+function setPastes(ta, list) {
+  const k = keyOf(ta);
+  PASTES.delete(k);
+  if (list.length) PASTES.set(k, list.slice(-MAX_LINES));
+  while (PASTES.size > 50) PASTES.delete(PASTES.keys().next().value);
+}
+// Whether the word at start..end came in with something pasted there.
 function pasted(ta, start, end) {
-  for (const t of PASTES.get(ta) || []) {
-    for (let i = ta.value.indexOf(t); i >= 0 && i < end; i = ta.value.indexOf(t, i + 1)) {
-      if (i <= start && end <= i + t.length) return true;
+  const word = ta.value.slice(start, end);
+  for (const line of pastesOf(ta)) {
+    for (let o = line.indexOf(word); o >= 0; o = line.indexOf(word, o + 1)) {
+      if (/[A-Za-z']/.test(line[o - 1] || '') || /[A-Za-z']/.test(line[o + word.length] || '')) continue;
+      // With what came before it, or after it (a side with nothing there doesn't count, unless the line is the word).
+      const after = o + word.length < line.length;
+      if ((o > 0 || !after) && ta.value.slice(start - o, end) === line.slice(0, o + word.length)) return true;
+      if (after && ta.value.slice(start, start + line.length - o) === line.slice(o)) return true;
     }
   }
   return false;
 }
-// Whether the last word in a box came in with something pasted or dropped there.
+// Whether the last word in a box (the one sending would correct) came in with something pasted there.
 export function lastWordPasted(ta) {
-  const m = /([A-Za-z']+)[^A-Za-z']*$/.exec(ta.value);
-  return !!m && pasted(ta, m.index, m.index + m[1].length);
+  const t = ta.value;
+  const c = findCorrection(t + ' ', t.length + 1, { kept: new Set() });
+  return !!c && pasted(ta, c.start, c.end);
 }
 
 // Corrects spelling as people type in a text box. on(): whether it's wanted right now (the setting, a computer).
 // Returns a function that stops it.
-export function autocorrect(ta, { on = () => true } = {}) {
+// pasteKey(): what pastes are remembered for (the conversation), when the box can be made again for it.
+export function autocorrect(ta, { on = () => true, pasteKey = null } = {}) {
+  if (pasteKey) KEYS.set(ta, pasteKey);
   // last: the latest fix ({ start, word, fix, run (the punctuation and space that finished it), caret, native }) until
   // anything else happens; back: the latest Backspace that turned one down, likewise. undoing: Ctrl+Z was pressed
   // right after one of them ({ f, put: what the undo brings back }), for the input that follows.
@@ -292,19 +312,23 @@ export function autocorrect(ta, { on = () => true } = {}) {
   let undoing = null;
   let turnedDown = null; // a word Ctrl+Z put back: kept once typing goes on (not if undo or redo goes on instead)
   let fixing = false;
+  // A paste or drop is remembered once it's in the box (not one the app took as files instead), as far as it went in
+  // (the box's maxlength can cut it short).
+  let coming = null;
   const remember = (text) => {
-    const t = String(text || '').replace(/\r\n?/g, '\n');
-    if (!/[A-Za-z]/.test(t)) return;
-    PASTES.set(ta, [...(PASTES.get(ta) || []).filter((x) => x !== t), t].slice(-MAX_PASTES));
+    const lines = String(text || '').split(/\r\n?|\n/).map((l) => l.trim().replace(/[.,!?;:]+$/, '')).filter((l) => /[A-Za-z]/.test(l));
+    if (lines.length) setPastes(ta, [...pastesOf(ta).filter((x) => !lines.includes(x)), ...lines]);
   };
-  const onPaste = (e) => remember(e.clipboardData && e.clipboardData.getData('text/plain'));
-  const onDrop = (e) => remember(e.dataTransfer && e.dataTransfer.getData('text/plain'));
+  const onPaste = (e) => { coming = { at: Math.min(ta.selectionStart, ta.selectionEnd), text: e.clipboardData && e.clipboardData.getData('text/plain') }; };
+  const onDrop = (e) => { coming = { at: -1, text: e.dataTransfer && e.dataTransfer.getData('text/plain') }; };
   const onInput = (e) => {
     const history = e.inputType === 'historyUndo' || e.inputType === 'historyRedo';
-    if (!history && (!ta.value || /^insert/.test(e.inputType || ''))) {
-      const list = (PASTES.get(ta) || []).filter((t) => ta.value.includes(t));
-      if (list.length) PASTES.set(ta, list); else PASTES.delete(ta);
+    if (coming && (e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop')) {
+      remember(coming.at >= 0 && ta.selectionEnd > coming.at ? ta.value.slice(coming.at, ta.selectionEnd) : coming.text);
+    } else if (!history && (!ta.value || /^insert/.test(e.inputType || ''))) {
+      setPastes(ta, ta.value ? pastesOf(ta).filter((l) => wordsOf(l).some((w) => ta.value.includes(w))) : []);
     }
+    coming = null;
     if (fixing) return;
     const u = undoing;
     last = null;
@@ -345,7 +369,8 @@ export function autocorrect(ta, { on = () => true } = {}) {
     undoing = null;
     const f = l || b;
     if (!f) return;
-    const undo = (e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey;
+    // (By the key's code too, as the browser does: Ctrl+Z on a Cyrillic or Greek keyboard is "я" or "ζ".)
+    const undo = (e.key === 'z' || e.key === 'Z' || e.keyCode === 90) && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey;
     const del = e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey;
     if (ta.selectionStart !== f.caret || ta.selectionEnd !== f.caret) return;
     const now = l ? l.fix : b.word; // what's in the box there
@@ -378,6 +403,5 @@ export function autocorrect(ta, { on = () => true } = {}) {
     ta.removeEventListener('keydown', onKey);
     ta.removeEventListener('pointerdown', forget);
     ta.removeEventListener('blur', forget);
-    PASTES.delete(ta);
   };
 }

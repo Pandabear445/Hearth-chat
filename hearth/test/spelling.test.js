@@ -146,7 +146,8 @@ test('the app: the boxes use it and the settings; one spell checker switch in th
   const app = read('app.js');
   assert.match(app, /const correcting = \(\) => \(P\.chat\.autocorrect \?\? englishHere\(\)\) !== false && !isTouchUI\(\);/);
   assert.match(app, /const spelled = \(ta, was = null\) => \(correcting\(\) && !lastWordPasted\(ta\) \? correctSending\(ta\.value, \{ was \}\) : ta\.value\);/);
-  assert.match(app, /class: 'composer-input'[^\n]*spellcheck: spellcheckAttr\(\) \}\);\n\s+autocorrect\(ta, \{ on: \(\) => correcting\(\) && !isCommand\(ta\.value\) \}\);/);
+  assert.match(app, /class: 'composer-input'[^\n]*spellcheck: spellcheckAttr\(\) \}\);\n\s+autocorrect\(ta, \{ on: \(\) => correcting\(\) && !isCommand\(ta\.value\), pasteKey: \(\) => k \+ \(threadId\(\) \|\| ''\) \}\);/);
+  assert.match(app, /drafts\.get\(k \+ \(threadId\(\) \|\| ''\)\)/, 'pastes are kept by the same key as the draft');
   assert.match(app, /class: 'edit-input'[^\n]*spellcheck: spellcheckAttr\(\) \}\);\n\s+ta\.value = textOf\(m\);\n\s+autocorrect\(ta, \{ on: correcting \}\);/);
   assert.match(app, /const content = ta\.value === textOf\(m\) \? ta\.value : spelled\(ta, textOf\(m\)\);/);
   assert.match(app, /const text = overrideText != null \? overrideText : spelled\(ta\);/);
@@ -172,9 +173,11 @@ function findPlaywright() {
 const PW = findPlaywright();
 test('in the browser: Ctrl+Z, redo and Backspace after a fix; what was pasted is left, as typed and when sent', { skip: !PW && 'Playwright is not installed' }, async () => {
   const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'spelling.js'));
+  // (rebuild(): the box made again for the same conversation, as the app does when a call starts or on coming back.)
   const page = `<!doctype html><meta charset=utf-8><textarea id=t maxlength=40></textarea><script type=module>
     import { autocorrect, lastWordPasted, correctSending } from '/spelling.js';
-    const t = document.getElementById('t'); autocorrect(t);
+    let t = document.getElementById('t'); autocorrect(t, { pasteKey: () => 'conversation' });
+    window.rebuild = () => { const n = t.cloneNode(); n.value = t.value; t.replaceWith(n); t = n; autocorrect(t, { pasteKey: () => 'conversation' }); t.focus(); };
     window.sent = () => (lastWordPasted(t) ? t.value : correctSending(t.value)); window.ready = true;</script>`;
   const srv = http.createServer((q, r) => { r.writeHead(200, { 'content-type': q.url === '/spelling.js' ? 'text/javascript' : 'text/html' }); r.end(q.url === '/spelling.js' ? js : page); });
   await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
@@ -207,6 +210,16 @@ test('in the browser: Ctrl+Z, redo and Backspace after a fix; what was pasted is
     await b.k.press('Control+z');
     await b.k.type('ok');
     assert.deepEqual(await b.state(), { text: 'so teh ok', caret: 9, end: 9, kept: ['teh'] }, 'typing on after Ctrl+Z: the word is kept');
+
+    // Ctrl+Z on a keyboard that isn't Latin (the key is "я", the browser goes by its code).
+    b = await box();
+    await b.k.type('so teh ');
+    const cdp = await context.newCDPSession(b.p);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17, modifiers: 2 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: '\u044f', code: 'KeyZ', windowsVirtualKeyCode: 90, modifiers: 2 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: '\u044f', code: 'KeyZ', windowsVirtualKeyCode: 90, modifiers: 2 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17 });
+    assert.deepEqual(await b.state(), { text: 'so teh ', caret: 7, end: 7, kept: [] }, 'Ctrl+Z on a Cyrillic keyboard too');
 
     b = await box();
     await b.k.type('i think teh plan');
@@ -310,6 +323,35 @@ test('in the browser: Ctrl+Z, redo and Backspace after a fix; what was pasted is
     await b.k.press('Delete');
     await b.k.type('dont ');
     assert.equal((await b.state()).text, "don't ", 'gone: the same word typed afterwards is fixed');
+
+    b = await box();
+    await b.k.type("the word is '");
+    await b.paste('teh');
+    await b.k.type("'");
+    assert.equal(await b.p.evaluate(() => window.sent()), "the word is 'teh'", 'pasted between quotes');
+
+    b = await box();
+    await b.k.type('the word is ');
+    await b.paste('teh ');
+    await b.k.press('Backspace');
+    assert.equal(await b.p.evaluate(() => window.sent()), 'the word is teh', 'its space taken off');
+
+    b = await box();
+    await b.paste('Hey dont do that');
+    for (let i = 0; i < 8; i++) await b.k.press('Backspace');
+    await b.k.type('!');
+    assert.equal((await b.state()).text, 'Hey dont!', 'its end taken off');
+
+    b = await box();
+    await b.p.evaluate(() => { const t = document.getElementById('t'); t.value = 'x'.repeat(30) + ' '; t.setSelectionRange(31, 31); });
+    await b.paste('ok i dont know');
+    assert.equal((await b.state()).text, 'x'.repeat(30) + ' ok i dont', 'cut short by the box (40 characters)');
+    assert.equal(await b.p.evaluate(() => window.sent()), 'x'.repeat(30) + ' ok i dont', 'what went in is still a paste');
+
+    b = await box();
+    await b.paste('he said i dont');
+    await b.p.evaluate(() => window.rebuild());
+    assert.equal(await b.p.evaluate(() => window.sent()), 'he said i dont', 'the box made again for the conversation remembers it');
 
     b = await box();
     await b.paste('he said i dont');

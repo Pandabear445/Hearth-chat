@@ -1679,17 +1679,20 @@ works the same in end-to-end encrypted conversations.
   p.m. do), so they're left, except words that always have one (Wensday). A word with a quote only before it is cut
   short ('im for him) and left. A full stop waits for what comes after it, so file names and addresses (`dont.js`)
   stay. Nothing is corrected inside `code` or ``` blocks, in @mentions, #channels, :emoji:, links, paths, words with
-  digits, a bot's /command, or text that was pasted or dropped into the box (going by the text, wherever it has moved
-  to; forgotten once it's gone when something is typed, or the box is emptied or sent, so at worst a word typed
-  exactly as something pasted is left too), nor when the fix wouldn't fit in the box's 4000 characters.
+  digits, a bot's /command, or a word that was pasted or dropped into the box (going by the text, line by line, as far
+  as it went in: a word that still has what came before it on its line, or what came after it, beside it, wherever
+  it has moved to; kept for the conversation, so a box made again for it still knows; a line is forgotten once none
+  of its words are there when something is typed, and all of them when the box is emptied or the message sent; at
+  worst a word typed exactly as something pasted, with the same words beside it, is left too), nor when the fix
+  wouldn't fit in the box's 4000 characters.
 - The last word is fixed when the message is sent (`correctSending`), as phones do, unless it was pasted. Saving an
   edit fixes it only if it's new: not one that was already there, nor the word a fix made on sending put back by hand
   (the old message's last word, after the same text; that word is then left alone, as below).
 - A fix is typed in as an edit of its own (`insertText`). Backspace right after it puts back what was typed, and that
   word is left alone on this device from then on (`hearth.spellKept`). Ctrl+Z right after it does the same once
   typing goes on (another Ctrl+Z goes on back through the typing instead, and keeps nothing). Ctrl+Z right after
-  that Backspace takes the fix after all. Each of these leaves the caret where it was; any other undo or redo is the
-  browser's own. Tests: `test/spelling.test.js` (with a real box in Chromium when Playwright is installed), the e2e
+  that Backspace takes the fix after all (Ctrl+Z goes by the key's code too, so it works on a Cyrillic or Greek
+  keyboard). Each of these leaves the caret where it was; any other undo or redo is the browser's own. Tests: `test/spelling.test.js` (with a real box in Chromium when Playwright is installed), the e2e
   flow "spelling".
 
 ## Update notes ("What's new"): only the owner publishes them
