@@ -1664,24 +1664,30 @@ dialog in `npm run test:a11y`.
 
 Settings → Chat → Spelling (`public/js/spelling.js`), on this device only: nothing typed is looked up anywhere, so it
 works the same in end-to-end encrypted conversations.
-- **Check spelling** (on by default) sets the message and edit boxes' `spellcheck` attribute: the browser's own
-  checker underlines words it doesn't know. In the desktop app it is also that app's spell checker switch (with
-  suggestions and "Add to dictionary" in its right-click menu), so there is one switch for it, not a second one in
-  Apps & devices; if that was turned off before, this shows Off.
+- **Check spelling** (on by default) sets the `spellcheck` attribute of the message box and the edit boxes (a
+  message's, a scheduled message's): the browser's own checker underlines words it doesn't know. In the desktop app it
+  is also that app's spell checker switch (with suggestions and "Add to dictionary" in its right-click menu), so there
+  is one switch for it, not a second one in Apps & devices; if that was turned off before, this shows Off.
 - **Correct spelling as I type** (computers; phones and tablets have their keyboard's; on by default where the
   browser's language is English, since the list is English: `im`, `dont` and `i` are words in other languages): when
   a word is finished with a space, a new line or punctuation, a common typo is fixed (`CORRECTIONS`: about 430 typos
   that aren't words themselves, missing apostrophes, `i` → `I`), keeping its capitals. Left out on purpose: real
   words (`whys`, `underate`), typos of two different words (`hwo`, `wheather`, `wanst`), names (`Grammer`), other
   languages' words (`posible`) and spellings people mean (`probly`). Two or three capitals (IM, CNA) are taken as an
-  abbreviation, and a word with a capital in the middle of a sentence as a name (Jony Ive), so they're left. A full
-  stop waits for what comes after it, so file names and addresses (`dont.js`) stay. The last word is fixed when the
-  message is sent (`correctSending`), as phones do; saving an edit fixes it only if the last word changed. Backspace
-  or Ctrl+Z right after a fix puts back what was typed, and that word is left alone on this device from then on
-  (`hearth.spellKept`). Nothing is corrected inside `code` or ``` blocks, in @mentions, #channels, :emoji:, links,
-  paths, words with digits, a word just pasted, or a bot's /command, nor when the fix wouldn't fit in the box's 4000
-  characters. A fix is typed in with `insertText`, so Ctrl+Z later on undoes it too. Tests: `test/spelling.test.js`,
-  the e2e flow "spelling".
+  abbreviation, and a word with a capital in the middle of a sentence as a name (Jony Ive, Mr. Noone: a title or an
+  initial before it doesn't end a sentence), so they're left, except words that always have one (Wensday). A word
+  with a quote only before it is cut short ('im for him) and left. A full stop waits for what comes after it, so file
+  names and addresses (`dont.js`) stay. Nothing is corrected inside `code` or ``` blocks, in @mentions, #channels,
+  :emoji:, links, paths, words with digits, what was pasted or dropped into the box, or a bot's /command, nor when
+  the fix wouldn't fit in the box's 4000 characters.
+- The last word is fixed when the message is sent (`correctSending`), as phones do, unless it was just pasted. Saving
+  an edit fixes it only if it's new: not one that was already there, nor the word a fix made on sending put back by
+  hand (that word is then left alone, as below).
+- A fix is typed in as an edit of its own (`insertText`). Backspace or Ctrl+Z right after it puts back what was
+  typed, and that word is left alone on this device from then on (`hearth.spellKept`); Ctrl+Z again goes on back
+  through the typing, and undoing a Backspace takes the fix after all. Ctrl+Z later on undoes a fix too, with the
+  caret after the word (no word is kept that way), and redo puts it back. Tests: `test/spelling.test.js` (with a
+  real box in Chromium when Playwright is installed), the e2e flow "spelling".
 
 ## Update notes ("What's new"): only the owner publishes them
 

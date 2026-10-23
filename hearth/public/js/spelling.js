@@ -110,9 +110,10 @@ export function correctionFor(word) {
   const fix = LIST.get(w.toLowerCase());
   if (!fix || fix === w) return null;
   if (w.length <= 3 && w.length > 1 && w === w.toUpperCase()) return null;
-  if (w.length > 1 && w === w.toUpperCase()) return fix.toUpperCase();
-  if (w[0] === w[0].toUpperCase() && w[0] !== w[0].toLowerCase()) return fix[0].toUpperCase() + fix.slice(1);
-  return fix;
+  let out = fix;
+  if (w.length > 1 && w === w.toUpperCase()) out = fix.toUpperCase();
+  else if (w[0] === w[0].toUpperCase() && w[0] !== w[0].toLowerCase()) out = fix[0].toUpperCase() + fix.slice(1);
+  return out === w ? null : out; // (I'LL is I'll in capitals already)
 }
 
 // Whether correcting as people type is on when they haven't chosen: the list is English, so where the browser's
@@ -132,6 +133,17 @@ function inCode(before) {
   const line = before.slice(before.lastIndexOf('\n') + 1).replace(/```/g, '');
   return ((line.match(/`/g) || []).length) % 2 === 1;
 }
+// Whether a word at `start` begins a sentence (or a line): after ! ? or a full stop that isn't part of a title or
+// initial (Mr. Noone, J. Noone, a.k.a. Noone).
+const TITLE = /^\W*(?:mr|mrs|ms|mx|dr|st|vs|prof|sr|jr|mt|[a-z]|(?:[a-z]\.)+[a-z])\.$/i;
+function startsSentence(text, start) {
+  const before = text.slice(0, start);
+  const gap = /[\s("'“‘[]*$/.exec(before);
+  const lead = before.slice(0, gap.index);
+  if (!lead || gap[0].includes('\n')) return true;
+  if (/[!?]$/.test(lead)) return true;
+  return lead.endsWith('.') && !TITLE.test((/\S+$/.exec(lead) || [''])[0]);
+}
 // The word that ends right before `at` (the character typed after it), and whether it may be corrected. text: the
 // box's text. Returns { start, end, word, fix } or null.
 export function findCorrection(text, at, { kept = new Set() } = {}) {
@@ -144,22 +156,26 @@ export function findCorrection(text, at, { kept = new Set() } = {}) {
   if (!m) return null;
   let word = m[0];
   let start = before.length - word.length;
-  // Quotes around the word aren't part of it ('teh' → 'the').
-  while (word.startsWith("'")) { word = word.slice(1); start++; }
-  if (word.endsWith("'") && !/^i'/i.test(word)) word = word.slice(0, -1);
-  if (!word) return null;
+  // Quotes around the word aren't part of it ('teh' → 'the'); one only before it is a word cut short ('im: him).
+  let quoted = false;
+  while (word.startsWith("'")) { word = word.slice(1); start++; quoted = true; }
+  let closed = false;
+  if (word.endsWith("'") && !/^i'/i.test(word)) { word = word.slice(0, -1); closed = true; }
+  if (!word || (quoted && !closed)) return null;
   // Part of something else (a @name, #channel, :emoji:, a path or link, a number, a-joined-word): only a word on its own.
   const prev = text[start - 1] || '';
   const opening = prev === "'" && /^\s?$/.test(text[start - 2] || ''); // a word in single quotes: 'teh'
-  if (prev && !opening && !/[\s("[]/.test(prev)) return null;
+  if (prev && !opening && !/[\s("“‘[]/.test(prev)) return null;
   if (inCode(before)) return null;
   if (word.toLowerCase() === 'i' && (dots || !/[\s,!?]/.test(sep))) return null;
-  // A capital in the middle of a sentence is a name (Jony Ive, Peter Noone) or a title: left as it is.
-  const capital = word.length > 1 && word[0] !== word[0].toLowerCase() && word.slice(1) !== word.slice(1).toUpperCase();
-  if (capital && !/(^|[.!?:\n])[\s("'[]*$/.test(text.slice(0, start))) return null;
   if (kept.has(word.toLowerCase())) return null;
   const fix = correctionFor(word);
-  return fix ? { start, end: start + word.length, word, fix } : null;
+  if (!fix) return null;
+  // A capital in the middle of a sentence is a name (Jony Ive, Peter Noone) or a title: left as it is. (Not where the
+  // word always has one: Wensday → Wednesday.)
+  const capital = word.length > 1 && word[0] !== word[0].toLowerCase() && word.slice(1) !== word.slice(1).toUpperCase();
+  if (capital && !/^[A-Z][a-z]/.test(LIST.get(word.toLowerCase())) && !startsSentence(text, start)) return null;
+  return { start, end: start + word.length, word, fix };
 }
 
 // A message being sent: its last word, which nothing after it has finished, is corrected as the message goes (as
@@ -172,12 +188,21 @@ export function correctEnd(text, { kept = keptWords() } = {}) {
 // A bot's /command goes to the bot as typed.
 export const isCommand = (text) => String(text || '').trimStart().startsWith('/');
 const lastWord = (t) => (/([A-Za-z']+)[^A-Za-z']*$/.exec(t) || [])[1] || '';
-// What a box sends: correctEnd, except for a /command and, when a message is edited (was: its text before), a last
-// word that was already there (it was sent like that, or put back on another device).
-export function correctSending(text, { was = null, kept } = {}) {
+// What a box sends: correctEnd, except for a /command. was: when a message is edited, its text before. Its last word
+// is corrected only if it's new: not one that was already there (sent like that, from another device, or the words
+// after it deleted), nor the word a fix made on sending put back by hand (left as typed from then on, as Backspace
+// does).
+export function correctSending(text, { was = null, kept = keptWords() } = {}) {
   const t = String(text || '');
-  if (isCommand(t) || (was != null && lastWord(t) === lastWord(String(was)))) return t;
-  return kept ? correctEnd(t, { kept }) : correctEnd(t);
+  if (isCommand(t)) return t;
+  const c = findCorrection(t + ' ', t.length + 1, { kept });
+  if (!c) return t;
+  if (was != null) {
+    const w = String(was);
+    if (lastWord(t) === lastWord(w) || (w.slice(0, c.end) === t.slice(0, c.end) && !/[A-Za-z']/.test(w[c.end] || ''))) return t;
+    if (lastWord(w) === c.fix) { keep(c.word); return t; }
+  }
+  return t.slice(0, c.start) + c.fix + t.slice(c.end);
 }
 
 // The words this person put back after a fix (Backspace or Ctrl+Z): never corrected again on this device.
@@ -188,10 +213,12 @@ export function keptWords() {
   try { keptCache = new Set(JSON.parse(localStorage.getItem(KEPT_KEY) || '[]')); } catch { return new Set(); }
   return keptCache;
 }
-function keep(word) {
+function keep(word, on = true) {
   try {
     const s = new Set(keptWords());
-    s.add(word.toLowerCase());
+    const w = word.toLowerCase();
+    if (s.has(w) === on) return;
+    if (on) s.add(w); else s.delete(w);
     const list = [...s].slice(-500);
     localStorage.setItem(KEPT_KEY, JSON.stringify(list));
     keptCache = new Set(list);
@@ -200,8 +227,8 @@ function keep(word) {
 // (Another tab of the app may have kept one.)
 if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('storage', (e) => { if (!e.key || e.key === KEPT_KEY) keptCache = null; });
 
-// Replaces start..end with text the way typing would (so Ctrl+Z undoes it), or directly where the browser can't.
-// Returns false, changing nothing, when the result wouldn't fit in the box (its maxlength).
+// Replaces start..end with text the way typing would (so Ctrl+Z undoes it: 'native'), or directly where the browser
+// can't ('direct'). Returns false, changing nothing, when the result wouldn't fit in the box (its maxlength).
 const fits = (ta, out, add) => !(ta.maxLength > 0 && ta.value.length - out + add > ta.maxLength);
 function replace(ta, start, end, text) {
   const was = ta.value.slice(start, end);
@@ -223,17 +250,44 @@ function replace(ta, start, end, text) {
   }
   const at = caret + (text.length - (end - start));
   ta.setSelectionRange(at, at);
-  return true;
+  return done ? 'native' : 'direct';
+}
+
+// Each box's latest paste or drop: { start, end, text } (lastWordPasted).
+const PASTES = new WeakMap();
+const pasteHolds = (ta, p) => !!p && ta.value.slice(p.start, p.end) === p.text;
+// Whether the last word in a box came in with the latest paste or drop there (so it's sent as it is, too).
+export function lastWordPasted(ta) {
+  const p = PASTES.get(ta);
+  if (!pasteHolds(ta, p)) return false;
+  const m = /([A-Za-z']+)[^A-Za-z']*$/.exec(ta.value);
+  return !!m && m.index >= p.start && m.index + m[1].length <= p.end;
 }
 
 // Corrects spelling as people type in a text box. on(): whether it's wanted right now (the setting, a computer).
 // Returns a function that stops it.
 export function autocorrect(ta, { on = () => true } = {}) {
-  let last = null; // the latest fix: { start, word, fix, caret } until anything else happens
-  let pasted = null; // where the latest paste or drop ended, until the next thing typed: { end }
+  // This box's fixes, the latest last: { start, word, fix, after (the punctuation and space that finished it),
+  // native, caret }. last: the latest, until anything else happens; undoing: Ctrl+Z was pressed right after it.
+  const fixes = [];
+  let last = null;
+  let undoing = null;
   let pasting = null;
   let fixing = false;
-  const fixed = new Set(); // the words fixed in this box, and what they became
+  const fixAt = (start, end) => {
+    const text = ta.value.slice(start, end);
+    for (let i = fixes.length - 1; i >= 0; i--) {
+      const f = fixes[i];
+      if (f.start === start && (text === f.word || text === f.fix)) return { f, back: text === f.word };
+    }
+    return null;
+  };
+  // The caret after a word put back or fixed again: past what finished it, if that's still there.
+  const past = (end, f) => {
+    let at = end;
+    for (let i = 0; i < f.after && finishes(ta.value[at]); i++) at++;
+    return at;
+  };
   const onBeforeInput = (e) => {
     pasting = e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop'
       ? { start: Math.min(ta.selectionStart, ta.selectionEnd), length: ta.value.length - Math.abs(ta.selectionEnd - ta.selectionStart) }
@@ -241,19 +295,33 @@ export function autocorrect(ta, { on = () => true } = {}) {
   };
   const onInput = (e) => {
     if (fixing) return;
+    const u = undoing;
     last = null;
-    const paste = pasted;
-    pasted = null;
-    if (pasting) { pasted = { end: pasting.start + (ta.value.length - pasting.length) }; pasting = null; return; }
+    undoing = null;
+    if (pasting) {
+      const end = pasting.start + (ta.value.length - pasting.length);
+      PASTES.set(ta, { start: pasting.start, end, text: ta.value.slice(pasting.start, end) });
+      pasting = null;
+      return;
+    }
     if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
-      // Ctrl+Z later on brings a fix's word back selected: the next key would type over it. The caret goes back after
-      // it and the space or punctuation that finished it.
-      const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
-      if (sel && fixed.has(sel)) {
-        const at = ta.selectionEnd + (finishes(ta.value[ta.selectionEnd]) ? 1 : 0);
-        ta.setSelectionRange(at, at);
-        if (e.inputType === 'historyUndo' && LIST.has(sel.toLowerCase())) keep(sel);
+      // Undoing a fix brings the word back selected (the next key would type over it); redoing one leaves the caret
+      // before what finished it. The caret goes after both. Undoing it right after it was made is turning it down, as
+      // Backspace is; undoing that (or Backspace) is taking it after all.
+      const s = ta.selectionStart;
+      const en = ta.selectionEnd;
+      let hit = s !== en ? fixAt(s, en) : null;
+      if (!hit && s === en && e.inputType === 'historyRedo') {
+        for (let i = fixes.length - 1; i >= 0 && !hit; i--) {
+          const f = fixes[i];
+          if (f.start + f.fix.length === s && ta.value.slice(f.start, s) === f.fix) hit = { f, back: false };
+        }
       }
+      if (!hit) return;
+      const at = past(hit.f.start + (hit.back ? hit.f.word.length : hit.f.fix.length), hit.f);
+      ta.setSelectionRange(at, at);
+      if (hit.back && u === hit.f) keep(hit.f.word);
+      else if (!hit.back) keep(hit.f.word, false);
       return;
     }
     if (e.isComposing || !(e.inputType === 'insertText' || e.inputType === 'insertLineBreak')) return;
@@ -261,31 +329,37 @@ export function autocorrect(ta, { on = () => true } = {}) {
     const at = ta.selectionStart;
     if (!finishes(ta.value[at - 1]) || !on()) return;
     const c = findCorrection(ta.value, at, { kept: keptWords() });
-    if (!c || (paste && c.end === paste.end)) return; // a word that was pasted, just finished
+    if (!c) return;
+    const p = PASTES.get(ta);
+    if (pasteHolds(ta, p) && c.start >= p.start && c.end <= p.end) return; // pasted: left as it is
     fixing = true;
     let done = false;
     try { done = replace(ta, c.start, c.end, c.fix); } finally { fixing = false; }
     if (!done) return;
-    fixed.add(c.word); fixed.add(c.fix);
-    last = { start: c.start, word: c.word, fix: c.fix, caret: ta.selectionStart };
+    last = { start: c.start, word: c.word, fix: c.fix, after: at - c.end, native: done === 'native', caret: ta.selectionStart };
+    fixes.push(last);
+    if (fixes.length > 50) fixes.shift();
   };
   const onKey = (e) => {
     if (!last || ['Control', 'Meta', 'Shift', 'Alt'].includes(e.key)) return; // (Ctrl on its own, before Ctrl+Z)
     const l = last;
     last = null;
-    // Backspace (or Ctrl+Z) right after a fix: what was typed comes back (the space or punctuation after it stays),
-    // for good.
     const undo = (e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey;
     const back = e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey;
     if (!(undo || back) || ta.selectionStart !== l.caret || ta.selectionEnd !== l.caret) return;
-    if (ta.value.slice(l.start, l.start + l.fix.length) !== l.fix || !fits(ta, l.fix.length, l.word.length)) return;
+    if (ta.value.slice(l.start, l.start + l.fix.length) !== l.fix) return;
+    // Ctrl+Z: the browser undoes the fix (an edit of its own), and onInput above notes it was turned down.
+    if (undo && l.native) { undoing = l; return; }
+    // Backspace (or Ctrl+Z where the fix isn't in the browser's undo): what was typed comes back (the space or
+    // punctuation after it stays), for good.
+    if (!fits(ta, l.fix.length, l.word.length)) return;
     e.preventDefault();
     fixing = true;
     let done = false;
     try { done = replace(ta, l.start, l.start + l.fix.length, l.word); } finally { fixing = false; }
     if (done) keep(l.word);
   };
-  const forget = () => { last = null; pasted = null; };
+  const forget = () => { last = null; undoing = null; };
   ta.addEventListener('beforeinput', onBeforeInput);
   ta.addEventListener('input', onInput);
   ta.addEventListener('keydown', onKey);
@@ -297,5 +371,6 @@ export function autocorrect(ta, { on = () => true } = {}) {
     ta.removeEventListener('keydown', onKey);
     ta.removeEventListener('pointerdown', forget);
     ta.removeEventListener('blur', forget);
+    PASTES.delete(ta);
   };
 }

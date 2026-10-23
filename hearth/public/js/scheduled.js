@@ -433,9 +433,10 @@ export function createScheduled(deps) {
     if (editing.has(it.id) && readable(dec)) {
       const ta = h('textarea', { class: 'edit-input sched-edit', rows: '3', maxlength: '4000', 'aria-label': 'Edit scheduled message' });
       ta.value = dec.t || '';
+      if (deps.spellBox) deps.spellBox(ta); // Settings → Chat → Spelling, as in the message box
       const save = async () => {
         if (!ta.value.trim() && !(dec.f || []).length) return toast('Write something, or cancel the message.', 'error');
-        const text = ta.value;
+        const text = deps.spelled && ta.value !== (dec.t || '') ? deps.spelled(ta, dec.t || '') : ta.value;
         const done = async (opts) => {
           try { await reseal(items.get(it.id) || it, { text, ...opts }); editing.delete(it.id); redraw(); toast(opts.now ? 'Sent.' : 'Saved.'); } catch (e) { toast(e.message, 'error'); }
         };

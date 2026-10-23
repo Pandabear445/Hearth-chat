@@ -25,7 +25,7 @@ import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voice
 import { rankRelays, chooseIce, relayTime, iceStale } from './relays.js';
 import { watchConnection } from './conn.js';
 import { unseenNotes, markNotesSeen } from './whatsnew.js';
-import { autocorrect, correctSending, isCommand, englishHere } from './spelling.js';
+import { autocorrect, correctSending, isCommand, englishHere, lastWordPasted } from './spelling.js';
 import { initKeybinds, getKeybinds, comboLabel, reportCall, flashTaskbar, installUpdate, shortcutGroups, comboParts, keyName } from './keybinds.js';
 import { initActivity, activityLine, openActivityPicker, startDesktopDetection } from './activity.js';
 import { modal, popover, closePopover, menu, contextMenu, sheet, quietFocus, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
@@ -4648,8 +4648,11 @@ function openCallFromLink(link) {
 // On this device only.
 const spellcheckAttr = () => (P.chat.spellcheck !== false ? 'true' : 'false');
 const correcting = () => (P.chat.autocorrect ?? englishHere()) !== false && !isTouchUI();
-// What a box sends, its last word corrected (not a bot's /command; for an edit, only a last word that changed).
-const spelled = (text, was = null) => (correcting() ? correctSending(text, { was }) : text);
+// What a box sends, its last word corrected (not a bot's /command or a word just pasted; for an edit, was: the text
+// before, only a new last word).
+const spelled = (ta, was = null) => (correcting() && !lastWordPasted(ta) ? correctSending(ta.value, { was }) : ta.value);
+// Another box people write a message in (scheduled.js): the same spelling.
+const spellBox = (ta) => { ta.spellcheck = P.chat.spellcheck !== false; autocorrect(ta, { on: correcting }); };
 function editBox(m, ctx) {
   const ta = h('textarea', { class: 'edit-input', rows: '1', 'aria-label': 'Edit message', spellcheck: spellcheckAttr() });
   ta.value = textOf(m);
@@ -4659,7 +4662,7 @@ function editBox(m, ctx) {
   setTimeout(autosize);
   const done = () => { S.editing = null; replaceMessageEl(m); const c = composers[ctx]; if (c) c.focus(); };
   const save = async () => {
-    const content = ta.value === textOf(m) ? ta.value : spelled(ta.value, textOf(m));
+    const content = ta.value === textOf(m) ? ta.value : spelled(ta, textOf(m));
     if (!content.trim() && !filesOf(m).length) return deleteMessage(m);
     if (content === textOf(m)) return done();
     try {
@@ -6013,6 +6016,8 @@ const composers = {};
 // the server holds because a key changed after you wrote them.
 const SCHED = createScheduled({
   me: () => S.me,
+  spellBox,
+  spelled: (ta, was) => spelled(ta, was),
   openDraft: (it) => openDraft(it.ref, it.dmId ? 'd:' + it.dmId : 'c:' + it.channelId, it.threadId, it.draft),
   sealFor: (key, payload, keep) => sealFor(key, payload, keep),
   withKeyRetry: (serverId, fn) => withKeyRetry(serverId, fn),
@@ -6551,7 +6556,7 @@ function createComposer({ id, key, threadId, placeholder }) {
   // { sendAt } schedules what's in the box for then (Send later) instead of sending it now.
   function send(overrideText, extra = {}) {
     // (Typed: its last word is corrected as it goes, as phones do: spelling.js correctSending.)
-    const text = overrideText != null ? overrideText : spelled(ta.value);
+    const text = overrideText != null ? overrideText : spelled(ta);
     const files = extra.files || (overrideText != null ? [] : state.pending.slice());
     const poll = extra.poll || null;
     const sendAt = extra.sendAt || null;
