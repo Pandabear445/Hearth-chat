@@ -73,6 +73,22 @@ export function probe(file) {
 
 const cancelled = () => Object.assign(new Error('Upload cancelled.'), { cancelled: true });
 
+// One audio context for every video being made smaller (a message can have several, and a phone allows only a few
+// contexts at once). It's made in the tap that sends (so it may play), and closes when the last video is done.
+let shared = null;
+let users = 0;
+function useAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!shared || shared.state === 'closed') { shared = new AC(); users = 0; }
+  users++;
+  return shared;
+}
+function doneWithAudio(ac) {
+  if (ac !== shared || --users > 0) return;
+  shared = null; users = 0;
+  ac.close().catch(() => {});
+}
+
 // Called in the tap that sends. Returns { run({ maxBytes, onProgress, signal }) → Promise<File>, stop() }.
 export function startShrink(file) {
   const url = URL.createObjectURL(file);
@@ -88,14 +104,18 @@ export function startShrink(file) {
   failed.catch(() => {});
   // The sound goes into the recording only: the element's own output is taken over by the audio graph, which isn't
   // connected to the speaker. Without one, the video stays muted (the result has no sound) rather than be heard.
-  const AC = window.AudioContext || window.webkitAudioContext;
-  let ac = null; let dest = null;
+  let ac = null; let dest = null; let source = null;
   try {
-    ac = new AC();
+    ac = useAudio();
     dest = ac.createMediaStreamDestination();
-    ac.createMediaElementSource(video).connect(dest);
+    source = ac.createMediaElementSource(video);
+    source.connect(dest);
     if (ac.state === 'suspended') ac.resume().catch(() => {});
-  } catch { if (ac) ac.close().catch(() => {}); ac = null; dest = null; video.muted = true; }
+  } catch {
+    try { if (source) source.disconnect(); } catch { /* not connected */ }
+    if (ac) doneWithAudio(ac);
+    ac = null; dest = null; video.muted = true;
+  }
   video.src = url;
   // Playing now, in the tap, lets it play (with sound) later on phones; it waits at the start until run() is ready.
   const blessed = video.play().then(() => { video.pause(); return true; }, () => false);
@@ -106,7 +126,9 @@ export function startShrink(file) {
     try { video.pause(); } catch { /* gone */ }
     video.removeAttribute('src'); video.load(); video.remove();
     URL.revokeObjectURL(url);
-    if (ac) ac.close().catch(() => {});
+    try { if (source) source.disconnect(); } catch { /* gone */ }
+    if (ac) doneWithAudio(ac);
+    ac = null;
   };
   async function run({ maxBytes, onProgress = () => {}, signal } = {}) {
     let lock = null; // the screen kept on while it works (a video without sound wouldn't keep it on by itself)

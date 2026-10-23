@@ -52,6 +52,8 @@ const failure = (r, fallback) => Object.assign(new Error((r.data && r.data.error
 const retryable = (r) => !r || r.status === 0 || r.status === 408 || r.status === 429 || (r.status >= 500 && r.status !== 507);
 // How long to wait before the next try: as long as the server asks after "too many", otherwise longer each time.
 const waitFor = (r, tries) => (r && r.status === 429 && r.retryAfter ? r.retryAfter * 1000 : Math.min(30000, 1000 * 2 ** (tries - 1)));
+// Longer than this ("try again in an hour"), it isn't waited for: the send stops and says so, with the server's words.
+const MAX_WAIT = 120000;
 // What onStatus gets while waiting: rate is true when the server said "too many" (a message with many files sends
 // many uploads in a row), not that the connection dropped.
 const waiting = (r, wait) => ({ retrying: true, wait, rate: !!(r && r.status === 429) });
@@ -70,14 +72,17 @@ export async function uploadResumable(bytes, { onProgress = () => {}, onStatus =
   const hash = await sha256Hex(bytes);
   const data = new Blob([bytes]);
   let start;
+  let lost = 0; // tries that failed for something else than "too many at once" (as uploadSimple)
   for (let tries = 1; ; tries++) {
     start = await request('POST', '/uploads', { json: { size }, signal }).catch((e) => { if (e.cancelled) throw e; return null; });
-    if (start && start.status === 200) { if (tries > 1) onStatus({ retrying: false }); break; }
-    if (!retryable(start) || tries > MAX_TRIES) throw start ? failure(start) : new Error('Couldn\u2019t reach the server. Check your connection and try again.');
+    if (start && start.status === 200) break;
+    if (!start || start.status !== 429) lost++;
     const wait = waitFor(start, tries);
+    if (!retryable(start) || tries > MAX_TRIES || lost > 3 || wait > MAX_WAIT) throw start ? failure(start) : new Error('Couldn\u2019t reach the server. Check your connection and try again.');
     onStatus(waiting(start, wait));
     await sleep(wait, signal);
     await backOnline(signal);
+    onStatus({ retrying: false });
   }
   const { id, chunkSize } = start.data;
   let offset = start.data.received || 0;
@@ -86,6 +91,7 @@ export async function uploadResumable(bytes, { onProgress = () => {}, onStatus =
     const recover = async (r) => {
       if (++tries > MAX_TRIES) throw new Error('The connection kept dropping, so the upload stopped. Try again when you\u2019re back online.');
       const wait = waitFor(r, tries);
+      if (wait > MAX_WAIT) throw failure(r);
       onStatus(waiting(r, wait));
       await sleep(wait, signal);
       await backOnline(signal);
@@ -124,22 +130,29 @@ export async function uploadSimple(bytes, { onProgress = () => {}, onStatus = ()
   const fd = new FormData();
   fd.append('file', new Blob([bytes]), 'blob.bin');
   const total = bytes.byteLength || 1;
+  // Tries in a row: "too many at once" may come back a few times while a big send goes; a connection that keeps
+  // failing (or timing out) gives up sooner, as before this waited at all.
+  let lost = 0;
   for (let tries = 1; ; tries++) {
     const r = await request('POST', '/upload/encrypted', { body: fd, signal, onProgress: (n) => onProgress(Math.min(1, n / total)) })
       .catch((e) => { if (e.cancelled) throw e; return null; });
-    if (r && r.status === 200) { if (tries > 1) onStatus({ retrying: false }); return r.data.url; }
+    if (r && r.status === 200) return r.data.url;
     if (r && !retryable(r)) throw failure(r);
-    if (tries > MAX_TRIES) throw r ? failure(r) : new Error('Upload failed. Check your connection.');
+    if (!r || r.status !== 429) lost++;
     const wait = waitFor(r, tries);
+    if (tries > MAX_TRIES || lost > 3 || wait > MAX_WAIT) throw r ? failure(r) : new Error('Upload failed. Check your connection.');
     onProgress(0);
     onStatus(waiting(r, wait));
     await sleep(wait, signal);
     await backOnline(signal);
+    onStatus({ retrying: false });
   }
 }
 // Downloads a file from this server with progress. A dropped connection carries on with a Range request from
 // where it stopped (a few times). A file that's gone answers with an error whose code is 'gone'.
-export async function download(url, { onProgress = () => {}, signal, expected = 0 } = {}) {
+// max: the most it may be (0: no limit); a file bigger than that fails with code 'too_big', as soon as that shows.
+export async function download(url, { onProgress = () => {}, signal, expected = 0, max = 0 } = {}) {
+  const tooBig = () => Object.assign(new Error('This file is bigger than its message says, so it wasn\u2019t opened.'), { code: 'too_big' });
   const parts = [];
   let got = 0;
   let total = expected;
@@ -157,6 +170,7 @@ export async function download(url, { onProgress = () => {}, signal, expected = 
     if (got && res.status === 200) { parts.length = 0; got = 0; } // the server sent it all again
     else if (!res.ok) throw new Error(`The server couldn\u2019t send this file (${res.status}). Try again in a moment.`);
     if (!got) total = Number(res.headers.get('Content-Length')) || expected;
+    if (max && total > max) { try { res.body && res.body.cancel(); } catch { /* gone */ } throw tooBig(); }
     if (!res.body || !res.body.getReader) { const b = new Uint8Array(await res.arrayBuffer()); parts.push(b); got += b.length; break; }
     const reader = res.body.getReader();
     try {
@@ -164,11 +178,13 @@ export async function download(url, { onProgress = () => {}, signal, expected = 
         const { done, value } = await reader.read();
         if (done) break;
         parts.push(value); got += value.length;
+        if (max && got > max) { reader.cancel().catch(() => {}); throw tooBig(); }
         if (total) onProgress(Math.min(1, got / total));
       }
       break;
     } catch (e) {
       if (signal && signal.aborted) throw cancelledError();
+      if (e.code === 'too_big') throw e;
       if (tries >= 3) throw new Error('The download kept getting cut off. Try again in a moment.');
       await sleep(1000 * 2 ** tries, signal);
     }

@@ -522,6 +522,13 @@ function reactionsFor(ids) {
 
 // since: the reader's history start in this server (server/joinhistory.js startOf), when it has one: a quote of a
 // message from before it isn't sent (replyHidden: true, so the app can say why instead of "no longer available").
+// A reply carries the message it quotes. One longer than anyone but the owner may send (up to 262,144 characters,
+// with many files: validCipher) goes without its ciphertext (big): every reply to it would carry it again, to
+// everyone, in every page. The app shows the quote from the original when it has it (app.js fillMessage).
+function quoteOf(r, enc) {
+  const base = { id: r.id, authorId: r.author_id, createdAt: r.created_at, expiresAt: r.expires_at || null };
+  return r.ciphertext && r.ciphertext.length > CIPHER_MAX ? { ...base, big: true } : { ...base, ...enc };
+}
 function serializeMessage(row, channel, reactions, since = null) {
   let reply = null;
   let replyHidden = false;
@@ -530,7 +537,7 @@ function serializeMessage(row, channel, reactions, since = null) {
     let r = db.prepare('SELECT * FROM messages WHERE id = ?').get(row.reply_to);
     if (since && alive(r) && !HIST.visible(r, since)) { r = null; replyHidden = true; }
     // createdAt: apps only check a reply against keys its author had when it was written.
-    if (alive(r) && r.ciphertext) reply = { id: r.id, authorId: r.author_id, ciphertext: r.ciphertext, epoch: r.epoch, createdAt: r.created_at, expiresAt: r.expires_at || null };
+    if (alive(r) && r.ciphertext) reply = quoteOf(r, { ciphertext: r.ciphertext, epoch: r.epoch });
     else if (alive(r)) {
       const rd = unseal(r.body);
       reply = { id: r.id, authorId: r.author_id, content: (rd.content || '').slice(0, 140), hasAttachments: (rd.attachments || []).length > 0, createdAt: r.created_at, expiresAt: r.expires_at || null, ...(rd.bot ? { bot: true } : {}) };
@@ -584,7 +591,7 @@ function serializeDmMessage(row, reactions) {
   let reply = null;
   if (row.reply_to) {
     const r = db.prepare('SELECT id, author_id, ciphertext, created_at, expires_at FROM dm_messages WHERE id = ?').get(row.reply_to);
-    if (alive(r)) reply = { id: r.id, authorId: r.author_id, ciphertext: r.ciphertext, createdAt: r.created_at, expiresAt: r.expires_at || null };
+    if (alive(r)) reply = quoteOf(r, { ciphertext: r.ciphertext });
   }
   return {
     id: row.id,
@@ -966,13 +973,14 @@ function limited(kind, base, field) {
   const label = { file: 'Files', image: 'Images', song: 'Songs', gif: 'GIFs for the library' }[kind];
   return (req, res, next) => {
     // Counted before the file is received, so a flood never reaches the disk. The owner's messages may carry 100
-    // files (200 uploads with their thumbnails), so their files for messages get ten times as many, and don't use up
-    // the share of the network they're on (everyone there has it).
+    // files (200 uploads with their thumbnails), so each of their files for messages counts a tenth (their pictures,
+    // icons and songs, which share these limits, still count whole: a big message doesn't hold those up), and doesn't
+    // use up the share of the network they're on (everyone there has it).
     try {
       const pace = kind === 'file' ? uploadPace(req.userId) : 1;
-      rateLimit(`up:user:${req.userId}`, 60 * pace, 60000);
-      rateLimit(`up:userh:${req.userId}`, 600 * pace, 3600000);
-      rateLimit(`up:session:${req.session.id}`, 40 * pace, 60000);
+      rateLimit(`up:user:${req.userId}`, 60, 60000, 1 / pace);
+      rateLimit(`up:userh:${req.userId}`, 600, 3600000, 1 / pace);
+      rateLimit(`up:session:${req.session.id}`, 40, 60000, 1 / pace);
       if (pace === 1) limitNet(req, 'up', 150, 60000);
     } catch (e) { return next(e); }
     const q = quotaOf(req.userId);
@@ -5506,7 +5514,7 @@ api.post('/reports', auth, (req, res) => {
     for (const e of (Array.isArray(b.evidence) ? b.evidence : []).slice(0, 25)) {
       const row = inConvo(String(e.id || ''));
       if (!row) continue;
-      evidence.push({ id: e.id, authorId: row.author_id, createdAt: row.created_at, text: String(e.text || '').slice(0, 4000), files: (Array.isArray(e.files) ? e.files : []).slice(0, 10).map((f) => String(f).slice(0, 200)), reported: e.id === id });
+      evidence.push({ id: e.id, authorId: row.author_id, createdAt: row.created_at, text: String(e.text || '').slice(0, 4000), files: (Array.isArray(e.files) ? e.files : []).slice(0, maxFilesOf(row.author_id)).map((f) => String(f).slice(0, 200)), reported: e.id === id });
     }
     if (!evidence.some((e) => e.reported)) fail(400, 'Include the reported message.');
   }

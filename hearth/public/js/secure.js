@@ -9,6 +9,8 @@ import { cleanFiles } from './attachments.js';
 import { cleanLinks } from './linkpreview.js';
 import { cleanX } from './disappear.js';
 import { bindingOf } from './binding.js';
+// A quote the server sent without its ciphertext (server/index.js quoteOf): nothing to open here.
+export const BIG_QUOTE = Object.freeze({ t: '', f: [], big: true });
 
 // The news bot's account (server/newsbot.js): the only one that still posts plaintext channel messages.
 const NEWS_BOT_ID = 'newsbot00000000000001';
@@ -528,7 +530,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   async function decryptChannelMessage(m) {
     if (m.dec && !m.dec.pending) return;
     if (m.legacy) await loadBotAuthor(m);
-    if (m.reply && !m.reply.ciphertext) await loadBotAuthor(m.reply);
+    if (m.reply && !m.reply.ciphertext && !m.reply.big) await loadBotAuthor(m.reply);
     if (m.legacy) m.dec = openLegacy(m);
     else {
       // If a key arrives while we're decrypting, try again so we never keep a stale "waiting" result.
@@ -539,7 +541,8 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       }
     }
     if (m.reply && (!m.reply.dec || m.reply.dec.pending)) {
-      m.reply.dec = m.reply.ciphertext ? await openGroup(m.serverId, m.channelId, m.reply.authorId, m.reply.ciphertext, Number(m.reply.createdAt) || 0) : openLegacy(m.reply);
+      // big: the server left out a very long one (the owner's, with many files); the app quotes it from the original.
+      m.reply.dec = m.reply.big ? BIG_QUOTE : m.reply.ciphertext ? await openGroup(m.serverId, m.channelId, m.reply.authorId, m.reply.ciphertext, Number(m.reply.createdAt) || 0) : openLegacy(m.reply);
     }
   }
 
@@ -589,6 +592,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   async function decryptDmMessage(m) {
     if (m.dec) return;
     m.dec = await openDm(m.dmId, m.authorId, m.ciphertext, Number(m.createdAt) || 0);
+    if (m.reply && m.reply.big && !m.reply.dec) m.reply.dec = BIG_QUOTE;
     if (m.reply && m.reply.ciphertext && !m.reply.dec) m.reply.dec = await openDm(m.dmId, m.reply.authorId, m.reply.ciphertext, Number(m.reply.createdAt) || 0);
   }
 

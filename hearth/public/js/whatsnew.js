@@ -4,8 +4,8 @@
 const pay = (text) => ({ text, pay: true });
 export const CHANGES = [
   { version: '1.34.0', items: [
-    'The server’s owner can attach up to 100 files to one message (everyone else: 10, as before). Pictures go up one at a time, so even a big batch doesn’t take a phone’s memory, and if sending stops halfway, Send carries on from where it got to.',
-    'Uploading many files in a row no longer fails when the server says “too many at once”: the app waits as long as the server asks and goes on by itself.',
+    'The server’s owner can attach up to 100 files to one message (everyone else: 10, as before). A message with more than 10 shows its pictures as a grid of small tiles, and its videos wait for a tap.',
+    'Sending many files is sturdier for everyone: files go up one at a time (a big batch doesn’t take a phone’s memory), the app waits when the server says “too many at once” and goes on by itself, and if a send stops, its files come back to the box (even after you’ve switched conversations) and Send carries on from where it got to.',
   ] },
   { version: '1.33.0', items: [
     'Phone videos send: a video bigger than this server’s limit is made smaller on your device first (up to 1280 px, keeping the sound), then encrypted and sent as usual. It takes about as long as the video lasts; keep Hearth on screen meanwhile (it pauses while Hearth is out of sight, and goes on when you’re back). A video too long to fit even made smaller says so, with how much fits.',

@@ -46,6 +46,7 @@ unattached `blobs` row. Old apps keep using the one-request route; it isn't goin
 | Storage per person (`quotaMb`) | 1000 MB | same; per-person override on the user's admin page |
 | Uploads per person per day (`dailyMb`) | 500 MB | same |
 | Admins and the owner | no quota or daily limit (the per-file limit still applies) | |
+| Files in one message | 10; 100 for the server's owner (the server links twice that many uploads: thumbnails) | `maxFilesOf` in `server/index.js`, `maxFilesFor` in `public/js/attachments.js` |
 | Unfinished resumable uploads per person | 4 | `MAX_SESSIONS` in `server/storage.js` |
 | Chunk size | 4 MiB (`UPLOAD_CHUNK_BYTES`) | returned by `POST /api/uploads` |
 | Idle time before an unfinished upload expires | 24 h (`UPLOAD_SESSION_IDLE_MS`) | |
@@ -55,6 +56,10 @@ unattached `blobs` row. Old apps keep using the one-request route; it isn't goin
 Rate limits (per minute unless noted): start an upload 20 per person (200 per hour) and 100 per network;
 chunks 600 per person, 600 per session, 1200 per network; status 240; finish 60; cancel 120. The one-request
 route keeps its own limits (60/min, 600/h per person, 40/min per session, 150/min per network, 4 at once).
+The server's owner, whose messages may carry 100 files: each of their uploads of files for messages counts a tenth
+against the one-request limits (which their pictures, icons and songs share), they may start, and finish, ten times as
+many resumable uploads, and their uploads don't count against their network (`uploadPace`). The app waits and tries
+again when told "too many" (as long as the server asks, up to 2 minutes).
 
 ## 3. Resumable upload protocol
 

@@ -11,7 +11,7 @@ import { openCropper } from './cropper.js';
 import { adminView, CATEGORY_LABEL } from './admin.js';
 import { captchaWidget } from './captcha.js';
 import { prepareImage, makeQueue, whenVisible, whenOnScreen, previewThumb } from './media.js';
-import { isUploadUrl, safeDownloadHref, ALT_MAX, maxFilesFor } from './attachments.js';
+import { isUploadUrl, safeDownloadHref, ALT_MAX, MAX_FILES, maxFilesFor } from './attachments.js';
 import { outsideMode, outsideHost, imageDecision, openedLinks } from './outside.js';
 import { CHUNKED_ABOVE, uploadResumable, uploadSimple, download, makeUrlCache, mediaKind, typeLabel } from './files.js';
 import { EMOJI, EMOJI_NAMES, CATEGORY_ICONS, QUICK_REACTIONS, recentEmoji, pushRecentEmoji, searchEmoji } from './emoji.js';
@@ -4060,6 +4060,12 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
   const bind = bindingOfMessage(m);
   if (m.reply) {
     const ru = getUser(m.reply.authorId);
+    // A quote the server left out for its size (big: the owner's, with many files): the original says what it was,
+    // when it's loaded here (in the conversation, or the thread).
+    if (m.reply.dec && m.reply.dec.big) {
+      const o = [...(S.msgs[keyOfMessage(m)] || { list: [] }).list, ...threadList()].find((x) => x.id === m.reply.id);
+      if (o && o.dec && !o.dec.error && !o.dec.pending) m.reply.dec = o.dec;
+    }
     const rd = m.reply.dec;
     const rtext = rd && !rd.error && !rd.pending ? rd.t : '';
     // The quoted message goes through the word filter too (it's someone's words shown here).
@@ -4067,7 +4073,7 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
     el.append(h('button', { class: 'msg-reply', 'aria-label': `Replying to ${nameInServer(server, ru)}. Jump to original.`, onclick: () => jumpToMessage(keyOfMessage(m), m.reply.id) },
       h('span', { class: 'reply-spine' }), avatarEl(ru, 16), nameEl(ru, { cls: 'reply-name', server }),
       rwf ? h('span', { class: 'reply-text' }, h('em', null, previewLabel(rwf)))
-        : h('span', { class: 'reply-text', html: rtext ? md(rtext, { inline: true }) : '<em>Attachment or encrypted message</em>' })));
+        : h('span', { class: 'reply-text', html: rtext ? md(rtext, { inline: true }) : rd && rd.big ? '<em>A message with many files</em>' : '<em>Attachment or encrypted message</em>' })));
   } else if (m.replyTo || (bind && bind.notes.includes('replyGone'))) {
     // Also when its sender replied to a message that was gone by the time it was posted (the server rightly leaves
     // the reply out then): no flag for that, unless the server can still find the original (bindingOfMessage).
@@ -4118,7 +4124,9 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
     if (embeds.length) out.append(h('div', { class: 'msg-embeds' }, embeds.map((u) => embedEl(u, m))));
     if (m.dec && m.dec.p) out.append(pollEl(m));
     const files = filesOf(m);
-    if (files.length) out.append(h('div', { class: 'msg-files' }, files.map((f) => attachmentEl(f, m))));
+    // More than 10 (only the server's owner sends that many): pictures as a grid of small tiles (app.css).
+    const many = files.length > MAX_FILES;
+    if (files.length) out.append(h('div', { class: `msg-files${many ? ' many' : ''}` }, files.map((f) => attachmentEl(f, m, { many }))));
     const wc = watchChips(text);
     if (wc) out.append(wc);
     if (embed) out.append(newsCard(embed));
@@ -4599,7 +4607,7 @@ function openCallFromLink(link) {
 
 // ---- message actions
 function editBox(m, ctx) {
-  const ta = h('textarea', { class: 'edit-input', rows: '1', 'aria-label': 'Edit message' });
+  const ta = h('textarea', { class: 'edit-input', rows: '1', maxlength: '4000', 'aria-label': 'Edit message' });
   ta.value = textOf(m);
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 300) + 'px'; };
   ta.addEventListener('input', autosize);
@@ -4698,9 +4706,18 @@ function openForward(m) {
         try {
           const fwd = `${note.value.trim() ? note.value.trim() + '\n' : ''}> Forwarded from ${displayName(getUser(m.authorId))}\n${textOf(m).split('\n').map((l) => '> ' + l).join('\n')}`;
           // A link preview goes along: the quoted text still has its link, so readers there keep the card.
-          await sendTo(d.key, null, { t: fwd, f: filesOf(m), ...(linksOf(m).length ? { l: linksOf(m) } : {}) }, null);
+          const all = filesOf(m);
+          const go = (f) => sendTo(d.key, null, { t: fwd, f, ...(linksOf(m).length ? { l: linksOf(m) } : {}) }, null);
+          // The server's owner can send 100 files in one message, and everyone else 10: a message of theirs too big for
+          // anyone else to send on goes with the first 10.
+          let some = 0;
+          try { await go(all); } catch (e) {
+            if (!(e.code === 'too_long' && all.length > maxFiles())) throw e;
+            some = maxFiles();
+            await go(all.slice(0, some));
+          }
           mdl.close();
-          toast(`Forwarded to ${d.label}.`);
+          toast(some ? `Forwarded to ${d.label} with the first ${some} of its ${all.length} files.` : `Forwarded to ${d.label}.`);
         } catch (e) { toast(e.message, 'error'); }
       } }, d.av.cloneNode(true), h('span', { class: 'quick-text' }, h('strong', null, d.label), h('span', null, d.sub)))));
   };
@@ -4718,6 +4735,7 @@ const fileUrls = makeUrlCache();
 const fileJobs = new Map(); // url -> { job, listeners }: downloads in progress, shared by everyone asking
 const AUTOLOAD_MAX = 20 * 1024 * 1024; // bigger videos and songs wait for a click instead of downloading by themselves
 const goneFile = () => Object.assign(new Error('This file is no longer available.'), { code: 'gone' });
+const THUMB_MAX = 2 * 1024 * 1024; // a thumbnail is 480 px (media.js): tens of KB
 function decryptedUrl(m, f) {
   if (!isUploadUrl(f.url)) return Promise.reject(new Error('This file isn\u2019t on this server.'));
   // A disappearing message's files go with it: nothing is fetched or decrypted for one whose time has passed.
@@ -4727,8 +4745,10 @@ function decryptedUrl(m, f) {
   if (!fileJobs.has(f.url)) {
     const listeners = new Set();
     const job = (async () => {
-      // f.size is the plain size; the ciphertext adds a 12-byte IV and a 16-byte tag.
-      const buf = await download(f.url, { expected: f.size ? f.size + 28 : 0, onProgress: (x) => listeners.forEach((fn) => fn(x)) });
+      // f.size is the plain size; the ciphertext adds a 12-byte IV and a 16-byte tag. Whoever sent the message wrote
+      // it (and a thumbnail has none), so the download stops past it (a thumbnail past THUMB_MAX): a message can't
+      // make everyone who scrolls past it download big files it calls small.
+      const buf = await download(f.url, { expected: f.size ? f.size + 28 : 0, max: f.thumb ? THUMB_MAX : f.size ? f.size + 28 + 4096 : 0, onProgress: (x) => listeners.forEach((fn) => fn(x)) });
       const plain = await sec.decryptAttachment(m, f, buf);
       if (isExpired(m, nowServer())) throw goneFile(); // it went while downloading: don't keep a copy
       return fileUrls.put(f.url, new Blob([plain], { type: f.type || 'application/octet-stream' }));
@@ -4824,7 +4844,11 @@ function sharpenWhenShown(el, holder, f, full, standIn) {
     }).catch(() => {}); // the thumbnail stays (the viewer still loads the full picture when it's opened)
   }));
 }
-function attachmentEl(f, m) {
+// many: one of more than 10 files in a message (the server's owner can send up to 100). Pictures are small tiles there,
+// so their thumbnail is sharp enough everywhere (no full picture loads by itself), and videos, songs and pictures
+// without a thumbnail over 2 MB wait for a click: a hundred of them shouldn't all download for everyone who scrolls by.
+const MANY_AUTOLOAD_MAX = 2 * 1024 * 1024;
+function attachmentEl(f, m, { many = false } = {}) {
   // Unencrypted entries (older messages) load straight from this server; anything else was dropped when the
   // message was decrypted (see attachments.js), and is refused here too.
   const direct = () => (isUploadUrl(f.url) ? Promise.resolve(f.url) : Promise.reject(new Error('This file isn\u2019t on this server.')));
@@ -4841,8 +4865,9 @@ function attachmentEl(f, m) {
     const standIn = lazyRow;
     if (f.alt && media !== 'audio') { holder.classList.add('has-alt'); holder.append(altChip(f.alt)); }
     if (f.sp) spoilerCover(holder, el, media);
-    // Reserve the right space up front so the chat doesn't jump while images load.
-    if (media === 'img' && Number(f.w) > 0 && Number(f.h) > 0) {
+    // Reserve the right space up front so the chat doesn't jump while images load (a tile's is its grid cell).
+    if (media === 'img' && many) holder.classList.add('tile');
+    else if (media === 'img' && Number(f.w) > 0 && Number(f.h) > 0) {
       const w = Math.min(440, f.w, Math.round(340 * f.w / f.h));
       holder.style.width = `${w}px`;
       holder.style.aspectRatio = `${f.w} / ${f.h}`;
@@ -4865,7 +4890,7 @@ function attachmentEl(f, m) {
     // Load only when it scrolls near the screen, a few at a time; images show the small thumbnail first.
     const load = () => {
       holder.classList.add('loading');
-      const want = media === 'img' && f.th ? () => decryptedUrl(m, { ...f.th, type: 'image/webp' }) : fullWatched;
+      const want = media === 'img' && f.th ? () => decryptedUrl(m, { ...f.th, type: 'image/webp', thumb: true }) : fullWatched;
       loadQueue(want).then((u) => { el.src = u; holder.classList.remove('locked', 'loading', 'failed'); if (media === 'img' && f.th) sharpenWhenShown(el, holder, f, fullWatched, standIn); })
         .catch((e) => {
           holder.classList.remove('loading');
@@ -4875,16 +4900,18 @@ function attachmentEl(f, m) {
           holder.append(again);
         });
     };
-    // Big videos and songs wait for a click (with the size on the button), then download with a progress bar.
-    if (enc && media !== 'img' && (f.size || 0) > AUTOLOAD_MAX) {
+    // Big videos and songs wait for a click (with the size on the button), then download with a progress bar; among
+    // many files, every video and song, and big pictures without a thumbnail, too.
+    const waits = media === 'img' ? many && !f.th && (f.size || 0) > MANY_AUTOLOAD_MAX : many || (f.size || 0) > AUTOLOAD_MAX;
+    if (enc && waits) {
       holder.classList.remove('locked');
       holder.classList.add('click-to-load');
       el.hidden = true;
       const play = h('button', { class: 'att-play', type: 'button', onclick: (e) => {
         e.stopPropagation(); play.remove(); el.hidden = false; holder.classList.remove('click-to-load');
-        loadQueue(fullWatched, { front: true }).then((u) => { el.src = u; if (media === 'video') el.play().catch(() => {}); })
+        loadQueue(fullWatched, { front: true }).then((u) => { el.src = u; holder.classList.remove('locked'); if (media === 'video') el.play().catch(() => {}); })
           .catch((err) => { if (err && err.code === 'gone') markGone(holder); else { toast(err.message, 'error'); holder.append(play); el.hidden = true; holder.classList.add('click-to-load'); } });
-      } }, icon(media === 'video' ? 'play' : 'music'), h('span', null, `${media === 'video' ? 'Play video' : 'Play audio'} · ${fmtSize(f.size)}`));
+      } }, icon(media === 'video' ? 'play' : media === 'img' ? 'image' : 'music'), h('span', null, `${media === 'video' ? 'Play video' : media === 'img' ? 'Show' : 'Play audio'} · ${fmtSize(f.size)}`));
       holder.append(play);
       if (media === 'video') holder.prepend(h('div', { class: 'att-audio-name' }, icon('file', 'ic'), f.name));
     } else if (enc || f.th || !isUploadUrl(f.url)) loadWhenVisible(holder, load); else el.src = f.url;
@@ -5991,6 +6018,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     h('div', { class: 'upload-progress' }, h('div', { class: 'bar' })), h('div', { class: 'upload-line' }, upText, upCancel));
   let uploading = null; // the AbortController of the upload in progress
   upCancel.addEventListener('click', () => { if (uploading) uploading.abort(); });
+  const convId = () => (key() || '') + (threadId() || '');
   const typing = h('div', { class: 'typing', 'aria-live': 'polite', dataset: { key: k } });
   const fileIn = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => { addFiles(fileIn.files); fileIn.value = ''; } });
   const sendBtn = h('button', { class: 'send-btn', 'data-tip': P.chat.enterToSend ? 'Send (Enter)' : 'Send (Ctrl+Enter)', 'aria-label': 'Send message', onclick: () => send() }, icon('send'));
@@ -6334,6 +6362,10 @@ function createComposer({ id, key, threadId, placeholder }) {
           : `${f.name} is ${fmtSize(f.size)}, and files here can be up to ${mb} MB.`, 'error');
         continue;
       }
+      if (f.size > max && state.pending.filter((x) => x.shrink).length >= MAX_SHRINK) {
+        toast(`Up to ${MAX_SHRINK} videos that need making smaller can go in one message. Send ${f.name} in the next one.`, 'error');
+        continue;
+      }
       const p = { file: f, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : null };
       state.pending.push(p);
       if (f.size > max) checkShrink(p, max, mb);
@@ -6394,7 +6426,23 @@ function createComposer({ id, key, threadId, placeholder }) {
     if (old) replaceMessageEl(old);
     if (m) { replaceMessageEl(m); ta.focus(); }
   }
+  // A send that stopped gives its files back (always: the uploads that went up are kept for the next Send, p.sent),
+  // and its words unless something new was typed here meanwhile.
+  function takeBack({ files, text, link }) {
+    if (!ta.value.trim() && !(drafts.get(convId()) || '').trim()) {
+      ta.value = text; drafts.set(convId(), text); synced = text; autosize();
+      if (link && !state.link) state.link = link; // and its preview
+    }
+    const all = [...files.filter((p) => !state.pending.includes(p)), ...state.pending];
+    if (all.length > maxFiles()) toast(`Only ${maxFiles()} files fit in the box: send the rest in the next message.`, 'error');
+    state.pending = all.slice(0, maxFiles());
+    // A video that was still being looked at when it was sent is looked at again.
+    const mb = S.config.maxUploadMb || 25;
+    for (const p of files) if (p.shrink === 'checking' && state.pending.includes(p)) checkShrink(p, mb * 1024 * 1024, mb);
+  }
   function renderExtras() {
+    const back = givenBack.get(convId());
+    if (back) { givenBack.delete(convId()); takeBack(back); }
     // Keyboard focus on the link chip outlives its redraw (a preview arriving, a note going away): it stays on
     // the same button if there still is one, else it goes back to the box, never to the page.
     const chipFocus = linkBox.contains(document.activeElement) ? document.activeElement.getAttribute('data-act') || '' : null;
@@ -6424,7 +6472,7 @@ function createComposer({ id, key, threadId, placeholder }) {
         h('button', { class: 'pending-edit', type: 'button', 'aria-label': `Edit ${p.file.name} (description, spoiler)`, 'data-tip': 'Edit', 'data-pending': String(i), onclick: () => editPending(p) }, icon('edit')),
         h('button', { class: 'pending-x', 'aria-label': `Remove ${p.file.name}`, 'data-tip': 'Remove', onclick: () => { if (p.url) URL.revokeObjectURL(p.url); state.pending.splice(i, 1); renderExtras(); update(); } }, icon('close'))))));
     }
-    extras.append(upStatus);
+    extras.append(sendingUi.get(convId()) || upStatus);
     const blockedNote = blockedDmNotice();
     const kk = key();
     const ch = kk && kk.startsWith('c:') ? channelById(kk.slice(2)) : null;
@@ -6491,7 +6539,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     if (old) replaceMessageEl(old);
     renderExtras(); autosize(); update();
     // A video to make smaller starts in this tap: phones only let it play (to record it smaller) after one.
-    for (const p of files) if (p.shrink && !p.session) p.session = startShrink(p.file);
+    for (const p of files) if (p.shrink && !p.session && !sentFresh(p)) p.session = startShrink(p.file);
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join('');
     if (id === 'main' && !tid && !sendAt) showPendingSend(kk, nonce, poll ? `\uD83D\uDCCA ${poll.q}` : files.some((f) => f.voice) ? '\uD83C\uDFA4 Voice message' : text, files.some((f) => f.voice) ? 0 : files.length, replyTo);
     // The disappearing timer they wrote it under (the note above the box): a weaker one by the time it goes out asks
@@ -6514,7 +6562,8 @@ function createComposer({ id, key, threadId, placeholder }) {
       upStatus.hidden = !files.length || f >= 1;
       bar.style.width = Math.round(f * 100) + '%';
       const what = files.length === 1 ? files[0].file.name : `${files.length} files`;
-      if (!retrying) upText.textContent = shrunk ? `Uploading ${what} (${Math.round(f * 100)}%)` : `Uploading ${what} — ${fmtSize(Math.round(f * totalBytes))} of ${fmtSize(totalBytes)} (${Math.round(f * 100)}%)`;
+      const stay = files.length > MAX_FILES ? ' (keep Hearth on screen)' : ''; // a big send takes a while (keepAwake)
+      if (!retrying) upText.textContent = shrunk ? `Uploading ${what} (${Math.round(f * 100)}%)${stay}` : `Uploading ${what} — ${fmtSize(Math.round(f * totalBytes))} of ${fmtSize(totalBytes)} (${Math.round(f * 100)}%)${stay}`;
     };
     const onStatus = ({ retrying: r, wait, rate, shrinking }) => {
       if (shrinking != null) {
@@ -6526,13 +6575,20 @@ function createComposer({ id, key, threadId, placeholder }) {
       }
       retrying = r ? wait : null;
       upStatus.classList.toggle('retrying', !!r);
-      if (r) upText.textContent = rate ? `The server takes only so many files a minute: going on in ${Math.max(1, Math.round(wait / 1000))} s… (nothing sent so far is lost)`
+      if (r) upText.textContent = rate ? `The server takes only so many files at a time: going on in ${Math.max(1, Math.round(wait / 1000))} s… (nothing sent so far is lost)`
         : `Connection lost. Trying again in ${Math.max(1, Math.round(wait / 1000))} s… (nothing sent so far is lost)`;
     };
     const ctl = files.length ? new AbortController() : null;
     uploading = ctl;
+    const conv = kk + (tid || '');
+    if (files.length) sendingUi.set(conv, upStatus);
+    const awake = files.length > MAX_FILES ? keepAwake() : null;
+    let posting = false;
     try {
       const f = await uploadEncryptedFiles(kk, files, setProgress, { signal: ctl && ctl.signal, onStatus });
+      // The server was handed to someone else meanwhile: it would keep only the first 10 of these.
+      if (f.length > maxFiles()) throw new Error(`You can send up to ${maxFiles()} files in one message now. They\u2019re back in the box: send them in parts.`);
+      posting = true;
       const msg = await sendTo(kk, tid, { t: text, f, ...(poll ? { p: poll } : {}), ...(links ? { l: links } : {}) }, replyTo, nonce, { wrote, sendAt });
       files.forEach((p) => p.url && URL.revokeObjectURL(p.url));
       if (sendAt) { SCHED.added(msg); toast(`Scheduled for ${SCHED.whenPhrase(msg.sendAt)}.`); return; }
@@ -6545,30 +6601,32 @@ function createComposer({ id, key, threadId, placeholder }) {
     } catch (e) {
       // Videos still waiting to be made smaller let go of what they'd started; sending again starts afresh.
       files.forEach((p) => { if (p.session) { p.session.stop(); p.session = null; } });
+      // The message may have got there after all when its answer was lost (no answer, or the server failing): then
+      // sending again uploads the files again, rather than share them with a message that has them (the server links
+      // a file to the first message only).
+      if (posting && !(e.status >= 400 && e.status < 500)) files.forEach((p) => { delete p.sent; });
       dropPendingSend(nonce);
       const wait = /in (\d+)s/.exec(e.message || '');
       if (e.code === 'slowmode' && wait) startSlow(+wait[1]);
       if (e.cancelled) toast('Upload cancelled. Your message and files are back in the box.');
       else toast(e.message, 'error');
-      // Give the words back so nothing is lost (unless they've already typed something new).
-      if (!poll && !files.some((f) => f.voice) && !ta.value.trim() && !(drafts.get(kk + (tid || '')) || '').trim() && key() === kk) {
-        ta.value = text; drafts.set(kk + (tid || ''), text); synced = text;
-        if (!state.pending.length) {
-          state.pending = files;
-          // A video that was still being looked at when it was sent is looked at again.
-          const mb = S.config.maxUploadMb || 25;
-          for (const p of files) if (p.shrink === 'checking') checkShrink(p, mb * 1024 * 1024, mb);
-        }
-        if (linkState && !state.link && linkState.status === 'ready') state.link = linkState; // and its preview
-        renderExtras(); autosize(); update();
+      // Give the files and words back so nothing is lost: to this box if it still shows the conversation, else to the
+      // one that shows it now or next (takeBack, renderExtras).
+      if (!poll && !files.some((f) => f.voice)) {
+        givenBack.set(conv, { files, text, link: linkState && linkState.status === 'ready' ? linkState : null });
+        const here = ta.isConnected && convId() === conv ? null : Object.values(composers).find((c) => c && c.showing && c.showing() === conv);
+        if (here) here.renderExtras();
+        else if (ta.isConnected && convId() === conv) { renderExtras(); update(); }
       }
     } finally {
       if (uploading === ctl) uploading = null;
+      if (sendingUi.get(conv) === upStatus) sendingUi.delete(conv);
+      if (awake) awake();
       setProgress(1);
     }
   }
   setTimeout(() => { autosize(); update(); renderEph(); }, 0);
-  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph, fitAttach, keepDraft: () => { if (ta.isConnected && ta.value !== synced) keepDraft(); } };
+  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph, fitAttach, showing: () => (ta.isConnected ? convId() : null), keepDraft: () => { if (ta.isConnected && ta.value !== synced) keepDraft(); } };
 }
 const fmtDuration = (sec) => (sec >= 3600 ? `${Math.round(sec / 3600)}h` : sec >= 60 ? `${Math.round(sec / 60)}m` : `${sec}s`);
 function placeholderFor(k) {
@@ -6636,6 +6694,31 @@ const maxFiles = () => maxFilesFor(S.me && S.me.staffRole);
 // A file that went up for a message that then couldn't be sent isn't sent again when it's tried again (p.sent): the
 // server keeps a file that no message uses for a day (server/index.js uploads.unlinked_cleanup).
 const SENT_KEEP_MS = 6 * 3600 * 1000;
+const sentFresh = (p) => !!p.sent && p.sent.at > Date.now() - SENT_KEEP_MS;
+// Videos made smaller on the device in one message: each plays (into the recording) in its own player, so not too many.
+const MAX_SHRINK = 10;
+// A send still going in a conversation (key + thread): its progress bar, with its Cancel, from the box that started it.
+// A box drawn again meanwhile (another conversation and back, a setting that changed) shows that one instead of its
+// own. And what a send that stopped gives back (its files, and its words), for the box that shows the conversation.
+const sendingUi = new Map();
+const givenBack = new Map();
+// Keeps a phone's screen on while a long send uploads (a phone puts away an app whose screen goes off, and its uploads
+// stop with it). Returns what lets it go.
+function keepAwake() {
+  if (!navigator.wakeLock) return () => {};
+  let lock = null; let done = false;
+  const take = () => {
+    if (done || lock || document.hidden) return;
+    navigator.wakeLock.request('screen').then((l) => {
+      if (done) { l.release().catch(() => {}); return; }
+      lock = l; l.addEventListener('release', () => { if (lock === l) lock = null; });
+    }, () => {});
+  };
+  const onVisible = () => { if (!document.hidden) take(); };
+  document.addEventListener('visibilitychange', onVisible);
+  take();
+  return () => { done = true; document.removeEventListener('visibilitychange', onVisible); if (lock) lock.release().catch(() => {}); lock = null; };
+}
 
 // ---- sending (every file gets its own random key, carried inside the encrypted message)
 // Small files go up in one request; bigger ones (CHUNKED_ABOVE) in resumable chunks that survive a dropped
@@ -6659,21 +6742,26 @@ async function uploadEncryptedFiles(key, files, onProgress, { signal, onStatus }
   };
   // Set from the file's Edit button in the box (also after a send that failed); like the rest, inside the message.
   const tags = (p) => ({ ...(p.spoiler ? { sp: 1 } : {}), ...(p.alt ? { alt: String(p.alt).slice(0, ALT_MAX) } : {}) });
+  // Videos over the limit are made smaller first (video-shrink.js; started in the tap that sent them): it takes as
+  // long as they last, with "keep Hearth on screen" up from the start, and their players don't wait behind the rest.
+  const smaller = new Map();
+  for (const p of files) {
+    if (!p.session) continue;
+    const s = p.session; p.session = null;
+    if (sentFresh(p)) { s.stop(); continue; } // made smaller and uploaded already
+    smaller.set(p, await s.run({ maxBytes: budgetFor((S.config.maxUploadMb || 25) * 1024 * 1024), signal, onProgress: (x) => onStatus && onStatus({ shrinking: x }) }));
+  }
   const out = [];
   for (const p of files) {
     const weight = p.file.size || 1;
-    if (p.sent && p.sent.at > Date.now() - SENT_KEEP_MS) { out.push({ ...p.sent.base, ...tags(p) }); done += weight; onProgress(done / total); continue; }
-    // A video over the limit is made smaller first (video-shrink.js; started in the tap that sent it).
-    let file = p.file;
-    if (p.session) {
-      const s = p.session; p.session = null;
-      file = await s.run({ maxBytes: budgetFor((S.config.maxUploadMb || 25) * 1024 * 1024), signal, onProgress: (x) => onStatus && onStatus({ shrinking: x }) });
-    }
+    if (sentFresh(p)) { out.push({ ...p.sent.base, ...tags(p) }); done += weight; onProgress(done / total); continue; }
+    const file = smaller.get(p) || p.file;
     const r = p.voice ? { file } : await prepareImage(file, { compress });
     const both = r.file.size + (r.thumb ? r.thumb.size : 0) || 1;
     const th = r.thumb ? await send(r.thumb, (weight * r.thumb.size) / both) : null;
     const main = await send(r.file, weight - (th ? (weight * r.thumb.size) / both : 0));
-    const base = { url: main.url, name: r.file.name, type: r.file.type, size: r.file.size, k: main.k, ...(r.w ? { w: r.w, h: r.h } : {}), ...(th ? { th: { url: th.url, k: th.k } } : {}),
+    // (Names and types as long as readers keep them: attachments.js cleanFiles.)
+    const base = { url: main.url, name: String(r.file.name || '').slice(0, 255), type: String(r.file.type || '').slice(0, 100), size: r.file.size, k: main.k, ...(r.w ? { w: r.w, h: r.h } : {}), ...(th ? { th: { url: th.url, k: th.k } } : {}),
       ...(p.voice ? { voice: true, dur: p.dur } : {}) };
     p.sent = { base, at: Date.now() };
     out.push({ ...base, ...tags(p) });
@@ -6711,8 +6799,8 @@ async function encryptFitting(payload, encrypt) {
     if ((typeof out === 'string' ? out : out.ciphertext).length <= cipherMax()) return out;
   }
   const n = Array.isArray(payload.f) ? payload.f.length : 0;
-  throw new Error(n > 1 ? `This message is too long to send with ${n} files. Shorten the text, the file descriptions or the file names, or send fewer files at once.`
-    : 'This message is too long to send. Shorten it and try again.');
+  throw Object.assign(new Error(n > 1 ? `This message is too long to send with ${n} files. Shorten the text, the file descriptions or the file names, or send fewer files at once.`
+    : 'This message is too long to send. Shorten it and try again.'), { code: 'too_long' });
 }
 // Disappearing messages: the conversation's timer goes inside the encrypted message (x, so readers' apps hide it on
 // time even if the server doesn't delete it) and alongside it (ttl, so the server stamps the same one). If someone

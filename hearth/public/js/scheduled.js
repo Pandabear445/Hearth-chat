@@ -426,7 +426,9 @@ export function createScheduled(deps) {
     const when = it.status === 'failed' ? `Not sent · was due ${whenPhrase(it.sendAt)}`
       : it.status === 'held' ? `${late ? 'Waiting · was due' : needsYou ? 'Waiting for you · sends' : 'Waiting to be re-encrypted · sends'} ${whenPhrase(it.sendAt)}`
         : `Sends ${whenPhrase(it.sendAt)}`;
-    const files = it.files ? h('span', { class: 'sched-files' }, icon('file'), plural(it.files, 'file', 'files')) : null;
+    // The server counts uploads (a picture's thumbnail too); the sender's own copy, once open, says how many files.
+    const nFiles = readable(dec) && Array.isArray(dec.f) ? dec.f.length : it.files;
+    const files = nFiles ? h('span', { class: 'sched-files' }, icon('file'), plural(nFiles, 'file', 'files')) : null;
     let body;
     if (editing.has(it.id) && readable(dec)) {
       const ta = h('textarea', { class: 'edit-input sched-edit', rows: '3', maxlength: '4000', 'aria-label': 'Edit scheduled message' });

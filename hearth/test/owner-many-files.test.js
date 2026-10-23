@@ -53,6 +53,9 @@ test('the owner: 100 files (200 uploads) in a message, uploaded faster than anyo
   const r = await as(owner, 'POST', `/channels/${ch.id}/messages`, { ciphertext: cipher(), epoch: 1, files });
   assert.equal(r.status, 200, r.text);
   assert.equal(linked(r.json.id), 200, 'up to 200 linked; the one over is left for the cleanup');
+  // Those counted a tenth each against the limits pictures share: making a server (its icon) right after still works.
+  const made = await as(owner, 'POST', '/servers', { name: 'right after' });
+  assert.equal(made.status, 200, made.text);
   // Everyone else, admins too: 10 files (20 uploads), as before.
   for (const u of [member, admin]) {
     const mine = await uploads(u, 21);
@@ -69,6 +72,23 @@ async function joined(name) {
   assert.equal((await as(u, 'POST', `/invites/${code}/join`)).status, 200);
   return u;
 }
+
+test('everyone else keeps the usual pace (40 uploads a minute from one device), and everyone the per-file size', async () => {
+  for (const name of ['pacer', 'adminpacer']) {
+    const u = await joined(name);
+    if (name === 'adminpacer') assert.equal((await as(owner, 'PUT', '/admin/staff', { userId: u.id, role: 'admin', authKey: owner.authKey })).status, 200);
+    await uploads(u, 40);
+    const r = await upload(u);
+    assert.equal(r.status, 429, `${name}'s 41st upload in a minute: ${r.text}`);
+  }
+  // The size limit is the same for the owner as for everyone (it was never meant to go).
+  for (const u of [owner, member]) {
+    const r = await as(u, 'POST', '/uploads', { size: 27 * 1024 * 1024 });
+    assert.equal(r.status, 413, r.text);
+    assert.equal(r.json.code, 'too_big');
+    assert.equal((await as(u, 'GET', '/me/storage')).json.fileMb, 25);
+  }
+});
 
 test('DMs and scheduled messages: the same numbers', async () => {
   const peer = await joined('peer'); const planner = await joined('planner');
@@ -107,6 +127,12 @@ test('the owner’s messages may be longer (262,144 characters); everyone else�
   const dm = (await as(owner, 'POST', '/dms', { userId: member.id })).json;
   assert.equal((await as(owner, 'POST', `/dms/${dm.id}/messages`, { ciphertext: cipher(262144) })).status, 200);
   assert.equal((await as(member, 'POST', `/dms/${dm.id}/messages`, { ciphertext: cipher(64001) })).status, 400);
+  // Edits of DMs too.
+  const dmBig = (await as(owner, 'POST', `/dms/${dm.id}/messages`, { ciphertext: cipher() })).json;
+  assert.equal((await as(owner, 'PATCH', `/dm-messages/${dmBig.id}`, { ciphertext: cipher(262144) })).status, 200);
+  assert.equal((await as(owner, 'PATCH', `/dm-messages/${dmBig.id}`, { ciphertext: cipher(262145) })).status, 400);
+  const dmSmall = (await as(member, 'POST', `/dms/${dm.id}/messages`, { ciphertext: cipher() })).json;
+  assert.equal((await as(member, 'PATCH', `/dm-messages/${dmSmall.id}`, { ciphertext: cipher(64001) })).status, 400);
   // Scheduled: the ciphertext, and the sender's own copy of it (a little longer).
   const sched = (u, n, d) => as(u, 'POST', `/channels/${ch.id}/scheduled-messages`, { ref: hex(12), draft: draft(d), ciphertext: cipher(n), epoch: 1, sendAt: Date.now() + 3600000 });
   const s = await sched(owner, 262144, 262144 + 2000);
@@ -114,7 +140,17 @@ test('the owner’s messages may be longer (262,144 characters); everyone else�
   assert.equal((await sched(owner, 262144, 262144 + 2001)).json.code, 'draft');
   assert.equal((await sched(member, 64000, 66001)).json.code, 'draft');
   assert.equal((await sched(member, 64001, 100)).status, 400);
-  assert.equal((await as(owner, 'DELETE', `/scheduled-messages/${s.json.id}`)).status, 200);
+  // …in a DM, changed later, and sent now with a new ciphertext.
+  const sd = await as(owner, 'POST', `/dms/${dm.id}/scheduled-messages`, { ref: hex(12), draft: draft(264144), ciphertext: cipher(262144), sendAt: Date.now() + 3600000 });
+  assert.equal(sd.status, 200, sd.text);
+  assert.equal((await as(member, 'POST', `/dms/${dm.id}/scheduled-messages`, { ref: hex(12), draft: draft(), ciphertext: cipher(64001), sendAt: Date.now() + 3600000 })).status, 400);
+  const changed = await as(owner, 'PATCH', `/scheduled-messages/${s.json.id}`, { ciphertext: cipher(262144), epoch: 1, draft: draft(264144) });
+  assert.equal(changed.status, 200, changed.text);
+  assert.equal((await as(owner, 'PATCH', `/scheduled-messages/${s.json.id}`, { ciphertext: cipher(262145), epoch: 1, draft: draft() })).status, 400);
+  const ms = (await sched(member, 64000, 100)).json;
+  assert.equal((await as(member, 'PATCH', `/scheduled-messages/${ms.id}`, { ciphertext: cipher(64001), epoch: 1, draft: draft() })).status, 400);
+  assert.equal((await as(member, 'POST', `/scheduled-messages/${ms.id}/send`, { ciphertext: cipher(64001), epoch: 1, draft: draft() })).status, 400);
+  for (const [u, x] of [[owner, s.json], [owner, sd.json], [member, ms]]) assert.equal((await as(u, 'DELETE', `/scheduled-messages/${x.id}`)).status, 200);
 });
 
 test('big files: the owner may start more resumable uploads a minute than anyone else', async () => {
@@ -124,8 +160,9 @@ test('big files: the owner may start more resumable uploads a minute than anyone
     return r.status;
   };
   for (let i = 0; i < 25; i++) assert.equal(await startAndCancel(owner), 200, `the owner's upload ${i + 1}`);
+  const starter = await joined('starter');
   const statuses = [];
-  for (let i = 0; i < 21; i++) statuses.push(await startAndCancel(member));
+  for (let i = 0; i < 21; i++) statuses.push(await startAndCancel(starter));
   assert.deepEqual([statuses.slice(0, 20).every((x) => x === 200), statuses[20]], [true, 429], 'the 21st in a minute waits');
 });
 
@@ -153,4 +190,36 @@ test('the app has the same numbers as the server', () => {
     assert.ok(src.includes(`const ${name}`), `app: ${name}`);
     assert.ok(server.includes(`const ${name}`), `server: ${name}`);
   }
+});
+
+test('a reply to a message longer than anyone else may send leaves its ciphertext out (each reply would carry it again)', async () => {
+  const big = (await as(owner, 'POST', `/channels/${ch.id}/messages`, { ciphertext: cipher(100000), epoch: 1 })).json;
+  const small = (await as(owner, 'POST', `/channels/${ch.id}/messages`, { ciphertext: cipher(), epoch: 1 })).json;
+  const a = (await as(member, 'POST', `/channels/${ch.id}/messages`, { ciphertext: cipher(), epoch: 1, replyTo: big.id })).json;
+  const b = (await as(member, 'POST', `/channels/${ch.id}/messages`, { ciphertext: cipher(), epoch: 1, replyTo: small.id })).json;
+  assert.equal(a.reply.big, true);
+  assert.equal(a.reply.ciphertext, undefined);
+  assert.equal(a.reply.id, big.id);
+  assert.equal(b.reply.ciphertext.length, 60, 'a usual one is quoted whole');
+  const page = (await as(member, 'GET', `/channels/${ch.id}/messages`)).json;
+  const list = Array.isArray(page) ? page : page.messages;
+  assert.equal(list.find((x) => x.id === a.id).reply.big, true);
+  // DMs the same.
+  const dm = (await as(owner, 'POST', '/dms', { userId: member.id })).json;
+  const dBig = (await as(owner, 'POST', `/dms/${dm.id}/messages`, { ciphertext: cipher(100000) })).json;
+  const dr = (await as(member, 'POST', `/dms/${dm.id}/messages`, { ciphertext: cipher(), replyTo: dBig.id })).json;
+  assert.deepEqual([dr.reply.big, dr.reply.ciphertext], [true, undefined]);
+});
+
+test('a report keeps as many file names as the reported message’s author may send', async () => {
+  const names = Array.from({ length: 50 }, (_, i) => `photo-${i + 1}.jpg`);
+  const fromOwner = (await as(owner, 'POST', `/channels/${ch.id}/messages`, { ciphertext: cipher(), epoch: 1 })).json;
+  const fromMember = (await as(member, 'POST', `/channels/${ch.id}/messages`, { ciphertext: cipher(), epoch: 1 })).json;
+  const report = async (who, m) => {
+    const r = await as(who, 'POST', '/reports', { category: 'spam', context: { kind: 'message', messageId: m.id }, evidence: [{ id: m.id, text: 'x', files: names }] });
+    assert.equal(r.status, 200, r.text);
+    return JSON.parse(srv.sql('SELECT evidence FROM reports ORDER BY created_at DESC LIMIT 1')[0].evidence)[0].files.length;
+  };
+  assert.equal(await report(member, fromOwner), 50);
+  assert.equal(await report(owner, fromMember), 10, 'made-up names from anyone else stop at 10');
 });

@@ -2335,6 +2335,17 @@ img.cemoji.big { width: 40px; height: 40px; }
    The same media queries as device.js. PHONE LAYOUT: (max-width: 760px), (pointer: coarse) and (max-height: 500px),
    a narrow window or a phone held sideways. TOUCH UI: (pointer: coarse), phones and tablets. A PHONE is both at once.
    A desktop with a mouse matches none and looks as it always has. */
+/* A message with more than 10 files (only the server's owner sends that many; app.js attachmentEl many): pictures are
+   square tiles in a grid, cropped to fill them (the viewer shows the whole picture), and everything else (files,
+   videos, songs) takes a row of its own (dense: later pictures fill the gaps rows like that leave). On every screen: it comes after the rules for one picture. */
+.msg-files.many { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); grid-auto-flow: row dense; gap: 6px; width: min(560px, 100%); }
+.msg-files.many > :not(.tile) { grid-column: 1 / -1; }
+.msg-files.many .att-media.tile { width: auto !important; max-width: none; aspect-ratio: 1; min-width: 0; min-height: 0; max-height: none; border-radius: 10px; }
+.msg-files.many .att-media.tile .att-img { width: 100%; height: 100%; max-height: none; object-fit: cover; }
+.msg-files.many .att-media.tile.click-to-load { padding: 0; display: grid; place-items: center; }
+.msg-files.many .att-media.tile .att-play { font-size: 12px; padding: 6px 8px; margin: 0; }
+.msg-files.many .att-media.tile .att-dl { top: 4px; right: 4px; width: 28px; height: 28px; }
+.msg-files.many .att-media.tile .att-alt { left: 4px; bottom: 4px; }
 /* A PHONE (PHONE LAYOUT and TOUCH UI at once): a picture in the chat takes the message's whole width when its shape
    allows, and a tall one up to about 70% of the screen's height instead of 340px, so a phone screenshot can be read.
    The box keeps the picture's shape (app.js attachmentEl gives it --att-w and --att-h), so nothing jumps while it
@@ -2348,6 +2359,7 @@ img.cemoji.big { width: 40px; height: 40px; }
   }
   .att-media.sized .att-img { object-fit: contain; }
   .att-img { max-height: 560px; max-height: 70svh; }
+  .msg-files.many .att-media.tile .att-img { max-height: none; }
 }
 /* TOUCH UI: the viewer takes the fingers itself (viewer-touch.js: pinch, double tap, swipes), so the page never zooms
    or scrolls underneath. The picture follows a finger directly and glides when it's let go. */

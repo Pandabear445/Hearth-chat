@@ -502,7 +502,8 @@ Built by the sender, carried inside the encrypted message. Design and the reason
    `media.js` `previewThumb`). The chip shows the card with a **Remove link preview** button.
 5. Sending puts `l: [{ v: 1, url, title, desc, site, kind, img? }]` in the payload next to `t` and `f`, only
    if the card is ready (sending never waits) and its link is still in the text. If the ciphertext would be
-   over 64,000 characters, the picture is dropped first, then the card (`payloadVariants`, `encryptFitting`).
+   over 64,000 characters (262,144 for the server's owner: see "Many files in one message"), the picture is
+   dropped first, then the card (`payloadVariants`, `encryptFitting`).
 6. Readers' apps (`secure.js` `openGroup`/`openDm` → `cleanLinks`) keep the card only if its URL is one of the
    message's links (outside code and spoilers), https, without credentials, without a mixed-script host or bidi
    characters, with every field capped and the picture a real WebP/JPEG of at most 16 KiB. `linkCardEl` draws
@@ -1143,7 +1144,8 @@ Socket events go only to `user:<you>`: `scheduled:update` (the item) and `schedu
 Items carry `id`, `serverId`, `channelId`, `dmId`, `threadId`, `replyTo`, `ciphertext`, `epoch`, `ref`, `draft`,
 `files` (a count), `sendAt`, `status` (`pending`, `held`, `failed`), `reason` (for held: `key`, `peer_key`,
 `session_ended`, `token_renewed`), `note`, `createdAt` and `encryptedAt`. `ref` must be 16–64 of `A-Z a-z 0-9 _ -` and `draft` an
-`x1:` string of at most 66,000 characters (400 `draft` otherwise); the server can't open it.
+`x1:` string of at most 2,000 characters more than the ciphertext may have (66,000; 264,144 for the server's owner;
+400 `draft` otherwise); the server can't open it.
 
 **Data model** (`scheduled_messages`, v19): owner, server, channel or DM (exactly one; no foreign key, so a deleted
 one is reported at send time), thread, reply, ciphertext, epoch, `ref` and `draft` (the sender's own copy),
@@ -1629,6 +1631,25 @@ entry. Readers keep `alt` only as a trimmed string and `sp` only as 1. Pictures 
 text and show an ALT button that opens it; spoilers are blurred under a Spoiler button, and the first click or Enter
 only uncovers them (videos and songs stay paused, file cards say Spoiler). The picture viewer's arrows skip spoilers
 nobody has opened yet.
+
+**Many files in one message** (the server's owner). Everyone can attach up to 10 files to a message, the server's
+owner up to 100 (`maxFilesFor` in `public/js/attachments.js`, `maxFilesOf` in `server/index.js`; the owner is
+`staffRole(uid) === 'owner'`, so handing the server over moves it). For the owner the server links up to 200 uploads
+to a message (a picture brings a thumbnail) in channels, DMs and scheduled messages, takes a ciphertext of up to
+262,144 characters (everyone else 64,000), and counts each of their files for messages as a tenth against the
+upload limits (so 200 uploads in a minute go through, and their avatar, icons and new servers aren't held up),
+without the per-network limit. Every app reads up to 100 files in any message (a reader can't tell who owns the
+server; anyone else's extra entries have no files linked). The sender's app makes each file ready and uploads it
+before the next, so a hundred photos never sit in memory at once; a send that stops keeps what went up (for 6
+hours: `p.sent`) and gives the files back to the box, so Send carries on from there; uploads wait as long as the
+server asks after "too many at once" (up to 2 minutes; longer, the send stops and says so); the screen stays on
+while more than 10 files go up. A message with more than 10 files shows its pictures as a grid of square tiles
+(`.msg-files.many`), and its videos, songs and pictures without a thumbnail over 2 MB wait for a click. Every
+download stops once a file is bigger than its message says (a thumbnail: 2 MB), so a message can't make readers
+download big files it calls small. A reply to a message longer than anyone else may send carries no copy of it
+(`quoteOf`): the app quotes it from the original. Forwarding one of the owner's albums that's too big for the
+forwarder's own limit forwards its first 10 files. Tests: `test/owner-many-files.test.js`,
+`test/files-retry.test.js`, the e2e flow "the owner sends 12 files".
 
 **Keyboard shortcuts** (`public/js/keybinds.js` `SHORTCUTS` and `shortcutGroups`; `openShortcuts` in app.js).
 Ctrl+/ (⌘+/) opens a sheet of every shortcut, in navigation, messages, calls (this person's own keybinds) and the

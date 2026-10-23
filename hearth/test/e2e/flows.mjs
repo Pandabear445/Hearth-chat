@@ -3892,7 +3892,8 @@ async function videoShrink(t) {
   const { alice, bob } = t.people;
   const setLimit = (fileMb) => bob.page.evaluate(async (mb) => (await fetch('/api/admin/limits', { method: 'PUT',
     headers: { authorization: `Bearer ${localStorage.getItem('hearth.token')}`, 'content-type': 'application/json' }, body: JSON.stringify({ fileMb: mb }) })).status, fileMb);
-  // About 8 seconds of video that doesn't compress, as a phone's would be (a browser recording: no length in it).
+  // About 8 seconds of video that doesn't compress, as a phone's would be (a browser recording: no length in it); 8 so
+  // it's well over 1 MB even on a busy machine (fewer frames get drawn then).
   const video = await alice.page.evaluate(async () => {
     const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
     const g = c.getContext('2d');
@@ -3989,16 +3990,45 @@ async function ownerManyFiles(t) {
   await bob.openChannel('general');
   await alice.railButton(SERVER);
   await alice.openChannel('general');
-  await bob.$('.cw-main input[type=file]').setInputFiles(notes(12, 'bob'));
-  await bob.$('.pending-files .pending', { hasText: 'bob-note-12.txt' }).waitFor();
+  // 7 files, 4 pictures (640 px wide: each goes up with a thumbnail) and a second of video.
+  const pictures = (await bob.page.evaluate(() => Promise.all([0, 1, 2, 3].map((i) => {
+    const c = document.createElement('canvas'); c.width = 640; c.height = 480;
+    const g = c.getContext('2d'); g.fillStyle = `hsl(${i * 90} 70% 50%)`; g.fillRect(0, 0, 640, 480);
+    g.fillStyle = '#fff'; g.font = 'bold 200px sans-serif'; g.fillText(String(i + 1), 260, 320);
+    return new Promise((r) => c.toBlob((b) => b.arrayBuffer().then((a) => r(btoa(String.fromCharCode(...new Uint8Array(a))))), 'image/png'));
+  })))).map((b64, i) => ({ name: `bob-picture-${i + 1}.png`, mimeType: 'image/png', buffer: Buffer.from(b64, 'base64') }));
+  const clip = await bob.page.evaluate(async () => {
+    const c = document.createElement('canvas'); c.width = 320; c.height = 240;
+    const g = c.getContext('2d');
+    const rec = new MediaRecorder(c.captureStream(15), { mimeType: 'video/webm' });
+    const chunks = []; rec.ondataavailable = (e) => chunks.push(e.data);
+    let n = 0; const tick = setInterval(() => { g.fillStyle = `hsl(${(n += 20) % 360} 70% 50%)`; g.fillRect(0, 0, 320, 240); }, 60);
+    rec.start(200); await new Promise((r) => setTimeout(r, 1000));
+    const stopped = new Promise((r) => { rec.onstop = r; }); rec.stop(); await stopped; clearInterval(tick);
+    const b = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    return btoa(String.fromCharCode(...b));
+  });
+  await bob.$('.cw-main input[type=file]').setInputFiles([...notes(7, 'bob'), ...pictures, { name: 'bob-clip.webm', mimeType: 'video/webm', buffer: Buffer.from(clip, 'base64') }]);
+  await bob.$('.pending-files .pending', { hasText: 'bob-picture-4.png' }).waitFor();
   check(await bob.$('.pending-files .pending').count() === 12, 'The owner should be able to attach 12 files.');
   check(!(await bob.$('.toast.toast-error').count()), 'No “up to 10 files” for the owner.');
   await bob.$('#composer-input').fill('Twelve files from the owner');
   await bob.$('.send-btn').click();
   const m = alice.message('Twelve files from the owner').first();
   await m.waitFor({ timeout: 60000 });
-  await m.locator('.att-file', { hasText: 'bob-note-12.txt' }).waitFor({ timeout: 30000 });
-  check(await m.locator('.att-file').count() === 12, `Alice should see all 12 files (got ${await m.locator('.att-file').count()}).`);
+  await m.locator('.att-file', { hasText: 'bob-note-7.txt' }).waitFor({ timeout: 30000 });
+  check(await m.locator('.att-file').count() === 7 && await m.locator('.att-media.tile').count() === 4 && await m.locator('.att-video').count() === 1,
+    `Alice should see all 12: 7 files, 4 pictures and a video (got ${await m.locator('.att-file').count()}, ${await m.locator('.att-media.tile').count()} and ${await m.locator('.att-video').count()}).`);
+  // Among this many, a video waits for a click (small as it is), and loads when asked.
+  const play = m.locator('.att-media.click-to-load .att-play', { hasText: 'Play video' });
+  check(await play.count() === 1 && !(await m.locator('.att-video').getAttribute('src')), 'The video should wait for a click.');
+  // More than 10: the pictures are small square tiles in a grid, their thumbnails loaded.
+  check(await m.locator('.msg-files.many').count() === 1, 'A message with more than 10 files should use the grid.');
+  const tile = m.locator('.att-media.tile').first();
+  await tile.scrollIntoViewIfNeeded();
+  await m.locator('.att-media.tile:not(.locked) img.att-img').nth(3).waitFor({ timeout: 30000 });
+  const box = await tile.boundingBox();
+  check(box && box.width >= 80 && box.width <= 200 && Math.abs(box.width - box.height) <= 2, `A picture should be a small square tile (got ${JSON.stringify(box)}).`);
   // Everyone else stops at 10, as before.
   await alice.$('.cw-main input[type=file]').setInputFiles(notes(12, 'alice'));
   await alice.toast('You can attach up to 10 files at once.');
