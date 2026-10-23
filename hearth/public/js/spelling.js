@@ -202,10 +202,11 @@ if (typeof window !== 'undefined' && window.addEventListener) window.addEventLis
 
 // Replaces start..end with text the way typing would (so Ctrl+Z undoes it), or directly where the browser can't.
 // Returns false, changing nothing, when the result wouldn't fit in the box (its maxlength).
+const fits = (ta, out, add) => !(ta.maxLength > 0 && ta.value.length - out + add > ta.maxLength);
 function replace(ta, start, end, text) {
   const was = ta.value.slice(start, end);
   const length = ta.value.length - was.length;
-  if (ta.maxLength > 0 && length + text.length > ta.maxLength) return false;
+  if (!fits(ta, was.length, text.length)) return false;
   const caret = ta.selectionStart;
   ta.setSelectionRange(start, end);
   let done = false;
@@ -277,11 +278,12 @@ export function autocorrect(ta, { on = () => true } = {}) {
     const undo = (e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey;
     const back = e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey;
     if (!(undo || back) || ta.selectionStart !== l.caret || ta.selectionEnd !== l.caret) return;
-    if (ta.value.slice(l.start, l.start + l.fix.length) !== l.fix) return;
+    if (ta.value.slice(l.start, l.start + l.fix.length) !== l.fix || !fits(ta, l.fix.length, l.word.length)) return;
     e.preventDefault();
     fixing = true;
-    try { replace(ta, l.start, l.start + l.fix.length, l.word); } finally { fixing = false; }
-    keep(l.word);
+    let done = false;
+    try { done = replace(ta, l.start, l.start + l.fix.length, l.word); } finally { fixing = false; }
+    if (done) keep(l.word);
   };
   const forget = () => { last = null; pasted = null; };
   ta.addEventListener('beforeinput', onBeforeInput);
