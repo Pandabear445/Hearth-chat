@@ -343,10 +343,32 @@ test('in the browser: Ctrl+Z, redo and Backspace after a fix; what was pasted is
     assert.equal((await b.state()).text, 'Hey dont!', 'its end taken off');
 
     b = await box();
-    await b.p.evaluate(() => { const t = document.getElementById('t'); t.value = 'x'.repeat(30) + ' '; t.setSelectionRange(31, 31); });
-    await b.paste('ok i dont know');
-    assert.equal((await b.state()).text, 'x'.repeat(30) + ' ok i dont', 'cut short by the box (40 characters)');
-    assert.equal(await b.p.evaluate(() => window.sent()), 'x'.repeat(30) + ' ok i dont', 'what went in is still a paste');
+    await b.p.evaluate(() => { const t = document.getElementById('t'); t.value = 'x'.repeat(35) + ' '; t.setSelectionRange(36, 36); });
+    await b.paste('dont worry about it');
+    assert.equal((await b.state()).text, 'x'.repeat(35) + ' dont', 'cut short by the box (40 characters)');
+    assert.equal(await b.p.evaluate(() => window.sent()), 'x'.repeat(35) + ' dont', 'what went in is still a paste');
+
+    b = await box();
+    await b.paste("he said 'teh'");
+    assert.equal(await b.p.evaluate(() => window.sent()), "he said 'teh'", 'pasted with its quotes');
+    await b.k.type(' ');
+    assert.equal((await b.state()).text, "he said 'teh' ");
+
+    b = await box();
+    await b.paste('he said i dont');
+    await b.k.type('. she said i dont ');
+    assert.equal((await b.state()).text, "he said i dont. she said I don't ", 'the same words typed after other ones are fixed');
+
+    b = await box();
+    await b.paste('i');
+    await b.k.type(' ');
+    assert.equal((await b.state()).text, 'i ', 'a pasted i');
+
+    b = await box();
+    await b.paste('dont !');
+    await b.k.press('Backspace');
+    await b.k.press('Backspace');
+    assert.equal(await b.p.evaluate(() => window.sent()), 'dont', 'its " !" taken off');
 
     b = await box();
     await b.paste('he said i dont');

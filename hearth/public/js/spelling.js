@@ -268,26 +268,36 @@ function replace(ta, start, end, text) {
 // (not lost to a Backspace that's undone, nor kept after the message is sent).
 const PASTES = new Map(); // key → [line…]
 const KEYS = new WeakMap(); // box → () => its key
-const MAX_LINES = 20;
+const MAX_CHARS = 20000; // lines kept for a key, beyond the ones still in the box
 const keyOf = (ta) => { const k = KEYS.get(ta); return k ? k() : ta; };
 const pastesOf = (ta) => PASTES.get(keyOf(ta)) || [];
-const wordsOf = (line) => line.split(/[^A-Za-z']+/).filter((w) => w.length > 1);
+const wordsOf = (line) => line.split(/[^A-Za-z']+/).filter(Boolean);
 function setPastes(ta, list) {
   const k = keyOf(ta);
   PASTES.delete(k);
-  if (list.length) PASTES.set(k, list.slice(-MAX_LINES));
+  let keep = list;
+  if (keep.reduce((n, l) => n + l.length, 0) > MAX_CHARS) keep = keep.filter((l) => ta.value.includes(l)); // (the rest go first)
+  if (keep.length) PASTES.set(k, keep);
   while (PASTES.size > 50) PASTES.delete(PASTES.keys().next().value);
 }
+// Whether a character joins the word beside it: a letter, or an apostrophe with a letter on its far side (teh's, but
+// not 'teh' in quotes).
+const joins = (ch, far) => /[A-Za-z]/.test(ch || '') || (ch === "'" && /[A-Za-z]/.test(far || ''));
 // Whether the word at start..end came in with something pasted there.
 function pasted(ta, start, end) {
-  const word = ta.value.slice(start, end);
+  const v = ta.value;
+  const word = v.slice(start, end);
+  if (!word) return false;
   for (const line of pastesOf(ta)) {
     for (let o = line.indexOf(word); o >= 0; o = line.indexOf(word, o + 1)) {
-      if (/[A-Za-z']/.test(line[o - 1] || '') || /[A-Za-z']/.test(line[o + word.length] || '')) continue;
-      // With what came before it, or after it (a side with nothing there doesn't count, unless the line is the word).
-      const after = o + word.length < line.length;
-      if ((o > 0 || !after) && ta.value.slice(start - o, end) === line.slice(0, o + word.length)) return true;
-      if (after && ta.value.slice(start, start + line.length - o) === line.slice(o)) return true;
+      const e = o + word.length;
+      if (joins(line[o - 1], line[o - 2]) || joins(line[e], line[e + 1])) continue; // (part of a longer word there)
+      // With what came before it on the line, or after it, beside it in the box as whole words (a side with nothing
+      // there doesn't count, unless the line is the word).
+      const b = start - o;
+      const a = start + line.length - o;
+      if ((o > 0 || e === line.length) && b >= 0 && v.slice(b, end) === line.slice(0, e) && !joins(v[b - 1], v[b - 2])) return true;
+      if (e < line.length && v.slice(start, a) === line.slice(o) && !joins(v[a], v[a + 1])) return true;
     }
   }
   return false;
@@ -316,7 +326,7 @@ export function autocorrect(ta, { on = () => true, pasteKey = null } = {}) {
   // (the box's maxlength can cut it short).
   let coming = null;
   const remember = (text) => {
-    const lines = String(text || '').split(/\r\n?|\n/).map((l) => l.trim().replace(/[.,!?;:]+$/, '')).filter((l) => /[A-Za-z]/.test(l));
+    const lines = String(text || '').split(/\r\n?|\n/).map((l) => l.replace(/[\s.,!?;:]+$/, '').trim()).filter((l) => /[A-Za-z]/.test(l));
     if (lines.length) setPastes(ta, [...pastesOf(ta).filter((x) => !lines.includes(x)), ...lines]);
   };
   const onPaste = (e) => { coming = { at: Math.min(ta.selectionStart, ta.selectionEnd), text: e.clipboardData && e.clipboardData.getData('text/plain') }; };
@@ -324,7 +334,9 @@ export function autocorrect(ta, { on = () => true, pasteKey = null } = {}) {
   const onInput = (e) => {
     const history = e.inputType === 'historyUndo' || e.inputType === 'historyRedo';
     if (coming && (e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop')) {
-      remember(coming.at >= 0 && ta.selectionEnd > coming.at ? ta.value.slice(coming.at, ta.selectionEnd) : coming.text);
+      // A paste goes in at the caret, a drop is left selected (the browser does that); nothing in, nothing kept.
+      if (coming.at >= 0) remember(ta.value.slice(coming.at, Math.max(coming.at, ta.selectionEnd)));
+      else remember(ta.selectionEnd > ta.selectionStart ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : coming.text);
     } else if (!history && (!ta.value || /^insert/.test(e.inputType || ''))) {
       setPastes(ta, ta.value ? pastesOf(ta).filter((l) => wordsOf(l).some((w) => ta.value.includes(w))) : []);
     }
