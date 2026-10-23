@@ -62,8 +62,10 @@ test('a finished word is fixed, keeping its capitals; abbreviations in capitals 
   assert.equal(typed('ok. Dont '), "ok. Don't ");
   assert.equal(typed('ok!\n(Dont '), "ok!\n(Don't ");
   assert.equal(typed('Kelsey Noone '), 'Kelsey Noone ');
-  for (const t of ['I met Mr. Noone ', 'ask Dr. Ive ', 'J. Noone ', 'Peter J. Noone ', 'a.k.a. Noone ', 'cc: Noone ']) assert.equal(typed(t), t, 'a title, an initial or a label isn\u2019t a sentence\u2019s end');
-  for (const [t, want] of [['So do I. Dont ', "So do I. Don't "], ['so am I. Im ', "so am I. I'm "], ['plan B. Thats ', "plan B. That's "], ['a. Dont ', "a. Don't "], ['love u. Im ', "love u. I'm "], ['in the U.S. Im ', "in the U.S. I'm "]]) {
+  for (const t of ['I met Mr. Noone ', 'ask Dr. Ive ', 'J. Noone ', 'Peter J. Noone ', 'I met J. Noone ', 'thanks\nJ. Noone ', '- J. Noone ', 'by J.K. Noone ', 'a.k.a. Noone ', 'cc: Noone ']) {
+    assert.equal(typed(t), t, 'a title, an initial or a label isn\u2019t a sentence\u2019s end');
+  }
+  for (const [t, want] of [['So do I. Dont ', "So do I. Don't "], ['so am I. Im ', "so am I. I'm "], ['a. Dont ', "a. Don't "], ['love u. Im ', "love u. I'm "], ['in the U.S. Im ', "in the U.S. I'm "], ['at 5 p.m. Dont ', "at 5 p.m. Don't "]]) {
     assert.equal(typed(t), want, 'a sentence\u2019s end');
   }
   assert.equal(typed('see you Wensday '), 'see you Wednesday ', 'a word that always has a capital');
@@ -119,6 +121,10 @@ test('what a box sends: the last word fixed, not a bot command, and for an edit 
   assert.equal(S.correctSending('love you, miss yuo', { was: 'love you', kept }), 'love you, miss you');
   assert.equal(S.correctSending('So do I. Or do i', { was: 'So do I', kept }), 'So do I. Or do I');
   assert.equal(S.correctSending("That's really wierd", { was: "That's so weird", kept }), "That's really weird");
+  // Only the old message's last word can be a fix made on sending.
+  assert.equal(S.correctSending('see you tomorow', { was: 'see you tomorrow at 5', kept }), 'see you tomorrow');
+  assert.equal(S.correctSending('I have alot', { was: 'I have a lot of work', kept }), 'I have a lot');
+  assert.equal(S.correctSending("they said 'dont'", { was: "they said 'don't'", kept }), "they said 'dont'", 'in quotes too');
   assert.equal(S.correctSending('ok dont', { kept: new Set(['dont']) }), 'ok dont');
 });
 
@@ -240,12 +246,25 @@ test('in the browser: Ctrl+Z, redo and Backspace after a fix; what was pasted is
 
     b = await box();
     await b.k.type('so teh ');
-    await b.k.press('Home');
-    await b.k.type('well ');
-    await b.k.press('End');
-    await b.k.type('ok');
-    for (let i = 0; i < 3; i++) await b.k.press('Control+z'); // ok, well, then the fix
-    assert.deepEqual(await b.state(), { text: 'so teh ', caret: 7, end: 7, kept: [] }, 'a fix moved along by typing before it is still found');
+    for (const key of ['Control+z', 'Control+z', 'Control+y', 'Control+y']) await b.k.press(key);
+    assert.deepEqual(await b.state(), { text: 'so the ', caret: 7, end: 7, kept: [] }, 'all undone and redone: as it was');
+
+    b = await box();
+    await b.k.type('look at teh cat');
+    for (let i = 0; i < 7; i++) await b.k.press('ArrowLeft');
+    await b.k.type('both ');
+    for (let i = 0; i < 3; i++) await b.k.press('Control+z');
+    await b.k.type('x');
+    assert.equal((await b.state()).text, 'look at teh x', 'typing just before a fix and undoing it all loses nothing');
+
+    b = await box();
+    await b.k.type('so teh ok');
+    await b.k.press('Control+z');
+    await b.k.press('Control+z');
+    await b.k.press('Backspace');
+    await b.k.press('Control+z');
+    await b.k.press('Control+y');
+    assert.deepEqual((await b.state()).kept, [], 'redoing your own Backspace isn\u2019t turning a fix down');
 
     b = await box();
     await b.paste('he said i dont');
@@ -263,6 +282,18 @@ test('in the browser: Ctrl+Z, redo and Backspace after a fix; what was pasted is
     await b.k.press('Backspace');
     await b.k.type('t ');
     assert.equal((await b.state()).text, "> i don't ", 'changed: no longer what was pasted');
+
+    b = await box();
+    await b.paste('dont');
+    await b.k.press('Home');
+    await b.k.type('and ');
+    assert.equal(await b.p.evaluate(() => window.sent()), 'and dont', 'typed before it, starting with the letter it starts with');
+
+    b = await box();
+    await b.paste('he said i dont');
+    await b.k.press('Control+z');
+    await b.k.press('Control+y');
+    assert.equal(await b.p.evaluate(() => window.sent()), 'he said i dont', 'a paste undone and redone is still a paste');
 
     b = await box();
     await b.paste('dont');

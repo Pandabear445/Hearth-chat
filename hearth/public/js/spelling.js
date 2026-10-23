@@ -134,9 +134,10 @@ function inCode(before) {
   return ((line.match(/`/g) || []).length) % 2 === 1;
 }
 // Whether a word at `start` begins a sentence (or a line): after ! ? or a full stop that isn't a title's (Mr. Noone,
-// a.k.a. Noone) or an initial's (J. Noone, Peter J. Noone; not "so do I." or "plan B.").
+// a.k.a. Noone) or an initial's (J. Noone, A.J. Noone; not the I of "so do I." nor U.S., a.m., p.m.).
 const TITLE = /^\W*(?:mr|mrs|ms|mx|dr|st|vs|prof|sr|jr|mt|a\.k\.a|e\.g|i\.e)\.$/i;
-const INITIAL = /^\W*[A-HJ-Z]\.$/;
+const INITIAL = /^\W*(?:[A-HJ-Z]|(?:[A-Za-z]\.)+[A-Za-z])\.$/;
+const ENDS_SENTENCE = /^\W*(?:U\.S|U\.K|a\.m|p\.m|A\.M|P\.M)\.$/;
 function startsSentence(text, start) {
   const before = text.slice(0, start);
   const gap = /[\s("'“‘[]*$/.exec(before);
@@ -144,11 +145,8 @@ function startsSentence(text, start) {
   if (!lead || gap[0].includes('\n')) return true;
   if (/[!?]$/.test(lead)) return true;
   if (!lead.endsWith('.')) return false;
-  const words = lead.split(/\s+/);
-  const last = words[words.length - 1];
-  const prior = words[words.length - 2];
-  if (TITLE.test(last)) return false;
-  return !(INITIAL.test(last) && (prior === undefined || /^\W*[A-Z]/.test(prior)));
+  const last = (/\S+$/.exec(lead) || [''])[0];
+  return !TITLE.test(last) && (!INITIAL.test(last) || ENDS_SENTENCE.test(last));
 }
 // The word that ends right before `at` (the character typed after it), and whether it may be corrected. text: the
 // box's text. Returns { start, end, word, fix } or null.
@@ -206,8 +204,10 @@ export function correctSending(text, { was = null, kept = keptWords() } = {}) {
   if (was != null) {
     const w = String(was);
     if (lastWord(t) === lastWord(w) || (w.slice(0, c.end) === t.slice(0, c.end) && !/[A-Za-z']/.test(w[c.end] || ''))) return t;
-    const at = c.start + c.fix.length;
-    if (w.slice(0, c.start) === t.slice(0, c.start) && w.startsWith(c.fix, c.start) && !/[A-Za-z']/.test(w[at] || '')) { keep(c.word); return t; }
+    // (The fix was the message's last word, after the same text: only the word is different.)
+    const wt = w.replace(/[^A-Za-z]+$/, '');
+    const k = wt.length - c.fix.length;
+    if (k >= 0 && wt.endsWith(c.fix) && !/[A-Za-z]/.test(wt[k - 1] || '') && w.slice(0, k) === t.slice(0, c.start)) { keep(c.word); return t; }
   }
   return t.slice(0, c.start) + c.fix + t.slice(c.end);
 }
@@ -276,14 +276,16 @@ export function lastWordPasted(ta) {
 // Returns a function that stops it.
 export function autocorrect(ta, { on = () => true } = {}) {
   // This box's fixes, the latest last: { start, word, fix, run (the punctuation and space that finished it), native,
-  // caret }. last: the latest, until anything else happens; undoing: Ctrl+Z was pressed right after it.
+  // caret, reverted (by Backspace) }. Undo puts the text before one back as it was, so where it is stays right. last: the latest, until anything else happens; undoing: Ctrl+Z was pressed right after it.
   const fixes = [];
   let last = null;
   let undoing = null;
   let fixing = false;
   let was = ta.value; // the text before the latest change, to see where it changed
+  let stash = null; // a paste an undo took away, for a redo to bring back
   // Where the text changed (it's compared with what it was), for the paste: the paste itself, or something typed before
-  // it (it moves along), in it (it's gone) or after it. Returns whether it was a paste.
+  // it (it moves along), in it (it's gone; an undo's can come back with a redo) or after it. Returns whether it was a
+  // paste.
   const track = (e) => {
     const now = ta.value;
     const max = Math.min(was.length, now.length);
@@ -291,17 +293,33 @@ export function autocorrect(ta, { on = () => true } = {}) {
     while (a < max && was[a] === now[a]) a++;
     let z = 0;
     while (z < max - a && was[was.length - 1 - z] === now[now.length - 1 - z]) z++;
-    const oldEnd = was.length - z;
-    const newEnd = now.length - z;
+    let oldEnd = was.length - z;
+    let newEnd = now.length - z;
+    // Typing and deleting happen at the caret: where the same letters make the change look further on (a "t" typed
+    // before "the"), it's put where the caret says.
+    const d = now.length - was.length;
+    if (d > 0 && oldEnd === a) {
+      const end = ta.selectionEnd;
+      const st = end - d;
+      if (st >= 0 && st < a && was.slice(0, st) === now.slice(0, st) && was.slice(st) === now.slice(end)) { a = st; oldEnd = st; newEnd = end; }
+    } else if (d < 0 && newEnd === a) {
+      const st = ta.selectionStart;
+      if (st < a && was.slice(0, st) === now.slice(0, st) && was.slice(st - d) === now.slice(st)) { a = st; oldEnd = st - d; newEnd = st; }
+    }
     was = now;
-    if (newEnd !== oldEnd) for (const f of fixes) if (oldEnd <= f.start) f.start += newEnd - oldEnd; // (so are fixes)
+    const history = e.inputType === 'historyUndo' || e.inputType === 'historyRedo';
     if (e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop') {
       if (newEnd > a) PASTES.set(ta, { start: a, end: newEnd, text: now.slice(a, newEnd) }); else PASTES.delete(ta);
+      stash = null;
       return true;
     }
     const p = PASTES.get(ta);
+    if (!p && stash && e.inputType === 'historyRedo' && pasteHolds(ta, stash)) { PASTES.set(ta, stash); stash = null; return false; }
+    if (!history) stash = null;
     if (!p || a >= p.end) return false;
-    if (oldEnd <= p.start) { p.start += newEnd - oldEnd; p.end += newEnd - oldEnd; } else PASTES.delete(ta);
+    if (oldEnd <= p.start) { p.start += newEnd - oldEnd; p.end += newEnd - oldEnd; return false; }
+    PASTES.delete(ta);
+    if (history) stash = p;
     return false;
   };
   const fixAt = (start, end) => {
@@ -333,7 +351,7 @@ export function autocorrect(ta, { on = () => true } = {}) {
         for (let i = fixes.length - 1; i >= 0 && !hit; i--) {
           const f = fixes[i];
           if (f.start + f.fix.length === s && ta.value.slice(f.start, s) === f.fix) hit = { f, back: false };
-          else if (f.start + f.word.length === s && ta.value.slice(f.start, s) === f.word) hit = { f, back: true };
+          else if (f.reverted && f.start + f.word.length === s && ta.value.slice(f.start, s) === f.word) hit = { f, back: true };
         }
       }
       if (!hit) return;
@@ -376,7 +394,7 @@ export function autocorrect(ta, { on = () => true } = {}) {
     fixing = true;
     let done = false;
     try { done = replace(ta, l.start, l.start + l.fix.length, l.word); } finally { fixing = false; }
-    if (done) keep(l.word);
+    if (done) { keep(l.word); l.reverted = true; }
   };
   const forget = () => { last = null; undoing = null; };
   ta.addEventListener('input', onInput);
