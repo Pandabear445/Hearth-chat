@@ -11,7 +11,7 @@ import { openCropper } from './cropper.js';
 import { adminView, CATEGORY_LABEL } from './admin.js';
 import { captchaWidget } from './captcha.js';
 import { prepareImage, makeQueue, whenVisible, whenOnScreen, previewThumb } from './media.js';
-import { isUploadUrl, safeDownloadHref, ALT_MAX } from './attachments.js';
+import { isUploadUrl, safeDownloadHref, ALT_MAX, maxFilesFor } from './attachments.js';
 import { outsideMode, outsideHost, imageDecision, openedLinks } from './outside.js';
 import { CHUNKED_ABOVE, uploadResumable, uploadSimple, download, makeUrlCache, mediaKind, typeLabel } from './files.js';
 import { EMOJI, EMOJI_NAMES, CATEGORY_ICONS, QUICK_REACTIONS, recentEmoji, pushRecentEmoji, searchEmoji } from './emoji.js';
@@ -6322,10 +6322,11 @@ function createComposer({ id, key, threadId, placeholder }) {
   });
 
   function addFiles(list) {
-    const mb = fileLimitMb();
-    const max = mb ? mb * 1024 * 1024 : Infinity;
+    const mb = S.config.maxUploadMb || 25;
+    const max = mb * 1024 * 1024;
+    const most = maxFiles();
     for (const f of list) {
-      if (state.pending.length >= 10) { toast('You can attach up to 10 files at once.', 'error'); break; }
+      if (state.pending.length >= most) { toast(`You can attach up to ${most} files at once.`, 'error'); break; }
       // A video over the limit (a phone's, usually) is made smaller to fit when it's sent (video-shrink.js).
       const video = mediaKind(f.type || '', f.name) === 'video';
       if (f.size > max && !(video && canShrink())) {
@@ -6415,7 +6416,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     if (chipFocus !== null) ((chipFocus && linkBox.querySelector(`[data-act="${chipFocus}"]`)) || ta).focus();
     if (state.pending.length) {
       extras.append(h('div', { class: 'pending-files' }, state.pending.map((p, i) => h('div', { class: `pending${p.spoiler ? ' is-spoiler' : ''}` },
-        p.url ? h('img', { src: p.url, alt: '' }) : h('div', { class: 'pending-ic' }, icon('file')),
+        p.url ? h('img', { src: p.url, alt: '', loading: 'lazy', decoding: 'async' }) : h('div', { class: 'pending-ic' }, icon('file')),
         p.spoiler || p.alt ? h('span', { class: 'pending-tags' }, p.spoiler ? h('span', { class: 'pending-tag' }, 'SPOILER') : null, p.alt ? h('span', { class: 'pending-tag' }, 'ALT') : null) : null,
         h('span', { class: 'pending-name', title: p.file.name }, p.file.name),
         h('span', { class: 'pending-size' }, p.shrink ? (p.shrinkTo ? `${fmtSize(p.file.size)} \u2192 about ${fmtSize(p.shrinkTo)}` : fmtSize(p.file.size)) : fmtSize(p.file.size)),
@@ -6459,6 +6460,8 @@ function createComposer({ id, key, threadId, placeholder }) {
     const sendAt = extra.sendAt || null;
     if (!text.trim() && !files.length && !poll) return;
     if (overrideText == null && !extra.files && checking()) { toast('Still checking the video\u2026 It can go in a moment.'); return; }
+    // (More than may go now: the server was handed to someone else since they were added.)
+    if (overrideText == null && !extra.files && files.length > maxFiles()) { toast(`You can send up to ${maxFiles()} files in one message. Remove some first.`, 'error'); return; }
     // A bot's slash command goes to the bot (after the warning), not into the channel.
     const slashIn = overrideText == null && !poll && slashChannel();
     const cmd = slashIn && SLASH.match(slashIn, text.trim());
@@ -6513,7 +6516,7 @@ function createComposer({ id, key, threadId, placeholder }) {
       const what = files.length === 1 ? files[0].file.name : `${files.length} files`;
       if (!retrying) upText.textContent = shrunk ? `Uploading ${what} (${Math.round(f * 100)}%)` : `Uploading ${what} — ${fmtSize(Math.round(f * totalBytes))} of ${fmtSize(totalBytes)} (${Math.round(f * 100)}%)`;
     };
-    const onStatus = ({ retrying: r, wait, shrinking }) => {
+    const onStatus = ({ retrying: r, wait, rate, shrinking }) => {
       if (shrinking != null) {
         shrunk = true;
         upStatus.hidden = false;
@@ -6523,7 +6526,8 @@ function createComposer({ id, key, threadId, placeholder }) {
       }
       retrying = r ? wait : null;
       upStatus.classList.toggle('retrying', !!r);
-      if (r) upText.textContent = `Connection lost. Trying again in ${Math.max(1, Math.round(wait / 1000))} s… (nothing sent so far is lost)`;
+      if (r) upText.textContent = rate ? `The server takes only so many files a minute: going on in ${Math.max(1, Math.round(wait / 1000))} s… (nothing sent so far is lost)`
+        : `Connection lost. Trying again in ${Math.max(1, Math.round(wait / 1000))} s… (nothing sent so far is lost)`;
     };
     const ctl = files.length ? new AbortController() : null;
     uploading = ctl;
@@ -6627,53 +6631,52 @@ function blockedDmNotice() {
     h('button', { class: 'btn sm ghost', onclick: () => toggleBlock(d.userId, false) }, 'Unblock'));
 }
 
-// The largest file someone can put in a message, in MB; 0: no limit (the server's owner: quotaOf in server/index.js).
-const fileLimitMb = () => (S.me && S.me.staffRole === 'owner' ? 0 : S.config.maxUploadMb || 25);
-// A file is encrypted on the device in one piece, so a very big one can be more than a phone has room for.
-const BIG_FOR_A_DEVICE = 256 * 1024 * 1024;
+// How many files one message may carry: 10, or 100 for the server's owner (attachments.js, server/index.js maxFilesOf).
+const maxFiles = () => maxFilesFor(S.me && S.me.staffRole);
+// A file that went up for a message that then couldn't be sent isn't sent again when it's tried again (p.sent): the
+// server keeps a file that no message uses for a day (server/index.js uploads.unlinked_cleanup).
+const SENT_KEEP_MS = 6 * 3600 * 1000;
 
 // ---- sending (every file gets its own random key, carried inside the encrypted message)
 // Small files go up in one request; bigger ones (CHUNKED_ABOVE) in resumable chunks that survive a dropped
-// connection (files.js). onStatus reports "connection lost, retrying"; signal cancels.
+// connection (files.js). onStatus reports "connection lost (or too many at once), retrying"; signal cancels.
+// One file at a time: made ready (big photos made smaller, a thumbnail), encrypted and uploaded before the next, so a
+// message with many photos never holds them all in memory. Progress counts the files by their size as picked.
 async function uploadEncryptedFiles(key, files, onProgress, { signal, onStatus } = {}) {
   if (!files.length) return [];
   if (key.startsWith('c:')) await sec.ready(serverOfChannel(key.slice(2)).id);
   const compress = P.chat.compressImages !== false;
-  // Optimize images first (resize big photos, make thumbnails), then encrypt and upload.
-  const prepared = [];
+  const total = files.reduce((a, p) => a + (p.file.size || 1), 0);
+  let done = 0;
+  onProgress(0);
+  const send = async (blobLike, weight) => {
+    if (signal && signal.aborted) throw Object.assign(new Error('Upload cancelled.'), { cancelled: true });
+    const { blob, k } = await E2EE.encryptFile(await blobLike.arrayBuffer());
+    const progress = (x) => onProgress((done + x * weight) / total);
+    const url = blob.byteLength > CHUNKED_ABOVE ? await uploadResumable(blob, { onProgress: progress, onStatus, signal }) : await uploadSimple(blob, { onProgress: progress, onStatus, signal });
+    done += weight;
+    return { url, k };
+  };
+  // Set from the file's Edit button in the box (also after a send that failed); like the rest, inside the message.
+  const tags = (p) => ({ ...(p.spoiler ? { sp: 1 } : {}), ...(p.alt ? { alt: String(p.alt).slice(0, ALT_MAX) } : {}) });
+  const out = [];
   for (const p of files) {
+    const weight = p.file.size || 1;
+    if (p.sent && p.sent.at > Date.now() - SENT_KEEP_MS) { out.push({ ...p.sent.base, ...tags(p) }); done += weight; onProgress(done / total); continue; }
     // A video over the limit is made smaller first (video-shrink.js; started in the tap that sent it).
     let file = p.file;
     if (p.session) {
       const s = p.session; p.session = null;
       file = await s.run({ maxBytes: budgetFor((S.config.maxUploadMb || 25) * 1024 * 1024), signal, onProgress: (x) => onStatus && onStatus({ shrinking: x }) });
     }
-    prepared.push({ ...(p.voice ? { file } : await prepareImage(file, { compress })), orig: p.file, voice: p.voice, dur: p.dur, alt: p.alt, spoiler: p.spoiler });
-  }
-  const total = prepared.reduce((a, p) => a + p.file.size + (p.thumb ? p.thumb.size : 0), 0) || 1;
-  let done = 0;
-  onProgress(0);
-  const send = async (blobLike, weight) => {
-    if (signal && signal.aborted) throw Object.assign(new Error('Upload cancelled.'), { cancelled: true });
-    let sealed;
-    try { sealed = await E2EE.encryptFile(await blobLike.arrayBuffer()); } catch (e) {
-      if (blobLike.size < BIG_FOR_A_DEVICE) throw e;
-      throw new Error(`This device ran out of memory encrypting a file that big (${fmtSize(blobLike.size)}). Try it from a computer, or send a smaller file.`);
-    }
-    const { blob, k } = sealed;
-    const progress = (x) => onProgress((done + x * weight) / total);
-    const url = blob.byteLength > CHUNKED_ABOVE ? await uploadResumable(blob, { onProgress: progress, onStatus, signal }) : await uploadSimple(blob, { onProgress: progress, signal });
-    done += weight;
-    return { url, k };
-  };
-  const out = [];
-  for (const p of prepared) {
-    const th = p.thumb ? await send(p.thumb, p.thumb.size) : null;
-    const main = await send(p.file, p.file.size);
-    out.push({ url: main.url, name: p.file.name, type: p.file.type, size: p.file.size, k: main.k, ...(p.w ? { w: p.w, h: p.h } : {}), ...(th ? { th: { url: th.url, k: th.k } } : {}),
-      ...(p.voice ? { voice: true, dur: p.dur } : {}),
-      // Set from the file's Edit button in the box; like the rest, it's inside the encrypted message.
-      ...(p.spoiler ? { sp: 1 } : {}), ...(p.alt ? { alt: String(p.alt).slice(0, ALT_MAX) } : {}) });
+    const r = p.voice ? { file } : await prepareImage(file, { compress });
+    const both = r.file.size + (r.thumb ? r.thumb.size : 0) || 1;
+    const th = r.thumb ? await send(r.thumb, (weight * r.thumb.size) / both) : null;
+    const main = await send(r.file, weight - (th ? (weight * r.thumb.size) / both : 0));
+    const base = { url: main.url, name: r.file.name, type: r.file.type, size: r.file.size, k: main.k, ...(r.w ? { w: r.w, h: r.h } : {}), ...(th ? { th: { url: th.url, k: th.k } } : {}),
+      ...(p.voice ? { voice: true, dur: p.dur } : {}) };
+    p.sent = { base, at: Date.now() };
+    out.push({ ...base, ...tags(p) });
   }
   return out;
 }
@@ -6689,23 +6692,27 @@ function mentionedIds(server, text) {
 
 // The longest ciphertext the server takes (validCipher in server/index.js; keep the two the same).
 const CIPHER_MAX = 64000;
+const OWNER_CIPHER_MAX = 262144; // the owner's messages may carry 100 files (maxFiles)
+const cipherMax = () => (S.me && S.me.staffRole === 'owner' ? OWNER_CIPHER_MAX : CIPHER_MAX);
 // Encrypts the payload, or if that comes out too long, the same message with less of its link preview: first
-// without the picture, then without the card (linkpreview.js payloadVariants). A message too long even then
-// goes as it is, and the server's usual "too big" answer applies. Everything else in it (the disappearing timer
-// x among them) stays in every variant.
+// without the picture, then without the card (linkpreview.js payloadVariants). A message too long even then isn't
+// sent: it says what to make shorter. Everything else in it (the disappearing timer x among them) stays in every
+// variant.
 async function encryptFitting(payload, encrypt) {
   let out;
   const variants = payloadVariants(payload);
-  // Ten long image descriptions on top of a long message can be too much as well: then they're cut short.
+  // Many long image descriptions on top of a long message can be too much as well: then they're cut short.
   const last = variants[variants.length - 1];
   if (Array.isArray(last.f) && last.f.some((f) => f && typeof f.alt === 'string' && f.alt.length > 200)) {
     variants.push({ ...last, f: last.f.map((f) => (f && typeof f.alt === 'string' ? { ...f, alt: f.alt.slice(0, 200) } : f)) });
   }
   for (const p of variants) {
     out = await encrypt(p);
-    if ((typeof out === 'string' ? out : out.ciphertext).length <= CIPHER_MAX) return out;
+    if ((typeof out === 'string' ? out : out.ciphertext).length <= cipherMax()) return out;
   }
-  return out;
+  const n = Array.isArray(payload.f) ? payload.f.length : 0;
+  throw new Error(n > 1 ? `This message is too long to send with ${n} files. Shorten the text, the file descriptions or the file names, or send fewer files at once.`
+    : 'This message is too long to send. Shorten it and try again.');
 }
 // Disappearing messages: the conversation's timer goes inside the encrypted message (x, so readers' apps hide it on
 // time even if the server doesn't delete it) and alongside it (ttl, so the server stamps the same one). If someone

@@ -4,7 +4,12 @@
 // message and from where (a "tracking pixel"), or turn a click on a file card into a jump to a look-alike site.
 
 const UPLOAD_PATH = /^\/uploads\/[a-z0-9]+(\.[a-z0-9]{1,8})?$/i;
-export const MAX_FILES = 10; // the app sends at most 10 attachments per message
+// How many files one message may carry: 10, or 100 for the server's owner (server/index.js maxFilesOf, which links at
+// most twice that many uploads, thumbnails included, to a message). Who owns the server isn't something a reader's app
+// knows, so every message is read with the bigger number.
+export const MAX_FILES = 10;
+export const OWNER_MAX_FILES = 100;
+export const maxFilesFor = (role) => (role === 'owner' ? OWNER_MAX_FILES : MAX_FILES);
 export const ALT_MAX = 1000; // an image description (alt text), as the attachment dialog allows
 
 export const isUploadUrl = (u) => typeof u === 'string' && UPLOAD_PATH.test(u);
@@ -14,7 +19,7 @@ export function cleanFiles(list) {
   if (!Array.isArray(list)) return [];
   const out = [];
   for (const f of list) {
-    if (out.length >= MAX_FILES) break;
+    if (out.length >= OWNER_MAX_FILES) break;
     if (!f || typeof f !== 'object' || !isUploadUrl(f.url)) continue;
     const e = { ...f, name: String(f.name || '').slice(0, 255), type: String(f.type || '').slice(0, 100), size: Math.max(0, +f.size || 0) };
     if (f.th !== undefined && !(f.th && typeof f.th === 'object' && isUploadUrl(f.th.url))) delete e.th; // a broken thumbnail just isn't shown

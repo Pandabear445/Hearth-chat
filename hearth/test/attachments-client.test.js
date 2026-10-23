@@ -49,7 +49,7 @@ test('the app sends both inside the message, reads alt for pictures and blurs sp
   assert.match(app, /if \(f\.sp\) spoilerCover\(holder, el, media\)/);
   // Unopened spoilers stay out of the picture viewer's left/right browsing.
   assert.match(app, /!i\.closest\('\.att-spoiler:not\(\.revealed\)'\)/);
-  // A message that would be too big for the server with ten long descriptions goes with them cut short.
+  // A message that would be too big for the server with many long descriptions goes with them cut short.
   const fit = app.slice(app.indexOf('async function encryptFitting('), app.indexOf('async function sendTo('));
   assert.match(fit, /alt: f\.alt\.slice\(0, 200\)/);
   // The server never sees either: no route or column for them.

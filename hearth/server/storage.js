@@ -28,7 +28,7 @@ const jobs = require('./jobs');
 
 module.exports = function setupStorage(ctx) {
   const { api, auth, db, fail, wrap, rateLimit, limitNet, HttpError, quotaOf, overLimit, uploadLimits, fmtMb, MB, getUserRow,
-    removeUpload, fileName, UPLOAD_DIR, DATA_DIR, unseal, auditLog, stepUp, adminOnly, brief } = ctx;
+    removeUpload, fileName, UPLOAD_DIR, DATA_DIR, unseal, auditLog, stepUp, adminOnly, brief, uploadPace = () => 1 } = ctx;
   const now = () => Date.now();
 
   const PART_DIR = path.join(DATA_DIR, 'upload-parts');
@@ -71,16 +71,17 @@ module.exports = function setupStorage(ctx) {
 
   // ------------------------------------------------------------------ start
   api.post('/uploads', auth, (req, res) => {
-    rateLimit('upsess:' + req.userId, 20, 60 * 1000);
-    rateLimit('upsessh:' + req.userId, 200, 3600 * 1000);
-    limitNet(req, 'upsess', 100, 60 * 1000);
+    // More for the owner, whose messages may carry 100 files (uploadPace in index.js).
+    const pace = uploadPace(req.userId);
+    rateLimit('upsess:' + req.userId, 20 * pace, 60 * 1000);
+    rateLimit('upsessh:' + req.userId, 200 * pace, 3600 * 1000);
+    if (pace === 1) limitNet(req, 'upsess', 100, 60 * 1000);
     const size = Number((req.body || {}).size);
     if (!Number.isSafeInteger(size) || size < 1) fail(400, 'Say how big the file is, in bytes.', 'bad_size');
     const q = quotaOf(req.userId);
     if (q.blocked) fail(403, 'Uploads are turned off for your account. Ask an admin if you think that\u2019s a mistake.');
-    // The same per-file limit as one-request uploads, with the same allowance for the encryption overhead (none
-    // for the owner: fileMb 0; the disk check below still holds).
-    if (q.fileMb && size > q.fileMb * MB + MB) fail(413, `That file is too big. Files can be up to ${q.fileMb} MB.`, 'too_big');
+    // The same per-file limit as one-request uploads, with the same allowance for the encryption overhead.
+    if (size > q.fileMb * MB + MB) fail(413, `That file is too big. Files can be up to ${q.fileMb} MB.`, 'too_big');
     if (db.prepare('SELECT COUNT(*) n FROM upload_sessions WHERE user_id = ?').get(req.userId).n >= MAX_SESSIONS) {
       fail(429, 'You have too many uploads going at once. Let one finish (or cancel one), then try again.', 'too_many_uploads');
     }
@@ -183,7 +184,7 @@ module.exports = function setupStorage(ctx) {
     return hash.digest('hex');
   }
   api.post('/uploads/:id/complete', auth, wrap(async (req, res) => {
-    rateLimit('updone:' + req.userId, 60, 60 * 1000);
+    rateLimit('updone:' + req.userId, 60 * uploadPace(req.userId), 60 * 1000);
     const s = own(req);
     const want = String((req.body || {}).sha256 || '').toLowerCase();
     if (!SHA.test(want)) fail(400, 'Send the SHA-256 of the whole file (64 hex characters).', 'bad_hash');

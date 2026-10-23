@@ -3916,8 +3916,7 @@ async function videoShrink(t) {
     return btoa(bin);
   });
   const buffer = Buffer.from(video, 'base64');
-  // Over what the server takes from anyone but the owner at a 1 MB limit (1 MB, plus 1 MB for the encryption).
-  check(buffer.length > 2.2 * 1024 * 1024, `The test video should be well over 2 MB (it's ${buffer.length} bytes).`);
+  check(buffer.length > 1.5 * 1024 * 1024, `The test video should be well over 1 MB (it's ${buffer.length} bytes).`);
   check(await setLimit(1) === 200, 'The owner should be able to set the limit to 1 MB.');
   try {
     await alice.railButton(SERVER);
@@ -3974,19 +3973,38 @@ async function videoShrink(t) {
     const watch = await alice.page.evaluate(() => ({ plays: window.__shrinkWatch.plays, errors: window.__shrinkWatch.errors }));
     check(watch.plays.length >= 1 && watch.plays[0] === true, `The video should start playing in the tap that sends it (got ${JSON.stringify(watch.plays)}).`);
     check(!watch.errors.length && !(await alice.$('.toast.toast-error').count()), `No error on the way (got ${JSON.stringify(watch.errors)}).`);
-    // The server's owner (bob) has no limit: the same video goes as it is, not made smaller.
-    await bob.$('.cw-main input[type=file]').setInputFiles([{ name: 'owners-video.webm', mimeType: 'video/webm', buffer }]);
-    await bob.$('.pending-files .pending', { hasText: 'owners-video.webm' }).waitFor();
-    check(!(await bob.$('.pending-files .pending-note').count()) && !(await bob.$('.toast.toast-error').count()), 'The owner\u2019s video should be taken as it is.');
-    await bob.$('#composer-input').fill('The owner\u2019s video, as it is');
-    await bob.$('.send-btn').click();
-    await alice.message('The owner\u2019s video, as it is').first().waitFor({ timeout: 60000 });
-    const ownerStored = Math.max(...t.server.rows("SELECT size FROM user_files WHERE kind = 'attachment' ORDER BY created_at DESC LIMIT 2").map((r) => r.size));
-    check(ownerStored > buffer.length, `The owner's video should be stored whole (${ownerStored} bytes stored, ${buffer.length} sent).`);
   } finally {
     await alice.page.evaluate(() => window.__shrinkWatch && window.__shrinkWatch.restore()).catch(() => {});
     await setLimit(25);
   }
+}
+
+// ------------------------------------------------------------------ the owner sends more than 10 files at once
+// The server's owner (bob) can put up to 100 files in one message; everyone else 10 (attachments.js maxFilesFor,
+// server/index.js maxFilesOf; test/owner-many-files.test.js has the server's side).
+async function ownerManyFiles(t) {
+  const { alice, bob } = t.people;
+  const notes = (n, who) => Array.from({ length: n }, (_, i) => ({ name: `${who}-note-${i + 1}.txt`, mimeType: 'text/plain', buffer: Buffer.from(`note ${i + 1} from ${who}\n`) }));
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await bob.$('.cw-main input[type=file]').setInputFiles(notes(12, 'bob'));
+  await bob.$('.pending-files .pending', { hasText: 'bob-note-12.txt' }).waitFor();
+  check(await bob.$('.pending-files .pending').count() === 12, 'The owner should be able to attach 12 files.');
+  check(!(await bob.$('.toast.toast-error').count()), 'No “up to 10 files” for the owner.');
+  await bob.$('#composer-input').fill('Twelve files from the owner');
+  await bob.$('.send-btn').click();
+  const m = alice.message('Twelve files from the owner').first();
+  await m.waitFor({ timeout: 60000 });
+  await m.locator('.att-file', { hasText: 'bob-note-12.txt' }).waitFor({ timeout: 30000 });
+  check(await m.locator('.att-file').count() === 12, `Alice should see all 12 files (got ${await m.locator('.att-file').count()}).`);
+  // Everyone else stops at 10, as before.
+  await alice.$('.cw-main input[type=file]').setInputFiles(notes(12, 'alice'));
+  await alice.toast('You can attach up to 10 files at once.');
+  check(await alice.$('.pending-files .pending').count() === 10, 'Alice should get 10 of her 12 files in the box.');
+  for (let i = 0; i < 10; i++) await alice.$('.pending-files .pending-x').first().click();
+  await alice.$('.pending-files').waitFor({ state: 'detached' });
 }
 
 // ------------------------------------------------------------------ the owner's password reset link
@@ -4144,7 +4162,8 @@ export const FLOWS = [
   ['staff deletion: the owner deletes an account for someone who can’t sign in, from Admin → Users', staffDelete],
   ['phones: held sideways it’s still the phone layout; a swipe from the left edge opens the drawer; Back closes the drawer, members, a picture, a menu and settings without leaving; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
   ['phone message actions: a long press opens a sheet (react, reply, copy, edit, delete; closes with Back, Esc, a tap or a swipe); a roomier message box with GIFs and Send later under +; the desktop keeps its hover toolbar and buttons', phoneMessageActions],
-  ['a video over the limit: made smaller on the device to fit, sent, and it plays; the owner has no limit', videoShrink],
+  ['a video over the limit: made smaller on the device to fit, sent, and it plays', videoShrink],
+  ['the owner sends 12 files in one message; everyone else still stops at 10', ownerManyFiles],
   ['owner reset link: the owner makes a one-time link in Admin → Users for someone who can\u2019t sign in; they choose their own new password with it; the owner can\u2019t verify the keys it made', ownerResetLink],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],

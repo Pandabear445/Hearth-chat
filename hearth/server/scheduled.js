@@ -81,7 +81,8 @@ const MAX_WAIT_MS = 60000; // the timer looks again at least this often
 const BATCH = 50;
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const REF = /^[A-Za-z0-9_-]{16,64}$/;
-const DRAFT_MAX = 66000; // the sender's copy: the same message as the ciphertext (at most 64,000), without a signature
+// The sender's copy: the same message as the ciphertext (validCipher, cipherMax), without a signature.
+const DRAFT_EXTRA = 2000;
 const UPLOAD = /^\/uploads\/[a-z0-9]+\.bin$/;
 
 // Why one is held or failed, in the words the app shows and the push carries.
@@ -104,7 +105,7 @@ const WHY = {
 module.exports = function setupScheduled(ctx) {
   const {
     api, auth, db, fail, rateLimit, limitMessages, newId, now, perms, PM, requireChannel, requireDm, isMember, serverOf, isBlocked,
-    getUserRow, stillSuspended, validCipher, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,
+    getUserRow, stillSuspended, validCipher, cipherMax, maxFilesOf, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,
     postChannelMessage, postDmMessage, pushTo, maintenance, nameOf, emitTo, ready = () => true,
     hasChat = (c) => c.type === 'text', checkTtl = () => {},
   } = ctx;
@@ -321,8 +322,8 @@ module.exports = function setupScheduled(ctx) {
     return t;
   }
   // The sender's own copy (see the top of this file): this server can't open it, only check its shape.
-  function checkDraft(draft) {
-    if (typeof draft !== 'string' || !draft.startsWith('x1:') || draft.length < 20 || draft.length > DRAFT_MAX) fail(400, 'Bad encrypted payload. Reload the page.', 'draft');
+  function checkDraft(draft, uid) {
+    if (typeof draft !== 'string' || !draft.startsWith('x1:') || draft.length < 20 || draft.length > cipherMax(uid) + DRAFT_EXTRA) fail(400, 'Bad encrypted payload. Reload the page.', 'draft');
     return draft;
   }
   function checkRef(ref) {
@@ -330,7 +331,8 @@ module.exports = function setupScheduled(ctx) {
     return ref;
   }
   const cleanMentions = (m) => (Array.isArray(m) ? [...new Set(m.filter((x) => typeof x === 'string' && ID.test(x)))].slice(0, 50) : []);
-  const cleanFiles = (f) => (Array.isArray(f) ? [...new Set(f.filter((u) => typeof u === 'string' && UPLOAD.test(u)))].slice(0, 20) : []);
+  // Each attachment may have a thumbnail: twice the files someone may send in one message (maxFilesOf in index.js).
+  const cleanFiles = (f, uid) => (Array.isArray(f) ? [...new Set(f.filter((u) => typeof u === 'string' && UPLOAD.test(u)))].slice(0, 2 * maxFilesOf(uid)) : []);
   function limitScheduling(req) {
     rateLimit('sched:' + req.userId, 30, 60000);
     limitMessages(req); // scheduling one is sending one, later
@@ -377,15 +379,15 @@ module.exports = function setupScheduled(ctx) {
     if ((req.body || {}).threadId && c.type !== 'text') fail(400, 'Threads are only in text channels.');
     limitScheduling(req);
     const b = req.body || {};
-    validCipher(b.ciphertext);
+    validCipher(b.ciphertext, req.userId);
     const ref = checkRef(b.ref);
-    const draft = checkDraft(b.draft);
+    const draft = checkDraft(b.draft, req.userId);
     const sendAt = checkSendAt(b.sendAt);
     const s = serverOf(c);
     if (perms.timedOut(s.id, req.userId)) fail(403, 'You’re timed out in this server for now.', 'timed_out');
     const cp = perms.channel(s, c, req.userId);
     if (!(cp & PM.SEND_MESSAGES)) fail(403, 'You don’t have permission to send messages here.');
-    const files = cleanFiles(b.files);
+    const files = cleanFiles(b.files, req.userId);
     if (files.length && !(cp & PM.ATTACH_FILES)) fail(403, 'You don’t have permission to attach files here.');
     let threadId = null;
     if (b.threadId) {
@@ -411,16 +413,16 @@ module.exports = function setupScheduled(ctx) {
     const peer = getUserRow(peerOf(d, req.userId));
     if (!peer || peer.deleted_at) fail(403, 'This account was deleted.', 'deleted');
     const b = req.body || {};
-    validCipher(b.ciphertext);
+    validCipher(b.ciphertext, req.userId);
     const ref = checkRef(b.ref);
-    const draft = checkDraft(b.draft);
+    const draft = checkDraft(b.draft, req.userId);
     const sendAt = checkSendAt(b.sendAt);
     checkTtl(b, d.disappear_secs);
     roomFor(req.userId);
     const r = create({
       user_id: req.userId, dm_id: d.id, reply_to: dmReplyIn(d, b.replyTo), ciphertext: b.ciphertext, ref, draft, session_id: req.session.id,
       own_key: ownKey(getUserRow(req.userId), false), peer_key: peerKey(peer), ttl: ttlOf(b), send_at: sendAt,
-    }, cleanFiles(b.files));
+    }, cleanFiles(b.files, req.userId));
     res.json(serialize(r));
   });
 
@@ -465,8 +467,8 @@ module.exports = function setupScheduled(ctx) {
     const set = {};
     if (b.sendAt !== undefined) set.send_at = checkSendAt(b.sendAt);
     if (b.ciphertext !== undefined) {
-      validCipher(b.ciphertext);
-      set.draft = checkDraft(b.draft);
+      validCipher(b.ciphertext, req.userId);
+      set.draft = checkDraft(b.draft, req.userId);
       // A held one whose time has passed goes out the moment it's pending again. Only when the request says so (or
       // gives a new time): an edit or a confirmation shouldn't quietly send a message that's hours or days late.
       if (r.status === 'held' && r.send_at <= now() && set.send_at === undefined && b.sendNow !== true) {
@@ -495,7 +497,7 @@ module.exports = function setupScheduled(ctx) {
     let go = r;
     if (b.ciphertext !== undefined) {
       const conv = r.channel_id ? requireChannel(r.channel_id, req.userId) : requireDm(r.dm_id, req.userId);
-      validCipher(b.ciphertext);
+      validCipher(b.ciphertext, req.userId);
       go = { ...r, ...reencrypted(r, b, req, conv) };
     }
     const p = prepare(go);

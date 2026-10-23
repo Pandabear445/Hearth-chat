@@ -859,7 +859,9 @@ test('files-5/xss-3: attachment entries from encrypted messages only keep files 
   assert.deepEqual(good, [{ url: '/uploads/0abc123def.bin', k: 'key', name: 'a.png', type: 'image/png', size: 10, th: { url: '/uploads/0abc124.bin', k: 'k2' } }]);
   // A bad thumbnail is dropped, the file itself kept.
   assert.equal(A.cleanFiles([{ url: '/uploads/a1.bin', k: 'k', th: { url: 'https://evil.example/t.png' } }])[0].th, undefined);
-  assert.equal(A.cleanFiles(Array.from({ length: 50 }, (_, i) => ({ url: `/uploads/f${i}.bin`, k: 'k' }))).length, 10);
+  // Up to 100 (the server's owner may send that many; a reader can't tell who sent it), never more.
+  assert.equal(A.cleanFiles(Array.from({ length: 150 }, (_, i) => ({ url: `/uploads/f${i}.bin`, k: 'k' }))).length, 100);
+  assert.deepEqual([A.maxFilesFor('owner'), A.maxFilesFor('admin'), A.maxFilesFor(null)], [100, 10, 10]);
   // Download links: a decrypted copy of this app, or a file on this server. Never another site.
   const origin = 'https://chat.example.test';
   assert.equal(A.safeDownloadHref('https://other.example/', origin), null);

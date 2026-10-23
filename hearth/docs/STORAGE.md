@@ -42,10 +42,10 @@ unattached `blobs` row. Old apps keep using the one-request route; it isn't goin
 
 | Limit | Default | Where |
 |---|---|---|
-| Largest file in a message (`fileMb`) | `MAX_UPLOAD_MB` (25) + 1 MB for encryption overhead | Admin → Security → Storage & limits; supporters may get more (Admin → Money); the owner has no limit |
+| Largest file in a message (`fileMb`) | `MAX_UPLOAD_MB` (25) + 1 MB for encryption overhead | Admin → Security → Storage & limits; supporters may get more (Admin → Money) |
 | Storage per person (`quotaMb`) | 1000 MB | same; per-person override on the user's admin page |
 | Uploads per person per day (`dailyMb`) | 500 MB | same |
-| Admins and the owner | no quota or daily limit (the per-file limit still applies to admins; the owner has none for files in messages, only the 64 MB disk margin, and pictures and profile songs keep their limits) | |
+| Admins and the owner | no quota or daily limit (the per-file limit still applies) | |
 | Unfinished resumable uploads per person | 4 | `MAX_SESSIONS` in `server/storage.js` |
 | Chunk size | 4 MiB (`UPLOAD_CHUNK_BYTES`) | returned by `POST /api/uploads` |
 | Idle time before an unfinished upload expires | 24 h (`UPLOAD_SESSION_IDLE_MS`) | |

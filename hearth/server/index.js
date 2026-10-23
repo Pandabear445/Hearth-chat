@@ -874,9 +874,17 @@ function removeUpload(url) {
 // ---------------------------------------------------------------- upload limits
 // fileMb: largest attachment · imageMb: avatars, banners, icons, emoji sources · songMb: profile songs
 // quotaMb: total storage per person · dailyMb: uploads per person per 24 hours. 0 = no limit.
-// Admins and the owner aren't limited by quota/daily (per-file limits still apply), and the owner's files in
-// messages have no size limit at all (fileMb 0): only the disk's free space (storage.js) and their device's memory.
+// Admins and the owner aren't limited by quota/daily (per-file limits still apply).
 const LIMIT_DEFAULTS = { fileMb: MAX_UPLOAD_MB, imageMb: 12, songMb: 10, quotaMb: 1000, dailyMb: 500 };
+// Files in one message: up to 10, or 100 for the server's owner. A picture goes up with a thumbnail, so twice as many
+// uploads are linked to a message (attachBlobs). The owner's bigger messages also get more room for their ciphertext
+// (validCipher) and more uploads a minute (limited, storage.js). The app has the same numbers (attachments.js).
+const MAX_FILES = 10;
+const OWNER_MAX_FILES = 100;
+const isOwner = (uid) => !!uid && staffRole(uid) === 'owner';
+const maxFilesOf = (uid) => (isOwner(uid) ? OWNER_MAX_FILES : MAX_FILES);
+// How many times the usual number of uploads a minute (and an hour) someone may send files for messages with.
+const uploadPace = (uid) => (isOwner(uid) ? 10 : 1);
 function uploadLimits() {
   let v = {};
   try { v = JSON.parse(getSetting('uploadLimits') || '{}') || {}; } catch { /* defaults */ }
@@ -899,7 +907,6 @@ function quotaOf(uid) {
   // Supporters can also send bigger files, if the owner set that perk (Admin → Money).
   const sf = row && row.supporter ? MONEY.supporterFileMb() : 0;
   if (sf > lim.fileMb) lim.fileMb = sf;
-  if (staffRole(uid) === 'owner') lim.fileMb = 0;
   return { ...lim, quotaMb, dailyMb: exempt ? 0 : lim.dailyMb, used: usedBytes(uid), today: dayBytes(uid), blocked: !!(row && row.uploads_blocked), exempt };
 }
 const fmtMb = (b) => `${(b / MB).toFixed(b < 10 * MB ? 1 : 0)} MB`;
@@ -958,18 +965,20 @@ function limited(kind, base, field) {
   const perFile = { file: 'fileMb', image: 'imageMb', song: 'songMb' }[kind];
   const label = { file: 'Files', image: 'Images', song: 'Songs', gif: 'GIFs for the library' }[kind];
   return (req, res, next) => {
-    // Counted before the file is received, so a flood never reaches the disk.
+    // Counted before the file is received, so a flood never reaches the disk. The owner's messages may carry 100
+    // files (200 uploads with their thumbnails), so their files for messages get ten times as many, and don't use up
+    // the share of the network they're on (everyone there has it).
     try {
-      rateLimit(`up:user:${req.userId}`, 60, 60000);
-      rateLimit(`up:userh:${req.userId}`, 600, 3600000);
-      rateLimit(`up:session:${req.session.id}`, 40, 60000);
-      limitNet(req, 'up', 150, 60000);
+      const pace = kind === 'file' ? uploadPace(req.userId) : 1;
+      rateLimit(`up:user:${req.userId}`, 60 * pace, 60000);
+      rateLimit(`up:userh:${req.userId}`, 600 * pace, 3600000);
+      rateLimit(`up:session:${req.session.id}`, 40 * pace, 60000);
+      if (pace === 1) limitNet(req, 'up', 150, 60000);
     } catch (e) { return next(e); }
     const q = quotaOf(req.userId);
     if (q.blocked) return next(new HttpError(403, 'Uploads are turned off for your account. Ask an admin if you think that\u2019s a mistake.'));
     const perFileMb = kind === 'gif' ? LIB_MAX_MB : q[perFile];
-    // Encrypted attachments carry a little overhead. 0: no limit (the owner's files in messages).
-    const fileCap = perFileMb ? perFileMb * MB + (kind === 'file' ? MB : 0) : Infinity;
+    const fileCap = perFileMb * MB + (kind === 'file' ? MB : 0); // encrypted attachments carry a little overhead
     const quotaLeft = q.quotaMb ? q.quotaMb * MB - q.used : Infinity;
     const dayLeft = q.dailyMb ? q.dailyMb * MB - q.today : Infinity;
     if (quotaLeft <= 0) return next(new HttpError(413, `You\u2019ve used all ${q.quotaMb} MB of your storage. Delete some old files or ask an admin for more room.`, 'quota'));
@@ -1049,7 +1058,7 @@ function requireUnlocked(uid) {
 function attachBlobs(files, userId, messageId, expiresAt = null) {
   if (!Array.isArray(files)) return;
   const stmt = db.prepare('UPDATE blobs SET message_id = ?, expires_at = ? WHERE name = ? AND uploader_id = ? AND message_id IS NULL');
-  files.slice(0, 20).forEach((u) => { // up to 10 attachments, each with a thumbnail
+  [...new Set(files)].slice(0, 2 * maxFilesOf(userId)).forEach((u) => { // each attachment may have a thumbnail
     if (typeof u === 'string' && /^\/uploads\/[a-z0-9]+\.bin$/.test(u)) stmt.run(messageId, expiresAt, path.basename(u), userId);
   });
 }
@@ -3644,8 +3653,13 @@ function followsVoiceChat(c, u) {
 // call has none: the group's own conversation is its chat.
 const hasChat = (c, srv = serverOf(c)) => c.type === 'text' || (c.type === 'voice' && !!srv && srv.kind !== 'group');
 
-const validCipher = (c) => {
-  if (typeof c !== 'string' || c.length < 20 || c.length > 64000) fail(400, 'Bad encrypted payload. Reload the page.');
+// The longest ciphertext a message may have: 64,000 characters is 10 files with long names and descriptions and 4,000
+// characters of text. The owner's messages may carry 100 files: 262,144. The app has the same numbers (app.js).
+const CIPHER_MAX = 64000;
+const OWNER_CIPHER_MAX = 262144;
+const cipherMax = (uid) => (isOwner(uid) ? OWNER_CIPHER_MAX : CIPHER_MAX);
+const validCipher = (c, uid) => {
+  if (typeof c !== 'string' || c.length < 20 || c.length > cipherMax(uid)) fail(400, 'Bad encrypted payload. Reload the page.');
 };
 function requireCurrentEpoch(serverId, epoch) {
   const s = db.prepare('SELECT key_epoch, needs_rotation FROM servers WHERE id = ?').get(serverId);
@@ -3671,7 +3685,7 @@ api.post('/channels/:id/messages', auth, (req, res) => {
   if ((req.body || {}).threadId && c.type !== 'text') fail(400, 'Threads are only in text channels.');
   limitMessages(req);
   const { ciphertext, epoch, files } = req.body || {};
-  validCipher(ciphertext);
+  validCipher(ciphertext, req.userId);
   const cp = perms.channel(srvRow, c, req.userId);
   if (!(cp & PM.SEND_MESSAGES)) fail(403, 'You don\u2019t have permission to send messages here.');
   if (Array.isArray(files) && files.length && !(cp & PM.ATTACH_FILES)) fail(403, 'You don\u2019t have permission to attach files here.');
@@ -3764,7 +3778,7 @@ api.patch('/messages/:id', auth, (req, res) => {
   const c = requireMessageChannel(m, req.userId);
   if (perms.timedOut(c.server_id, req.userId)) fail(403, 'You\u2019re timed out in this server for now.', 'timed_out');
   const { ciphertext, epoch } = req.body || {};
-  validCipher(ciphertext);
+  validCipher(ciphertext, req.userId);
   const ep = requireCurrentEpoch(c.server_id, epoch);
   // Editing an older server-encrypted message: drop its readable text, keep the file list for cleanup.
   const body = m.ciphertext ? m.body : seal({ content: '', attachments: unseal(m.body).attachments || [] });
@@ -3991,7 +4005,7 @@ api.post('/dms/:id/messages', auth, (req, res) => {
   // A deleted account keeps its public key (so old messages stay readable), but nobody can read new ones.
   if ((getUserRow(d.user_a === req.userId ? d.user_b : d.user_a) || {}).deleted_at) fail(403, 'This account was deleted.', 'deleted');
   const { ciphertext, files } = req.body || {};
-  validCipher(ciphertext);
+  validCipher(ciphertext, req.userId);
   DIS.checkTtl(req.body, d.disappear_secs);
   res.json(postDmMessage(d, req.userId, { ciphertext, files, replyTo: dmReplyIn(d, (req.body || {}).replyTo) }, req.body));
 });
@@ -4029,7 +4043,7 @@ api.patch('/dm-messages/:id', auth, (req, res) => {
   // Editing is sending new words: a block stops it like it stops new messages (deleting your own still works).
   if (isBlocked(d.user_a, d.user_b)) fail(403, 'You can\u2019t message this person.');
   const { ciphertext } = req.body || {};
-  validCipher(ciphertext);
+  validCipher(ciphertext, req.userId);
   db.prepare('UPDATE dm_messages SET ciphertext = ?, edited_at = ? WHERE id = ?').run(ciphertext, now(), m.id);
   const msg = serializeDmMessage(db.prepare('SELECT * FROM dm_messages WHERE id = ?').get(m.id));
   io.to([`user:${d.user_a}`, `user:${d.user_b}`]).emit('dm:update', msg);
@@ -4049,7 +4063,7 @@ api.delete('/dm-messages/:id', auth, (req, res) => {
 // Encrypted attachment blobs. The client encrypts each file with its own random key before upload.
 api.post('/upload/encrypted', auth, limited('file', uploadEncrypted, 'file'), (req, res) => {
   if (!req.file) fail(400, 'No file.');
-  rateLimit('blob:' + req.userId, 120, 60 * 1000);
+  rateLimit('blob:' + req.userId, 120 * uploadPace(req.userId), 60 * 1000);
   db.prepare('INSERT INTO blobs (name, uploader_id, created_at) VALUES (?, ?, ?)').run(req.file.filename, req.userId, now());
   res.json({ url: '/uploads/' + req.file.filename });
 });
@@ -6459,7 +6473,7 @@ const MEMB = require('./memberships')({ api, auth, db, fail, wrap, rateLimit, ge
   mailPublicUrl: () => { let v = {}; try { v = JSON.parse(getSetting('mail') || '{}') || {}; } catch { /* none */ } return String(v.publicUrl || process.env.PUBLIC_URL || '').replace(/\/+$/, ''); } });
 // Resumable uploads, storage reports and orphan cleanup (server/storage.js).
 STORE = require('./storage')({ api, auth, db, fail, wrap, rateLimit, limitNet, HttpError, quotaOf, overLimit, uploadLimits, fmtMb, MB, getUserRow,
-  removeUpload, fileName, UPLOAD_DIR, DATA_DIR, unseal, auditLog, stepUp, adminOnly, brief });
+  removeUpload, fileName, UPLOAD_DIR, DATA_DIR, unseal, auditLog, stepUp, adminOnly, brief, uploadPace });
 // Message search (server/search.js): filters by where, who and when; the search words stay in the app.
 require('./search')({ api, auth, db, fail, rateLimit, canIn, PM, requireServer, requireChannel, requireDm, serializeMessage, serializeDmMessage, reactionsFor, history: HIST });
 // Bots and integrations (server/bots.js): installs, scopes, the bot API, signed webhooks, slash commands.
@@ -6499,7 +6513,7 @@ require('./imports')({ api, auth, db, fail, rateLimit, limitNet, countHit, hitsS
   serializeServer, keyState, getIo: () => io, auditLog, requirePerm });
 // Scheduled messages, "Send later" (server/scheduled.js): ciphertext held until its time, then posted as if sent then.
 SCHED = require('./scheduled')({ api, auth, db, fail, rateLimit, limitMessages, newId, now, perms, PM, requireChannel, requireDm, isMember, serverOf,
-  isBlocked, getUserRow, stillSuspended, validCipher, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,
+  isBlocked, getUserRow, stillSuspended, validCipher, cipherMax, maxFilesOf, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,
   postChannelMessage, postDmMessage, pushTo, maintenance, nameOf, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), ready: () => !!io,
   // Voice channels' chats take scheduled messages like text channels; the disappearing timer a message was encrypted
   // for is checked when it's scheduled, as when it's sent (server/disappear.js).

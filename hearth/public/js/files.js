@@ -50,6 +50,11 @@ function request(method, path, { body, json, onProgress, signal, timeout = 12000
 const failure = (r, fallback) => Object.assign(new Error((r.data && r.data.error) || fallback || `Upload failed (${r.status}).`), { status: r.status, code: r.data && r.data.code });
 // Network trouble, a busy server or "too many requests": worth waiting and trying again (a full disk isn't).
 const retryable = (r) => !r || r.status === 0 || r.status === 408 || r.status === 429 || (r.status >= 500 && r.status !== 507);
+// How long to wait before the next try: as long as the server asks after "too many", otherwise longer each time.
+const waitFor = (r, tries) => (r && r.status === 429 && r.retryAfter ? r.retryAfter * 1000 : Math.min(30000, 1000 * 2 ** (tries - 1)));
+// What onStatus gets while waiting: rate is true when the server said "too many" (a message with many files sends
+// many uploads in a row), not that the connection dropped.
+const waiting = (r, wait) => ({ retrying: true, wait, rate: !!(r && r.status === 429) });
 
 export async function sha256Hex(buf) {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
@@ -58,18 +63,21 @@ export async function sha256Hex(buf) {
 
 // Uploads already-encrypted bytes (a Uint8Array) and resolves with the blob's /uploads/ address.
 //   onProgress(fraction)            how much the server has confirmed (and what's in flight)
-//   onStatus({ retrying, wait })    "connection lost, trying again in …" and back to normal
+//   onStatus({ retrying, wait, rate })  "connection lost (or too many at once), trying again in …" and back to normal
 //   signal                          an AbortSignal: cancelling also tells the server, which frees the room
 export async function uploadResumable(bytes, { onProgress = () => {}, onStatus = () => {}, signal } = {}) {
   const size = bytes.byteLength;
   const hash = await sha256Hex(bytes);
   const data = new Blob([bytes]);
   let start;
-  for (let tries = 0; ; tries++) {
+  for (let tries = 1; ; tries++) {
     start = await request('POST', '/uploads', { json: { size }, signal }).catch((e) => { if (e.cancelled) throw e; return null; });
-    if (start && start.status === 200) break;
-    if (!retryable(start) || tries >= 3) throw start ? failure(start) : new Error('Couldn\u2019t reach the server. Check your connection and try again.');
-    await sleep(1000 * 2 ** tries, signal);
+    if (start && start.status === 200) { if (tries > 1) onStatus({ retrying: false }); break; }
+    if (!retryable(start) || tries > MAX_TRIES) throw start ? failure(start) : new Error('Couldn\u2019t reach the server. Check your connection and try again.');
+    const wait = waitFor(start, tries);
+    onStatus(waiting(start, wait));
+    await sleep(wait, signal);
+    await backOnline(signal);
   }
   const { id, chunkSize } = start.data;
   let offset = start.data.received || 0;
@@ -77,8 +85,8 @@ export async function uploadResumable(bytes, { onProgress = () => {}, onStatus =
     let tries = 0;
     const recover = async (r) => {
       if (++tries > MAX_TRIES) throw new Error('The connection kept dropping, so the upload stopped. Try again when you\u2019re back online.');
-      const wait = r && r.status === 429 && r.retryAfter ? r.retryAfter * 1000 : Math.min(30000, 1000 * 2 ** (tries - 1));
-      onStatus({ retrying: true, wait });
+      const wait = waitFor(r, tries);
+      onStatus(waiting(r, wait));
       await sleep(wait, signal);
       await backOnline(signal);
       // Ask the server how far it got: a chunk cut off halfway keeps what arrived.
@@ -110,15 +118,24 @@ export async function uploadResumable(bytes, { onProgress = () => {}, onStatus =
   }
 }
 
-// The one-request upload, for small files (and the way older servers take every file).
-export async function uploadSimple(bytes, { onProgress = () => {}, signal } = {}) {
+// The one-request upload, for small files (and the way older servers take every file). Like the resumable one it
+// waits and tries again after a dropped connection or "too many at once", which a message with many files can meet.
+export async function uploadSimple(bytes, { onProgress = () => {}, onStatus = () => {}, signal } = {}) {
   const fd = new FormData();
   fd.append('file', new Blob([bytes]), 'blob.bin');
   const total = bytes.byteLength || 1;
-  const r = await request('POST', '/upload/encrypted', { body: fd, signal, onProgress: (n) => onProgress(Math.min(1, n / total)) })
-    .catch((e) => { if (e.cancelled) throw e; throw new Error('Upload failed. Check your connection.'); });
-  if (r.status !== 200) throw failure(r);
-  return r.data.url;
+  for (let tries = 1; ; tries++) {
+    const r = await request('POST', '/upload/encrypted', { body: fd, signal, onProgress: (n) => onProgress(Math.min(1, n / total)) })
+      .catch((e) => { if (e.cancelled) throw e; return null; });
+    if (r && r.status === 200) { if (tries > 1) onStatus({ retrying: false }); return r.data.url; }
+    if (r && !retryable(r)) throw failure(r);
+    if (tries > MAX_TRIES) throw r ? failure(r) : new Error('Upload failed. Check your connection.');
+    const wait = waitFor(r, tries);
+    onProgress(0);
+    onStatus(waiting(r, wait));
+    await sleep(wait, signal);
+    await backOnline(signal);
+  }
 }
 // Downloads a file from this server with progress. A dropped connection carries on with a Range request from
 // where it stopped (a few times). A file that's gone answers with an error whose code is 'gone'.
