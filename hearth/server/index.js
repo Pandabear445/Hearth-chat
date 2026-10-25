@@ -519,6 +519,58 @@ function reactionsFor(ids) {
   }
   return map;
 }
+// v21 (photos): how many comments each photo of these messages has: { [messageId]: { [fileIdx]: n } }, counting only
+// replies that haven't disappeared. A comment is an ordinary reply that also says which photo it's about (reply_file),
+// so the count is one range of the partial index per message. table: 'messages' or 'dm_messages' (null: both, for a
+// search page that mixes them). The count includes a comment the reader can't open (a reply in a thread from before
+// their history starts, server/joinhistory.js): it says only that someone commented, and the comments themselves
+// are never handed out to them (photos.js).
+function fileRepliesFor(table, ids, t = now()) {
+  const map = {};
+  if (!ids.length) return map;
+  for (const tb of table ? [table] : ['messages', 'dm_messages']) {
+    for (let i = 0; i < ids.length; i += 500) {
+      const part = ids.slice(i, i + 500);
+      for (const r of db.prepare(`SELECT reply_to, reply_file, COUNT(*) AS n FROM ${tb} INDEXED BY idx_${tb}_reply_file
+        WHERE reply_to IN (${part.map(() => '?').join(',')}) AND reply_file IS NOT NULL AND ${LIVE} GROUP BY reply_to, reply_file`).iterate(...part, t)) {
+        (map[r.reply_to] ||= {})[r.reply_file] = r.n;
+      }
+    }
+  }
+  return map;
+}
+// A tag as it travels with its message (the photos.js routes add messageId when it travels alone).
+const tagOut = (r) => ({ id: r.id, fileIdx: r.file_idx, authorId: r.author_id, ciphertext: r.ciphertext, epoch: r.epoch == null ? null : r.epoch, createdAt: r.created_at });
+// v21 (photos): the encrypted tags on these messages' photos, oldest first: { [messageId]: [tag] }. In slices of 500 like
+// reactionsFor (a message has at most 300, photos.js).
+function tagsFor(ids) {
+  const map = {};
+  if (!ids.length) return map;
+  for (let i = 0; i < ids.length; i += 500) {
+    const part = ids.slice(i, i + 500);
+    for (const r of db.prepare(`SELECT id, message_id, file_idx, author_id, ciphertext, epoch, created_at FROM media_tags
+      WHERE message_id IN (${part.map(() => '?').join(',')}) ORDER BY created_at, id`).iterate(...part)) {
+      (map[r.message_id] ||= []).push(tagOut(r));
+    }
+  }
+  return map;
+}
+// Everything a page of messages carries besides the messages themselves, read once for the whole page instead of once
+// per message: reactions, photo comment counts and photo tags. serializeMessage and serializeDmMessage take it (and
+// read what's missing from it one message at a time, which is fine for a single message).
+const extrasFor = (ids, table = null) => ({ reactions: reactionsFor(ids), fileReplies: fileRepliesFor(table, ids), tags: tagsFor(ids) });
+// What serializeMessage and serializeDmMessage add from those, for one row.
+function extrasOf(row, table, x) {
+  const fr = x && x.fileReplies ? x.fileReplies[row.id] : fileRepliesFor(table, [row.id])[row.id];
+  const tags = x && x.tags ? x.tags[row.id] : tagsFor([row.id])[row.id];
+  return {
+    reactions: x && x.reactions ? x.reactions[row.id] || [] : reactionsFor([row.id])[row.id] || [],
+    // Which photo of the message it replies to this reply comments on (null for any other message).
+    replyFile: row.reply_file == null ? null : row.reply_file,
+    ...(fr ? { fileReplies: fr } : {}),
+    ...(tags && tags.length ? { tags } : {}),
+  };
+}
 
 // since: the reader's history start in this server (server/joinhistory.js startOf), when it has one: a quote of a
 // message from before it isn't sent (replyHidden: true, so the app can say why instead of "no longer available").
@@ -529,7 +581,9 @@ function quoteOf(r, enc) {
   const base = { id: r.id, authorId: r.author_id, createdAt: r.created_at, expiresAt: r.expires_at || null };
   return r.ciphertext && r.ciphertext.length > CIPHER_MAX ? { ...base, big: true } : { ...base, ...enc };
 }
-function serializeMessage(row, channel, reactions, since = null) {
+// extras: what extrasFor() read for the whole page (reactions, photo comment counts and tags), or nothing for a single
+// message.
+function serializeMessage(row, channel, extras, since = null) {
   let reply = null;
   let replyHidden = false;
   if (row.reply_to) {
@@ -561,8 +615,18 @@ function serializeMessage(row, channel, reactions, since = null) {
     createdAt: row.created_at,
     editedAt: row.edited_at,
     expiresAt: row.expires_at || null,
-    reactions: reactions ? reactions[row.id] || [] : reactionsFor([row.id])[row.id] || [],
+    ...channelExtras(row, extras, since),
   };
+}
+// A channel message's extras for a reader whose history starts at since (server/joinhistory.js): no tag locked with a
+// key from before theirs (they couldn't open it; tags come after their photo, so there are normally none).
+function channelExtras(row, extras, since) {
+  const out = extrasOf(row, 'messages', extras);
+  if (since && out.tags) {
+    const tags = out.tags.filter((t) => t.epoch == null || t.epoch >= since.epoch);
+    if (tags.length) out.tags = tags; else delete out.tags;
+  }
+  return out;
 }
 // files-10: a news post's picture and a webhook post's avatar come with a signed proxy link (imageSrc, avatarSrc),
 // made fresh each time a message is sent to an app, so older posts get working links too. The app loads only those.
@@ -587,7 +651,7 @@ function threadInfo(row) {
   return t.n ? { threadCount: t.n, threadLastAt: t.last } : {};
 }
 
-function serializeDmMessage(row, reactions) {
+function serializeDmMessage(row, extras) {
   let reply = null;
   if (row.reply_to) {
     const r = db.prepare('SELECT id, author_id, ciphertext, created_at, expires_at FROM dm_messages WHERE id = ?').get(row.reply_to);
@@ -604,7 +668,7 @@ function serializeDmMessage(row, reactions) {
     createdAt: row.created_at,
     editedAt: row.edited_at,
     expiresAt: row.expires_at || null,
-    reactions: reactions ? reactions[row.id] || [] : reactionsFor([row.id])[row.id] || [],
+    ...extrasOf(row, 'dm_messages', extras),
   };
 }
 
@@ -710,6 +774,33 @@ function emitChannelMessage(c, row, event, msg, { skip = null } = {}) {
   const rooms = quoted.filter((u) => ev.channel(c, u) & PM.VIEW_CHANNEL).map((u) => `user:${u}`);
   if (rooms.length) io.to(rooms).emit(event, { ...msg, reply: null, replyHidden: true });
 }
+// v21 (photos): the photos of these messages got or lost a comment (one was posted, deleted or disappeared). Each one's
+// new counts go to whoever hears about that message's reactions: both people in a DM; in a channel, everyone who can
+// see it except members it's from before (server/joinhistory.js). Messages that are gone themselves are skipped.
+// table: 'messages' or 'dm_messages'.
+function emitFileReplies(table, messageIds) {
+  const ids = [...new Set(messageIds.filter(Boolean))];
+  if (!ids.length) return;
+  const t = now();
+  const counts = fileRepliesFor(table, ids, t);
+  const convs = new Map(); // channel or DM rows, read once each
+  const convOf = (sql, id) => { if (!convs.has(id)) convs.set(id, db.prepare(sql).get(id) || null); return convs.get(id); };
+  for (const id of ids) {
+    if (table === 'messages') {
+      // What toChannelAbout needs to tell who it's from before, without the ciphertext itself.
+      const m = db.prepare('SELECT id, channel_id, thread_id, created_at, ciphertext IS NOT NULL AS ciphertext, epoch, expires_at FROM messages WHERE id = ?').get(id);
+      const c = alive(m, t) && convOf('SELECT * FROM channels WHERE id = ?', m.channel_id);
+      if (c) toChannelAbout(c, m).emit('message:file-replies', { id, channelId: c.id, threadId: m.thread_id || null, fileReplies: counts[id] || {} });
+    } else {
+      const m = db.prepare('SELECT id, dm_id, expires_at FROM dm_messages WHERE id = ?').get(id);
+      const d = alive(m, t) && convOf('SELECT * FROM dm_channels WHERE id = ?', m.dm_id);
+      if (d) io.to([`user:${d.user_a}`, `user:${d.user_b}`]).emit('dm:file-replies', { id, dmId: d.id, fileReplies: counts[id] || {} });
+    }
+  }
+}
+// The messages that the comments among these rows are about (rows with reply_file set), for emitFileReplies once the
+// comments are gone. sql selects reply_to and reply_file from the rows that go, with args.
+const commentedIn = (sql, ...args) => db.prepare(sql).all(...args).filter((r) => r.reply_file != null && r.reply_to).map((r) => r.reply_to);
 const isBlocked = (a, b) => !!db.prepare('SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)').get(a, b, b, a);
 // outsideImages: what your apps do with an image link to another site in a message (xss-8). Loading it shows that
 // site your IP address, so by default they ask first ('ask' | 'always' | 'never'). Only your own apps read it.
@@ -1071,6 +1162,15 @@ function attachBlobs(files, userId, messageId, expiresAt = null) {
     if (typeof u === 'string' && /^\/uploads\/[a-z0-9]+\.bin$/.test(u)) stmt.run(messageId, expiresAt, path.basename(u), userId);
   });
 }
+// v21 (photos): how many uploads a message lists (messages.files and dm_messages.files, which the Photos & videos pages
+// go by): the distinct well-formed addresses its sender posted, files and thumbnails alike, up to what one message may
+// carry (as attachBlobs takes them). What was posted, not what attachBlobs linked: a forward lists the original's
+// uploads, which stay the original's blobs, and is in the panel all the same.
+function fileCountOf(files, userId) {
+  if (!Array.isArray(files)) return 0;
+  const n = new Set(files.filter((u) => typeof u === 'string' && /^\/uploads\/[a-z0-9]+\.bin$/.test(u))).size;
+  return Math.min(n, 2 * maxFilesOf(userId));
+}
 function removeMessageFiles(messageIds) {
   if (!messageIds.length) return;
   for (let i = 0; i < messageIds.length; i += 500) {
@@ -1083,15 +1183,20 @@ function removeMessageFiles(messageIds) {
       .forEach((m) => (unseal(m.body).attachments || []).forEach((a) => removeUpload(a.url)));
   }
 }
-// Everything that hangs off messages: their files, reactions and poll votes. These tables have no foreign key to
-// the messages (channel and DM messages share them), so every way of deleting messages calls this first.
+// The tables besides blobs that hang off messages by message_id: reactions, poll votes and closings, mention marks and
+// (v21) photo tags. They have no foreign key to the messages (channel and DM messages share them), so every way of
+// deleting messages clears them: forgetMessages, deleteMessageTree, purgeChannelMessages and sweepOrphans here, and
+// the disappearing sweep (server/disappear.js, whose list also has saved entries and the pin history).
+const MESSAGE_SIDE_TABLES = ['reactions', 'poll_votes', 'poll_closed', 'mention_marks', 'media_tags'];
+// Everything that hangs off messages: their files, reactions, poll votes and photo tags. Every way of deleting messages
+// calls this first (or deletes the same, as the ones below do).
 function forgetMessages(messageIds) {
   if (!messageIds.length) return;
   removeMessageFiles(messageIds);
   for (let i = 0; i < messageIds.length; i += 500) {
     const ids = messageIds.slice(i, i + 500);
     const q = ids.map(() => '?').join(',');
-    for (const t of ['reactions', 'poll_votes', 'poll_closed', 'mention_marks']) db.prepare(`DELETE FROM ${t} WHERE message_id IN (${q})`).run(...ids);
+    for (const t of MESSAGE_SIDE_TABLES) db.prepare(`DELETE FROM ${t} WHERE message_id IN (${q})`).run(...ids);
   }
 }
 // Before a server or group is deleted: its messages' files, reactions and votes, and its own pictures (icon,
@@ -1112,12 +1217,15 @@ function deleteMessageTree(id) {
   // Older, server-encrypted messages keep their attachment list in the sealed body.
   db.prepare('SELECT body FROM messages WHERE (id = ? OR thread_id = ?) AND ciphertext IS NULL').all(id, id)
     .forEach((m) => (unseal(m.body).attachments || []).forEach((a) => files.push(a.url)));
+  // Comments on photos among them: the messages they're about lose one each.
+  const commented = commentedIn('SELECT reply_to, reply_file FROM messages WHERE (id = ? OR thread_id = ?) AND reply_file IS NOT NULL', id, id);
   db.transaction(() => {
     db.prepare(`DELETE FROM blobs WHERE message_id IN (${tree})`).run(id, id);
-    for (const x of ['reactions', 'poll_votes', 'poll_closed', 'mention_marks']) db.prepare(`DELETE FROM ${x} WHERE message_id IN (${tree})`).run(id, id);
+    for (const x of MESSAGE_SIDE_TABLES) db.prepare(`DELETE FROM ${x} WHERE message_id IN (${tree})`).run(id, id);
     db.prepare('DELETE FROM messages WHERE id = ? OR thread_id = ?').run(id, id);
   })();
   files.forEach((u) => removeUpload(u));
+  emitFileReplies('messages', commented);
 }
 // Many channel messages at once (bulk delete, a ban's cleanup), deleted the way deleteMessageTree deletes one:
 // thread replies go with the message that starts the thread, and so do files, reactions and poll votes. One
@@ -1138,21 +1246,25 @@ function purgeChannelMessages(rows, actorId) {
   }
   const every = slices([...all]);
   const files = [];
+  const commented = [];
   for (const part of every) {
     db.prepare(`SELECT name FROM blobs WHERE message_id IN (${marks(part.length)})`).all(...part).forEach((b) => files.push('/uploads/' + b.name));
     // Older, server-encrypted messages keep their attachment list in the sealed body.
     db.prepare(`SELECT body FROM messages WHERE id IN (${marks(part.length)}) AND ciphertext IS NULL`).all(...part)
       .forEach((m) => (unseal(m.body).attachments || []).forEach((a) => files.push(a.url)));
+    // Comments on photos among them: the messages they're about (those that stay) lose one each.
+    commented.push(...commentedIn(`SELECT reply_to, reply_file FROM messages WHERE id IN (${marks(part.length)}) AND reply_file IS NOT NULL`, ...part));
   }
   db.transaction(() => {
     for (const part of every) {
       const q = marks(part.length);
       db.prepare(`DELETE FROM blobs WHERE message_id IN (${q})`).run(...part);
-      for (const t of ['reactions', 'poll_votes', 'poll_closed', 'mention_marks']) db.prepare(`DELETE FROM ${t} WHERE message_id IN (${q})`).run(...part);
+      for (const t of MESSAGE_SIDE_TABLES) db.prepare(`DELETE FROM ${t} WHERE message_id IN (${q})`).run(...part);
       db.prepare(`DELETE FROM messages WHERE id IN (${q})`).run(...part);
     }
   })();
   files.forEach((u) => removeUpload(u));
+  emitFileReplies('messages', commented.filter((id) => !all.has(id)));
   const byChannel = new Map();
   for (const r of rows) { if (!byChannel.has(r.channel_id)) byChannel.set(r.channel_id, []); byChannel.get(r.channel_id).push(r); }
   for (const [chId, list] of byChannel) {
@@ -1244,7 +1356,7 @@ function sweepOrphans() {
   const blobs = db.prepare(`SELECT name FROM blobs WHERE ${gone('blobs')}`).all();
   blobs.forEach((b) => removeUpload('/uploads/' + b.name));
   if (blobs.length) db.prepare(`DELETE FROM blobs WHERE ${gone('blobs')}`).run();
-  for (const t of ['reactions', 'poll_votes', 'poll_closed', 'mention_marks']) db.prepare(`DELETE FROM ${t} WHERE ${gone(t)}`).run();
+  for (const t of MESSAGE_SIDE_TABLES) db.prepare(`DELETE FROM ${t} WHERE ${gone(t)}`).run();
   return blobs.length;
 }
 jobs.every('uploads.orphan_sweep', 24 * 3600 * 1000, sweepOrphans, { firstDelay: +(process.env.ORPHAN_SWEEP_DELAY_MS || 2 * 60 * 1000) });
@@ -3584,8 +3696,8 @@ api.get('/channels/:id/messages', auth, (req, res) => {
   // Thread replies live in their thread, not the main channel.
   const page = pageRows('messages', 'channel_id', c.id, req.query, 'AND thread_id IS NULL', since);
   const { rows, hasMore, hasNewer } = page;
-  const reactions = reactionsFor(rows.map((r) => r.id));
-  const messages = rows.map((r) => serializeMessage(r, c, reactions, since));
+  const extras = extrasFor(rows.map((r) => r.id), 'messages');
+  const messages = rows.map((r) => serializeMessage(r, c, extras, since));
   // Your own unread and ping counts for the threads these messages start ("2 new replies" on each).
   const threads = USE ? USE.threadStates(req.userId, c, messages.filter((m) => m.threadCount).map((m) => m.id)) : {};
   const hidden = !!since && !hasMore && !req.query.after && hiddenBefore(c, since, rows[0]);
@@ -3709,19 +3821,35 @@ api.post('/channels/:id/messages', auth, (req, res) => {
   const ep = requireCurrentEpoch(c.server_id, epoch);
   // The disappearing timer the app encrypted for must be the one in force (it's inside the message too).
   DIS.checkTtl(req.body, c.disappear_secs);
+  const fileAsked = parseReplyFile((req.body || {}).replyFile);
   const replyTo = replyIn(c, (req.body || {}).replyTo);
   let threadId = (req.body || {}).threadId || null;
   if (threadId) {
     threadId = threadRootIn(c, threadId, req.userId);
     if (!threadId) fail(404, 'That thread no longer exists.');
   }
-  const msg = postChannelMessage(c, req.userId, { ciphertext, epoch: ep, files, replyTo, threadId, mentions: (req.body || {}).mentions, everyone: (req.body || {}).everyone }, req.body);
+  const msg = postChannelMessage(c, req.userId, { ciphertext, epoch: ep, files, replyTo, replyFile: replyFileIn('messages', replyTo, fileAsked), threadId,
+    mentions: (req.body || {}).mentions, everyone: (req.body || {}).everyone }, req.body);
   // Replying to a message from before your history here starts (by its id) doesn't hand you its quote.
   res.json(msgFor(msg, c.server_id, req.userId));
 });
 // The message a new one replies to, if it's really in this channel and hasn't disappeared (else none, as a reply to
 // a deleted message).
 const replyIn = (c, replyTo, t = now()) => (replyTo && alive(db.prepare('SELECT expires_at FROM messages WHERE id = ? AND channel_id = ?').get(String(replyTo), c.id), t) ? String(replyTo) : null);
+// v21 (photos): a reply that comments on one photo of the message it replies to says which (replyFile, its place in
+// that message's file list). Anything but a whole number from 0 to 99 is refused; null when it isn't given.
+function parseReplyFile(v) {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > 99) fail(400, 'That photo isn\u2019t in the message. Reload the page.', 'bad_reply_file');
+  return v;
+}
+// The photo a reply comments on, kept only when the reply is (replyIn / dmReplyIn kept replyTo) and the message it
+// replies to lists that many uploads (messages.files); otherwise it's a plain reply. table: 'messages' or 'dm_messages'.
+function replyFileIn(table, replyTo, fileIdx) {
+  if (fileIdx == null || !replyTo) return null;
+  const p = db.prepare(`SELECT files FROM ${table} WHERE id = ?`).get(replyTo);
+  return p && p.files > fileIdx ? fileIdx : null;
+}
 // The stored id of a thread's first message in this channel (whatever shape the request gave it in), or null: none
 // there, or one that has disappeared. uid: who's replying, when it's someone the thread is closed to (it was started
 // before their history in the server starts, server/joinhistory.js) it's as if there were none.
@@ -3742,15 +3870,18 @@ const sendSecs = (secs, ttl = null) => (ttl > 0 ? (secs > 0 ? Math.min(secs, ttl
 // scheduled message hands over its row and files). scheduled: posted at its time while its author may well be away,
 // so their read marker stays where it was (what others wrote meanwhile stays unread for them), and their own apps get
 // their copy marked scheduled: true so they don't take it as "read up to here" either.
-function postChannelMessage(c, authorId, { ciphertext, epoch, files, replyTo, threadId, mentions, everyone, ttl = null }, body, { within = null, scheduled = false } = {}) {
+// fileCount: how many uploads it lists, when files isn't that list (a scheduled message's files are handed over in
+// within; it kept the count). replyFile: the photo of replyTo it comments on (replyFileIn), or null.
+function postChannelMessage(c, authorId, { ciphertext, epoch, files, replyTo, threadId, mentions, everyone, ttl = null, fileCount = null, replyFile = null }, body, { within = null, scheduled = false } = {}) {
   const id = newId();
   const t = now();
+  const nFiles = fileCount != null ? fileCount : fileCountOf(files, authorId);
   // A thread reply never outlives the message that starts the thread.
   const root = threadId ? db.prepare('SELECT id, expires_at FROM messages WHERE id = ?').get(threadId) : null;
   const expiresAt = DISAPPEAR.stamp({ secs: sendSecs(c.disappear_secs, ttl), t, root });
   db.transaction(() => {
-    db.prepare('INSERT INTO messages (id, channel_id, author_id, body, ciphertext, epoch, reply_to, created_at, thread_id, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, c.id, authorId, '', ciphertext, epoch, replyTo, t, threadId, expiresAt);
+    db.prepare('INSERT INTO messages (id, channel_id, author_id, body, ciphertext, epoch, reply_to, created_at, thread_id, expires_at, files, reply_file) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, c.id, authorId, '', ciphertext, epoch, replyTo, t, threadId, expiresAt, nFiles, replyTo ? replyFile : null);
     // A reply moves its thread to the top of the channel's Threads list (deleting one is handled in db.js).
     if (threadId) {
       db.prepare(`INSERT INTO thread_activity (root_id, channel_id, last_reply_id) VALUES (?, ?, ?)
@@ -3777,6 +3908,8 @@ function postChannelMessage(c, authorId, { ciphertext, epoch, files, replyTo, th
   // Bots get who, where and when: never the text, which is end-to-end encrypted.
   BOTS.event('message.created', c.server_id, { messageId: id, channelId: c.id, authorId, authorIsBot: false, createdAt: msg.createdAt, editedAt: null, threadId: threadId || null, replyTo: replyTo || null, expiresAt }, { channel: c, actorId: authorId });
   if (threadId) toChannelAbout(c, visibilityOf(threadId)).emit('thread:update', { rootId: threadId, channelId: c.id, ...threadInfo({ id: threadId }) });
+  // A comment on one photo: that photo's count changed.
+  if (replyTo && replyFile != null) emitFileReplies('messages', [replyTo]);
   return msg;
 }
 
@@ -3865,10 +3998,10 @@ api.get('/messages/:id/thread', auth, (req, res) => {
   const since = HIST.startOf(c.server_id, req.userId);
   // Paged like a channel (newest replies first, ?before=id for older ones): a thread can be any size.
   const { rows, hasMore, hasNewer } = pageRows('messages', 'thread_id', root.id, { limit: '100', ...req.query }, '', since);
-  const reactions = reactionsFor([root.id, ...rows.map((r) => r.id)]);
+  const extras = extrasFor([root.id, ...rows.map((r) => r.id)], 'messages');
   // state: where you'd read up to (the app's "New" line), before opening it marks the thread read, and the channel's
   // thread pings (threadMentions), which set its badge right whenever a thread is opened.
-  res.json({ root: serializeMessage(root, c, reactions, since), messages: rows.map((r) => serializeMessage(r, c, reactions, since)), hasMore, hasNewer,
+  res.json({ root: serializeMessage(root, c, extras, since), messages: rows.map((r) => serializeMessage(r, c, extras, since)), hasMore, hasNewer,
     state: USE ? USE.threadStateWithBadge(req.userId, root.id, c) : null });
 });
 
@@ -3935,14 +4068,14 @@ api.get('/channels/:id/pins', auth, (req, res) => {
   const since = HIST.startOf(c.server_id, req.userId);
   const hist = HIST.where(since, { alias: 'messages.', threads: true });
   const rows = db.prepare(`SELECT * FROM messages INDEXED BY idx_messages_pins WHERE channel_id = ? AND pinned_at IS NOT NULL${hist.sql} AND ${LIVE} ORDER BY pinned_at DESC LIMIT 50`).all(c.id, ...hist.args, now());
-  const reactions = reactionsFor(rows.map((r) => r.id));
-  res.json(rows.map((r) => serializeMessage(r, c, reactions, since)));
+  const extras = extrasFor(rows.map((r) => r.id), 'messages');
+  res.json(rows.map((r) => serializeMessage(r, c, extras, since)));
 });
 api.get('/dms/:id/pins', auth, (req, res) => {
   const d = requireDm(req.params.id, req.userId);
   const rows = db.prepare(`SELECT * FROM dm_messages WHERE dm_id = ? AND pinned_at IS NOT NULL AND ${LIVE} ORDER BY pinned_at DESC LIMIT 50`).all(d.id, now());
-  const reactions = reactionsFor(rows.map((r) => r.id));
-  res.json(rows.map((r) => serializeDmMessage(r, reactions)));
+  const extras = extrasFor(rows.map((r) => r.id), 'dm_messages');
+  res.json(rows.map((r) => serializeDmMessage(r, extras)));
 });
 
 // Reactions work for both server messages and DMs.
@@ -4003,8 +4136,8 @@ api.get('/dms/:id/messages', auth, (req, res) => {
   const d = requireDm(req.params.id, req.userId);
   const page = pageRows('dm_messages', 'dm_id', d.id, req.query);
   const { rows, hasMore, hasNewer } = page;
-  const reactions = reactionsFor(rows.map((r) => r.id));
-  res.json({ messages: rows.map((r) => serializeDmMessage(r, reactions)), hasMore, hasNewer, timerEvents: timerEvents('d:' + d.id, page, req.query) });
+  const extras = extrasFor(rows.map((r) => r.id), 'dm_messages');
+  res.json({ messages: rows.map((r) => serializeDmMessage(r, extras)), hasMore, hasNewer, timerEvents: timerEvents('d:' + d.id, page, req.query) });
 });
 
 api.post('/dms/:id/messages', auth, (req, res) => {
@@ -4015,19 +4148,23 @@ api.post('/dms/:id/messages', auth, (req, res) => {
   if ((getUserRow(d.user_a === req.userId ? d.user_b : d.user_a) || {}).deleted_at) fail(403, 'This account was deleted.', 'deleted');
   const { ciphertext, files } = req.body || {};
   validCipher(ciphertext, req.userId);
+  const fileAsked = parseReplyFile((req.body || {}).replyFile);
   DIS.checkTtl(req.body, d.disappear_secs);
-  res.json(postDmMessage(d, req.userId, { ciphertext, files, replyTo: dmReplyIn(d, (req.body || {}).replyTo) }, req.body));
+  const replyTo = dmReplyIn(d, (req.body || {}).replyTo);
+  res.json(postDmMessage(d, req.userId, { ciphertext, files, replyTo, replyFile: replyFileIn('dm_messages', replyTo, fileAsked) }, req.body));
 });
 // The DM a new one replies to, if it's really in this DM and hasn't disappeared.
 const dmReplyIn = (d, replyTo, t = now()) => (replyTo && alive(db.prepare('SELECT expires_at FROM dm_messages WHERE id = ? AND dm_id = ?').get(String(replyTo), d.id), t) ? String(replyTo) : null);
 // Posts a DM that passed its checks (see postChannelMessage: scheduled DMs end here too, with the same options, and
 // get their deadline from the DM's timer when they're posted).
-function postDmMessage(d, authorId, { ciphertext, files, replyTo, ttl = null }, body, { within = null, scheduled = false } = {}) {
+function postDmMessage(d, authorId, { ciphertext, files, replyTo, ttl = null, fileCount = null, replyFile = null }, body, { within = null, scheduled = false } = {}) {
   const id = newId();
   const t = now();
   const expiresAt = DISAPPEAR.stamp({ secs: sendSecs(d.disappear_secs, ttl), t });
+  const nFiles = fileCount != null ? fileCount : fileCountOf(files, authorId);
   db.transaction(() => {
-    db.prepare('INSERT INTO dm_messages (id, dm_id, author_id, ciphertext, reply_to, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, d.id, authorId, ciphertext, replyTo, t, expiresAt);
+    db.prepare('INSERT INTO dm_messages (id, dm_id, author_id, ciphertext, reply_to, created_at, expires_at, files, reply_file) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, d.id, authorId, ciphertext, replyTo, t, expiresAt, nFiles, replyTo ? replyFile : null);
     if (within) within(id);
     if (within && expiresAt != null) db.prepare('UPDATE blobs SET expires_at = ? WHERE message_id = ?').run(expiresAt, id);
   })();
@@ -4042,6 +4179,7 @@ function postDmMessage(d, authorId, { ciphertext, files, replyTo, ttl = null }, 
     const dm = serializeDm({ ...d, last_message_at: t }, uid);
     io.to(`user:${uid}`).emit('dm:message', { dm, message: scheduled && uid === authorId ? { ...msg, scheduled: true } : msg, user: publicUser(getUserRow(dm.userId)) });
   }
+  if (replyTo && replyFile != null) emitFileReplies('dm_messages', [replyTo]);
   return msg;
 }
 
@@ -4066,6 +4204,8 @@ api.delete('/dm-messages/:id', auth, (req, res) => {
   forgetMessages([m.id]);
   db.prepare('DELETE FROM dm_messages WHERE id = ?').run(m.id);
   io.to([`user:${d.user_a}`, `user:${d.user_b}`]).emit('dm:delete', { id: m.id, dmId: d.id });
+  // A comment on a photo: that photo has one fewer.
+  if (m.reply_file != null) emitFileReplies('dm_messages', [m.reply_to]);
   res.json({ ok: true });
 });
 
@@ -5799,6 +5939,7 @@ api.delete('/admin/messages/:id', auth, staffOnly, (req, res) => {
     forgetMessages([d.id]);
     db.prepare('DELETE FROM dm_messages WHERE id = ?').run(d.id);
     if (dm) io.to([`user:${dm.user_a}`, `user:${dm.user_b}`]).emit('dm:delete', { id: d.id, dmId: dm.id });
+    if (d.reply_file != null) emitFileReplies('dm_messages', [d.reply_to]);
   }
   adminLog(req, 'delete_message', req.params.id);
   res.json({ ok: true });
@@ -6486,7 +6627,11 @@ const MEMB = require('./memberships')({ api, auth, db, fail, wrap, rateLimit, ge
 STORE = require('./storage')({ api, auth, db, fail, wrap, rateLimit, limitNet, HttpError, quotaOf, overLimit, uploadLimits, fmtMb, MB, getUserRow,
   removeUpload, fileName, UPLOAD_DIR, DATA_DIR, unseal, auditLog, stepUp, adminOnly, brief, uploadPace });
 // Message search (server/search.js): filters by where, who and when; the search words stay in the app.
-require('./search')({ api, auth, db, fail, rateLimit, canIn, PM, requireServer, requireChannel, requireDm, serializeMessage, serializeDmMessage, reactionsFor, history: HIST });
+require('./search')({ api, auth, db, fail, rateLimit, canIn, PM, requireServer, requireChannel, requireDm, serializeMessage, serializeDmMessage, extrasFor, history: HIST });
+// Photos & videos (server/photos.js, v21): a conversation's messages with files, comments on one photo, and photo tags
+// (sealed on the device; the server never sees their words).
+require('./photos')({ api, auth, db, fail, rateLimit, now, perms, PM, isMember, serverOf, requireChannel, requireDm, isBlocked, getUserRow, history: HIST, alive, LIVE,
+  serializeMessage, serializeDmMessage, extrasFor, tagsFor, tagOut, toChannelAbout, getIo: () => io, requireCurrentEpoch, b64Len });
 // Bots and integrations (server/bots.js): installs, scopes, the bot API, signed webhooks, slash commands.
 BOTS = require('./bots')({ api, express, db, fail, HttpError, wrap, rateLimit, newId, seal, unseal, sealSecret, openSecret, auth, stepUp, auditLog, serverAudit, checkWords,
   perms, PM, getUserRow, publicUser, requireServer, requireChannel, serializeMessage, toChannel, toChannelAbout, emitChannelMessage, reactionsFor, deleteMessageTree, emitServer: (id) => emitServer(id),
@@ -6501,7 +6646,7 @@ require('./webhooks')({ api, express, db, fail, HttpError, rateLimit, limitNet, 
 // Saved messages, read state, notification preferences, pin history, timeouts, data export (server/usability.js).
 USE = require('./usability')({ api, auth, db, fail, wrap, rateLimit, stepUp, auditLog, serverAudit, perms, PM, ALL: ALL_PERMS, newId, now, brandName: () => brand().name,
   emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), emitServer: (sid) => io && emitServer(sid),
-  requireServer, requirePerm, requireChannel, requireDm, isMember, serverOf, serializeMessage, serializeDmMessage, reactionsFor, getUserRow, selfUser, nameOf, history: HIST });
+  requireServer, requirePerm, requireChannel, requireDm, isMember, serverOf, serializeMessage, serializeDmMessage, extrasFor, getUserRow, selfUser, nameOf, history: HIST });
 // Disappearing messages (server/disappear.js): the timer routes, and the job that deletes messages whose time has
 // passed (it runs once right here, before anyone can connect).
 DIS = require('./disappear')({ api, auth, db, fail, rateLimit, newId, now, requireChannel, requireDm, requireManageableChannel, serverOf, isBlocked, getUserRow,
@@ -6510,7 +6655,9 @@ DIS = require('./disappear')({ api, auth, db, fail, rateLimit, newId, now, requi
   bots: () => BOTS, serverAudit, chanRef,
   // "New members can't read messages from before they joined" (server/joinhistory.js): thread counts of a thread from
   // before someone joined don't reach them, nor do timer changes from before.
-  toChannelAbout: (c, row) => toChannelAbout(c, row), visibilityOf, historyStart: (c, uid) => HIST.startOf(c.server_id, uid) });
+  toChannelAbout: (c, row) => toChannelAbout(c, row), visibilityOf, historyStart: (c, uid) => HIST.startOf(c.server_id, uid),
+  // v21 (photos): photos that lost a comment that disappeared get their new counts (only once io is there).
+  emitFileReplies });
 // Away after inactivity and custom statuses that clear themselves (server/presence.js).
 PRES = require('./presence')({ api, auth, db, fail, rateLimit, limitNet, now, getUserRow, parseProfile, sanitizeProfile, checkWords, requireUnlocked,
   broadcastUser, broadcastPresence, presenceFor, selfUser });
@@ -6528,7 +6675,9 @@ SCHED = require('./scheduled')({ api, auth, db, fail, rateLimit, limitMessages, 
   postChannelMessage, postDmMessage, pushTo, maintenance, nameOf, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), ready: () => !!io,
   // Voice channels' chats take scheduled messages like text channels; the disappearing timer a message was encrypted
   // for is checked when it's scheduled, as when it's sent (server/disappear.js).
-  hasChat, checkTtl: (body, secs) => DIS.checkTtl(body, secs) });
+  hasChat, checkTtl: (body, secs) => DIS.checkTtl(body, secs),
+  // v21 (photos): a scheduled reply may comment on one photo, checked as when it's sent.
+  parseReplyFile, replyFileIn });
 // Per-server nicknames (server/nicknames.js).
 NICK = require('./nicknames')({ api, auth, db, fail, rateLimit, limitNet, requireServer, isMember, perms, PM, ALL: ALL_PERMS, checkWords, requireUnlocked,
   serverAudit, getIo: () => io });
