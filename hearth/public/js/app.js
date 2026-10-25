@@ -4155,9 +4155,18 @@ function photoQuote(m, server, ru) {
 function openQuotedPhoto(m, ph) {
   const el = $$('#messages .att-img, #messages .att-video, .thread-list .att-img, .thread-list .att-video').find((x) => x._item && x._item.m.id === m.reply.id
     && x._item.fi === ph.i && x._item.f.url === ph.u && !x.closest('.att-spoiler:not(.revealed)'));
-  if (el) return openViewer(el, { name: el._item.f.name, download: () => downloadAttachment(el._item.m, el._item.f), side: true });
+  if (el) return openPhotoViewer(el, true);
   // Not on screen: to the message (in its thread if it's a thread reply).
   return m.threadId ? jumpToMessageId(m.reply.id) : jumpToMessage(keyOfMessage(m), m.reply.id);
+}
+// The viewer on one photo or video of the chat (el: its <img> or <video>, which carries el._item), with its side panel
+// of comments and tags (side: true, or 'comment' for its comment box too). A video goes on its own: the chat's list is
+// its pictures.
+function openPhotoViewer(el, side) {
+  const it = el._item;
+  const download = () => downloadAttachment(it.m, it.f);
+  if (el.tagName !== 'VIDEO') return openViewer(el, { name: it.f.name, download, side });
+  return openViewer(null, { items: [{ ...it, kind: 'video', thumb: () => null, full: () => decryptedUrl(it.m, it.f), name: it.f.name || 'Video', alt: it.f.alt || '', download }], side });
 }
 function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = null }) {
   // In a server, people go by their nicknames there (none in DMs and group chats).
@@ -5014,7 +5023,7 @@ function attachmentEl(f, m, { many = false, fi = 0 } = {}) {
     holder.append(meter, mediaDownloadBtn(m, f));
     // One of several photos and videos in a message (photo-notes.js): its comment and tag counts, and on hover "Comment
     // on this photo", which opens it in the viewer with the comment box ready.
-    if (media !== 'audio') holder.append(...NOTES.tileExtras(m, fi, () => openViewer(el, { name: f.name, download: () => downloadAttachment(m, f), side: 'comment' })));
+    if (media !== 'audio') holder.append(...NOTES.tileExtras(m, fi, () => openPhotoViewer(el, 'comment')));
     // Load only when it scrolls near the screen, a few at a time; images show the small thumbnail first.
     const load = () => {
       holder.classList.add('loading');
@@ -6380,7 +6389,14 @@ const NOTES = createPhotoNotes({
   copies: (id) => loadedCopies(id),
   loaded: (id) => loadedMessage(id),
   onMeta: (key, id) => MEDIA.onMeta(key, id),
-  openMessage: (m) => (m.dmId ? jumpToMessage('d:' + m.dmId, m.id) : jumpToMessageId(m.id)),
+  // A comment, from the viewer's side panel: the viewer closes (and on a phone the side panel it may have been opened
+  // from, which covers the chat), then the chat goes to it.
+  openMessage: (m) => {
+    const v = $('.viewer:not(.closing)');
+    if (v && v._close) v._close();
+    if (isPhoneLayout() && panelMode()) closePanel();
+    return m.dmId ? jumpToMessage('d:' + m.dmId, m.id) : jumpToMessageId(m.id);
+  },
 });
 // Why you can't add a comment or a tag here (a sentence), or null when you can: the same rules as the message box.
 function photoPostBlock(key, threadId) {

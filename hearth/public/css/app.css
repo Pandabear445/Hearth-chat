@@ -3320,6 +3320,7 @@ body:has(> .viewer:not(.closing)) #toasts { z-index: 86; }
 .pn-slot { position: absolute; top: 8px; left: 8px; z-index: 2; pointer-events: none; }
 .pn-slot:empty { display: none; }
 .pn-badges { display: inline-flex; align-items: center; gap: 6px; padding: 2px 7px; border-radius: 999px; background: rgb(0 0 0 / .62); color: #fff; font-size: 11.5px; font-weight: 700; line-height: 18px; }
+.pn-badges[hidden] { display: none; }
 .pn-badge { display: inline-flex; align-items: center; gap: 3px; }
 .pn-badge .ic, .pn-badge svg { width: 12px; height: 12px; }
 .pn-comment-btn { position: absolute; top: 8px; right: 46px; z-index: 2; width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; background: rgb(0 0 0 / .55); color: #fff; opacity: 0; transition: opacity .15s; }
@@ -3344,7 +3345,13 @@ body:has(> .viewer:not(.closing)) #toasts { z-index: 86; }
 /* The picture viewer's side panel for one photo (the viewer gives it a place: a column about 340px wide beside the
    picture, or a bottom sheet on a phone). Its comment list scrolls between the tags and the box when the panel has a
    height of its own (the column); in a sheet that grows with what's in it, the sheet scrolls instead. */
-.pn-side { display: flex; flex-direction: column; gap: 14px; height: 100%; min-height: 0; padding: 14px; color: var(--text); font-size: 14px; touch-action: pan-y; overflow-wrap: anywhere; }
+/* The viewer is dark in every theme, so is the panel: the dark theme's colours, whatever the app's. */
+.pn-side {
+  --field: 17 15 24; --text-rgb: 237 233 245; --text: rgb(var(--text-rgb)); --text-2: #b6afc6; --muted: #8c849d; --msg-text: #dcd7e7;
+  --line: rgb(255 255 255 / .065); --line-2: rgb(255 255 255 / .12); --hover: rgb(255 255 255 / .045); --active: rgb(255 255 255 / .085);
+  --accent-ink: var(--accent); color-scheme: dark;
+  display: flex; flex-direction: column; gap: 14px; height: 100%; min-height: 0; padding: 14px; color: var(--text); font-size: 14px; touch-action: pan-y; overflow-wrap: anywhere;
+}
 .pn-sec { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .pn-tags { flex: none; }
 .pn-comments { flex: 1 1 auto; min-height: 0; }

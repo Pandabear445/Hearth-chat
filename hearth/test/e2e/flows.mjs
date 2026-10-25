@@ -419,7 +419,9 @@ async function phonePictures(t) {
     count: document.querySelector('.viewer-count').getBoundingClientRect().height,
     width: innerWidth,
   }));
-  check(JSON.stringify(bar.buttons.map((b) => b.label)) === JSON.stringify(['Download', 'More', 'Close (Esc)']), `The phone viewer's bar should have Download, More and Close (got ${bar.buttons.map((b) => b.label).join(', ')}).`);
+  // (And Comments, for a photo that can have comments and tags: photo-notes.js. Its 44px are checked with the rest.)
+  const barLabels = bar.buttons.map((b) => b.label).filter((l) => !/^Comments( \(\d+\))?$/.test(l));
+  check(JSON.stringify(barLabels) === JSON.stringify(['Download', 'More', 'Close (Esc)']), `The phone viewer's bar should have Download, More and Close, and besides them only Comments (got ${bar.buttons.map((b) => b.label).join(', ')}).`);
   check(bar.buttons.every((b) => b.w >= 44 && b.h >= 44 && b.right <= bar.width), `Its buttons should be at least 44px and on screen (got ${JSON.stringify(bar.buttons)}).`);
   check(bar.count < 30, `The picture count should be on one line (it's ${bar.count}px tall).`);
   // A long name is shortened in the middle, so how it ends stays in sight.
@@ -4437,9 +4439,9 @@ async function mediaPanel(t) {
 // to count), and Alice sees it as a reply quoting that very photo, with its thumbnail, and the photo's count in the
 // chat. Tags go on single photos, sealed on the device (the server never sees the words); the box suggests the
 // labels already used there; whoever added one can remove it, and someone who isn't allowed has no × and is refused
-// by the server. Last, the Photos & videos panel filtered by a tag shows just the photos carrying it.
-// (The side panel is drawn by photo-notes.js inside the viewer's host for it, and the panel is media-panel.js: the
-// selectors marked "panel" below are the likely ones and are to be checked once both are merged.)
+// by the server (in Alice's group chat, where Bob has no say over other people's messages). Last, the Photos & videos
+// panel filtered by a tag shows just the photos carrying it.
+// (The side panel is photo-notes.js inside the viewer's place for it; the Photos & videos panel is media-panel.js.)
 async function photoNotes(t) {
   const { alice, bob } = t.people;
   const shells = [makePng(240, 180), makePng(180, 240), makePng(200, 200)];
@@ -4584,24 +4586,6 @@ async function photoNotes(t) {
   const chAlice = alice.message('The harbour three ways: mussel').first();
   await chAlice.locator('.att-media').nth(2).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
 
-  // Erin, a new member with no say over other people's messages: she reads the tag (sealed before she joined, under
-  // the key she's given), has no × and is refused.
-  const erin = await t.open('erin');
-  t.pw.erin = newPassword();
-  await erin.register('erin', t.pw.erin);
-  await erin.join(await bob.inviteLink(), SERVER);
-  await erin.openChannel('general');
-  const onErin = erin.message('The harbour three ways: mussel').first();
-  await onErin.waitFor();
-  await drawn(erin, cmid, 3);
-  await onErin.locator('.att-media').nth(2).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
-  side = await commentOn(erin, onErin, 2);
-  await side.locator('.pn-chip', { hasText: '#Harbour' }).waitFor();
-  check(!(await side.locator('.pn-chip .chip-x').count()), 'Erin can’t remove Bob’s tag on Alice’s photo.');
-  const erefused = await status(erin, 'DELETE', `/api/messages/${cmid}/tags/${harbourId}`);
-  check(erefused === 403, `The server should refuse Erin (got ${erefused}).`);
-  await closeViewer(erin);
-  await erin.close();
   // Bob takes his own back: gone for Alice too.
   side = await commentOn(bob, inChannel, 2);
   await side.locator('.pn-chip', { hasText: '#Harbour' }).locator('.chip-x').click();
@@ -4609,19 +4593,53 @@ async function photoNotes(t) {
   await closeViewer(bob);
   await chAlice.locator('.att-media').nth(2).locator('.pn-badges[aria-label="1 comment"]').waitFor();
 
-  // ---- The Photos & videos panel filtered by a tag (panel: media-panel.js's selectors, to check after the merge).
-  await alice.railButton('Direct messages');
+  // ---- A group chat (also sealed and signed, under the group's key). Alice made Fruit Club, so only she has Manage
+  // Messages there: Bob reads her tag on her photo, has no × and is refused.
+  for (const p of [alice, bob]) {
+    await p.railButton('Direct messages');
+    await p.dmRow('Fruit Club').click();
+    await p.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  }
+  await alice.$('.cw-main input[type=file]').setInputFiles(shells.slice(0, 2).map((buffer, i) => ({ name: `pool-${i + 1}.png`, mimeType: 'image/png', buffer })));
+  await alice.send('Two from the rock pool: periwinkle');
+  const inGroup = bob.message('Two from the rock pool: periwinkle').first();
+  await inGroup.waitFor();
+  const gmid = await inGroup.getAttribute('data-mid');
+  await drawn(alice, gmid, 2);
+  side = await commentOn(alice, alice.message('Two from the rock pool: periwinkle').first(), 0);
+  const groupTag = alice.page.waitForResponse((r) => /\/api\/messages\/\w+\/tags$/.test(r.url()) && r.request().method() === 'POST');
+  await side.locator('.pn-tag-in').fill('Rock pool');
+  await side.locator('.pn-tag-in').press('Enter');
+  const gres = await groupTag;
+  check(/^tc1:[1-9]\d*:/.test(gres.request().postDataJSON().ciphertext), 'A group chat’s tag should go sealed and signed (tc1).');
+  const poolId = (await gres.json()).tag.id;
+  await side.locator('.pn-chip', { hasText: '#Rock pool' }).locator('.chip-x').waitFor();
+  await closeViewer(alice);
+  await drawn(bob, gmid, 2);
+  await inGroup.locator('.att-media').nth(0).locator('.pn-badges[aria-label="1 tag"]').waitFor();
+  side = await commentOn(bob, inGroup, 0);
+  await side.locator('.pn-chip', { hasText: '#Rock pool' }).waitFor();
+  check(!(await side.locator('.pn-chip .chip-x').count()), 'Bob can’t remove Alice’s tag on Alice’s photo in her group.');
+  const grefused = await status(bob, 'DELETE', `/api/messages/${gmid}/tags/${poolId}`);
+  check(grefused === 403, `The server should refuse Bob there (got ${grefused}).`);
+  await closeViewer(bob);
+
+  // ---- The Photos & videos panel filtered by a tag: in the DM, #Beach is on photo 2 (Alice's) and photo 1 (Bob's).
   await alice.dmRow('bob').click();
   await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
   await alice.$('#main-head button[aria-label="Photos & videos"]').click();
-  const chip = alice.$('#members button', { hasText: /#?Beach/ }).first();
-  await chip.waitFor();
-  await chip.click();
-  // Photo 2 (Alice's tag) and photo 1 (Bob's): just those two.
-  await alice.page.waitForFunction(() => document.querySelectorAll('#members [data-gid]').length === 2);
-  await chip.click();
-  await alice.page.waitForFunction(() => document.querySelectorAll('#members [data-gid]').length >= 3);
+  await alice.$('#members .mp-tile').first().waitFor();
+  const beach = alice.$('#members button.mp-tag[data-label="Beach"]');
+  await beach.waitFor();
+  check(/#Beach\s*2/.test(await beach.textContent()), `The chip should count the two photos tagged Beach (got “${await beach.textContent()}”).`);
+  await beach.click();
+  const gids = () => alice.page.$$eval('#members .mp-tile', (els) => els.map((e) => e.dataset.gid).sort());
+  await alice.page.waitForFunction(() => document.querySelectorAll('#members .mp-tile').length === 2);
+  check(JSON.stringify(await gids()) === JSON.stringify([`${mid}:0`, `${mid}:1`]), `Only the two photos tagged Beach should show (got ${(await gids()).join(', ')}).`);
+  await alice.$('#members button[aria-label="Show all, not only #Beach"]').click();
+  await alice.page.waitForFunction(() => document.querySelectorAll('#members .mp-tile').length > 3);
   await alice.$('#main-head button[aria-label="Hide photos & videos"]').click();
+  await alice.$('#members .mp-tile').first().waitFor({ state: 'detached' });
 }
 
 export const FLOWS = [

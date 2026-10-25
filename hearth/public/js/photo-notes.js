@@ -162,13 +162,14 @@ const msgBase = (m) => `${m.dmId ? '/dm-messages/' : '/messages/'}${encodeURICom
 //   copies(id)                    every loaded copy of a message (the conversation, threads)
 //   loaded(id)                    one loaded copy, or null
 //   onMeta(key, id)               a message's tags or comment counts changed (the Photos & videos panel redraws it)
-//   openMessage(m)                shows a message in the chat (a comment, from the side panel)
+//   openMessage(m)                shows a message in the chat (a comment, from the side panel), closing the viewer
 export function createPhotoNotes(deps) {
   const opened = new Map(); // tag (bound fields + ciphertext) -> { conv, label, fu } | { pending, serverId, messageId } | { error }
   const opening = new Map(); // the same -> Promise of that
   const waiting = new Set(); // ids of messages whose tags are being opened
   const meta = new Map(); // `${conversation}|${message id}` -> { tags?, fileReplies? } from live updates (newer than copies drawn earlier)
-  const convs = new Map(); // conversation -> { recs: Map(message id -> records), live: Set(ids), loaded: Promise }
+  const convs = new Map(); // conversation -> { recs: Map(message id -> records), live: Set(ids), absent: Set(ids), loaded: Promise }
+  const indexes = new Map(); // conversation -> Promise of its tag index (tagIndex), until its tags change
   const fetched = new Map(); // message id -> a message fetched (and decrypted) for the tag index
   const threads = new Map(); // `${messageId}|${fi}` -> { list, next, loaded, error }: comments on one photo
   const panels = new Set(); // side panels handed out: { el, m, fi, drawTags, reload, born }
@@ -216,7 +217,8 @@ export function createPhotoNotes(deps) {
     opening.set(k, job);
     return job;
   }
-  // Opens a message's tags that aren't yet; once they are, whatever shows them is drawn again.
+  // Opens a message's tags that aren't yet; once they are, the counts and side panels showing it are drawn again, in
+  // place. (Nothing about the message changed, so the Photos & videos panel isn't told: it would fetch it again.)
   function ensureOpen(m) {
     if (!usable(m) || waiting.has(m.id)) return;
     const conv = keyOf(m);
@@ -225,7 +227,8 @@ export function createPhotoNotes(deps) {
     waiting.add(m.id);
     Promise.all(todo.map((t) => open(conv, m.id, t))).then((rs) => {
       waiting.delete(m.id);
-      if (rs.some((r) => r.label)) changed(conv, m.id);
+      refreshSlots(m.id); // (also the ones drawn while they were opening: those may have nothing to show now)
+      if (rs.some((r) => r.label)) refreshPanels(m.id);
       ensureOpen(m); // any that arrived meanwhile
     });
   }
@@ -257,13 +260,23 @@ export function createPhotoNotes(deps) {
   function countLabel({ comments, tags }) {
     return [comments ? plural(comments, 'comment') : null, tags ? plural(tags, 'tag') : null].filter(Boolean).join(', ');
   }
+  // A picture's counts: null when it has none, else an element that keeps itself up to date (refreshSlots), hidden
+  // while there's nothing to show yet (its tags are still being opened).
   function badges(m, fi) {
     const c = counts(m, fi);
-    if (!c.comments && !c.tags) return null;
+    if (!c.comments && !c.tags && !(usable(m) && waiting.has(m.id))) return null;
+    const el = h('span', { class: 'pn-badges', role: 'img', dataset: { pnMid: m.id, pnFi: String(fi) } });
+    el._pn = { m, fi };
+    fillBadges(el, c);
+    return el;
+  }
+  function fillBadges(el, c = counts(el._pn.m, el._pn.fi)) {
     const label = countLabel(c);
-    return h('span', { class: 'pn-badges', role: 'img', 'aria-label': label, title: label },
-      c.comments ? h('span', { class: 'pn-badge' }, icon('message'), String(c.comments)) : null,
-      c.tags ? h('span', { class: 'pn-badge' }, icon('tag'), String(c.tags)) : null);
+    el.replaceChildren(
+      c.comments ? h('span', { class: 'pn-badge' }, icon('message'), String(c.comments)) : '',
+      c.tags ? h('span', { class: 'pn-badge' }, icon('tag'), String(c.tags)) : '');
+    el.hidden = !label;
+    for (const a of ['aria-label', 'title']) if (label) el.setAttribute(a, label); else el.removeAttribute(a);
   }
   // In the chat, each photo or video of a message with two or more of them: its counts (kept up to date in place, see
   // refreshSlots) and, on hover or focus, "Comment on this photo", which opens it in the viewer at the comment box.
@@ -287,11 +300,12 @@ export function createPhotoNotes(deps) {
     const c = b ? b.getAttribute('aria-label') : '';
     btn.setAttribute('aria-label', `Comment on this ${what}${c ? ` (${c})` : ''}`);
   }
-  // A message's counts changed: its pictures in the chat show the new ones, without redrawing the message (that
-  // would load its pictures again).
+  // A message's counts changed: its pictures in the chat and in the Photos & videos panel show the new ones, without
+  // redrawing anything else (a message drawn again loads its pictures again).
   function refreshSlots(id) {
     if (typeof document === 'undefined' || !MSG_ID.test(String(id || ''))) return;
     for (const slot of document.querySelectorAll(`.pn-slot[data-pn-mid="${id}"]`)) if (slot._pn) fillSlot(slot);
+    for (const el of document.querySelectorAll(`.pn-badges[data-pn-mid="${id}"]`)) if (el._pn && !el.closest('.pn-slot')) fillBadges(el);
   }
   function prune() {
     for (const p of panels) if (!p.el.isConnected && Date.now() - p.born > 5000) panels.delete(p);
@@ -312,7 +326,8 @@ export function createPhotoNotes(deps) {
     const here = deps.copies(id).filter((c) => keyOf(c) === key);
     for (const c of here) c.tags = list;
     const st = convs.get(key);
-    if (st) { if (list.length) st.recs.set(id, list); else st.recs.delete(id); st.live.add(id); }
+    if (st) { if (list.length) st.recs.set(id, list); else st.recs.delete(id); st.live.add(id); st.absent.delete(id); }
+    indexes.delete(key);
     changed(key, id);
     const one = here[0] || ([...panels].find((p) => p.m.id === id) || {}).m;
     if (one) ensureOpen(one);
@@ -334,6 +349,7 @@ export function createPhotoNotes(deps) {
   function onKeys(serverId) {
     const ids = new Set();
     for (const [k, r] of [...opened]) if (r.pending && r.serverId === serverId) { opened.delete(k); ids.add(r.messageId); }
+    if (ids.size) indexes.clear();
     for (const id of ids) {
       const m = deps.loaded(id) || fetched.get(id) || ([...panels].find((p) => p.m.id === id) || {}).m;
       if (m) ensureOpen(m);
@@ -344,6 +360,7 @@ export function createPhotoNotes(deps) {
   function reconnected() {
     meta.clear();
     convs.clear();
+    indexes.clear();
     prune();
     for (const p of panels) p.reload();
   }
@@ -353,7 +370,7 @@ export function createPhotoNotes(deps) {
   function convTags(key) {
     const had = convs.get(key);
     if (had) return had.loaded;
-    const st = { recs: new Map(), live: new Set(), loaded: null };
+    const st = { recs: new Map(), live: new Set(), absent: new Set(), loaded: null };
     convs.set(key, st);
     st.loaded = api('GET', `${convBase(key)}/tags`).then(async (r) => {
       const byMsg = new Map();
@@ -369,13 +386,13 @@ export function createPhotoNotes(deps) {
     return st.loaded;
   }
   // Those messages, decrypted: loaded here already, or fetched (GET …/media?ids=, in pages). One the server doesn't
-  // give (deleted, disappeared, not yours to see) is simply left out.
-  async function messagesFor(key, ids) {
+  // give (deleted, disappeared, not yours to see) is left out, and not asked for again (st.absent).
+  async function messagesFor(key, ids, st) {
     const out = new Map();
     const need = [];
     for (const id of ids) {
       const m = deps.loaded(id) || fetched.get(id);
-      if (m && keyOf(m) === key && deps.readable(m)) out.set(id, m); else need.push(id);
+      if (m && keyOf(m) === key && deps.readable(m)) out.set(id, m); else if (!st.absent.has(id)) need.push(id);
     }
     for (let i = 0; i < need.length; i += IDS_PAGE) {
       const part = need.slice(i, i + IDS_PAGE);
@@ -384,18 +401,28 @@ export function createPhotoNotes(deps) {
       list = list.filter((m) => m && typeof m === 'object' && part.includes(m.id) && keyOf(m) === key);
       await Promise.all(list.map((m) => Promise.resolve(deps.decrypt(m)).catch(() => {})));
       for (const m of list) { put(fetched, m.id, m, FETCHED_MAX); out.set(m.id, m); }
+      for (const id of part) if (!out.has(id)) st.absent.add(id);
     }
     return out;
   }
   // label -> [{ messageId, fileIdx }] for the Photos & videos panel (groupIndex), each tag checked as on a picture: it
-  // opened, its author isn't blocked, and it's on the very file it was put on.
-  async function tagIndex(key) {
-    if (!deps.where(key)) return new Map();
+  // opened, its author isn't blocked, and it's on the very file it was put on. Worked out once per conversation, and
+  // again only once its tags changed (the panel asks after every change it hears of).
+  function tagIndex(key) {
+    if (!deps.where(key)) return Promise.resolve(new Map());
+    if (!indexes.has(key)) {
+      const job = buildIndex(key);
+      indexes.set(key, job);
+      job.catch(() => { if (indexes.get(key) === job) indexes.delete(key); });
+    }
+    return indexes.get(key);
+  }
+  async function buildIndex(key) {
     const st = await convTags(key);
     const all = [...st.recs].flatMap(([messageId, recs]) => recs.map((t) => ({ messageId, t })));
     await Promise.all(all.map(({ messageId, t }) => open(key, messageId, t)));
     const ids = [...new Set(all.filter(({ messageId, t }) => (peek(key, messageId, t) || {}).label).map((x) => x.messageId))];
-    const msgs = await messagesFor(key, ids);
+    const msgs = await messagesFor(key, ids, st);
     const entries = [];
     for (const { messageId, t } of all) {
       const r = peek(key, messageId, t);
@@ -457,8 +484,8 @@ export function createPhotoNotes(deps) {
   }
 
   // ---------------------------------------------------------------- the viewer's side panel
-  // item: { m, f, fi, key } (the viewer's item, viewer: openViewer). ctx: { close, focus } (focus 'comment': into the
-  // comment box once it's on screen). null when the photo can't have comments or tags here.
+  // item: { m, f, fi, key } (the viewer's item, app.js openViewer). ctx: { close, focus } (close: hides this panel;
+  // focus 'comment': into the comment box once it's on screen). null when the photo can't have comments or tags here.
   function side(item, ctx = {}) {
     const m = item && item.m;
     const fi = item && item.fi;
@@ -475,7 +502,7 @@ export function createPhotoNotes(deps) {
     const note = (el, text) => { el.textContent = text || ''; el.hidden = !text; };
     const tagIn = h('input', { class: 'input pn-tag-in', type: 'text', maxlength: String(LABEL_MAX), placeholder: 'Add a tag', 'aria-label': `Add a tag to this ${what}`,
       autocomplete: 'off', spellcheck: 'false', enterkeyhint: 'done' });
-    const tagAdd = h('button', { class: 'btn sm pn-tag-add', type: 'button', disabled: true }, 'Add');
+    const tagAdd = h('button', { class: 'btn sm ghost pn-tag-add', type: 'button', disabled: true }, 'Add');
     const suggest = h('div', { class: 'pn-suggest', role: 'group', 'aria-label': 'Tags used in this conversation', hidden: true });
     const noTag = deps.canPost(key, null);
     let tagBusy = false;
@@ -572,7 +599,7 @@ export function createPhotoNotes(deps) {
           h('div', { class: 'pn-c-head' }, h('strong', { class: 'pn-c-name' }, deps.nameOf(c, u)),
             Number.isFinite(Number(c.createdAt)) ? h('time', { class: 'pn-c-time', datetime: new Date(Number(c.createdAt)).toISOString() }, fmtStamp(Number(c.createdAt))) : null),
           deps.textEl(c)),
-        ibtn('arrowUp', 'Show in chat', () => { if (ctx.close) ctx.close(); deps.openMessage(c); }, { cls: 'sm pn-c-jump' }));
+        ibtn('arrowUp', 'Show in chat', () => deps.openMessage(c), { cls: 'sm pn-c-jump' }));
     }
     function drawComments() {
       const shown = thread.list.filter((c) => isCommentOn(c, m, f, fi));

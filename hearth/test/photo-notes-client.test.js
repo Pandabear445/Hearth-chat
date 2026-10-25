@@ -418,7 +418,7 @@ test('photo-notes: a photo’s tags open once, count only on the very file they 
   assert.deepEqual(N.tagsOf(m, 0), ['cat']);
   assert.deepEqual(N.counts(m, 1), { comments: 2, tags: 2 });
   assert.deepEqual(N.counts(m, 2), { comments: 0, tags: 0 });
-  assert.deepEqual(metaCalls, ['d:d1|m1'], 'the Photos & videos panel is told once, when they opened');
+  assert.deepEqual(metaCalls, [], 'nothing about the message changed: the Photos & videos panel isn’t told (it would fetch it again)');
   const n = opens.length;
   N.tagsOf(m, 1); N.counts(m, 0);
   await tick();
@@ -504,11 +504,16 @@ test('photo-notes: the tag index for the Photos & videos panel fetches the tags 
   const media = asked.filter(([, u]) => u.includes('/media?'));
   assert.equal(media.length, 1);
   assert.deepEqual(new URL(media[0][1], 'http://x').searchParams.get('ids').split(',').sort(), ['m2', 'm3'], 'only the ones not loaded here');
-  // Again: nothing fetched again; a live update is folded in.
+  // Asked again (the panel asks after every change it hears of): the same answer, worked out once.
   asked.length = 0;
+  assert.equal(await N.tagIndex('d:d1'), idx);
+  assert.equal(asked.length, 0, 'nothing fetched');
+  // A live update is folded in: worked out again, without fetching the list again nor asking for a message the server
+  // didn't give last time.
   N.onTags('d:d1', 'm1', [rec('a', 1, 'alice', 'Beach', 1), rec('k', 0, 'carol', 'cat', 8)]);
   const again = await N.tagIndex('d:d1');
+  assert.notEqual(again, idx);
   assert.deepEqual(again.get('cat'), [{ messageId: 'm1', fileIdx: 0 }]);
-  assert.equal(asked.filter(([, u]) => u.endsWith('/tags')).length, 0, 'the list isn’t fetched again');
+  assert.deepEqual(asked, [], 'no request at all');
   assert.deepEqual(await N.tagIndex('x:nowhere'), new Map(), 'a conversation this app doesn’t have');
 });
