@@ -1619,8 +1619,11 @@ name. Previews, notifications and the reply bar show `#name` as text (`readableT
 numbered items (indent to nest; counted on from the first number), `> ` for one quoted line and `>>> ` for the rest
 of the message. Each needs a space after the marker, so `#general` and `#1` stay text; code blocks are left alone;
 everything is escaped first, as before. On one line (replies, thread cards, previews) the markers are dropped and
-bullets become dots. `<t:seconds>` and `<t:seconds:style>` (t, T, d, D, f, F, R) show in the reader's time zone, the
-same syntax `server/webhooks.js` already turns into dates for webhook posts.
+bullets become dots, and a code block is its first line that isn't blank, in inline code with … when more follows
+(never a block, so the reply quote stays one line). Plain text (`readableText`: the reply bar, conversation
+previews, notifications and the inbox) shows that same line without the ``` or language tag, and search results show
+all of the code without them. `<t:seconds>` and `<t:seconds:style>` (t, T, d, D, f, F, R) show in the reader's time
+zone, the same syntax `server/webhooks.js` already turns into dates for webhook posts.
 
 **Attachment options** (the pencil on a file in the box: `editPending`; `uploadEncryptedFiles`; `attachmentEl`,
 `altChip` and `spoilerCover`; `public/js/attachments.js` `cleanFiles`). A description (alt text, up to 1,000
@@ -1635,6 +1638,7 @@ Ctrl+/ (⌘+/) opens a sheet of every shortcut, in navigation, messages, calls (
 picture viewer; pressed again, it closes. Also from Settings → Keybinds → See all shortcuts and the menu on your
 name. Shift+Esc marks the server you're in as read (not in a group chat, nor while a dialog or menu is open).
 
-**Tests**: `test/markdown-client.test.js`, `test/attachments-client.test.js`, `test/shortcuts-client.test.js` (every
-key `globalKeys` handles is in the sheet), the e2e flow "discord habits", and the shortcuts sheet and the attachment
+**Tests**: `test/markdown-client.test.js` (with a code block on one line), `test/search-query.test.js`,
+`test/attachments-client.test.js`, `test/shortcuts-client.test.js` (every key `globalKeys` handles is in the sheet),
+the e2e flow "discord habits" (a reply to a code block quotes one line), and the shortcuts sheet and the attachment
 dialog in `npm run test:a11y`.

@@ -159,9 +159,11 @@ export function segments(text, q) {
 // Never cut a character made of two UTF-16 units (most emoji) in half.
 const safeCut = (s, i) => (i > 0 && i < s.length && /[\uDC00-\uDFFF]/.test(s[i]) ? i - 1 : i);
 
-// A short one-line excerpt around the first match (custom emoji shown as :name:).
+// A short one-line excerpt around the first match (custom emoji shown as :name:, code blocks without their ``` and
+// language tag, every line kept since the match may be in any of them).
 export function excerpt(text, q, max = 160) {
-  const flat = String(text || '').replace(/<a?:(\w{2,32}):[a-z0-9]{6,40}>/g, ':$1:').replace(/\s+/g, ' ').trim();
+  const flat = String(text || '').replace(/```(?:[a-zA-Z0-9_+-]{1,20}\n)?([\s\S]*?)```/g, ' $1 ')
+    .replace(/<a?:(\w{2,32}):[a-z0-9]{6,40}>/g, ':$1:').replace(/\s+/g, ' ').trim();
   if (flat.length <= max) return flat;
   let hit = 0;
   if (q && q.highlight) { q.highlight.lastIndex = 0; const m = q.highlight.exec(flat); if (m) hit = m.index; }

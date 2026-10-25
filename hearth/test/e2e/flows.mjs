@@ -3264,6 +3264,27 @@ async function discordHabits(t) {
   check(shape.quote.join('|') === 'quoted line|still quoted|and #unknown-channel', `>>> should quote the rest (got ${JSON.stringify(shape)}).`);
   check(shape.links.join() === '#house-rules' && shape.unknown.join() === '#unknown-channel', `Channel mentions: a link for one Bob can see, plain text for any other (got ${JSON.stringify(shape)}).`);
   check(!/<#|>>>|^# /m.test(shape.raw), `No raw markers should show (got “${shape.raw}”).`);
+
+  // A reply to a code block quotes it on one line, in the reply bar and above the reply: its first line as code,
+  // without the ``` or the language tag.
+  await box.fill('```js\nfunction flip(player) {\n  player.gravity *= -1;\n}\n```');
+  await box.press('Enter');
+  const code = bob.message('player.gravity').first();
+  await code.waitFor();
+  await code.hover();
+  await code.locator('button[aria-label="Reply"]').click();
+  const bar = await bob.$('.cw-main .reply-bar-quote').innerText();
+  check(bar === 'function flip(player) {\u2026', `The reply bar should quote the code’s first line (got “${bar}”).`);
+  await bob.send('Flipped the gravity');
+  const quote = alice.message('Flipped the gravity').first().locator('.msg-reply');
+  await quote.waitFor();
+  const q = await quote.evaluate((el) => {
+    const t = el.querySelector('.reply-text');
+    return { code: (t.querySelector('code.md-code') || {}).textContent, pre: !!t.querySelector('pre'), h: el.getBoundingClientRect().height, font: parseFloat(getComputedStyle(el).fontSize) };
+  });
+  check(q.code === 'function flip(player) {\u2026' && !q.pre, `The quote should show the code’s first line as inline code (got ${JSON.stringify(q)}).`);
+  check(q.h < 2 * q.font, `The quote should stay on one line (got ${JSON.stringify(q)}).`);
+
   // The link opens the channel.
   await m.locator('.channel-mention').click();
   await bob.page.waitForSelector('#composer-input[placeholder="Message #house-rules"]');
@@ -3366,5 +3387,5 @@ export const FLOWS = [
   ['word filter: your own list hides a disguised word (sealed on the server, never your own messages, search doesn’t quote it); a server’s suggested list blurs live, is audited, and can be turned off; a hidden message keeps its tampering flag', wordFilter],
   ['join history: new members can’t read back (setting, audit log); someone joining again sees one line instead of locked rows, in a channel and a voice chat; later messages both ways', joinHistory],
   ['alert channels: add a signed webhook, its secret shown once, Test reaches it, masked address; off and remove need the password; the page stays put', alertChannels],
-  ['discord habits: # picks a channel and the link opens it (unknown ones stay plain); headings, lists and >>> quotes; a spoiler picture with a description; Ctrl+/ and Shift+Esc', discordHabits],
+  ['discord habits: # picks a channel and the link opens it (unknown ones stay plain); headings, lists and >>> quotes; a reply to a code block quotes one line; a spoiler picture with a description; Ctrl+/ and Shift+Esc', discordHabits],
 ];

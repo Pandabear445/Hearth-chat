@@ -69,6 +69,36 @@ test('readableText puts mentions, emoji and timestamps into words for notificati
   assert.ok(!/<t:/.test(MD.readableText('at <t:1700000000:D>')));
 });
 
+test('a code block on one line (the reply bar, a reply’s quote, previews) is its first line, without fences or language', () => {
+  const block = '```js\nfunction flip(player) {\n  player.gravity *= -1;\n}\n```';
+  assert.equal(MD.readableText(block), 'function flip(player) {\u2026');
+  assert.equal(md(block, { inline: true }), '<code class="md-code">function flip(player) {\u2026</code>');
+  assert.match(md(block), /^<pre class="md-pre"><code>function flip\(player\) \{\n {2}player\.gravity/, 'in the message itself it is still a block');
+  // Blank lines don't count, one line has no …, and the words around a block stay.
+  assert.equal(MD.readableText('```\n\n   x = 1  \n\n```'), 'x = 1');
+  assert.equal(MD.readableText('see ```npm test``` first'), 'see npm test first');
+  assert.equal(md('Try:\n```sh\nnpm test\n```\nthen <#0mfr2k3ab1c2d3e4f5>', { inline: true }), 'Try: <code class="md-code">npm test</code> then #rules');
+  assert.equal(md('```js\n```', { inline: true }), '');
+  // Inside the block nothing is formatted or looked up, and it is escaped, as in the message.
+  assert.equal(MD.readableText('<#0mfr2k3ab1c2d3e4f5> ```\n<#0mfr2k3ab1c2d3e4f5> **b**\n```'), '#rules <#0mfr2k3ab1c2d3e4f5> **b**');
+  assert.equal(md('```\n<img src=x onerror=alert(1)> *x*\n```', { inline: true }), '<code class="md-code">&lt;img src=x onerror=alert(1)&gt; *x*</code>');
+});
+
+test('on one line nothing is a block', () => {
+  const blocks = /<(?:pre|div|p|br|ul|ol|li|h\d|blockquote|table)\b|class="md-(?:pre|h\d|sub|li|quote)/;
+  for (const t of [
+    '```js\nfunction flip(player) {\n  player.gravity *= -1;\n}\n```',
+    'before\n```\ncode\n```\nafter',
+    '```one``` and ```\ntwo\nlines\n```',
+    '# Rules\n-# fine print\n- one\n1. step\n> quoted\n>>> rest\n\nmore',
+    '>>> ```\nquoted code\n```',
+  ]) {
+    const out = md(t, { inline: true });
+    assert.ok(!blocks.test(out), `${JSON.stringify(t)} gave ${out}`);
+    assert.ok(!out.includes('```') && !MD.readableText(t).includes('```'), `no fences left from ${JSON.stringify(t)}`);
+  }
+});
+
 test('headings, small print and lists become blocks, with the rest of the formatting inside', () => {
   assert.equal(md('# Rules'), '<span class="md-h1">Rules</span>');
   assert.equal(md('## Two'), '<span class="md-h2">Two</span>');

@@ -2,6 +2,8 @@
 import { escapeHtml, icons } from './util.js';
 
 export const URL_RE = /\bhttps?:\/\/[^\s<]+[^\s<.,:;"')\]!?]/g;
+// A code block: ``` and an optional language tag on its own first line, up to the next ```.
+const CODE_BLOCK = /```(?:[a-zA-Z0-9_+-]{1,20}\n)?([\s\S]*?)```/g;
 const IMAGE_URL_RE = /^https?:\/\/[^\s]+\.(gif|png|jpe?g|webp)(\?[^\s]*)?$/i;
 const MEDIA_HOST_RE = /^https?:\/\/(media\d*\.giphy\.com|i\.giphy\.com|media\.tenor\.com|c\.tenor\.com)\//i;
 
@@ -18,7 +20,7 @@ export function extractImageUrls(text) {
 // preview belongs to a link really in the message.
 export function linkedUrls(text, { skipSpoilers = false } = {}) {
   let s = String(text || '');
-  s = s.replace(/```(?:[a-zA-Z0-9_+-]{1,20}\n)?([\s\S]*?)```/g, ' ');
+  s = s.replace(CODE_BLOCK, ' ');
   s = s.replace(/`([^`\n]+)`/g, ' ');
   if (skipSpoilers) s = s.replace(/\|\|([^|\n]+)\|\|/g, ' ');
   return s.match(URL_RE) || [];
@@ -58,14 +60,21 @@ export function formatStamp(seconds, style = 'f', now = Date.now()) {
   return new Intl.DateTimeFormat(undefined, STAMP_STYLES[style] || STAMP_STYLES.f).format(d);
 }
 
-// A message's text with its mention, emoji and timestamp tokens in words, for places that show plain text
-// (notifications, conversation previews, the reply bar).
+// A code block on one line: its first line that isn't blank, with … when more follows.
+function codeLine(code) {
+  const lines = code.split('\n').map((l) => l.trim()).filter(Boolean);
+  return lines.length > 1 ? `${lines[0]}\u2026` : lines[0] || '';
+}
+
+// A message's text with its mention, emoji and timestamp tokens in words and each code block as its first line
+// (no fences or language tag), for places that show plain text (notifications, conversation previews, the reply
+// bar). Tokens inside a code block stay as typed, as render() shows them.
 export function readableText(text) {
-  return String(text || '')
+  return String(text || '').split(CODE_BLOCK).map((part, i) => (i % 2 ? codeLine(part) : part
     .replace(CHANNEL_MENTION, (m, id) => { const c = resolve.channel(id); return c ? `#${c.name}` : '#unknown-channel'; })
     .replace(ROLE_MENTION, (m, id) => { const r = resolve.role(id); return r ? `@${r.name}` : '@deleted-role'; })
     .replace(CUSTOM_EMOJI, (m, a, name) => `:${name}:`)
-    .replace(TIMESTAMP, (m, n, style) => formatStamp(n, style || 'f') || m);
+    .replace(TIMESTAMP, (m, n, style) => formatStamp(n, style || 'f') || m))).join('');
 }
 
 // Text typed where there's no # picker (a server's welcome message, in Server settings): "#rules" becomes a link to
@@ -107,8 +116,13 @@ export function render(text, { mentionName = '', inline = false, everyone = true
   const keep = (html) => `\u0000${stash.push(html) - 1}\u0000`;
   let s = String(text || '');
 
-  // code blocks + inline code are stashed so nothing inside them is formatted
-  s = s.replace(/```(?:[a-zA-Z0-9_+-]{1,20}\n)?([\s\S]*?)```/g, (_, code) => keep(`<pre class="md-pre"><code>${escapeHtml(code.replace(/^\n|\n$/g, ''))}</code></pre>`));
+  // code blocks + inline code are stashed so nothing inside them is formatted. On one line a block can't fit, so
+  // a code block shows as its first line in inline code (… when there's more).
+  s = s.replace(CODE_BLOCK, (_, code) => {
+    if (!inline) return keep(`<pre class="md-pre"><code>${escapeHtml(code.replace(/^\n|\n$/g, ''))}</code></pre>`);
+    const line = codeLine(code);
+    return keep(line ? `<code class="md-code">${escapeHtml(line)}</code>` : '');
+  });
   s = s.replace(/`([^`\n]+)`/g, (_, code) => keep(`<code class="md-code">${escapeHtml(code)}</code>`));
   // custom emoji, role and channel mentions, timestamps
   s = s.replace(CUSTOM_EMOJI, (m, a, name, id) => {

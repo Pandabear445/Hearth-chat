@@ -3516,8 +3516,9 @@ async function decryptAll(key) {
   if (store) await Promise.all(store.list.map(decryptMessage));
 }
 const textOf = (m) => (m.dec && m.dec.t) || '';
-// A message's words for a snippet (the inbox): the word filter's note instead, when it hides or blurs the message.
-const snippetOf = (m, n) => { const wf = WF.check(m); return wf ? previewLabel(wf) : textOf(m).slice(0, n); };
+// A message's words for a snippet (the inbox), as previews show them: the word filter's note instead, when it hides
+// or blurs the message.
+const snippetOf = (m, n) => { const wf = WF.check(m); return wf ? previewLabel(wf) : readableText(textOf(m)).slice(0, n); };
 const filesOf = (m) => (m.dec && m.dec.f) || [];
 const linksOf = (m) => (m.dec && m.dec.l) || []; // link previews the sender built (already checked by secure.js)
 const readable = (m) => !!m.dec && !m.dec.error && !m.dec.pending;

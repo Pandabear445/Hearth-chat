@@ -1,6 +1,9 @@
 // "What's new": shown once after this server is updated (not on someone's very first visit).
 // Newest first. Keep each item short and about what people can do.
 export const CHANGES = [
+  { version: '1.29.1', items: [
+    'Fixed: replying to a code block showed its ``` marks and language in the reply bar, and a big box above the reply. Replies, thread cards, previews and notifications now show the code\u2019s first line, and search results leave the ``` marks out.',
+  ] },
   { version: '1.29.0', items: [
     'Webhooks: give a channel a webhook address (channel settings \u2192 Webhooks) and paste it into Uptime Kuma, Home Assistant, Grafana, GitHub or anything that posts to Discord or Slack. Posts show as the webhook, marked as not end-to-end encrypted, and can\u2019t ping anyone unless you allow it.',
     'Pick your roles: moderators can let members choose roles themselves (ping roles like @game-night, pronouns, colors, opt-in channels) from the server menu or the start of any channel.',

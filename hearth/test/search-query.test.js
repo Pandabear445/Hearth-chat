@@ -119,6 +119,8 @@ test('excerpts stay short, center on the first match and never split an emoji', 
   assert.ok(ex.includes('NEEDLE'));
   assert.equal(Q.excerpt('short\n\ntext', Q.parseQuery('x')), 'short text', 'whitespace folded');
   assert.equal(Q.excerpt('hi <:party:abc123def> there', null), 'hi :party: there', 'custom emoji shown by name');
+  assert.equal(Q.excerpt('look:\n```js\nconst a = 1;\nflip(a);\n```\nok?', Q.parseQuery('flip')), 'look: const a = 1; flip(a); ok?',
+    'code blocks without fences or language tag, every line kept');
   const emoji = '\u{1F600}'.repeat(200);
   for (const max of [119, 120, 121]) assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(Q.excerpt(emoji, null, max)), `no lone surrogate at ${max}`);
 });
