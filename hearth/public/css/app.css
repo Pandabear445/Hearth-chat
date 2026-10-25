@@ -3248,5 +3248,78 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 
 
 /* ======================================================================= Photo comments and tags (photo-notes.js) */
+/* On each photo or video of a message with several: its counts in the top-left corner (left free by the download button
+   and the ALT chip), and on hover or focus a "Comment on this photo" button beside the download button. Under an
+   unopened spoiler both are blurred and can't be clicked, like everything else on it. */
+.pn-slot { position: absolute; top: 8px; left: 8px; z-index: 2; pointer-events: none; }
+.pn-slot:empty { display: none; }
+.pn-badges { display: inline-flex; align-items: center; gap: 6px; padding: 2px 7px; border-radius: 999px; background: rgb(0 0 0 / .62); color: #fff; font-size: 11.5px; font-weight: 700; line-height: 18px; }
+.pn-badge { display: inline-flex; align-items: center; gap: 3px; }
+.pn-badge .ic, .pn-badge svg { width: 12px; height: 12px; }
+.pn-comment-btn { position: absolute; top: 8px; right: 46px; z-index: 2; width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; background: rgb(0 0 0 / .55); color: #fff; opacity: 0; transition: opacity .15s; }
+.pn-comment-btn .ic, .pn-comment-btn svg { width: 17px; height: 17px; }
+.pn-comment-btn:hover { background: rgb(0 0 0 / .75); }
+.att-media:hover .pn-comment-btn, .att-media:focus-within .pn-comment-btn { opacity: 1; }
+.att-media.gone .pn-comment-btn, .att-media.gone .pn-slot { display: none; }
+/* A video (or a big picture) waiting for a click shows its name along the top: the counts go under its button. */
+.att-media.click-to-load:not(.tile) .pn-slot { position: static; display: block; margin: 6px 12px 0; }
+.msg-files.many .att-media.tile .pn-slot { top: 4px; left: 4px; }
+.msg-files.many .att-media.tile .pn-badges { padding: 1px 5px; gap: 4px; font-size: 10.5px; line-height: 16px; }
+.msg-files.many .att-media.tile .pn-comment-btn { top: 4px; right: 36px; width: 28px; height: 28px; }
+
+/* The quote of a comment on one photo: a small thumbnail of it and "<name>’s photo", no taller than a quote's line. */
+.pn-quote-thumb { flex: none; width: 20px; height: 18px; border-radius: 4px; overflow: hidden; display: grid; place-items: center; background: var(--hover); border: 1px solid var(--line-2); color: var(--muted); }
+.pn-quote-thumb .ic, .pn-quote-thumb svg { width: 12px; height: 12px; }
+.pn-quote-thumb.loaded { border-color: transparent; }
+.pn-quote-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pn-reply-name { font-weight: 600; color: var(--text-2); }
+.msg-reply.pn-reply:hover .pn-reply-name { color: var(--text); }
+
+/* The picture viewer's side panel for one photo (the viewer gives it a place: a column about 340px wide beside the
+   picture, or a bottom sheet on a phone). Its comment list scrolls between the tags and the box when the panel has a
+   height of its own (the column); in a sheet that grows with what's in it, the sheet scrolls instead. */
+.pn-side { display: flex; flex-direction: column; gap: 14px; height: 100%; min-height: 0; padding: 14px; color: var(--text); font-size: 14px; touch-action: pan-y; overflow-wrap: anywhere; }
+.pn-sec { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pn-tags { flex: none; }
+.pn-comments { flex: 1 1 auto; min-height: 0; }
+.pn-h { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 700; letter-spacing: .02em; color: var(--muted); }
+.pn-h .ic, .pn-h svg { width: 14px; height: 14px; }
+.pn-count { color: var(--text-2); }
+.pn-count:empty { display: none; }
+.pn-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* A label is someone's words: kept apart from the text around it (unicode-bidi), so it can't turn that around. */
+.pn-chip { height: 28px; padding: 0 4px 0 10px; font-size: 13px; color: var(--text); max-width: 100%; }
+.pn-chip:not(:has(.chip-x)) { padding-right: 10px; }
+.pn-chip-text, .pn-suggestion { unicode-bidi: isolate; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pn-add { display: flex; gap: 6px; align-items: center; }
+.pn-add .input { height: 36px; }
+.pn-add .btn { flex: none; }
+.pn-suggest { display: flex; flex-wrap: wrap; gap: 6px; }
+.pn-suggest[hidden] { display: none; }
+.chip.pn-suggestion { height: 26px; padding: 0 10px; font-size: 12.5px; font-weight: 600; max-width: 100%; display: inline-block; line-height: 24px; }
+.pn-note { margin: 0; font-size: 12.5px; color: var(--muted); }
+.pn-note[role=status]:not(:empty) { color: var(--danger); }
+.pn-empty { color: var(--muted); font-size: 13px; list-style: none; }
+.pn-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 48px; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
+.pn-c { display: grid; grid-template-columns: 28px 1fr auto; gap: 8px; align-items: start; }
+.pn-c-body { min-width: 0; }
+.pn-c-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.pn-c-name { font-size: 13.5px; }
+.pn-c-time { font-size: 11.5px; color: var(--muted); }
+.pn-c-text { color: var(--msg-text); font-size: 14px; line-height: 1.4; margin-top: 1px; }
+.pn-c-jump { color: var(--muted); opacity: .7; }
+.pn-c:hover .pn-c-jump, .pn-c-jump:focus-visible { opacity: 1; }
+.pn-more { align-self: flex-start; font-size: 13px; }
+.pn-more[hidden] { display: none; }
+.pn-compose { flex: none; display: flex; align-items: flex-end; gap: 6px; }
+.pn-box { flex: 1; min-height: 38px; max-height: 140px; padding: 8px 11px; resize: none; line-height: 1.4; }
+
+@media (pointer: coarse) {
+  /* Nothing hovers on a touch screen: tapping a picture opens the viewer, whose side panel has the comments. */
+  .pn-comment-btn { display: none; }
+  .pn-chip .chip-x { width: 32px; height: 32px; }
+  .pn-add .input { height: 44px; }
+  .pn-c-jump { opacity: 1; width: 40px; height: 40px; }
+}
 
 /* (end of photo comments and tags) */

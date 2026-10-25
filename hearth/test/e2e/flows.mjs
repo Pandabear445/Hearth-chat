@@ -4229,7 +4229,195 @@ async function mediaPanel(t) {
 }
 
 // ------------------------------------------------------------------ photo comments and tags
+// Alice sends three photos in one message, in the DM with Bob and in #general. Bob comments on one of them from the
+// viewer: it goes as an ordinary encrypted reply that names that photo inside it (the server is only told its index,
+// to count), and Alice sees it as a reply quoting that very photo, with its thumbnail, and the photo's count in the
+// chat. Tags go on single photos, sealed on the device (the server never sees the words); the box suggests the
+// labels already used there; whoever added one can remove it, and someone who isn't allowed has no × and is refused
+// by the server. Last, the Photos & videos panel filtered by a tag shows just the photos carrying it.
+// (The side panel is drawn by photo-notes.js inside the viewer's host for it, and the panel is media-panel.js: the
+// selectors marked "panel" below are the likely ones and are to be checked once both are merged.)
 async function photoNotes(t) {
+  const { alice, bob } = t.people;
+  const shells = [makePng(240, 180), makePng(180, 240), makePng(200, 200)];
+  const sizes = [[240, 180], [180, 240], [200, 200]];
+  const token = (p) => p.page.evaluate(() => localStorage.getItem('hearth.token'));
+  const status = async (p, method, url) => p.page.evaluate(async ({ method, url, tok }) => (await fetch(url, { method, headers: { Authorization: 'Bearer ' + tok } })).status,
+    { method, url, tok: await token(p) });
+  // A message's pictures, decrypted and drawn (how many).
+  const drawn = (p, mid, n) => p.page.waitForFunction(({ mid, n }) => [...document.querySelectorAll(`#messages [data-mid="${mid}"] .att-img`)]
+    .filter((i) => i.complete && i.naturalWidth > 0).length === n, { mid, n });
+  // The viewer, opened at the comment box from a photo's "Comment on this photo" button.
+  const commentOn = async (p, msg, i) => {
+    const tile = msg.locator('.att-media').nth(i);
+    await tile.hover();
+    await tile.locator('.pn-comment-btn').click();
+    const side = p.$('.viewer .pn-side');
+    await side.waitFor();
+    await p.page.waitForFunction(([w, h]) => { const img = document.querySelector('.viewer .viewer-img'); return img && img.naturalWidth === w && img.naturalHeight === h; }, sizes[i]);
+    return side;
+  };
+  const closeViewer = async (p) => {
+    await p.$('.viewer-bar button[aria-label="Close (Esc)"]').click();
+    await p.page.waitForSelector('.viewer', { state: 'detached' });
+  };
+  // The quote of a comment shows that very photo: the same decrypted picture as its tile, at its own size.
+  const quotes = (p, rid, pid, i) => p.page.waitForFunction(({ rid, pid, i, w, h }) => {
+    const q = document.querySelector(`#messages [data-mid="${rid}"] .msg-reply.pn-reply .pn-quote-img`);
+    const tile = document.querySelectorAll(`#messages [data-mid="${pid}"] .att-img`)[i];
+    return !!q && !!tile && q.complete && q.naturalWidth === w && q.naturalHeight === h && q.getAttribute('src') === tile.getAttribute('src');
+  }, { rid, pid, i, w: sizes[i][0], h: sizes[i][1] });
+
+  // ---- In the DM.
+  await alice.railButton('Direct messages');
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await alice.$('.cw-main input[type=file]').setInputFiles(shells.map((buffer, i) => ({ name: `shell-${i + 1}.png`, mimeType: 'image/png', buffer })));
+  await alice.send('Three shells from the beach: cockle');
+  const onBob = bob.message('Three shells from the beach: cockle').first();
+  await onBob.waitFor();
+  const mid = await onBob.getAttribute('data-mid');
+  await drawn(bob, mid, 3);
+  check(await onBob.locator('.pn-comment-btn').count() === 3, 'Each of several photos should have its own “Comment on this photo” button.');
+  check(!(await onBob.locator('.pn-badges').count()), 'Nothing to count yet.');
+
+  // Bob comments on photo 2 from the viewer.
+  let side = await commentOn(bob, onBob, 1);
+  const posted = bob.page.waitForRequest((r) => /\/api\/dms\/\w+\/messages$/.test(r.url()) && r.method() === 'POST');
+  await side.locator('textarea.pn-box').fill('The middle one is the best: whelk');
+  await side.locator('textarea.pn-box').press('Enter');
+  const body = (await posted).postDataJSON();
+  check(body.replyTo === mid && body.replyFile === 1, `A comment should go as a reply naming photo 2 (got ${JSON.stringify({ replyTo: body.replyTo, replyFile: body.replyFile })}).`);
+  check(!JSON.stringify(body).includes('whelk'), 'The comment’s words should only go encrypted.');
+  await side.locator('.pn-c', { hasText: 'The middle one is the best: whelk' }).waitFor();
+  await closeViewer(bob);
+  await bob.message('The middle one is the best: whelk').waitFor(); // in the chat too, as a reply
+
+  // Alice: a reply quoting that photo, its thumbnail, and the count on photo 2 only.
+  const reply = alice.message('The middle one is the best: whelk').first();
+  await reply.waitFor();
+  const rid = await reply.getAttribute('data-mid');
+  await reply.locator('.msg-reply.pn-reply', { hasText: 'Alice Wonder’s photo' }).waitFor();
+  await quotes(alice, rid, mid, 1);
+  const onAlice = alice.message('Three shells from the beach: cockle').first();
+  await onAlice.locator('.att-media').nth(1).locator('.pn-badges[aria-label="1 comment"]').waitFor();
+  check(!(await onAlice.locator('.att-media').nth(0).locator('.pn-badges').count()) && !(await onAlice.locator('.att-media').nth(2).locator('.pn-badges').count()),
+    'Only photo 2 should count a comment.');
+  // Clicking the quote opens that photo (its message is on screen), with its comments beside it.
+  await reply.locator('.msg-reply.pn-reply').click();
+  await alice.page.waitForFunction(([w, h]) => { const img = document.querySelector('.viewer .viewer-img'); return img && img.naturalWidth === w && img.naturalHeight === h; }, sizes[1]);
+  side = alice.$('.viewer .pn-side');
+  await side.locator('.pn-c', { hasText: 'The middle one is the best: whelk' }).waitFor();
+
+  // Alice tags photo 2. The label is sealed on her device, bound to that photo.
+  const aliceTag = alice.page.waitForResponse((r) => /\/api\/dm-messages\/\w+\/tags$/.test(r.url()) && r.request().method() === 'POST');
+  await side.locator('.pn-tag-in').fill('Beach');
+  await side.locator('.pn-tag-in').press('Enter');
+  const aliceRes = await aliceTag;
+  const sent = aliceRes.request().postDataJSON();
+  check(/^td1:/.test(sent.ciphertext) && sent.fileIdx === 1 && !JSON.stringify(sent).includes('Beach'), 'A DM tag should go sealed (td1), naming only the photo’s index.');
+  check(aliceRes.status() === 200, `Adding a tag should work (got ${aliceRes.status()}).`);
+  const beachId = (await aliceRes.json()).tag.id;
+  await side.locator('.pn-chip', { hasText: '#Beach' }).locator('.chip-x').waitFor(); // her own: she can remove it
+  await closeViewer(alice);
+  await onAlice.locator('.att-media').nth(1).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
+  await onBob.locator('.att-media').nth(1).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
+
+  // Bob tags photo 1 with a new label and, from the suggestions, with the one Alice made; then takes his own back.
+  side = await commentOn(bob, onBob, 0);
+  await side.locator('.pn-tag-in').fill('Sunset');
+  await side.locator('.pn-tag-in').press('Enter');
+  await side.locator('.pn-chip', { hasText: '#Sunset' }).waitFor();
+  await side.locator('.pn-tag-in').fill('bea');
+  await side.locator('.pn-suggestion', { hasText: '#Beach' }).click();
+  await side.locator('.pn-chip', { hasText: '#Beach' }).waitFor();
+  check(!(await side.locator('.pn-suggestion', { hasText: '#Beach' }).count()), 'A label the photo has isn’t suggested again.');
+  await side.locator('.pn-chip', { hasText: '#Sunset' }).locator('.chip-x').click();
+  await side.locator('.pn-chip', { hasText: '#Sunset' }).waitFor({ state: 'detached' });
+  await onAlice.locator('.att-media').nth(0).locator('.pn-badges[aria-label="1 tag"]').waitFor();
+  // On photo 2, Alice's tag on Alice's photo: Bob has no ×, and the server refuses him anyway.
+  await bob.$('.viewer-nav.next').click();
+  await bob.page.waitForFunction(([w, h]) => { const img = document.querySelector('.viewer .viewer-img'); return img && img.naturalWidth === w && img.naturalHeight === h; }, sizes[1]);
+  side = bob.$('.viewer .pn-side');
+  await side.locator('.pn-chip', { hasText: '#Beach' }).waitFor();
+  check(!(await side.locator('.pn-chip', { hasText: '#Beach' }).locator('.chip-x').count()), 'Someone who neither added a tag nor sent the photo can’t remove it.');
+  const refused = await status(bob, 'DELETE', `/api/dm-messages/${mid}/tags/${beachId}`);
+  check(refused === 403, `The server should refuse to remove someone else’s tag (got ${refused}).`);
+  await closeViewer(bob);
+
+  // ---- The same in a server channel (signed tags under the server's key).
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await alice.$('.cw-main input[type=file]').setInputFiles(shells.map((buffer, i) => ({ name: `harbour-${i + 1}.png`, mimeType: 'image/png', buffer })));
+  await alice.send('The harbour three ways: mussel');
+  const inChannel = bob.message('The harbour three ways: mussel').first();
+  await inChannel.waitFor();
+  const cmid = await inChannel.getAttribute('data-mid');
+  await drawn(bob, cmid, 3);
+  side = await commentOn(bob, inChannel, 2);
+  const cposted = bob.page.waitForRequest((r) => /\/api\/channels\/\w+\/messages$/.test(r.url()) && r.method() === 'POST');
+  await side.locator('textarea.pn-box').fill('This one could be a postcard: limpet');
+  await side.locator('textarea.pn-box').press('Enter');
+  const cbody = (await cposted).postDataJSON();
+  check(cbody.replyTo === cmid && cbody.replyFile === 2, 'In a channel too, a comment names its photo.');
+  await side.locator('.pn-c', { hasText: 'This one could be a postcard: limpet' }).waitFor();
+  const bobTag = bob.page.waitForResponse((r) => /\/api\/messages\/\w+\/tags$/.test(r.url()) && r.request().method() === 'POST');
+  await side.locator('.pn-tag-in').fill('Harbour');
+  await side.locator('.pn-tag-in').press('Enter');
+  const bobRes = await bobTag;
+  const csent = bobRes.request().postDataJSON();
+  check(/^tc1:[1-9]\d*:/.test(csent.ciphertext) && csent.fileIdx === 2 && !JSON.stringify(csent).includes('Harbour'), 'A channel tag should go sealed and signed (tc1), under the current key.');
+  const harbourId = (await bobRes.json()).tag.id;
+  await side.locator('.pn-chip', { hasText: '#Harbour' }).locator('.chip-x').waitFor();
+  await closeViewer(bob);
+  const creply = alice.message('This one could be a postcard: limpet').first();
+  await creply.waitFor();
+  await creply.locator('.msg-reply.pn-reply', { hasText: '’s photo' }).waitFor(); // (her name there, a nickname if she has one)
+  await quotes(alice, await creply.getAttribute('data-mid'), cmid, 2);
+  const chAlice = alice.message('The harbour three ways: mussel').first();
+  await chAlice.locator('.att-media').nth(2).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
+
+  // Dana, a member with no say over other people's messages: she reads the tag, has no × and is refused.
+  const dana = await t.open('dana');
+  await dana.login('dana', t.pw.dana);
+  await dana.railButton(SERVER);
+  await dana.openChannel('general');
+  const onDana = dana.message('The harbour three ways: mussel').first();
+  await onDana.waitFor();
+  await drawn(dana, cmid, 3);
+  await onDana.locator('.att-media').nth(2).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
+  side = await commentOn(dana, onDana, 2);
+  await side.locator('.pn-chip', { hasText: '#Harbour' }).waitFor();
+  check(!(await side.locator('.pn-chip .chip-x').count()), 'Dana can’t remove Bob’s tag on Alice’s photo.');
+  const drefused = await status(dana, 'DELETE', `/api/messages/${cmid}/tags/${harbourId}`);
+  check(drefused === 403, `The server should refuse Dana (got ${drefused}).`);
+  await closeViewer(dana);
+  await dana.close();
+  // Bob takes his own back: gone for Alice too.
+  side = await commentOn(bob, inChannel, 2);
+  await side.locator('.pn-chip', { hasText: '#Harbour' }).locator('.chip-x').click();
+  await side.locator('.pn-chip', { hasText: '#Harbour' }).waitFor({ state: 'detached' });
+  await closeViewer(bob);
+  await chAlice.locator('.att-media').nth(2).locator('.pn-badges[aria-label="1 comment"]').waitFor();
+
+  // ---- The Photos & videos panel filtered by a tag (panel: media-panel.js's selectors, to check after the merge).
+  await alice.railButton('Direct messages');
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await alice.$('#main-head button[aria-label="Photos & videos"]').click();
+  const chip = alice.$('#members button', { hasText: /#?Beach/ }).first();
+  await chip.waitFor();
+  await chip.click();
+  // Photo 2 (Alice's tag) and photo 1 (Bob's): just those two.
+  await alice.page.waitForFunction(() => document.querySelectorAll('#members [data-gid]').length === 2);
+  await chip.click();
+  await alice.page.waitForFunction(() => document.querySelectorAll('#members [data-gid]').length >= 3);
+  await alice.$('#main-head button[aria-label="Hide photos & videos"]').click();
 }
 
 export const FLOWS = [

@@ -39,7 +39,7 @@ import { api } from './api.js';
 import { modal, menu, confirmDialog, showError, field } from './ui.js';
 import { linkedUrls } from './markdown.js';
 import { label as timerLabel } from './disappear.js';
-import { bindingOf, bindScheduled } from './binding.js';
+import { bindingOf, bindScheduled, photoOf } from './binding.js';
 
 const LATE_OK = 10 * 60 * 1000; // re-encrypted by itself (and sent at once) up to this long after its time
 const MAX_DAYS = 30;
@@ -178,10 +178,11 @@ export function createScheduled(deps) {
   }
 
   // ------------------------------------------------------------------ opening and re-encrypting
-  // What it says, from your own copy (never from the ciphertext the server holds): { t, f, p?, l?, x?, b?, sid? }, or
-  // { error: true } when the copy is missing, doesn't open with your keys, or names another scheduled message (a
+  // What it says, from your own copy (never from the ciphertext the server holds): { t, f, p?, l?, x?, b?, ph?, sid? },
+  // or { error: true } when the copy is missing, doesn't open with your keys, or names another scheduled message (a
   // copy of that one, put here). x is the disappearing timer it was written for (seconds), which every re-encrypt
-  // keeps (see reseal); b is where it belongs (binding.js: its id, reply and thread, fixed when it was scheduled);
+  // keeps (see reseal); b is where it belongs (binding.js: its id, reply and thread, fixed when it was scheduled); ph,
+  // for a comment on one photo, which photo of the message it replies to (binding.js photoOf), which stays as well;
   // sid, the scheduled message it was sealed for (see the top of this file).
   async function open(it) {
     const o = opened.get(it.id);
@@ -192,7 +193,7 @@ export function createScheduled(deps) {
       if (p && typeof p === 'object' && !Array.isArray(p) && (p.sid === undefined || p.sid === it.id)) {
         dec = { t: typeof p.t === 'string' ? p.t : '', f: Array.isArray(p.f) ? p.f : [], ...(p.p && typeof p.p === 'object' ? { p: p.p } : {}), l: Array.isArray(p.l) ? p.l : [],
           ...(Number.isInteger(p.x) && p.x > 0 ? { x: p.x } : {}), ...(bindingOf(p) ? { b: bindingOf(p) } : {}),
-          ...(p.sid === it.id ? { sid: it.id } : {}) };
+          ...(photoOf(p) ? { ph: photoOf(p) } : {}), ...(p.sid === it.id ? { sid: it.id } : {}) };
       }
     } catch { /* doesn't open: can't confirm it's yours */ }
     opened.set(it.id, { draft: it.draft, dec });
@@ -214,7 +215,7 @@ export function createScheduled(deps) {
     const t = text !== undefined ? text : dec.t || '';
     const still = linkedUrls(t, { skipSpoilers: true });
     const links = (dec.l || []).filter((x) => x && still.includes(x.url));
-    const payload = { t, f: dec.f || [], ...(dec.p ? { p: dec.p } : {}), ...(links.length ? { l: links } : {}),
+    const payload = { t, f: dec.f || [], ...(dec.p ? { p: dec.p } : {}), ...(links.length ? { l: links } : {}), ...(dec.ph ? { ph: dec.ph } : {}),
       ...bindScheduled(dec.b, { at: at || dueOf(it, dec) }) };
     return deps.sealFor(keyOf(it), payload, { ref: it.ref, threadId: it.threadId, x: dec.x || 0, sid: it.id });
   }

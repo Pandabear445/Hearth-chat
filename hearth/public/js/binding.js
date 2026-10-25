@@ -18,6 +18,12 @@
 // (older apps, bots, webhooks and the news bot, which aren't end-to-end encrypted anyway) are never flagged.
 //
 // Nothing here throws on odd input: a message whose fields are malformed is flagged, never made unreadable.
+//
+// A comment on one photo of a message that carries several (photo-notes.js) is an ordinary reply that also says which
+// photo it is about, inside it too: ph { i, u }, the index into the replied-to message's files and that file's
+// address. With r (above) that binds it to exactly that photo; the server's own count of comments per photo
+// (replyFile) is only ever a number to show.
+import { isUploadUrl } from './attachments.js';
 
 export const SKEW = 10 * 60 * 1000; // clocks and slow connections: a message's time may be this far off either way
 // A scheduled message may go out late without a flag, up to the server's own limit (server/scheduled.js
@@ -63,6 +69,16 @@ export function bindingOf(payload) {
   const ts = Number.isSafeInteger(payload.ts) && payload.ts > 0 ? payload.ts : 0;
   const v = Number.isSafeInteger(payload.v) && payload.v >= 0 && payload.v <= MAX_V ? payload.v : 0;
   return { u: payload.u, r: idOr(payload.r), th: idOr(payload.th), ts, v, ...(payload.sch === 1 ? { sch: 1 } : {}) };
+}
+// Which photo of the replied-to message a comment is about: { i, u } (i: 0–99, the index into that message's files as
+// every app cleans them, attachments.js cleanFiles; u: that file's address on this server), or undefined when it says
+// none or something malformed. Never throws.
+export const PHOTO_MAX = 99;
+export function photoOf(payload) {
+  const ph = payload && typeof payload === 'object' ? payload.ph : undefined;
+  if (!ph || typeof ph !== 'object' || Array.isArray(ph)) return undefined;
+  if (!Number.isInteger(ph.i) || ph.i < 0 || ph.i > PHOTO_MAX || !isUploadUrl(ph.u)) return undefined;
+  return { i: ph.i, u: ph.u };
 }
 
 // What the server says against what the message says. m: the message as the server sent it (replyTo, threadId,

@@ -368,6 +368,62 @@ export async function decryptGroup({ raw, serverId, channelId, authorId, authorS
   return { payload, verified: !!signedBy, signedBy };
 }
 
+// ---------------------------------------------------------------- photo tags (photo-notes.js)
+// A tag is a short label someone put on one photo of a message, kept beside the message rather than inside it. Its
+// formats, key derivation (HKDF info) and additional data are its own, so a tag never opens as a message, a key wrap
+// or a voice handshake, nor any of those as a tag. The additional data binds the conversation, the key epoch (channels),
+// the message, which of its files, the tag's own id (the app picks it and the server stores it as the key) and who
+// wrote it: the server can't move a tag to another photo, message, conversation or author, or copy it under another id.
+// The payload ({ n: label, fu: that file's address }) is padded to exactly one 256-byte step, so every tag is the same
+// size and its length says nothing about the label (photo-notes.js keeps labels short enough for that).
+//   Channel and group chat: tc1:<epoch>:<salt>:<iv>:<ciphertext>:<signature>   (signed like channel messages)
+//   DM:                     td1:<salt>:<iv>:<ciphertext>                       (not signed, like DMs)
+const tagBytes = (payload) => {
+  const b = padded(payload);
+  if (b.length !== 256) throw new Error('That tag is too long.');
+  return b;
+};
+const groupTagAad = (channelId, epoch, messageId, fileIndex, tagId, authorId) => `hearth-tc1|${channelId}|${epoch}|${messageId}|${fileIndex}|${tagId}|${authorId}`;
+const dmTagAad = (dmId, messageId, fileIndex, tagId, authorId) => `hearth-td1|${dmId}|${messageId}|${fileIndex}|${tagId}|${authorId}`;
+export async function encryptGroupTag({ raw, serverId, channelId, epoch, messageId, fileIndex, tagId, authorId, signKey, payload }) {
+  const salt = rand(32);
+  const iv = rand(12);
+  const aad = groupTagAad(channelId, epoch, messageId, fileIndex, tagId, authorId);
+  const key = await hkdfAes(await groupBase(raw, `${serverId}|${epoch}`), salt, `hearth-tag-v1|${channelId}`, ['encrypt']);
+  const body = `${epoch}:${b64(salt)}:${b64(iv)}:${b64(await aesEncrypt(key, iv, tagBytes(payload), aad))}`;
+  return `tc1:${body}:${await sign(signKey, `${aad}|${body}`)}`;
+}
+// The key epoch a channel tag says it was sealed with (null for anything else).
+export function tagEpoch(text) {
+  const p = String(text || '').split(':');
+  return p[0] === 'tc1' && /^[1-9][0-9]{0,8}$/.test(p[1] || '') ? parseInt(p[1], 10) : null;
+}
+// authorSignPub: the author's signing key or a list of them, as for decryptGroup; signedBy says which one signed it.
+export async function decryptGroupTag({ raw, serverId, channelId, messageId, fileIndex, tagId, authorId, authorSignPub, text }) {
+  const parts = String(text).split(':');
+  const [v, epoch, salt, iv, ct, sig] = parts;
+  if (parts.length !== 6 || v !== 'tc1' || tagEpoch(text) === null) throw new Error('Unknown format');
+  const aad = groupTagAad(channelId, epoch, messageId, fileIndex, tagId, authorId);
+  const key = await hkdfAes(await groupBase(raw, `${serverId}|${epoch}`), unb64(salt), `hearth-tag-v1|${channelId}`, ['decrypt']);
+  const payload = JSON.parse(dec.decode(await aesDecrypt(key, unb64(iv), unb64(ct), aad)));
+  const signedBy = await verifyAny(authorSignPub, `${aad}|${epoch}:${salt}:${iv}:${ct}`, sig);
+  return { payload, verified: !!signedBy, signedBy };
+}
+export async function encryptDmTag({ myPriv, theirPub, dmId, messageId, fileIndex, tagId, authorId, payload }) {
+  const salt = rand(32);
+  const iv = rand(12);
+  const key = await hkdfAes(await dmBase(myPriv, theirPub), salt, `hearth-dm-tag-v1|${dmId}`, ['encrypt']);
+  const ct = await aesEncrypt(key, iv, tagBytes(payload), dmTagAad(dmId, messageId, fileIndex, tagId, authorId));
+  return `td1:${b64(salt)}:${b64(iv)}:${b64(ct)}`;
+}
+export async function decryptDmTag({ myPriv, theirPub, dmId, messageId, fileIndex, tagId, authorId, text }) {
+  const parts = String(text).split(':');
+  const [v, salt, iv, ct] = parts;
+  if (parts.length !== 4 || v !== 'td1') throw new Error('Unknown format');
+  const key = await hkdfAes(await dmBase(myPriv, theirPub), unb64(salt), `hearth-dm-tag-v1|${dmId}`, ['decrypt']);
+  return { payload: JSON.parse(dec.decode(await aesDecrypt(key, unb64(iv), unb64(ct), dmTagAad(dmId, messageId, fileIndex, tagId, authorId)))) };
+}
+
 // ---------------------------------------------------------------- attachments (one random key per file)
 export async function encryptFile(arrayBuffer) {
   const raw = rand(32);

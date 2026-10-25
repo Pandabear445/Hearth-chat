@@ -914,6 +914,15 @@ function startApp() {
     const m = (store && store.list.find((x) => x.id === p.messageId)) || findThreadMessage(p.messageId);
     if (m) { m.reactions = p.reactions; replaceMessageEl(m); }
   });
+  // Photo comments and tags (photo-notes.js): a message's tags (its whole list), or how many comments each of its photos
+  // has. Its loaded copies take them, and only what shows them is drawn again (the counts on its pictures, an open
+  // viewer's side panel, the Photos & videos panel): never the whole message, which would load its pictures again.
+  socket.on('dm:tags', (p) => { if (S.me && p) NOTES.onTags('d:' + p.dmId, p.id, p.tags); });
+  socket.on('message:tags', (p) => { if (S.me && p) NOTES.onTags('c:' + p.channelId, p.id, p.tags); });
+  socket.on('dm:file-replies', (p) => { if (S.me && p) NOTES.onFileReplies('d:' + p.dmId, p.id, p.fileReplies); });
+  socket.on('message:file-replies', (p) => { if (S.me && p) NOTES.onFileReplies('c:' + p.channelId, p.id, p.fileReplies); });
+  // Back after the connection dropped: what came live before is no longer the latest word.
+  socket.on('connect', () => NOTES.reconnected());
   socket.on('pin:update', (p) => {
     const key = p.channelId ? 'c:' + p.channelId : 'd:' + p.dmId;
     const store = S.msgs[key];
@@ -3696,6 +3705,7 @@ async function onKeysChanged(serverId, added, heldChanged) {
   if (heldChanged && S.view.serverId === serverId && S.panel === 'members') later(renderPanel);
   if (heldChanged && S.view.type === 'dm') { later(renderHeader); if (composers.main) composers.main.renderExtras(); }
   if (added) {
+    NOTES.onKeys(serverId); // photo tags that were waiting for this key
     const server = S.servers.find((s) => s.id === serverId);
     for (const c of server ? server.channels : []) {
       const store = S.msgs['c:' + c.id];
@@ -4096,6 +4106,44 @@ function messageElRevealed(m, prev, ctx) {
   const el = h('div', { class: 'msg', dataset: { mid: m.id, ctx }, tabindex: '-1' });
   return fillMessage(el, m, prev, ctx, { author: getUser(m.authorId), mine: false, isGrouped: false, text: textOf(m) });
 }
+// The quote of a comment on one photo (photo-notes.js): "<name>’s photo" with a small thumbnail of that very photo, in
+// place of the quoted words. null when the message isn't such a comment, or names a photo the quoted message doesn't
+// have (then it's quoted as any reply). Without the quoted message's files at hand (one the server left out for its
+// size and that isn't loaded here, or one that can't be opened), it still says whose photo, without the picture.
+// Clicking it opens that photo in the viewer when its message is on screen here, otherwise it jumps there.
+function photoQuote(m, server, ru) {
+  const ph = readable(m) && m.dec.ph;
+  if (!ph || !m.reply) return null;
+  const rd = m.reply.dec;
+  const opened = !!rd && !rd.error && !rd.pending && !rd.big;
+  const f = opened ? (rd.f || [])[ph.i] : null;
+  if (opened && (!f || f.url !== ph.u)) return null;
+  const kind = f ? mediaKind(f.type || '', f.name) : null;
+  const what = kind === 'video' ? 'video' : 'photo';
+  const name = nameInServer(server, ru);
+  const thumb = h('span', { class: `pn-quote-thumb${f && f.sp ? ' spoiler' : ''}` }, icon(f && f.sp ? 'eyeOff' : what === 'video' ? 'video' : 'image'));
+  // The small picture: its thumbnail, or a small picture itself, decrypted like the chat's (never a spoiler's, nor one
+  // from someone you blocked: those keep the icon).
+  const src = f && kind === 'img' && !f.sp && !S.blocked.has(m.reply.authorId) && (f.k || m.dmId)
+    ? (f.th ? { ...f.th, type: 'image/webp', thumb: true } : f.size > 0 && f.size <= MANY_AUTOLOAD_MAX ? f : null) : null;
+  if (src) {
+    const qm = { ...m.reply, dmId: m.dmId, channelId: m.channelId, serverId: m.serverId };
+    const show = (u) => { thumb.replaceChildren(h('img', { class: 'pn-quote-img', src: u, alt: '' })); thumb.classList.add('loaded'); };
+    const hit = fileUrls.get(src.url); // already decrypted: drawn at once, so a redraw doesn't blink
+    if (hit) show(hit);
+    else loadWhenVisible(thumb, () => loadQueue(() => decryptedUrl(qm, src)).then(show).catch(() => {}));
+  }
+  return h('button', { class: 'msg-reply pn-reply', 'aria-label': `Replying to ${name}’s ${what}. Open it.`, onclick: () => openQuotedPhoto(m, ph) },
+    h('span', { class: 'reply-spine' }), avatarEl(ru, 16), thumb,
+    h('span', { class: 'reply-text pn-reply-text' }, h('strong', { class: 'pn-reply-name' }, name), `’s ${what}`));
+}
+function openQuotedPhoto(m, ph) {
+  const el = $$('#messages .att-img, #messages .att-video, .thread-list .att-img, .thread-list .att-video').find((x) => x._item && x._item.m.id === m.reply.id
+    && x._item.fi === ph.i && x._item.f.url === ph.u && !x.closest('.att-spoiler:not(.revealed)'));
+  if (el) return openViewer(el, { name: el._item.f.name, download: () => downloadAttachment(el._item.m, el._item.f), side: true });
+  // Not on screen: to the message (in its thread if it's a thread reply).
+  return m.threadId ? jumpToMessageId(m.reply.id) : jumpToMessage(keyOfMessage(m), m.reply.id);
+}
 function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = null }) {
   // In a server, people go by their nicknames there (none in DMs and group chats).
   const server = msgServer(m);
@@ -4115,7 +4163,10 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
     const rtext = rd && !rd.error && !rd.pending ? rd.t : '';
     // The quoted message goes through the word filter too (it's someone's words shown here).
     const rwf = veiledQuote(m);
-    el.append(h('button', { class: 'msg-reply', 'aria-label': `Replying to ${nameInServer(server, ru)}. Jump to original.`, onclick: () => jumpToMessage(keyOfMessage(m), m.reply.id) },
+    // A comment on one of its photos (photo-notes.js) quotes that photo instead of its words.
+    const pq = rwf ? null : photoQuote(m, server, ru);
+    if (pq) el.append(pq);
+    else el.append(h('button', { class: 'msg-reply', 'aria-label': `Replying to ${nameInServer(server, ru)}. Jump to original.`, onclick: () => jumpToMessage(keyOfMessage(m), m.reply.id) },
       h('span', { class: 'reply-spine' }), avatarEl(ru, 16), nameEl(ru, { cls: 'reply-name', server }),
       rwf ? h('span', { class: 'reply-text' }, h('em', null, previewLabel(rwf)))
         : h('span', { class: 'reply-text', html: rtext ? md(rtext, { inline: true }) : rd && rd.big ? '<em>A message with many files</em>' : '<em>Attachment or encrypted message</em>' })));
@@ -4680,9 +4731,9 @@ function editBox(m, ctx) {
       const still = linkedUrls(content, { skipSpoilers: true });
       const kept = linksOf(m).filter((x) => still.includes(x.url));
       // Where it belongs stays too (binding.js): the same id, reply, thread and time, one edit later. One sent by an
-      // app from before that stays without.
+      // app from before that stays without. So does the photo a comment is about (ph, photo-notes.js).
       const payload = { t: content, f: filesOf(m), ...(m.dec && m.dec.p ? { p: m.dec.p } : {}), ...(m.dec && m.dec.x ? { x: m.dec.x } : {}), ...(kept.length ? { l: kept } : {}),
-        ...(m.dec && m.dec.b ? bindEdit(m.dec.b) : {}) };
+        ...(m.dec && m.dec.ph ? { ph: m.dec.ph } : {}), ...(m.dec && m.dec.b ? bindEdit(m.dec.b) : {}) };
       if (m.dmId) await api('PATCH', `/dm-messages/${m.id}`, { ciphertext: await encryptFitting(payload, (p) => sec.encryptDm(m.dmId, p)) });
       else {
         await withKeyRetry(m.serverId, async () => {
@@ -4945,6 +4996,9 @@ function attachmentEl(f, m, { many = false, fi = 0 } = {}) {
     }
     if (media === 'audio') holder.prepend(h('div', { class: 'att-audio-name' }, icon('file', 'ic'), f.name, h('span', { class: 'att-size' }, fmtSize(f.size || 0))));
     holder.append(meter, mediaDownloadBtn(m, f));
+    // One of several photos and videos in a message (photo-notes.js): its comment and tag counts, and on hover "Comment
+    // on this photo", which opens it in the viewer with the comment box ready.
+    if (media !== 'audio') holder.append(...NOTES.tileExtras(m, fi, () => openViewer(el, { name: f.name, download: () => downloadAttachment(m, f), side: 'comment' })));
     // Load only when it scrolls near the screen, a few at a time; images show the small thumbnail first.
     const load = () => {
       holder.classList.add('loading');
@@ -6061,7 +6115,77 @@ const MEDIA = createMediaPanel({
 
 // Comments on one photo and tags on photos (photo-notes.js).
 const NOTES = createPhotoNotes({
+  me: () => S.me,
+  where: (key) => {
+    if (key.startsWith('d:')) return S.dms.some((d) => d.id === key.slice(2)) ? { dmId: key.slice(2) } : null;
+    const s = serverOfChannel(key.slice(2));
+    return s ? { serverId: s.id, channelId: key.slice(2) } : null;
+  },
+  encryptTag: (where, tag) => sec.encryptTag(where, tag),
+  openTag: (t) => sec.openTag(t),
+  withKeyRetry: (serverId, fn) => withKeyRetry(serverId, fn),
+  decrypt: (m) => decryptMessage(m),
+  readable: (m) => readable(m),
+  filesOf: (m) => filesOf(m),
+  expired: (m) => isExpired(m, nowServer()),
+  blocked: (id) => S.blocked.has(id),
+  getUser: (id) => getUser(id),
+  nameOf: (m, u) => nameInMsg(m, u),
+  avatar: (u, size) => avatarEl(u, size),
+  // A comment's words as the chat shows them, through the word filter too. (A click shows a spoiler in them; what
+  // else a click does in the chat, such as a profile card, would open behind the viewer.)
+  textEl: (m) => {
+    const wf = veiled(m);
+    if (wf) return h('div', { class: 'pn-c-text' }, h('em', null, previewLabel(wf)));
+    return h('div', { class: 'pn-c-text md', html: md(textOf(m) || '_Attachment_', { mentionName: S.me.username }),
+      onclick: (e) => { const sp = e.target.closest('.md-spoiler'); if (sp) sp.classList.add('revealed'); } });
+  },
+  canPost: (key, threadId) => photoPostBlock(key, threadId),
+  canManage: (key) => { const c = key.startsWith('c:') ? channelById(key.slice(2)) : null; return !!c && canIn(c, PERMS.MANAGE_MESSAGES); },
+  sendComment: (item, text) => sendComment(item, text),
+  spellBox: (ta) => spellBox(ta),
+  spelled: (ta) => spelled(ta),
+  spellcheck: () => spellcheckAttr(),
+  copies: (id) => loadedCopies(id),
+  loaded: (id) => loadedMessage(id),
+  onMeta: (key, id) => MEDIA.onMeta(key, id),
+  openMessage: (m) => (m.dmId ? jumpToMessage('d:' + m.dmId, m.id) : jumpToMessageId(m.id)),
 });
+// Why you can't add a comment or a tag here (a sentence), or null when you can: the same rules as the message box.
+function photoPostBlock(key, threadId) {
+  if (key.startsWith('d:')) {
+    const d = S.dms.find((x) => x.id === key.slice(2));
+    if (!d) return 'This conversation isn’t available.';
+    const u = getUser(d.userId);
+    if (S.blocked.has(d.userId)) return `You blocked ${displayName(u)}.`;
+    if (u.deleted) return 'This account was deleted, so nobody can read anything new here.';
+    if (sec.keyChanged(u)) return `${displayName(u)}’s security key changed. Verify it before you add anything here.`;
+    return null;
+  }
+  const ch = channelById(key.slice(2));
+  if (!ch) return 'You can’t post here.';
+  if (canIn(ch, threadId ? PERMS.CREATE_THREADS : PERMS.SEND_MESSAGES)) return null;
+  const to = (serverOfChannel(ch.id) || {}).timeout;
+  return to && to.until > Date.now() ? `You’re timed out until ${fmtStamp(to.until)}. You can still read.` : 'You don’t have permission to post here.';
+}
+// A comment on one photo, from the picture viewer's side panel (photo-notes.js): sent like a reply from the message box
+// (the same encryption, binding, disappearing timer, key retry and errors), in the thread the photo is in, with which
+// photo it is about inside it. Resolves to the message as the server took it.
+async function sendComment({ m, f, fi, key }, text) {
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join('');
+  const msg = await underWay(sendTo(key, m.threadId || null, { t: text, f: [], ph: { i: fi, u: f.url } }, m.id, nonce));
+  playSound('sent');
+  // Normally the live connection delivers it first; this covers a slow or dropped connection.
+  if (msg && msg.id) { if (msg.threadId) onThreadMessage(msg); else onNewMessage(key, msg); }
+  return msg;
+}
+// Every loaded copy of a message: in its conversation's list, and in threads (as a reply or as the first message).
+function loadedCopies(id) {
+  const out = [];
+  for (const st of Object.values(S.msgs)) for (const x of (st && st.list) || []) if (x.id === id) out.push(x);
+  for (const th of Object.values(S.threads)) for (const x of [th.root, ...(th.list || [])]) if (x && x.id === id && !out.includes(x)) out.push(x);
+  return out;
+}
 // Bots' slash commands (bots.js). Answers only you can see live in memory and show above the main composer.
 const SLASH = createSlash({
   getSocketId: () => (socket && socket.id) || null,
@@ -6959,6 +7083,9 @@ async function sendOnce(key, threadId, payload0, replyTo, nonce, sendAt = null) 
   const payload = { ...payload0, ...bindNew({ replyTo, threadId, at: sendAt || nowServer(), scheduled: !!sendAt }) };
   const files = (payload.f || []).flatMap((x) => [x.url, x.th && x.th.url]).filter(Boolean);
   const where = key.startsWith('c:') ? `/channels/${key.slice(2)}` : `/dms/${key.slice(2)}`;
+  // A comment on one photo (photo-notes.js) says which one inside it (ph); the server is told the index beside it
+  // (replyFile), only so it can count each photo's comments.
+  const photo = replyTo && payload.ph ? { replyFile: payload.ph.i } : {};
   // A scheduled one gets an id of this app's choosing for its own copy (sealFor's keep).
   const ref = sendAt ? Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) => x.toString(16).padStart(2, '0')).join('') : null;
   if (key.startsWith('c:')) {
@@ -6966,13 +7093,13 @@ async function sendOnce(key, threadId, payload0, replyTo, nonce, sendAt = null) 
     if (!server) throw new Error('Channel not found.');
     return withKeyRetry(server.id, async () => {
       const sealed = await sealFor(key, payload, sendAt ? { ref, threadId } : null);
-      return sendAt ? bindScheduled(await api('POST', `${where}/scheduled-messages`, { ...sealed, ref, replyTo, threadId, files, sendAt }), sealed, key, ref, threadId)
-        : api('POST', `${where}/messages`, { ...sealed, replyTo, threadId, files, nonce });
+      return sendAt ? bindScheduled(await api('POST', `${where}/scheduled-messages`, { ...sealed, ref, replyTo, ...photo, threadId, files, sendAt }), sealed, key, ref, threadId)
+        : api('POST', `${where}/messages`, { ...sealed, replyTo, ...photo, threadId, files, nonce });
     });
   }
   const sealed = await sealFor(key, payload, sendAt ? { ref, threadId: null } : null);
-  return sendAt ? bindScheduled(await api('POST', `${where}/scheduled-messages`, { ...sealed, ref, replyTo, files, sendAt }), sealed, key, ref, null)
-    : api('POST', `${where}/messages`, { ...sealed, replyTo, files, nonce });
+  return sendAt ? bindScheduled(await api('POST', `${where}/scheduled-messages`, { ...sealed, ref, replyTo, ...photo, files, sendAt }), sealed, key, ref, null)
+    : api('POST', `${where}/messages`, { ...sealed, replyTo, ...photo, files, nonce });
 }
 // A scheduled message's own copy can't name it when it's made (the server picks its id), so as soon as the server
 // answers, the copy is sealed again naming it (sid) and goes back with the very same ciphertext. From then on any of
