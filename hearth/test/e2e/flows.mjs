@@ -4339,9 +4339,8 @@ async function photoNotes(t) {
   await side.locator('.pn-chip', { hasText: '#Sunset' }).waitFor({ state: 'detached' });
   await onAlice.locator('.att-media').nth(0).locator('.pn-badges[aria-label="1 tag"]').waitFor();
   // On photo 2, Alice's tag on Alice's photo: Bob has no ×, and the server refuses him anyway.
-  await bob.$('.viewer-nav.next').click();
-  await bob.page.waitForFunction(([w, h]) => { const img = document.querySelector('.viewer .viewer-img'); return img && img.naturalWidth === w && img.naturalHeight === h; }, sizes[1]);
-  side = bob.$('.viewer .pn-side');
+  await closeViewer(bob);
+  side = await commentOn(bob, onBob, 1);
   await side.locator('.pn-chip', { hasText: '#Beach' }).waitFor();
   check(!(await side.locator('.pn-chip', { hasText: '#Beach' }).locator('.chip-x').count()), 'Someone who neither added a tag nor sent the photo can’t remove it.');
   const refused = await status(bob, 'DELETE', `/api/dm-messages/${mid}/tags/${beachId}`);
@@ -4382,22 +4381,24 @@ async function photoNotes(t) {
   const chAlice = alice.message('The harbour three ways: mussel').first();
   await chAlice.locator('.att-media').nth(2).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
 
-  // Dana, a member with no say over other people's messages: she reads the tag, has no × and is refused.
-  const dana = await t.open('dana');
-  await dana.login('dana', t.pw.dana);
-  await dana.railButton(SERVER);
-  await dana.openChannel('general');
-  const onDana = dana.message('The harbour three ways: mussel').first();
-  await onDana.waitFor();
-  await drawn(dana, cmid, 3);
-  await onDana.locator('.att-media').nth(2).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
-  side = await commentOn(dana, onDana, 2);
+  // Erin, a new member with no say over other people's messages: she reads the tag (sealed before she joined, under
+  // the key she's given), has no × and is refused.
+  const erin = await t.open('erin');
+  t.pw.erin = newPassword();
+  await erin.register('erin', t.pw.erin);
+  await erin.join(await bob.inviteLink(), SERVER);
+  await erin.openChannel('general');
+  const onErin = erin.message('The harbour three ways: mussel').first();
+  await onErin.waitFor();
+  await drawn(erin, cmid, 3);
+  await onErin.locator('.att-media').nth(2).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
+  side = await commentOn(erin, onErin, 2);
   await side.locator('.pn-chip', { hasText: '#Harbour' }).waitFor();
-  check(!(await side.locator('.pn-chip .chip-x').count()), 'Dana can’t remove Bob’s tag on Alice’s photo.');
-  const drefused = await status(dana, 'DELETE', `/api/messages/${cmid}/tags/${harbourId}`);
-  check(drefused === 403, `The server should refuse Dana (got ${drefused}).`);
-  await closeViewer(dana);
-  await dana.close();
+  check(!(await side.locator('.pn-chip .chip-x').count()), 'Erin can’t remove Bob’s tag on Alice’s photo.');
+  const erefused = await status(erin, 'DELETE', `/api/messages/${cmid}/tags/${harbourId}`);
+  check(erefused === 403, `The server should refuse Erin (got ${erefused}).`);
+  await closeViewer(erin);
+  await erin.close();
   // Bob takes his own back: gone for Alice too.
   side = await commentOn(bob, inChannel, 2);
   await side.locator('.pn-chip', { hasText: '#Harbour' }).locator('.chip-x').click();
