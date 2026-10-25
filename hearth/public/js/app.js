@@ -5251,14 +5251,19 @@ function openViewer(fromImg, { name, download, items: given = null, index = 0, s
     sideFocus = null;
     sideBox.replaceChildren(...(el ? [el] : []));
     sideBtn.hidden = !el;
-    const n = el && it.m.fileReplies ? Number(it.m.fileReplies[it.fi]) || 0 : 0;
+    countSide(it);
+    setSide(sideOpen);
+  };
+  // The Comments button's count: drawn with the photo, and again when a comment on it comes or goes while it's shown
+  // (photo-notes.js tells the app, which calls overlay._photoChanged).
+  const countSide = (it) => {
+    const n = !sideBtn.hidden && it.m ? NOTES.counts(it.m, it.fi).comments : 0;
     const label = n ? `Comments (${n})` : 'Comments';
     sideBtn.setAttribute('aria-label', label);
     sideBtn.dataset.tip = label;
     const badge = sideBtn.querySelector('.badge');
     if (n) (badge || sideBtn.appendChild(h('span', { class: 'badge', 'aria-hidden': 'true' }))).textContent = n > 99 ? '99+' : String(n);
     else if (badge) badge.remove();
-    setSide(sideOpen);
   };
   const close = () => {
     if (closed) return;
@@ -5347,6 +5352,7 @@ function openViewer(fromImg, { name, download, items: given = null, index = 0, s
   // viewer closes (forgetCopies).
   overlay._mids = new Set(items.map((it) => (it.m ? it.m.id : it.mid)).filter(Boolean));
   overlay._close = close;
+  overlay._photoChanged = (id) => { const it = items[idx]; if (it && it.m && it.m.id === id) countSide(it); };
   // Menus, popups and questions opened from inside the viewer (its side panel's) go over it, not behind (app.css).
   const above = new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) n.classList.add('over-viewer'); });
   const layer = $('#layer');
@@ -6388,7 +6394,11 @@ const NOTES = createPhotoNotes({
   spellcheck: () => spellcheckAttr(),
   copies: (id) => loadedCopies(id),
   loaded: (id) => loadedMessage(id),
-  onMeta: (key, id) => MEDIA.onMeta(key, id),
+  onMeta: (key, id) => {
+    MEDIA.onMeta(key, id);
+    const v = $('.viewer:not(.closing)');
+    if (v && v._photoChanged) v._photoChanged(id);
+  },
   // A comment, from the viewer's side panel: the viewer closes (and on a phone the side panel it may have been opened
   // from, which covers the chat), then the chat goes to it.
   openMessage: (m) => {

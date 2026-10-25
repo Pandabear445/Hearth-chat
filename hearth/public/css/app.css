@@ -3304,9 +3304,11 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 /* Opened from inside the viewer (its More menu, its side panel's menus, popups and questions) and toasts: over it. */
 #layer > .over-viewer { z-index: 85; }
 body:has(> .viewer:not(.closing)) #toasts { z-index: 86; }
-/* PHONE LAYOUT: the side panel is a sheet over the bottom of the picture, and it scrolls with a finger. */
+/* PHONE LAYOUT: the side panel is a sheet along the bottom, and it scrolls with a finger. It takes its own room: the
+   picture fits in what's left above it rather than going on under it. */
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
-  .viewer-side { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; width: auto; max-height: 60%; border-left: 0; border-top: 1px solid rgb(255 255 255 / .1); border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -10px 30px rgb(0 0 0 / .5); touch-action: pan-y; }
+  .viewer-body { flex-direction: column; }
+  .viewer-side { position: relative; flex: none; z-index: 3; width: auto; max-height: 60%; border-left: 0; border-top: 1px solid rgb(255 255 255 / .1); border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -10px 30px rgb(0 0 0 / .5); touch-action: pan-y; }
   .viewer-video { border-radius: 0; }
 }
 /* (end of the Photos & videos panel) */
@@ -3334,8 +3336,8 @@ body:has(> .viewer:not(.closing)) #toasts { z-index: 86; }
 .msg-files.many .att-media.tile .pn-badges { padding: 1px 5px; gap: 4px; font-size: 10.5px; line-height: 16px; }
 .msg-files.many .att-media.tile .pn-comment-btn { top: 4px; right: 36px; width: 28px; height: 28px; }
 
-/* The quote of a comment on one photo: a small thumbnail of it and "<name>’s photo", no taller than a quote's line. */
-.pn-quote-thumb { flex: none; width: 20px; height: 18px; border-radius: 4px; overflow: hidden; display: grid; place-items: center; background: var(--hover); border: 1px solid var(--line-2); color: var(--muted); }
+/* The quote of a comment on one photo: a thumbnail of it, big enough to tell which photo it was, and "<name>’s photo". */
+.pn-quote-thumb { flex: none; width: 32px; height: 32px; border-radius: 6px; overflow: hidden; display: grid; place-items: center; background: var(--hover); border: 1px solid var(--line-2); color: var(--muted); }
 .pn-quote-thumb .ic, .pn-quote-thumb svg { width: 12px; height: 12px; }
 .pn-quote-thumb.loaded { border-color: transparent; }
 .pn-quote-img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -3385,7 +3387,7 @@ body:has(> .viewer:not(.closing)) #toasts { z-index: 86; }
 .pn-more { align-self: flex-start; font-size: 13px; }
 .pn-more[hidden] { display: none; }
 .pn-compose { flex: none; display: flex; align-items: flex-end; gap: 6px; }
-.pn-box { flex: 1; min-height: 38px; max-height: 140px; padding: 8px 11px; resize: none; line-height: 1.4; }
+textarea.pn-box { flex: 1; min-height: 38px; max-height: 140px; padding: 8px 11px; resize: none; line-height: 1.4; }
 
 @media (pointer: coarse) {
   /* Nothing hovers on a touch screen: tapping a picture opens the viewer, whose side panel has the comments. */
