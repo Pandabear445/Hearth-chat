@@ -565,6 +565,10 @@ function extrasOf(row, table, x) {
   const tags = x && x.tags ? x.tags[row.id] : tagsFor([row.id])[row.id];
   return {
     reactions: x && x.reactions ? x.reactions[row.id] || [] : reactionsFor([row.id])[row.id] || [],
+    // How many uploads it listed (messages.files): only a photo below that can have comments (replyFileIn) or tags
+    // (photos.js), so the apps offer neither past it. 0 for a forward from before v21 (db.js), whose photos the
+    // panel can't list either.
+    files: row.files || 0,
     // Which photo of the message it replies to this reply comments on (null for any other message).
     replyFile: row.reply_file == null ? null : row.reply_file,
     ...(fr ? { fileReplies: fr } : {}),
@@ -3828,7 +3832,8 @@ api.post('/channels/:id/messages', auth, (req, res) => {
     threadId = threadRootIn(c, threadId, req.userId);
     if (!threadId) fail(404, 'That thread no longer exists.');
   }
-  const msg = postChannelMessage(c, req.userId, { ciphertext, epoch: ep, files, replyTo, replyFile: replyFileIn('messages', replyTo, fileAsked), threadId,
+  const replyFile = replyFileIn('messages', replyTo, fileAsked, { uid: req.userId, serverId: c.server_id });
+  const msg = postChannelMessage(c, req.userId, { ciphertext, epoch: ep, files, replyTo, replyFile, threadId,
     mentions: (req.body || {}).mentions, everyone: (req.body || {}).everyone }, req.body);
   // Replying to a message from before your history here starts (by its id) doesn't hand you its quote.
   res.json(msgFor(msg, c.server_id, req.userId));
@@ -3845,10 +3850,18 @@ function parseReplyFile(v) {
 }
 // The photo a reply comments on, kept only when the reply is (replyIn / dmReplyIn kept replyTo) and the message it
 // replies to lists that many uploads (messages.files); otherwise it's a plain reply. table: 'messages' or 'dm_messages'.
-function replyFileIn(table, replyTo, fileIdx) {
+// In a channel, uid (who posts it) and serverId must be given: a message from before their history in the server
+// starts (server/joinhistory.js) is one they can't see, so it's a plain reply there too. Otherwise the replyFile they
+// got back would tell them how many uploads it has (a few posts would count them), and each one would add to the
+// comment counts that those who can see it get.
+function replyFileIn(table, replyTo, fileIdx, { uid = null, serverId = null } = {}) {
   if (fileIdx == null || !replyTo) return null;
-  const p = db.prepare(`SELECT files FROM ${table} WHERE id = ?`).get(replyTo);
-  return p && p.files > fileIdx ? fileIdx : null;
+  // What HIST.hidden reads (created_at, ciphertext as 1 or 0, epoch, thread_id), never the ciphertext itself.
+  const p = table === 'messages'
+    ? db.prepare('SELECT files, created_at, ciphertext IS NOT NULL AS ciphertext, epoch, thread_id FROM messages WHERE id = ?').get(replyTo)
+    : db.prepare('SELECT files FROM dm_messages WHERE id = ?').get(replyTo);
+  if (!p || p.files <= fileIdx) return null;
+  return table === 'messages' && uid && HIST.hidden(serverId, uid, p) ? null : fileIdx;
 }
 // The stored id of a thread's first message in this channel (whatever shape the request gave it in), or null: none
 // there, or one that has disappeared. uid: who's replying, when it's someone the thread is closed to (it was started
