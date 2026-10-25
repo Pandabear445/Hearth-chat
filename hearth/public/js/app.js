@@ -70,7 +70,7 @@ const S = {
   blocked: new Set(),
   voice: {},
   view: { type: 'home' },
-  panel: null,          // right panel: 'members' | 'pins' | 'threads' | 'thread' | null
+  panel: null,          // right panel: 'members' | 'pins' | 'threads' | 'thread' | 'media' (Photos & videos) | null
   thread: null,         // { rootId, channelId, serverId, from: 'threads' when opened from the Threads panel }
   msgs: {},             // 'c:<channelId>' | 'd:<dmId>' -> { list, hasMore, hasNewer, loaded }
   threads: {},          // rootId -> { root, list, loaded }
@@ -488,6 +488,7 @@ async function signOutHere() {
   // runs again last, in case anything else did.)
   clearLocalCopies();
   SCHED.reset();
+  MEDIA.reset();
   sec.reset();
   copies.clear();
   originals.clear();
@@ -1066,6 +1067,7 @@ async function loadBootstrap() {
   S.threads = {};
   S.threadState = {};
   S.threadsPanel = null;
+  MEDIA.reset(); // (an open Photos & videos panel asks for its newest page again)
   await sec.ensureSigningKey(b.encSignPrivateKey);
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(b.keyStates || {})) await sec.applyState(st);
@@ -1446,6 +1448,7 @@ function armClientExpiry() {
   for (const st of Object.values(S.msgs)) for (const m of st.list) items.push(m);
   for (const t of Object.values(S.threads)) { if (t.root) items.push(t.root); for (const m of t.list || []) items.push(m); }
   if (S.threadsPanel) for (const x of S.threadsPanel.items) items.push(x.root);
+  for (const m of MEDIA.messages()) items.push(m); // (Photos & videos keep messages the chat may not have)
   for (const d of S.dms) if (d.last) items.push(d.last);
   for (const sv of S.servers) if (sv.last) items.push(sv.last);
   for (const exp of [...P.inbox.map((x) => x.exp), ...reminderDeadlines()]) if (exp) items.push({ expiresAt: exp });
@@ -1472,6 +1475,8 @@ function purgeExpired() {
   const tp = S.threadsPanel;
   const goneRoots = tp ? tp.items.filter((x) => isExpired(x.root, t)).map((x) => x.rootId) : [];
   if (goneRoots.length) forgetThreads('c:' + tp.channelId, new Set(goneRoots));
+  // Photos & videos of messages the chat hasn't loaded (the rest went with the conversations above).
+  MEDIA.expire();
   const sidebar = () => { if (!S.view.serverId) later(renderSidebar); };
   for (const d of S.dms) if (d.last && isExpired(d.last, t)) { d.last = newestLive('d:' + d.id); previewDm(d).then(sidebar); }
   for (const g of groups()) if (g.last && isExpired(g.last, t)) { const c = textChannel(g); g.last = c ? newestLive('c:' + c.id) : null; previewGroup(g).then(sidebar); }
@@ -1710,10 +1715,13 @@ function applyCallRegion({ room, region = null, version }) {
 const textChannel = (server) => server.channels.find((c) => c.type === 'text');
 
 function setView(v) {
+  const from = currentKey();
   S.view = v;
   S.editing = null;
   if (S.panel === 'thread' && (!S.thread || S.thread.channelId !== v.channelId)) { S.panel = null; S.thread = null; }
   if (S.panel === 'pins' || (S.panel === 'threads' && (!S.threadsPanel || S.threadsPanel.channelId !== v.channelId))) S.panel = null;
+  // Photos & videos belong to their conversation: going to another one closes them (coming back to the same one doesn't).
+  if (S.panel === 'media' && (!['channel', 'dm'].includes(v.type) || currentKey() !== from)) S.panel = null;
   if (S.panel === null && P.showMembers && wideEnoughForPanel() && (v.type === 'channel' || v.type === 'dm')) S.panel = 'members';
   document.body.classList.remove('nav-open');
   // Going somewhere draws the side panel afresh (a voice chat panel otherwise stays as it is through redraws).
@@ -2158,7 +2166,8 @@ function resizeHandle(which) {
   const cfg = () => {
     const d = document.documentElement.dataset;
     if (which === 'sidebar') return { key: 'sideW', v: '--side-w', min: 200, max: 420, def: 256, dir: d.sidebarSide === 'right' ? -1 : 1, box: $('#sidebar') };
-    const thread = panelMode() === 'thread' || panelMode() === 'chat'; // conversations in the panel share one width
+    // Conversations in the panel share one width, and Photos & videos (a grid of them) takes it too.
+    const thread = panelMode() === 'thread' || panelMode() === 'chat' || panelMode() === 'media';
     return { key: thread ? 'threadW' : 'panelW', v: thread ? '--thread-w' : '--members-w', min: thread ? 300 : 220, max: thread ? 680 : 520, def: thread ? 400 : 272, dir: d.panelSide === 'left' ? 1 : -1, box: $('#members') };
   };
   const save = (key, w) => { const a = loadAppearance(); a.layout[key] = Math.round(w); saveAppearance(a); };
@@ -3019,6 +3028,10 @@ function drawHeader(head) {
   const key = currentKey();
   const server = currentServer();
   const PIN_ITEM = { label: S.panel === 'pins' ? 'Hide pinned messages' : 'Pinned messages', icon: 'pin', action: () => togglePanel('pins') };
+  // Photos & videos: in the ⋯ menu everywhere (the way in on a phone, whose header is full), and a header button of
+  // their own in DMs and group chats on wider screens (app.css hides it in the phone layout).
+  const MEDIA_ITEM = { label: S.panel === 'media' ? 'Hide photos & videos' : 'Photos & videos', icon: 'images', action: () => togglePanel('media') };
+  const mediaButton = () => ibtn('images', S.panel === 'media' ? 'Hide photos & videos' : 'Photos & videos', () => togglePanel('media'), { active: S.panel === 'media', cls: 'head-media' });
   // Counted when the menu opens, so it's never out of date.
   const SCHED_ITEM = () => { const n = key ? SCHED.forKey(key).length : 0; return { label: 'Scheduled messages', icon: 'clock', hint: n ? String(n) : null, action: () => SCHED.openList(key) }; };
   if (v.type === 'channel' && server && !isGroup(server)) {
@@ -3035,7 +3048,7 @@ function drawHeader(head) {
         isMuted(key) ? ibtn('bellOff', 'Muted. Click to change.', (e) => menu(e.currentTarget, notifyMenu(key), { align: 'end' }), { attrs: { 'data-pop-anchor': '' } }) : null,
         threadsButton(c.id),
         ibtn('people', S.panel === 'members' ? 'Hide members' : 'Show members', () => togglePanel('members'), { active: S.panel === 'members' }),
-        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, SCHED_ITEM(), ...channelMenuItems(c, server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
+        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), ...channelMenuItems(c, server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' || S.panel === 'media' })));
   } else if (v.type === 'channel' && isGroup(server)) {
     const call = server.channels.find((c) => c.type === 'voice');
     const inCall = voice && call && voice.channelId === call.id;
@@ -3051,8 +3064,9 @@ function drawHeader(head) {
           icon(inCall ? 'phoneOff' : 'phone'), inCall ? 'Leave call' : callers ? `Join call (${callers})` : 'Call') : null,
         ibtn('search', 'Search (Ctrl+K)', () => openSearch({ scope: key })),
         threadsButton(v.channelId),
+        mediaButton(),
         ibtn('people', 'Members', () => togglePanel('members'), { active: S.panel === 'members' }),
-        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, SCHED_ITEM(), ...groupMenuItems(server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
+        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), ...groupMenuItems(server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
   } else if (v.type === 'dm') {
     const d = S.dms.find((x) => x.id === v.dmId);
     if (!d) return;
@@ -3077,8 +3091,9 @@ function drawHeader(head) {
           return [ibtn('phone', live ? 'Join the call' : 'Start a voice call', () => startDmCall(d.id)), ibtn('video', live ? 'Join with video' : 'Start a video call', () => startDmCall(d.id, true))];
         })(),
         ibtn('search', 'Search (Ctrl+K)', () => openSearch({ scope: key })),
+        mediaButton(),
         ibtn('user', S.panel === 'members' ? 'Hide profile' : 'Show profile', () => togglePanel('members'), { active: S.panel === 'members' }),
-        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, SCHED_ITEM(), ...dmMenuItems(d), '-', blockItem(u)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
+        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), ...dmMenuItems(d), '-', blockItem(u)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
   } else if (v.type === 'voice' && server) {
     const c = server.channels.find((x) => x.id === v.channelId);
     const ck = 'c:' + v.channelId;
@@ -4573,7 +4588,8 @@ function wordFilterChanged() {
 function redrawFiltered() {
   redrawFilterChanges();
   const mode = panelMode();
-  if (mode === 'pins' || mode === 'threads') renderPanel();
+  // (Photos & videos draw only the tiles whose filtering changed.)
+  if (mode === 'pins' || mode === 'threads' || mode === 'media') renderPanel();
   if (S.view.type === 'saved') renderMain();
   loadPreviews();
 }
@@ -5068,14 +5084,48 @@ function spoilerCover(holder, el, media) {
   holder.append(cover);
 }
 
-function openViewer(fromImg, { name, download } = {}) {
+// A picture in the chat as an item for the viewer: which photo of which message it is (img._item, from attachmentEl),
+// or a picture link's (a message's, with nothing to decrypt).
+function chatViewerItem(img, { name: named, download } = {}) {
+  const holder = img.closest('.att-media');
+  const name = (holder ? holder.dataset.name : img.alt) || named || 'Image';
+  const shown = () => (img.src ? Promise.resolve(img.src) : null); // what the chat shows now (the thumbnail, often)
+  const it = img._item;
+  if (it) return { ...it, kind: 'img', thumb: shown, full: img._full || null, name, alt: it.f.alt || '', download: download || (() => downloadAttachment(it.m, it.f)) };
+  const row = img.closest('[data-mid]');
+  return { m: null, mid: row ? row.dataset.mid : null, key: currentKey(), kind: 'img', thumb: shown, full: img._full || null, name, alt: '', download: download || null };
+}
+// The full-screen viewer, for pictures and videos.
+//   items: what left and right go through, starting at index (the Photos & videos panel passes its list, videos too).
+//   Without it, every picture in the conversation loaded so far, as always. An item is { m, f, fi, key,
+//   kind: 'img'|'video', thumb: () => Promise<url>|null, full: () => Promise<url>, name, alt, download: () => void }.
+//   side: true opens it with the photo's side panel of comments and tags (photo-notes.js) showing; 'comment' also puts
+//   the focus in its comment box.
+function openViewer(fromImg, { name, download, items: given = null, index = 0, side = false } = {}) {
   const opener = document.activeElement;
-  // Every picture in the conversation loaded so far, including those not scrolled into view yet (they load as
-  // you reach them here). Spoilers nobody has opened yet are left out.
-  const imgs = $$('#messages .att-img, #messages .embed-img, .thread-list .att-img').filter((i) => (i.src || i._full) && !i.closest('.att-spoiler:not(.revealed)'));
-  let idx = Math.max(0, imgs.indexOf(fromImg));
+  let items;
+  let idx;
+  if (Array.isArray(given) && given.length) {
+    items = given;
+    idx = Math.min(given.length - 1, Math.max(0, Math.floor(Number(index) || 0)));
+  } else {
+    // Every picture in the conversation loaded so far, including those not scrolled into view yet (they load as
+    // you reach them here). Spoilers nobody has opened yet are left out.
+    const imgs = $$('#messages .att-img, #messages .embed-img, .thread-list .att-img').filter((i) => (i.src || i._full) && !i.closest('.att-spoiler:not(.revealed)'));
+    if (fromImg && !imgs.includes(fromImg)) imgs.unshift(fromImg);
+    items = imgs.map((i) => chatViewerItem(i, i === fromImg ? { name, download } : {}));
+    idx = Math.max(0, imgs.indexOf(fromImg));
+  }
+  if (!items.length) return;
   let scale = 1; let tx = 0; let ty = 0;
+  let closed = false;
   const img = h('img', { class: 'viewer-img', alt: '' });
+  // A video plays in the stage, with the browser's own controls (no zoom). One that's big, or whose size its sender
+  // left out, waits for Play, as in the chat: going past it with the arrow keys shouldn't download it.
+  const video = h('video', { class: 'viewer-video', controls: true, playsinline: true, preload: 'metadata', hidden: true });
+  const play = h('button', { class: 'viewer-play', type: 'button', hidden: true }, icon('play'), h('span'));
+  // Fingers on them work them, rather than swiping or zooming the viewer (viewer-touch.js listens on the stage).
+  for (const el of [video, play]) el.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse') e.stopPropagation(); });
   const caption = h('span', { class: 'viewer-name' });
   // The picture's name. On a phone it's in two parts, so it can be shortened and still show how it ends (".jpg");
   // elsewhere it's the plain text it always was (fit() below redoes it when the screen changes over).
@@ -5087,45 +5137,148 @@ function openViewer(fromImg, { name, download } = {}) {
     caption.replaceChildren(h('span', { class: 'viewer-name-base' }, parts[1]), h('span', { class: 'viewer-name-ext' }, parts[2]));
   };
   const counter = h('span', { class: 'viewer-count' });
-  const stage = h('div', { class: 'viewer-stage' }, img);
+  const stage = h('div', { class: 'viewer-stage' }, img, video, play);
+  const isVideo = () => items[idx].kind === 'video';
   const apply = () => { img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; stage.classList.toggle('zoomed', scale > 1); };
-  const show = (i) => {
-    idx = (i + imgs.length) % imgs.length;
-    const src = imgs[idx];
-    if (src.src) img.src = src.src; // thumbnail (instant)…
-    else img.removeAttribute('src');
-    stage.classList.add('loading-full');
-    if (src._full) {
-      src._full().then((u) => { if (imgs[idx] === src) { img.src = u; } })
-        .catch((e) => { if (imgs[idx] === src && e && e.code === 'gone') setCaption(`${captionText} \u2014 no longer available`); })
-        .finally(() => { if (imgs[idx] === src) stage.classList.remove('loading-full'); });
-    }
-    else stage.classList.remove('loading-full');
-    const nm = src.closest('.att-media') ? src.closest('.att-media').dataset.name : src.alt;
-    setCaption(nm || 'Image');
-    counter.textContent = imgs.length > 1 ? `${idx + 1} / ${imgs.length}` : '';
-    scale = 1; tx = 0; ty = 0; apply();
+  const stopVideo = () => {
+    if (!video.hasAttribute('src')) return;
+    video.pause();
+    video.removeAttribute('src');
+    video.load(); // (lets go of what it had loaded)
   };
-  const zoom = (f) => { scale = Math.min(6, Math.max(1, scale * f)); if (scale === 1) { tx = 0; ty = 0; } apply(); };
+  // Which show() is the current one: what an earlier one asked for and gets late is dropped.
+  let turn = 0;
+  let startOn = idx; // the item it was opened on: a video there starts playing
+  let played = null; // Play on a big video
+  const showPicture = (it, current) => {
+    video.hidden = true; play.hidden = true; img.hidden = false;
+    img.removeAttribute('src');
+    img.alt = it.alt || '';
+    let sharp = false;
+    // The thumbnail (instant)…
+    const quick = typeof it.thumb === 'function' ? it.thumb() : null;
+    if (quick) Promise.resolve(quick).then((u) => { if (current() && !sharp && u) img.src = u; }, () => {});
+    if (typeof it.full !== 'function') return;
+    // …then the full picture.
+    stage.classList.add('loading-full');
+    Promise.resolve().then(() => it.full()).then((u) => { if (current()) { sharp = true; img.src = u; } })
+      .catch((e) => { if (current() && e && e.code === 'gone') setCaption(`${captionText} \u2014 no longer available`); })
+      .finally(() => { if (current()) stage.classList.remove('loading-full'); });
+  };
+  const showVideo = (it, current, autoplay) => {
+    img.hidden = true; img.removeAttribute('src');
+    const f = it.f || {};
+    const start = (go) => {
+      play.hidden = true; video.hidden = false;
+      stage.classList.add('loading-full');
+      stage.dataset.loading = 'Loading video\u2026';
+      let p;
+      try { p = Promise.resolve(it.full()); } catch (e) { p = Promise.reject(e); }
+      if (f.url) watchFile(f.url, (x) => { if (current() && x < 1) stage.dataset.loading = `Loading video\u2026 ${Math.round(x * 100)}%`; });
+      p.then((u) => { if (!current()) return; video.src = u; if (go) video.play().catch(() => {}); })
+        .catch((e) => {
+          if (!current()) return;
+          video.hidden = true;
+          if (e && e.code === 'gone') setCaption(`${captionText} \u2014 no longer available`);
+          else { toast(e && e.message ? e.message : 'Couldn\u2019t load this video.', 'error'); play.hidden = false; }
+        })
+        .finally(() => { if (current()) { stage.classList.remove('loading-full'); delete stage.dataset.loading; } });
+    };
+    played = () => start(true);
+    if (!(Number(f.size) > 0) || f.size > AUTOLOAD_MAX) {
+      video.hidden = true;
+      play.lastChild.textContent = Number(f.size) > 0 ? `Play video \u00b7 ${fmtSize(f.size)}` : 'Play video';
+      play.hidden = false;
+    } else start(autoplay);
+  };
+  play.addEventListener('click', () => { if (played) played(); });
+  const show = (i) => {
+    idx = (i + items.length) % items.length;
+    const it = items[idx];
+    const mine = ++turn;
+    const current = () => mine === turn && !closed;
+    stopVideo();
+    played = null;
+    stage.classList.remove('loading-full');
+    delete stage.dataset.loading;
+    stage.classList.toggle('video', it.kind === 'video');
+    setCaption(it.name || (it.kind === 'video' ? 'Video' : 'Image'));
+    if (it.kind === 'video') showVideo(it, current, idx === startOn); else showPicture(it, current);
+    startOn = -1;
+    counter.textContent = items.length > 1 ? `${idx + 1} / ${items.length}` : '';
+    scale = 1; tx = 0; ty = 0; apply();
+    drawSide(it);
+    fit();
+  };
+  const zoom = (f) => { if (isVideo()) return; scale = Math.min(6, Math.max(1, scale * f)); if (scale === 1) { tx = 0; ty = 0; } apply(); };
+  // Jump to message: the viewer closes (and on a phone, the side panel it was opened from, which covers the chat).
+  const jumpable = (it) => !!it && !!it.key && !!(it.m ? it.m.id : it.mid);
+  const jump = () => {
+    const it = items[idx];
+    if (!jumpable(it)) return;
+    close();
+    if (isPhoneLayout() && panelMode()) closePanel();
+    if (it.m && it.m.threadId) jumpToMessageId(it.m.id); else jumpToMessage(it.key, it.m ? it.m.id : it.mid);
+  };
+  // The photo's comments and tags (photo-notes.js): a column on the right, or a sheet over the bottom on a phone, with
+  // a Comments button that shows and hides it. On a wider screen it starts open on a photo that already has some.
+  const sideBox = h('aside', { class: 'viewer-side', 'aria-label': 'Comments and tags', hidden: true });
+  const notesOn = (it) => !!it && !!it.m && ((it.m.fileReplies && Number(it.m.fileReplies[it.fi]) > 0) || (Array.isArray(it.m.tags) && it.m.tags.some((x) => x && x.fileIdx === it.fi)));
+  let sideOpen = !!side || (!isPhoneLayout() && notesOn(items[idx]));
+  let sideFocus = side === 'comment' ? 'comment' : null;
+  const sideBtn = ibtn('message', 'Comments', () => setSide(!sideOpen), { cls: 'viewer-side-btn with-badge' });
+  sideBtn.hidden = true;
+  const setSide = (on) => {
+    sideOpen = on;
+    const showing = on && !!sideBox.firstChild;
+    sideBox.hidden = !showing;
+    overlay.classList.toggle('side-open', showing);
+    sideBtn.classList.toggle('active', showing);
+    sideBtn.setAttribute('aria-pressed', String(showing));
+    scale = 1; tx = 0; ty = 0; apply(); // (the stage changed size)
+  };
+  const drawSide = (it) => {
+    const el = it.m && it.f ? NOTES.side(it, { close: () => setSide(false), focus: sideFocus }) : null;
+    sideFocus = null;
+    sideBox.replaceChildren(...(el ? [el] : []));
+    sideBtn.hidden = !el;
+    const n = el && it.m.fileReplies ? Number(it.m.fileReplies[it.fi]) || 0 : 0;
+    const label = n ? `Comments (${n})` : 'Comments';
+    sideBtn.setAttribute('aria-label', label);
+    sideBtn.dataset.tip = label;
+    const badge = sideBtn.querySelector('.badge');
+    if (n) (badge || sideBtn.appendChild(h('span', { class: 'badge', 'aria-hidden': 'true' }))).textContent = n > 99 ? '99+' : String(n);
+    else if (badge) badge.remove();
+    setSide(sideOpen);
+  };
   const close = () => {
+    if (closed) return;
+    closed = true;
     overlay.classList.add('closing'); setTimeout(() => overlay.remove(), 140); document.removeEventListener('keydown', keys, true);
+    stopVideo();
     stopFitting();
-    if (morePop && morePop.isConnected) closePopover();
+    above.disconnect();
+    if ((morePop && morePop.isConnected) || $('#layer > .popover.over-viewer')) closePopover();
     // Back to whatever opened it (the picture in the chat), like other dialogs.
     if (opener && opener.isConnected && opener !== document.body) opener.focus({ preventScroll: true });
   };
   const keys = (e) => {
     if (morePop && morePop.isConnected) return; // the More menu (phones) takes the keys while it's open
-    if (e.key === 'Escape') { e.stopPropagation(); close(); }
+    // So does anything opened from inside the viewer (a menu, a popup or a question from its side panel).
+    if (document.querySelector('#layer > .over-viewer:not(.closing)')) return;
+    if (e.key === 'Escape') { e.stopPropagation(); close(); return; }
     if (e.key === 'Tab') trapTab(e, overlay);
+    // Typing in the side panel (a comment, a tag): the keys are the words'.
+    if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
     if (e.key === 'ArrowRight') show(idx + 1);
     if (e.key === 'ArrowLeft') show(idx - 1);
     if (e.key === '+' || e.key === '=') zoom(1.4);
     if (e.key === '-') zoom(1 / 1.4);
   };
-  const dl = async () => {
-    if (imgs[idx] === fromImg && download) return download();
-    const a = h('a', { href: img.src, download: caption.textContent || 'image', target: '_blank', rel: 'noopener noreferrer' });
+  const dl = () => {
+    const it = items[idx];
+    if (it.download) return it.download();
+    const a = h('a', { href: img.src, download: captionText || 'image', target: '_blank', rel: 'noopener noreferrer' });
     document.body.append(a); a.click(); a.remove();
   };
   const copy = async () => {
@@ -5137,38 +5290,63 @@ function openViewer(fromImg, { name, download } = {}) {
     } catch { copyText(img.src.startsWith('blob:') ? '' : img.src); toast(img.src.startsWith('blob:') ? 'Your browser can\u2019t copy this image.' : 'Image link copied.'); }
   };
   const fullscreen = () => (document.fullscreenElement ? document.exitFullscreen() : overlay.requestFullscreen().catch(() => {}));
-  // On a phone (device.js PHONE_LAYOUT) the bar keeps Download and Close, with bigger buttons, and the rest goes under
-  // More, with the previous and next pictures (swipes stand in for the arrow buttons there, which screen readers can't
-  // make). It changes over if the screen does (a window narrowed, say).
-  const extras = [ibtn('zoomOut', 'Zoom out (−)', () => zoom(1 / 1.4)), ibtn('zoomIn', 'Zoom in (+)', () => zoom(1.4)),
-    ibtn('maximize', 'Fullscreen', fullscreen), ibtn('copy', 'Copy image', copy)];
+  // On a phone (device.js PHONE_LAYOUT) the bar keeps Download and Close, with bigger buttons (and Comments, when the
+  // photo has a side panel), and the rest goes under More, with the previous and next pictures (swipes stand in for the
+  // arrow buttons there, which screen readers can't make). It changes over if the screen does (a window narrowed, say).
+  // Zoom and Copy image are for pictures only.
+  const jumpBtn = h('button', { class: 'viewer-jump', type: 'button', onclick: jump }, icon('arrowUp'), h('span', null, 'Jump to message'));
+  const zoomOutBtn = ibtn('zoomOut', 'Zoom out (−)', () => zoom(1 / 1.4));
+  const zoomInBtn = ibtn('zoomIn', 'Zoom in (+)', () => zoom(1.4));
+  const fullBtn = ibtn('maximize', 'Fullscreen', fullscreen);
+  const copyBtn = ibtn('copy', 'Copy image', copy);
   let morePop = null;
   const more = ibtn('more', 'More', () => {
-    morePop = menu(more, [
-      imgs.length > 1 ? { label: 'Previous picture', icon: 'chevronLeft', action: () => show(idx - 1) } : null,
-      imgs.length > 1 ? { label: 'Next picture', icon: 'chevronRight', action: () => show(idx + 1) } : null,
-      imgs.length > 1 ? '-' : null,
-      { label: 'Zoom in', icon: 'zoomIn', action: () => zoom(1.4) },
-      { label: 'Zoom out', icon: 'zoomOut', action: () => zoom(1 / 1.4) },
+    const it = items[idx];
+    const vid = isVideo();
+    const many = items.length > 1;
+    const what = items.some((x) => x.kind === 'video') ? '' : ' picture';
+    const list = [
+      many ? { label: `Previous${what}`, icon: 'chevronLeft', action: () => show(idx - 1) } : null,
+      many ? { label: `Next${what}`, icon: 'chevronRight', action: () => show(idx + 1) } : null,
+      jumpable(it) ? { label: 'Jump to message', icon: 'arrowUp', action: jump } : null,
+      many || jumpable(it) ? '-' : null,
+      vid ? null : { label: 'Zoom in', icon: 'zoomIn', action: () => zoom(1.4) },
+      vid ? null : { label: 'Zoom out', icon: 'zoomOut', action: () => zoom(1 / 1.4) },
       document.fullscreenEnabled ? { label: document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen', icon: 'maximize', action: fullscreen } : null,
-      { label: 'Copy image', icon: 'copy', action: copy },
-    ], { align: 'end', className: 'viewer-menu' });
+      vid ? null : { label: 'Copy image', icon: 'copy', action: copy },
+    ].filter(Boolean);
+    while (list[list.length - 1] === '-') list.pop();
+    morePop = menu(more, list, { align: 'end', className: 'viewer-menu' });
   }, { attrs: { 'data-pop-anchor': '' } });
-  const fit = () => { const phone = isPhoneLayout(); extras.forEach((b) => { b.hidden = phone; }); more.hidden = !phone; setCaption(captionText); };
-  fit();
+  const fit = () => {
+    const phone = isPhoneLayout();
+    const vid = isVideo();
+    zoomOutBtn.hidden = phone || vid; zoomInBtn.hidden = phone || vid; copyBtn.hidden = phone || vid;
+    fullBtn.hidden = phone;
+    jumpBtn.hidden = phone || !jumpable(items[idx]);
+    more.hidden = !phone;
+    setCaption(captionText);
+  };
   const stopFitting = onDeviceChange(fit);
   const bar = h('div', { class: 'viewer-bar' }, caption, counter, h('span', { class: 'spacer' }),
-    ...extras, ibtn('download', 'Download', dl), more, ibtn('close', 'Close (Esc)', close));
-  const overlay = h('div', { class: 'viewer', role: 'dialog', 'aria-label': 'Image viewer', 'aria-modal': 'true' }, bar, stage,
-    imgs.length > 1 ? h('button', { class: 'viewer-nav prev', 'aria-label': 'Previous image', onclick: () => show(idx - 1) }, icon('chevronLeft')) : null,
-    imgs.length > 1 ? h('button', { class: 'viewer-nav next', 'aria-label': 'Next image', onclick: () => show(idx + 1) }, icon('chevronRight')) : null);
-  overlay._mids = new Set(imgs.map((i) => (i.closest('[data-mid]') || {}).dataset?.mid).filter(Boolean));
+    jumpBtn, zoomOutBtn, zoomInBtn, fullBtn, copyBtn, ibtn('download', 'Download', dl), sideBtn, more, ibtn('close', 'Close (Esc)', close));
+  const overlay = h('div', { class: 'viewer', role: 'dialog', 'aria-label': 'Image viewer', 'aria-modal': 'true' }, bar,
+    h('div', { class: 'viewer-body' }, stage, sideBox),
+    items.length > 1 ? h('button', { class: 'viewer-nav prev', 'aria-label': 'Previous image', onclick: () => show(idx - 1) }, icon('chevronLeft')) : null,
+    items.length > 1 ? h('button', { class: 'viewer-nav next', 'aria-label': 'Next image', onclick: () => show(idx + 1) }, icon('chevronRight')) : null);
+  // The messages it shows (not the rows they're in: the panel's tiles have none): when one of them disappears, the
+  // viewer closes (forgetCopies).
+  overlay._mids = new Set(items.map((it) => (it.m ? it.m.id : it.mid)).filter(Boolean));
   overlay._close = close;
+  // Menus, popups and questions opened from inside the viewer (its side panel's) go over it, not behind (app.css).
+  const above = new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) n.classList.add('over-viewer'); });
+  const layer = $('#layer');
+  if (layer) above.observe(layer, { childList: true });
   // Touch screens (device.js TOUCH_UI): pinch, double tap, swipes (viewer-touch.js). The clicks a browser makes out
-  // of those taps are left to it; a mouse works as on a desktop.
+  // of those taps are left to it; a mouse works as on a desktop. A video doesn't zoom.
   const touch = isTouchUI() ? touchGestures({
-    stage, img, bar, backdrop: overlay, close, count: () => imgs.length, step: (d) => show(idx + d),
-    view: () => ({ scale, tx, ty }), setView: (v) => { ({ scale, tx, ty } = v); apply(); },
+    stage, img, bar, backdrop: overlay, close, count: () => items.length, step: (d) => show(idx + d),
+    view: () => ({ scale, tx, ty }), setView: (v) => { if (isVideo()) return; ({ scale, tx, ty } = v); apply(); },
     busy: () => { if (!morePop || !morePop.isConnected) return false; closePopover(); return true; },
   }) : null;
   const fromTouch = () => !!touch && touch.touchedRecently();
@@ -5183,6 +5361,14 @@ function openViewer(fromImg, { name, download } = {}) {
   document.body.append(overlay);
   show(idx);
   overlay.querySelector('.viewer-bar .icon-btn:last-child').focus();
+  // Opened to comment on this photo: into its comment box, once the side panel is drawn.
+  if (side === 'comment') {
+    requestAnimationFrame(() => {
+      if (closed || sideBox.hidden || sideBox.contains(document.activeElement)) return;
+      const box = sideBox.querySelector('textarea');
+      if (box) box.focus();
+    });
+  }
 }
 async function toPng(blob) {
   const bmp = await createImageBitmap(blob);
@@ -5198,6 +5384,7 @@ async function onNewMessage(key, m) {
   if (m.nonce) dropPendingSend(m.nonce);
   // Already past its time (a timer shorter than the trip here, or a server that held on to it): never shown.
   if (isExpired(m, nowServer())) return;
+  MEDIA.onNew(key, m); // its pictures and videos go on top in Photos & videos, if that's open here
   if (key.startsWith('d:')) {
     S.previews[key] = previewText(m);
     // The preview goes at the message's time too, by the timer inside it (the server's copy can't be decrypted there).
@@ -5302,13 +5489,14 @@ function notify(author, body, key, msgId = null) {
 }
 async function onUpdateMessage(key, m) {
   const store = S.msgs[key];
-  if (!store) return;
-  const i = store.list.findIndex((x) => x.id === m.id);
-  if (i < 0) return;
+  const i = store ? store.list.findIndex((x) => x.id === m.id) : -1;
+  // (Photos & videos may have it when the chat doesn't: it decrypts it itself then.)
+  if (i < 0) return MEDIA.onUpdate(key, m);
   await decryptMessage(m);
   store.list[i] = m;
   if (S.editing === m.id) S.editing = null;
   replaceMessageEl(m);
+  MEDIA.onUpdate(key, m);
 }
 // Channel messages deleted (one, or a batch): thread replies leave their thread, the rest leave the channel.
 // expired: disappearing messages whose time came (this device's copies of them go too, see forgetCopies).
@@ -5333,7 +5521,7 @@ function onDeleteChannelMessages(channelId, list, { expired = false } = {}) {
   }
   if (S.thread && threads.has(S.thread.rootId)) renderPanel();
   const replies = list.filter((x) => x.threadId).map((x) => x.id);
-  if (replies.length) forgetBindings('c:' + channelId, replies);
+  if (replies.length) { forgetBindings('c:' + channelId, replies); MEDIA.onDelete('c:' + channelId, replies); }
   if (top.length) onDeleteMessage('c:' + channelId, top, { expired });
   if (expired && removed.length) forgetCopies(removed, new Set(removed.map((x) => x.id)), 'c:' + channelId);
 }
@@ -5351,6 +5539,7 @@ function recheckThread(rootId) {
 function onDeleteMessage(key, id, { expired = false } = {}) {
   const gone = new Set(Array.isArray(id) ? id : [id]);
   forgetBindings(key, gone);
+  MEDIA.onDelete(key, gone); // their tiles in Photos & videos, and the decrypted copies it had of them
   // Threads these messages started go with them (their counts, and their cards in the Threads panel).
   if (key.startsWith('c:')) forgetThreads(key, gone);
   const store = S.msgs[key];
@@ -5465,6 +5654,7 @@ function markThreadRead(rootId) {
 async function onThreadMessage(m) {
   await decryptMessage(m);
   if (isExpired(m, nowServer())) return;
+  MEDIA.onNew('c:' + m.channelId, m); // (a channel's Photos & videos include its threads')
   const t = S.threads[m.threadId];
   if (t && t.hasNewer && !t.list.find((x) => x.id === m.id)) {
     // Showing an older part of the thread: a new reply doesn't belong right after it. Your own reply takes you to
@@ -5530,13 +5720,13 @@ function countThreadReply(m) {
 }
 async function onThreadUpdate(m) {
   const t = S.threads[m.threadId];
-  if (!t) return;
-  const i = t.list.findIndex((x) => x.id === m.id);
-  if (i < 0) return;
+  const i = t ? t.list.findIndex((x) => x.id === m.id) : -1;
+  if (i < 0) return MEDIA.onUpdate('c:' + m.channelId, m);
   await decryptMessage(m);
   t.list[i] = m;
   if (S.editing === m.id) S.editing = null;
   replaceMessageEl(m);
+  MEDIA.onUpdate('c:' + m.channelId, m);
 }
 
 // ======================================================================= right panel (contextual)
@@ -5546,7 +5736,11 @@ function renderPanel() {
   // The Threads list keeps the card that had focus through a rebuild (server updates, people joining…).
   const was = el.querySelector(':scope > .threads-list');
   const refocus = was && was.contains(document.activeElement) ? document.activeElement.closest('[data-root]') : null;
+  // Photos & videos put the same elements back (media-panel.js), so whatever had focus in them can have it again.
+  const mediaFocus = el.dataset.mode === 'media' && el.contains(document.activeElement) ? document.activeElement : null;
   const mode = panelMode();
+  // Closed (or showing something else): it lets go of what it had, and starts from the newest when it opens again.
+  if (mode !== 'media') MEDIA.reset();
   // A voice channel's chat stays as it is through the panel's redraws (people joining, server updates): drawing it
   // again would lose your place in it and the focus of what you're typing. Going somewhere else draws it afresh.
   if (mode === 'chat' && el.dataset.mode === 'chat' && el.dataset.key === currentKey() && el.querySelector(':scope > .chat')) {
@@ -5560,11 +5754,16 @@ function renderPanel() {
   if (!mode || !S.me) return;
   el.dataset.mode = mode;
   queueMicrotask(() => { if (!el.querySelector(':scope > .resize-handle')) el.append(resizeHandle('panel')); });
-  if ((mode === 'thread' || mode === 'pins' || mode === 'threads') && hiddenWhileSharing(privateKey())) return el.append(h('p', { class: 'sidebar-empty' }, 'Hidden while you share your screen.'));
+  if ((mode === 'thread' || mode === 'pins' || mode === 'threads' || mode === 'media') && hiddenWhileSharing(privateKey())) return el.append(h('p', { class: 'sidebar-empty' }, 'Hidden while you share your screen.'));
   if (mode === 'thread') return threadPanel(el);
   if (mode === 'chat') return voiceChatPanel(el);
   if (mode === 'pins') return pinsPanel(el);
   if (mode === 'threads') return threadsPanel(el, refocus && refocus.dataset.root);
+  if (mode === 'media') {
+    MEDIA.draw(el);
+    if (mediaFocus && mediaFocus.isConnected) mediaFocus.focus({ preventScroll: true });
+    return;
+  }
   if (S.view.type === 'dm') return dmProfilePanel(el);
   return membersPanel(el);
 }
@@ -6110,8 +6309,40 @@ const SCHED = createScheduled({
 });
 
 // Photos & videos (media-panel.js): the side panel of every picture and video in a conversation.
+// A file to show: its decrypted copy, or (an older unencrypted channel file) the file on this server as it is.
+const mediaCopy = (m, f) => ((f.k || m.dmId) ? decryptedUrl(m, f)
+  : isUploadUrl(f.url) ? Promise.resolve(f.url) : Promise.reject(new Error('This file isn\u2019t on this server.')));
 const MEDIA = createMediaPanel({
+  key: () => currentKey(),
+  get: (path) => api('GET', path),
+  decrypt: (m) => decryptMessage(m),
+  // The chat's own copy, when it has one: nothing is decrypted twice, and changes to it (tags) show in both.
+  known: (id) => { const m = loadedMessage(id); return m && m.dec ? m : null; },
+  files: (m) => filesOf(m),
+  readable: (m) => readable(m),
+  expired: (m) => isExpired(m, nowServer()),
+  disappears: (m) => disappears(m),
+  blocked: (id) => S.blocked.has(id),
+  veiled: (m) => veiled(m),
+  filterLabel: (wf) => filterLabel(wf),
+  reveal: (m) => revealFiltered(loadedMessage(m.id) || m),
+  thumb: (m, f) => decryptedUrl(m, { ...f.th, type: 'image/webp', thumb: true }),
+  full: (m, f) => mediaCopy(m, f),
+  queue: (fn) => loadQueue(fn),
+  // Its tiles are small, so they load like the tiles of a message with many files: a picture without a thumbnail
+  // (a GIF, say) by itself only up to 2 MB; videos never.
+  autoloadMax: MANY_AUTOLOAD_MAX,
+  open: (tile, opts) => openViewer(tile, opts),
+  download: (m, f) => downloadAttachment(m, f),
+  badges: (m, fi) => NOTES.badges(m, fi),
+  tagIndex: (key) => NOTES.tagIndex(key),
+  panelHead: (title) => panelHead(title, null),
+  forget: (msgs, ids, key) => forgetCopies(msgs, ids, key),
+  drop: (urls) => urls.forEach((u) => fileUrls.drop(u, true)),
+  armExpiry: () => armClientExpiry(),
 });
+// Disappearing messages that went from wherever else they were loaded go from the panel too.
+expiryListeners.add((ids) => MEDIA.onDelete(null, ids));
 
 // Comments on one photo and tags on photos (photo-notes.js).
 const NOTES = createPhotoNotes({
