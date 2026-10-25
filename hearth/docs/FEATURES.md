@@ -1814,14 +1814,30 @@ A comment is an ordinary encrypted reply, sent through the normal send path (`se
   posted, deleted or disappears).
 - **Which photo a comment is about** is only ever read from the decrypted `ph`. The viewer's list
   (`GET /api/{dm-}messages/:id/comments?file=i`) keeps only replies whose binding says they reply to that message and
-  whose `ph` names that photo.
+  whose `ph` names that photo (`isCommentOn`).
+- **The viewer's list** loads 100 at a time, with Show more for the next. When a comment comes or goes it loads again
+  as far as it had been loaded (to the end when it had them all), so what Show more loaded and the comment you just
+  sent stay. Side panels on the same photo share one load. The comment box follows Settings → "Enter sends the
+  message", like the message box.
 - **In chat**, the quote shows a thumbnail of that exact photo. Tiles of messages with two or more photos or videos get
-  counts and a "Comment on this photo" button.
+  counts and a "Comment on this photo" button. The button isn't there on a spoiler nobody has opened yet.
+- **Where the server keeps none**: a photo past the message's `files` count (a forward from before v21, whose files
+  are the original's) gets no counts, button or side panel, since the server refuses comments and tags on it. A
+  message without `files` (an older server) is taken as keeping them.
 
 ### Tags
 `public/js/photo-notes.js` covers labels on photos.
 - **Labels.** At most 40 characters, normalised (NFC; control and invisible characters removed) and compared without
-  case. At most 20 per photo and 300 per message.
+  case. At most 20 per photo and 300 per message. The box counts whole characters (an emoji once), in code: a
+  browser's `maxlength` would count an emoji twice.
+- **What counts.** On a photo, in the Photos & videos panel's chips and in what the box suggests, only tags that
+  opened with a key this device trusts, aren't by someone you blocked, and are on a photo or video that is still the
+  file they were sealed for (`labelOn`). The suggestions come from the conversation's tag index.
+- **Kept current.** Deleted and disappeared messages leave the index, the chips and the suggestions at once
+  (`NOTES.onDelete`, `expire`), and the copies fetched for the index go with them. A tag that didn't open is tried
+  again: a few times, less and less often, when its author's keys couldn't be looked up; when their keys are verified
+  or change; after reconnecting. The index keeps every message it needs, so working it out again after a change
+  fetches nothing.
 - **Storage.** Kept beside the message in `media_tags`, schema v21, through these routes:
   - `GET /api/dms/:id/tags` and `/api/channels/:id/tags`;
   - `POST /api/dm-messages/:id/tags` and `/api/messages/:id/tags`, with `{ id, fileIdx, ciphertext }`;

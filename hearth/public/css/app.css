@@ -3318,7 +3318,8 @@ body:has(> .viewer:not(.closing)) #toasts { z-index: 86; }
 /* ======================================================================= Photo comments and tags (photo-notes.js) */
 /* On each photo or video of a message with several: its counts in the top-left corner (left free by the download button
    and the ALT chip), and on hover or focus a "Comment on this photo" button beside the download button. Under an
-   unopened spoiler both are blurred and can't be clicked, like everything else on it. */
+   unopened spoiler the counts are blurred like everything else on it, and the button isn't there at all (no key or
+   screen reader can reach it): it would open the picture without the reveal. */
 .pn-slot { position: absolute; top: 8px; left: 8px; z-index: 2; pointer-events: none; }
 .pn-slot:empty { display: none; }
 .pn-badges { display: inline-flex; align-items: center; gap: 6px; padding: 2px 7px; border-radius: 999px; background: rgb(0 0 0 / .62); color: #fff; font-size: 11.5px; font-weight: 700; line-height: 18px; }
@@ -3330,6 +3331,7 @@ body:has(> .viewer:not(.closing)) #toasts { z-index: 86; }
 .pn-comment-btn:hover { background: rgb(0 0 0 / .75); }
 .att-media:hover .pn-comment-btn, .att-media:focus-within .pn-comment-btn { opacity: 1; }
 .att-media.gone .pn-comment-btn, .att-media.gone .pn-slot { display: none; }
+.att-spoiler:not(.revealed) .pn-comment-btn { display: none; }
 /* A video (or a big picture) waiting for a click shows its name along the top: the counts go under its button. */
 .att-media.click-to-load:not(.tile) .pn-slot { position: static; display: block; margin: 6px 12px 0; }
 .msg-files.many .att-media.tile .pn-slot { top: 4px; left: 4px; }
@@ -3374,6 +3376,8 @@ body:has(> .viewer:not(.closing)) #toasts { z-index: 86; }
 .chip.pn-suggestion { height: 26px; padding: 0 10px; font-size: 12.5px; font-weight: 600; max-width: 100%; display: inline-block; line-height: 24px; }
 .pn-note { margin: 0; font-size: 12.5px; color: var(--muted); }
 .pn-note[role=status]:not(:empty) { color: var(--danger); }
+/* "Removed the tag …": said to screen readers only (the chips show it). */
+.pn-said { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .pn-empty { color: var(--muted); font-size: 13px; list-style: none; }
 .pn-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 48px; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
 .pn-c { display: grid; grid-template-columns: 28px 1fr auto; gap: 8px; align-items: start; }
