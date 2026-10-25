@@ -3739,6 +3739,8 @@ async function onKeysChanged(serverId, added, heldChanged) {
         if (sc && !atBottom) sc.scrollTop = top;
       }
     }
+    // Photos & videos: what was waiting for this key shows there now (its own copies are opened; the chat's just were).
+    MEDIA.onKeys(serverId);
     if (server && isGroup(server)) { await previewGroup(server); if (!S.view.serverId) renderSidebar(); }
   }
   if (S.view.serverId === serverId && composers.main) { composers.main.renderExtras(); renderHeader(); }
@@ -5112,6 +5114,9 @@ function chatViewerItem(img, { name: named, download } = {}) {
 //   the focus in its comment box.
 function openViewer(fromImg, { name, download, items: given = null, index = 0, side = false } = {}) {
   const opener = document.activeElement;
+  // A tile of Photos & videos that opened it: which one, should it have been drawn anew meanwhile (an edit).
+  const openerTile = opener && opener.closest ? opener.closest('.mp-tile') : null;
+  const openerGid = openerTile ? openerTile.dataset.gid : null;
   let items;
   let idx;
   if (Array.isArray(given) && given.length) {
@@ -5273,8 +5278,11 @@ function openViewer(fromImg, { name, download, items: given = null, index = 0, s
     stopFitting();
     above.disconnect();
     if ((morePop && morePop.isConnected) || $('#layer > .popover.over-viewer')) closePopover();
-    // Back to whatever opened it (the picture in the chat), like other dialogs.
-    if (opener && opener.isConnected && opener !== document.body) opener.focus({ preventScroll: true });
+    // Back to whatever opened it (the picture in the chat), like other dialogs: for a tile of Photos & videos drawn anew
+    // while it was open, the same photo's tile.
+    const tile = opener && !opener.isConnected && openerGid ? $$('#members .mp-tile').find((x) => x.dataset.gid === openerGid) : null;
+    const back = tile ? tile.querySelector('.mp-cover') || tile.querySelector('.mp-open') : opener;
+    if (back && back.isConnected && back !== document.body) back.focus({ preventScroll: true });
   };
   const keys = (e) => {
     if (morePop && morePop.isConnected) return; // the More menu (phones) takes the keys while it's open
@@ -5284,6 +5292,9 @@ function openViewer(fromImg, { name, download, items: given = null, index = 0, s
     if (e.key === 'Tab') trapTab(e, overlay);
     // Typing in the side panel (a comment, a tag): the keys are the words'.
     if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
+    // A video with the focus (its own controls): the arrow keys seek it, as anywhere else, rather than going on to the
+    // next item (which would stop it and lose its place).
+    if (e.target === video || (e.target && e.target.closest && e.target.closest('video'))) return;
     if (e.key === 'ArrowRight') show(idx + 1);
     if (e.key === 'ArrowLeft') show(idx - 1);
     if (e.key === '+' || e.key === '=') zoom(1.4);
@@ -5760,6 +5771,12 @@ function renderPanel() {
   // again would lose your place in it and the focus of what you're typing. Going somewhere else draws it afresh.
   if (mode === 'chat' && el.dataset.mode === 'chat' && el.dataset.key === currentKey() && el.querySelector(':scope > .chat')) {
     if (composers.main) composers.main.renderExtras();
+    return;
+  }
+  // So does Photos & videos (people coming online or going Away redraw a DM's side panel often): taken out and put
+  // back, its list would stop scrolling midway. Only what changed in it is drawn again.
+  if (mode === 'media' && el.dataset.mode === 'media' && !hiddenWhileSharing(privateKey()) && MEDIA.drawn(el)) {
+    MEDIA.draw(el);
     return;
   }
   clear(el);
@@ -6370,7 +6387,8 @@ const NOTES = createPhotoNotes({
   encryptTag: (where, tag) => sec.encryptTag(where, tag),
   openTag: (t) => sec.openTag(t),
   withKeyRetry: (serverId, fn) => withKeyRetry(serverId, fn),
-  decrypt: (m) => decryptMessage(m),
+  // (What it fetches and decrypts for its tag index, Photos & videos takes when a tag is picked: not fetched twice.)
+  decrypt: (m) => decryptMessage(m).then(() => MEDIA.offer(m)),
   readable: (m) => readable(m),
   filesOf: (m) => filesOf(m),
   expired: (m) => isExpired(m, nowServer()),

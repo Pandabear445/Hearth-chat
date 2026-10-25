@@ -11,9 +11,11 @@
 // they were scrolled to, without asking the server again, and only what changed is drawn anew. Closing the panel lets
 // go of it all (reset): opened again, it starts from the newest page.
 //
-// What it leaves out: voice messages, songs and other files; messages it can't read; people you blocked; messages the
-// word filter hides (one it blurs is blurred here too); messages that disappeared. The app keeps it up to date (onNew,
-// onUpdate, onDelete, onMeta for tags and photo comments) and hands it the disappearing timer's work (messages, expire).
+// What it leaves out: voice messages, songs and other files; messages it can't read (one waiting for its channel's key
+// shows once the key comes: onKeys); people you blocked; messages the word filter hides (one it blurs is blurred here
+// too); messages that disappeared. The app keeps it up to date (onNew, onUpdate, onDelete, onMeta for tags and photo
+// comments, onKeys), hands it the messages photo-notes.js fetched for its tag index (offer: they aren't asked for
+// twice), and hands it the disappearing timer's work (messages, expire).
 import { h, icon, fmtSize } from './util.js';
 import { mediaKind } from './files.js';
 import { whenVisible } from './media.js';
@@ -21,6 +23,11 @@ import { whenVisible } from './media.js';
 export const PAGE = 30; // messages per page (the server's default)
 export const IDS_MAX = 100; // ids per ?ids= request (the server's limit)
 const MORE_WITHIN = 600; // px from the end of the grid at which the next page is asked for
+// Pages in a row that brought nothing to show (only PDFs, say, or no videos with Videos picked) after which the next one
+// waits to be asked for ("Show older", or scrolling down): a filter few photos match doesn't page through the whole
+// history at once, into the server's rate limit.
+export const IDLE_PAGES = 3;
+const SPARE_MAX = 1000; // copies photo-notes.js fetched for its tag index kept here (offer), as many as it keeps
 
 // ---- what's shown, worked out without a page (test/media-panel-client.test.js)
 
@@ -70,8 +77,9 @@ export function byMonth(tiles, locale) {
 //   unreadable, gone, from someone you blocked);
 //   kind: 'all', 'img' (Photos) or 'video' (Videos);
 //   tagged: null, or the photos carrying the tag picked (a Set of "messageId:fileIdx", taggedSet).
-// The ones the word filter hides come back apart (hidden): their thumbnails still load as if they were shown, so the
-// server sees the same downloads either way.
+// The ones the word filter hides come back apart (hidden), each with the place it would have had among the tiles
+// (after: the index of the tile it would come just before, or tiles.length after the last one). Their thumbnails still
+// load as if they were shown, as that place comes near the screen, so the server sees the same downloads either way.
 export function pickTiles(messages, { files, view, kind = 'all', tagged = null }) {
   const tiles = [];
   const hidden = [];
@@ -81,7 +89,8 @@ export function pickTiles(messages, { files, view, kind = 'all', tagged = null }
     for (const e of mediaEntries(files(m))) {
       if (kind !== 'all' && e.kind !== kind) continue;
       if (tagged && !tagged.has(`${m.id}:${e.fi}`)) continue;
-      (v === 'hide' ? hidden : tiles).push({ m, ...e, blur: v === 'blur' });
+      if (v === 'hide') hidden.push({ m, ...e, blur: false, after: tiles.length });
+      else tiles.push({ m, ...e, blur: v === 'blur' });
     }
   }
   return { tiles, hidden };
@@ -136,20 +145,34 @@ export function fileUrls(msgs, files) {
 //   go of; armExpiry(): look at the disappearing timer again.
 export function createMediaPanel(deps) {
   let st = null; // the open panel's state, or null
+  // Messages photo-notes.js fetched and decrypted for its tag index (offer), by id: a tag picked, or a page, takes them
+  // from here rather than asking for them and decrypting them again. They're photo-notes.js's copies, so they stay while
+  // the panel is closed, as they do there (at most SPARE_MAX); deleted, edited or disappeared ones go.
+  const spare = new Map();
 
   const fresh = (key) => ({
     key,
     msgs: new Map(), // id -> message (decrypted), from the pages, live, or fetched for a tag
     paged: new Set(), // ids that came in with the pages (or live): only those show without a tag picked
     next: null, done: false, loading: false, error: null,
+    idle: 0, // pages in a row that brought nothing to show (IDLE_PAGES)
     kind: 'all', tag: null, tagged: null, tags: null, tagJobs: 0, tagError: null,
     revealed: new Set(), // spoilers uncovered ("messageId:fileIdx")
     tiles: new Map(), // "messageId:fileIdx" -> { el, m, blur }: drawn tiles, put back as they are
     shadowed: new Set(), // thumbnails of hidden messages already loaded
+    shadowOn: new WeakMap(), // element (a tile, the foot) -> the hidden ones whose thumbnails wait for it to come near
     shown: [], sig: null, chipSig: null, scrollTop: 0,
     stale: new Set(), staleTimer: 0, tagTimer: 0, moreFrame: 0,
     parts: null,
   });
+
+  const keyOfMsg = (m) => (m.dmId ? 'd:' + m.dmId : 'c:' + m.channelId);
+  // A decrypted copy of this conversation's message that the app has already (the chat's, or one photo-notes.js
+  // fetched), or null.
+  const copyOf = (s, id) => {
+    const m = deps.known(id) || spare.get(id) || null;
+    return m && keyOfMsg(m) === s.key && !deps.expired(m) ? m : null;
+  };
 
   // Is this message shown here, and how ('show', 'blur', 'hide' or null)? Asked at every drawing, so blocking someone,
   // a word filter change or a key arriving shows at once.
@@ -160,12 +183,15 @@ export function createMediaPanel(deps) {
     const wf = deps.veiled(m);
     return wf ? (wf.action === 'hide' ? 'hide' : 'blur') : 'show';
   };
+  // Waiting for its channel's key, which is still on its way (onKeys opens it then). One older than a key this app
+  // holds never comes.
+  const waitingKey = (m) => !!m.dec && !!m.dec.pending && !m.dec.before;
 
-  // Decrypts a page (reusing the app's own copy of a message it has loaded) and leaves out what has disappeared.
-  async function take(messages) {
+  // Decrypts a page (reusing a copy the app has of a message already) and leaves out what has disappeared.
+  async function take(s, messages) {
     const list = (Array.isArray(messages) ? messages : []).filter((m) => m && typeof m.id === 'string');
     const out = await Promise.all(list.map(async (m) => {
-      const known = deps.known(m.id);
+      const known = copyOf(s, m.id);
       if (known) return known;
       try { await deps.decrypt(m); } catch { /* it can't be read here: left out (readable) */ }
       return m;
@@ -182,11 +208,14 @@ export function createMediaPanel(deps) {
     render(s);
     try {
       const res = await deps.get(mediaPath(s.key, { limit: String(PAGE), ...(older && s.next ? { before: s.next } : {}) }));
-      const list = await take(res && res.messages);
+      const list = await take(s, res && res.messages);
       if (s !== st) return;
       for (const m of list) { s.msgs.set(m.id, m); s.paged.add(m.id); }
       s.next = (res && typeof res.next === 'string' && res.next) || null;
       s.done = !s.next;
+      // Anything to show from this page (with the kind picked now)? A few pages in a row without: the next one waits.
+      const added = pickTiles(list, { files: deps.files, view: (m) => viewOf(s, m), kind: s.kind }).tiles.length;
+      s.idle = added ? 0 : s.idle + 1;
     } catch (e) {
       if (s === st) s.error = (e && e.message) || 'Something went wrong.';
     } finally {
@@ -198,9 +227,9 @@ export function createMediaPanel(deps) {
   }
   // The end of the grid is in sight (or there's too little to scroll): the next page. Looked at as the list is
   // scrolled, and once the grid has been drawn (a page that brought only PDFs, the Videos filter or a tag cleared can
-  // leave too little to scroll).
+  // leave too little to scroll). Not after IDLE_PAGES pages in a row with nothing to show: then "Show older" asks.
   function more(s) {
-    if (s !== st || s.tag || s.loading || s.done || s.error || !s.parts || !s.parts.scroll.isConnected) return;
+    if (s !== st || s.tag || s.loading || s.done || s.error || s.idle >= IDLE_PAGES || !s.parts || !s.parts.scroll.isConnected) return;
     const sc = s.parts.scroll;
     if (sc.scrollHeight - sc.scrollTop - sc.clientHeight < MORE_WITHIN) load(s, true);
   }
@@ -237,10 +266,19 @@ export function createMediaPanel(deps) {
       s.tagged = taggedSet(list);
       fetchTagged(s, list);
     }
+    s.idle = 0;
     toTop(s);
     render(s);
   }
+  // The messages a tag's photos are in that aren't here yet: a copy the app has (the chat's, or the one photo-notes.js
+  // fetched for the tag index, which it did just now), else asked for by id.
   async function fetchTagged(s, list) {
+    for (const x of Array.isArray(list) ? list : []) {
+      const id = x && x.messageId;
+      if (typeof id !== 'string' || s.msgs.has(id)) continue;
+      const m = copyOf(s, id);
+      if (m) s.msgs.set(id, m);
+    }
     const batches = idBatches(list, (id) => s.msgs.has(id));
     if (!batches.length) return;
     s.tagJobs++;
@@ -249,7 +287,7 @@ export function createMediaPanel(deps) {
     try {
       for (const ids of batches) {
         const res = await deps.get(mediaPath(s.key, { ids: ids.join(',') }));
-        const got = await take(res && res.messages);
+        const got = await take(s, res && res.messages);
         if (s !== st) return;
         for (const m of got) if (!s.msgs.has(m.id)) s.msgs.set(m.id, m);
       }
@@ -265,14 +303,21 @@ export function createMediaPanel(deps) {
     const seg = h('div', { class: 'seg mp-kinds', role: 'group', 'aria-label': 'Show' },
       [['all', 'All'], ['img', 'Photos'], ['video', 'Videos']].map(([k, label]) => h('button', {
         class: 'seg-btn', type: 'button', dataset: { kind: k },
-        onclick: () => { if (s.kind === k) return; s.kind = k; toTop(s); render(s); },
+        onclick: () => { if (s.kind === k) return; s.kind = k; s.idle = 0; toTop(s); render(s); },
       }, label)));
     const chips = h('div', { class: 'mp-tags', role: 'group', 'aria-label': 'Tags', hidden: true });
     const filters = h('div', { class: 'mp-filters' }, seg, chips);
     const grid = h('div', { class: 'mp-months' });
     const foot = h('div', { class: 'mp-foot' });
     const scroll = h('div', { class: 'mp-scroll', role: 'region', 'aria-label': 'Photos and videos' }, grid, foot);
-    scroll.addEventListener('scroll', () => { if (s !== st) return; s.scrollTop = scroll.scrollTop; more(s); }, { passive: true });
+    scroll.addEventListener('scroll', () => {
+      if (s !== st) return;
+      // Scrolled down: paging goes on, if it had stopped (IDLE_PAGES). (Where the app puts the list back is where it
+      // was, or higher when it got shorter: never further down.)
+      if (scroll.scrollTop > s.scrollTop) s.idle = 0;
+      s.scrollTop = scroll.scrollTop;
+      more(s);
+    }, { passive: true });
     s.parts = { head: deps.panelHead('Photos & videos'), filters, seg, chips, scroll, grid, foot };
   }
   const toTop = (s) => { s.scrollTop = 0; if (s.parts) s.parts.scroll.scrollTop = 0; };
@@ -286,19 +331,22 @@ export function createMediaPanel(deps) {
       tiles.map((t) => `${t.m.id}:${t.fi}:${t.blur ? 1 : 0}`).join(',')].join('|');
     if (sig === s.sig) return;
     s.sig = sig;
-    const { scroll, grid } = s.parts;
+    const { scroll, grid, foot } = s.parts;
     const top = s.scrollTop;
     const focused = grid.contains(document.activeElement) ? document.activeElement : null;
     grid.replaceChildren();
-    // Thumbnails of the photos the word filter hides load as the tile after them comes near the screen.
-    let shadows = [];
+    // Thumbnails of the photos the word filter hides load as their place comes near the screen, as they would if they
+    // were shown (and as in the chat): with the tile after them, or with the end of the list after the last one.
+    const waits = new Map(); // place (the index of the tile after it) -> [{ id, want }]
     for (const t of hidden) {
       const id = `${t.m.id}:${t.fi}`;
-      if (t.kind !== 'img' || s.shadowed.has(id)) continue;
-      const want = wanted(t);
-      if (want) shadows.push(() => { if (s.shadowed.has(id)) return; s.shadowed.add(id); deps.queue(want).catch(() => {}); });
+      const want = t.kind === 'img' && !s.shadowed.has(id) ? wanted(t) : null;
+      if (!want) continue;
+      if (!waits.has(t.after)) waits.set(t.after, []);
+      waits.get(t.after).push({ id, want });
     }
     const keep = new Map();
+    let n = 0;
     for (const g of byMonth(tiles)) {
       const box = h('div', { class: 'mp-grid' });
       for (const t of g.items) {
@@ -307,7 +355,7 @@ export function createMediaPanel(deps) {
         const el = had && had.m === t.m && had.blur === t.blur ? had.el : tileEl(s, t);
         keep.set(id, { el, m: t.m, blur: t.blur });
         box.append(el);
-        if (shadows.length) { const run = shadows; shadows = []; whenVisible(el, () => run.forEach((fn) => fn())); }
+        shadows(s, el, waits.get(n++));
       }
       grid.append(h('section', { class: 'mp-month', 'aria-label': g.label }, h('h3', { class: 'mp-month-name' }, g.label), box));
     }
@@ -315,10 +363,26 @@ export function createMediaPanel(deps) {
     for (const [id, v] of s.tiles) if (!keep.has(id) && s.msgs.get(v.m.id) === v.m) keep.set(id, v);
     s.tiles = keep;
     drawFoot(s, tiles.length);
-    if (shadows.length) { const run = shadows; whenVisible(s.parts.foot, () => run.forEach((fn) => fn())); }
+    shadows(s, foot, waits.get(tiles.length));
     scroll.scrollTop = top;
     if (focused && focused.isConnected) focused.focus({ preventScroll: true });
     moreSoon(s);
+  }
+  // The thumbnails of hidden photos that wait for this element (a tile, or the foot) to come near the screen, each
+  // asked for once (drawn again, the same element doesn't wait for them twice).
+  function shadows(s, el, list) {
+    if (!list) return;
+    let on = s.shadowOn.get(el);
+    if (!on) s.shadowOn.set(el, (on = new Set()));
+    for (const { id, want } of list) {
+      if (on.has(id)) continue;
+      on.add(id);
+      whenVisible(el, () => {
+        if (s !== st || s.shadowed.has(id)) return;
+        s.shadowed.add(id);
+        deps.queue(want).catch(() => {});
+      });
+    }
   }
 
   function drawFilters(s) {
@@ -358,8 +422,9 @@ export function createMediaPanel(deps) {
     }
     if (s.loading) foot.append(busy());
     else if (s.error) foot.append(...failed(s.error, () => load(s, s.msgs.size > 0)));
-    // (Normally the next page comes as the end of the grid scrolls into view; this is for when it doesn't.)
-    else if (!s.done) foot.append(h('button', { class: 'btn ghost sm', type: 'button', onclick: () => load(s, true) }, 'Show older'));
+    // (Normally the next page comes as the end of the grid scrolls into view; this is for when it doesn't, and for
+    // after a few pages with nothing to show.)
+    else if (!s.done) foot.append(h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { s.idle = 0; load(s, true); } }, 'Show older'));
     else if (!count) {
       foot.append(empty(s.kind === 'video' ? 'No videos here yet.' : s.kind === 'img' ? 'No photos here yet.'
         : 'No photos or videos here yet. Pictures and videos sent in this conversation show up here.'));
@@ -401,8 +466,10 @@ export function createMediaPanel(deps) {
       // No poster: a video's tile shows what it is and how big, and nothing downloads until it's opened.
       open.append(h('span', { class: 'mp-ph' }, icon('play', 'ic mp-play'), Number(f.size) > 0 ? h('span', { class: 'mp-size' }, fmtSize(Number(f.size))) : null));
     }
-    const badges = deps.badges ? deps.badges(m, fi) : null;
-    if (badges) tile.append(h('span', { class: 'mp-badges' }, badges));
+    // Its badges: always a place for them, so a tag or a comment shows there without drawing the tile again (refreshBadges).
+    const slot = h('span', { class: 'mp-badges' });
+    fillBadges(slot, m, fi);
+    tile.append(slot);
     const cover = (cls, aria, text, onclick) => {
       tile.classList.add(cls);
       open.tabIndex = -1; // (the cover is what the keyboard reaches, as in the chat)
@@ -426,6 +493,19 @@ export function createMediaPanel(deps) {
     }
     open.addEventListener('click', () => openAt(s, gid, open));
     return tile;
+  }
+  const fillBadges = (slot, m, fi) => {
+    const b = deps.badges ? deps.badges(m, fi) : null;
+    slot.replaceChildren(...(b ? [b] : []));
+  };
+  // A message's tags or photo comment counts changed: the badges of its tiles, in place. (A tile drawn again would lose
+  // the keyboard focus, and the viewer opened from it its way back, and show no picture until it had loaded again.)
+  function refreshBadges(s, id) {
+    for (const [gid, v] of s.tiles) {
+      if (!gid.startsWith(`${id}:`)) continue;
+      const slot = v.el.querySelector(':scope > .mp-badges');
+      if (slot) fillBadges(slot, v.m, Number(gid.slice(id.length + 1)));
+    }
   }
 
   // The viewer, on this tile: left and right go through what the panel shows now (the filter's list), videos too, but
@@ -471,9 +551,8 @@ export function createMediaPanel(deps) {
             const had = x && s.msgs.get(x.id);
             if (!had) continue;
             had.tags = x.tags; had.fileReplies = x.fileReplies;
-            dropTiles(s, x.id);
+            refreshBadges(s, x.id);
           }
-          render(s);
         } catch { /* the counts stay as they were until the next change */ }
       }
     }, 300);
@@ -491,8 +570,8 @@ export function createMediaPanel(deps) {
   }
 
   return {
-    // The panel's content, into #members (app.js renderPanel, which has emptied it). The same conversation as before:
-    // the same elements, scrolled where they were.
+    // The panel's content, into #members (app.js renderPanel, which has emptied it, or left it there: drawn). The same
+    // conversation as before: the same elements, scrolled where they were.
     draw(el) {
       const key = deps.key();
       if (!key) return;
@@ -505,22 +584,31 @@ export function createMediaPanel(deps) {
       }
       const s = st;
       const { head, filters, scroll } = s.parts;
-      el.append(head, filters, scroll);
+      const back = scroll.parentNode !== el;
+      if (back) el.append(head, filters, scroll);
       render(s);
-      scroll.scrollTop = s.scrollTop;
+      if (back) scroll.scrollTop = s.scrollTop;
       moreSoon(s);
     },
-    // A new message (decrypted): its pictures and videos go on top.
+    // Is it in el already, for the conversation on screen? Then the app's redraws of its side panel (people coming
+    // online or going Away) leave it there: taken out and put back, it would stop a scroll midway and lose the hover.
+    drawn(el) {
+      const s = st;
+      return !!s && !!s.parts && s.key === deps.key() && [s.parts.head, s.parts.filters, s.parts.scroll].every((p) => p.parentNode === el);
+    },
+    // A new message (decrypted): its pictures and videos go on top. One whose channel key is still on its way is kept
+    // until the key comes (onKeys): only then is it known whether it has any.
     onNew(key, m) {
       const s = st;
       if (!s || s.key !== key || !m || typeof m.id !== 'string' || s.msgs.has(m.id)) return;
-      if (!mediaEntries(deps.files(m)).length || deps.expired(m)) return;
+      if (deps.expired(m) || (!waitingKey(m) && !mediaEntries(deps.files(m)).length)) return;
       s.msgs.set(m.id, m);
       s.paged.add(m.id);
       render(s);
     },
     // An edited message: decrypted again (its words may change what the word filter does to it).
     async onUpdate(key, m) {
+      if (m && typeof m.id === 'string') spare.delete(m.id); // (photo-notes.js's copy from before: asked for anew)
       const s = st;
       if (!s || s.key !== key || !m || !s.msgs.has(m.id)) return;
       try { await deps.decrypt(m); } catch { /* left out as unreadable */ }
@@ -530,10 +618,15 @@ export function createMediaPanel(deps) {
       render(s);
     },
     // Messages deleted or disappeared (key null: wherever they were). Their tiles go, and so do their decrypted copies.
+    // A thread's first message takes its replies with it: the server deletes them too, but names only the first.
     onDelete(key, ids) {
+      const set = new Set(typeof ids === 'string' ? [ids] : ids || []);
+      if (!set.size) return;
+      const goes = (m) => set.has(m.id) || (!!m.threadId && set.has(m.threadId));
+      for (const [id, m] of [...spare]) if (goes(m)) spare.delete(id);
       const s = st;
       if (!s || (key && s.key !== key)) return;
-      const gone = [...new Set(typeof ids === 'string' ? [ids] : ids || [])].map((id) => s.msgs.get(id)).filter(Boolean);
+      const gone = [...s.msgs.values()].filter(goes);
       if (!gone.length) return;
       remove(s, gone);
       deps.drop(fileUrls(gone, deps.files));
@@ -546,16 +639,38 @@ export function createMediaPanel(deps) {
       tagsSoon(s);
       const had = s.msgs.get(messageId);
       if (!had) return;
+      // The chat's copy has them (photo-notes.js keeps it up to date): taken from there. Else asked for again.
       const known = deps.known(messageId);
-      if (known && known !== had) s.msgs.set(messageId, known);
-      else if (!known) refetch(s, messageId);
-      dropTiles(s, messageId);
+      if (known && known !== had) { had.tags = known.tags; had.fileReplies = known.fileReplies; } else if (!known) refetch(s, messageId);
+      refreshBadges(s, messageId);
+    },
+    // A server's keys arrived (app.js onKeysChanged, after the chat has opened its own copies): the messages here that
+    // were waiting for one are opened, and what they have shows. So do the tags waiting for it (photo-notes.js).
+    async onKeys(serverId) {
+      const s = st;
+      if (!s || !s.key.startsWith('c:')) return;
+      tagsSoon(s);
+      const waiting = [...s.msgs.values()].filter((m) => m.serverId === serverId && waitingKey(m));
+      await Promise.all(waiting.map(async (m) => { try { await deps.decrypt(m); } catch { /* still unreadable */ } }));
+      if (s !== st) return;
+      // (A live one kept while it waited that turns out to have no pictures or videos isn't kept any more.)
+      for (const m of waiting) if (s.msgs.get(m.id) === m && deps.readable(m) && !mediaEntries(deps.files(m)).length) { s.msgs.delete(m.id); s.paged.delete(m.id); }
+      if (waiting.some((m) => deps.disappears(m))) setTimeout(() => deps.armExpiry(), 0);
       render(s);
+    },
+    // A message photo-notes.js fetched and decrypted for its tag index (app.js hands over each one it decrypts): kept
+    // here too when it has pictures or videos, for when a tag is picked.
+    offer(m) {
+      if (!m || typeof m.id !== 'string' || !deps.readable(m) || deps.expired(m) || !mediaEntries(deps.files(m)).length) return;
+      spare.delete(m.id);
+      spare.set(m.id, m);
+      while (spare.size > SPARE_MAX) spare.delete(spare.keys().next().value);
     },
     // The messages it holds (the app's disappearing timer counts them in).
     messages() { return st ? [...st.msgs.values()] : []; },
     // The disappearing timer went off: those whose time has come go, with everything the app kept of them.
     expire() {
+      for (const [id, m] of [...spare]) if (deps.expired(m)) spare.delete(id);
       const s = st;
       if (!s) return;
       const gone = [...s.msgs.values()].filter((m) => deps.expired(m));

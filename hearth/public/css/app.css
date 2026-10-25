@@ -3269,7 +3269,11 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 .mp-ph .ic.mp-play { width: 34px; height: 34px; padding: 8px; border-radius: 50%; background: rgb(255 255 255 / .14); color: #fff; }
 .mp-size { font-variant-numeric: tabular-nums; }
 .mp-gif { position: absolute; top: 4px; left: 4px; padding: 1px 5px; border-radius: 5px; background: rgb(0 0 0 / .6); color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .05em; pointer-events: none; }
-.mp-badges { position: absolute; left: 4px; bottom: 4px; z-index: 1; display: flex; gap: 4px; max-width: calc(100% - 8px); }
+/* The counts over the tile let a click or a tap through to it (they're only words), as the chat's do; a real button in
+   them would still take its own. Always there, so they can change in place: empty, nothing shows. */
+.mp-badges { position: absolute; left: 4px; bottom: 4px; z-index: 1; display: flex; gap: 4px; max-width: calc(100% - 8px); pointer-events: none; }
+.mp-badges:empty { display: none; }
+.mp-badges :is(button, a) { pointer-events: auto; }
 /* A spoiler, or a photo the word filter blurs: blurred under a cover until it's clicked (it loads behind it all the same). */
 .mp-tile.spoiler:not(.revealed) > :not(.mp-cover), .mp-tile.veiled > :not(.mp-cover) { filter: blur(14px); }
 .mp-cover { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 5px; background: rgb(0 0 0 / .3); color: #fff; font-size: 12px; font-weight: 700; }
