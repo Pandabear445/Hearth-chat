@@ -43,6 +43,8 @@ import { loadAppearance, saveAppearance, setServerTheme, BACKGROUNDS } from './a
 import { createDrafts, clearAllDrafts, clearLocalCopies, expireLocalCopies, claimOnce, rememberNotification, closeNotifications, closeNotificationFor, alsoCloseNotifications, quietNow } from './usability.js';
 import { label as disLabel, deadline, expired as isExpired, disappears, serverKept, nextDeadline, waitFor, sysLineParts, remaining, TIMERS, setChoices as setTimerChoices, weaker as weakerTimer, stricter as stricterTimer } from './disappear.js';
 import { createScheduled } from './scheduled.js';
+import { createMediaPanel } from './media-panel.js';
+import { createPhotoNotes } from './photo-notes.js';
 import { bindNew, bindEdit, describe as describeBinding, createVersions, createCopies, createOriginals, noteMessage, bindingState } from './binding.js';
 import { trackViewport } from './viewport.js';
 import { isPhone, isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
@@ -4169,7 +4171,7 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
     const files = filesOf(m);
     // More than 10 (only the server's owner sends that many): pictures as a grid of small tiles (app.css).
     const many = files.length > MAX_FILES;
-    if (files.length) out.append(h('div', { class: `msg-files${many ? ' many' : ''}` }, files.map((f) => attachmentEl(f, m, { many }))));
+    if (files.length) out.append(h('div', { class: `msg-files${many ? ' many' : ''}` }, files.map((f, fi) => attachmentEl(f, m, { many, fi }))));
     const wc = watchChips(text);
     if (wc) out.append(wc);
     if (embed) out.append(newsCard(embed));
@@ -4902,7 +4904,7 @@ function sharpenWhenShown(el, holder, f, full, standIn) {
 // so their thumbnail is sharp enough everywhere (no full picture loads by itself), and videos, songs and pictures
 // without a thumbnail over 2 MB wait for a click: a hundred of them shouldn't all download for everyone who scrolls by.
 const MANY_AUTOLOAD_MAX = 2 * 1024 * 1024;
-function attachmentEl(f, m, { many = false } = {}) {
+function attachmentEl(f, m, { many = false, fi = 0 } = {}) {
   // Unencrypted entries (older messages) load straight from this server; anything else was dropped when the
   // message was decrypted (see attachments.js), and is refused here too.
   const direct = () => (isUploadUrl(f.url) ? Promise.resolve(f.url) : Promise.reject(new Error('This file isn\u2019t on this server.')));
@@ -4915,6 +4917,8 @@ function attachmentEl(f, m, { many = false } = {}) {
     const el = media === 'img'
       ? h('img', { class: 'att-img', alt: f.alt || f.name || 'Image', tabindex: '0', role: 'button', 'aria-label': `Open ${f.alt || f.name || 'image'}` })
       : h(media, { class: `att-${media}`, controls: true, preload: 'metadata', 'aria-label': f.alt || null });
+    // Which file of which message this is (the viewer, photo comments and tags work from it).
+    el._item = { m, f, fi, key: keyOfMessage(m) };
     const holder = h('div', { class: `att-media${enc ? ' locked' : ''}`, dataset: { name: f.name || '' } }, el);
     const standIn = lazyRow;
     if (f.alt && media !== 'audio') { holder.classList.add('has-alt'); holder.append(altChip(f.alt)); }
@@ -6049,6 +6053,14 @@ const SCHED = createScheduled({
     const s = serverOfChannel(key.slice(2));
     if (s) openChannel(key.slice(2), s.id);
   },
+});
+
+// Photos & videos (media-panel.js): the side panel of every picture and video in a conversation.
+const MEDIA = createMediaPanel({
+});
+
+// Comments on one photo and tags on photos (photo-notes.js).
+const NOTES = createPhotoNotes({
 });
 // Bots' slash commands (bots.js). Answers only you can see live in memory and show above the main composer.
 const SLASH = createSlash({

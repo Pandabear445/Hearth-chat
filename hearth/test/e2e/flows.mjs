@@ -4224,6 +4224,14 @@ async function updateBar(t) {
   await alice.$('#composer-input').fill('');
 }
 
+// ------------------------------------------------------------------ photos & videos panel
+async function mediaPanel(t) {
+}
+
+// ------------------------------------------------------------------ photo comments and tags
+async function photoNotes(t) {
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -4278,6 +4286,8 @@ export const FLOWS = [
   ['update notes: only the owner publishes them; open apps show a new one once, as plain text', updateNotes],
   ['spelling: common typos fixed as a word is finished, Backspace or Ctrl+Z puts one back, the last word fixed on send', spelling],
   ['owner reset link: the owner makes a one-time link in Admin → Users for someone who can\u2019t sign in; they choose their own new password with it; the owner can\u2019t verify the keys it made', ownerResetLink],
+  ['photos & videos: every picture and video in a DM, a group chat and a channel, newest first, opened in the viewer and jumped to', mediaPanel],
+  ['photo comments and tags: a comment on one photo of several, tags added and removed, the panel filtered by a tag', photoNotes],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
 ];

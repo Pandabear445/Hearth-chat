@@ -3240,3 +3240,13 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
   input:where(:not([type=checkbox], [type=radio], [type=range], [type=color], [type=file])), textarea, select { font-size: max(16px, 1em); }
   .input.mono, .hex-in, .panel-search .input, .xp-input, .edit-input { font-size: 16px; }
 }
+
+/* ======================================================================= Photos & videos panel (media-panel.js) */
+
+/* (end of the Photos & videos panel) */
+
+
+
+/* ======================================================================= Photo comments and tags (photo-notes.js) */
+
+/* (end of photo comments and tags) */
