@@ -29,7 +29,8 @@
 //   DELETE /dm-messages/:id/tags/:tagId, /messages/:id/tags/:tagId
 // Live (to whoever hears about that message's reactions): dm:tags { id, dmId, tags } and message:tags { id, channelId,
 // threadId, tags }, with the message's whole list; dm:file-replies and message:file-replies (index.js emitFileReplies).
-// Every serialized message carries replyFile, and fileReplies and tags when it has any (index.js extrasFor).
+// Every serialized message carries files (how many uploads it listed: the apps offer comments and tags only below
+// that) and replyFile, and fileReplies and tags when it has any (index.js extrasFor).
 
 const MSG_ID = /^[A-Za-z0-9_-]{1,64}$/;
 // The id the app picks for a tag (public/js/binding.js newUid: 16 random bytes, base64url).

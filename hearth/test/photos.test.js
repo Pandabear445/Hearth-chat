@@ -114,7 +114,8 @@ test('files counts the uploads a message listed: distinct, well-formed, thumbnai
   assert.equal(linked(fwd.id), 0, 'not linked to the forward');
   assert.equal(row('dm_messages', fwd.id).files, 2, 'but counted');
   // No files, or not a list: 0.
-  assert.equal(row('dm_messages', (await sendD(alice, dm.id)).id).files, 0);
+  const none = await sendD(alice, dm.id);
+  assert.equal(row('dm_messages', none.id).files, 0);
   assert.equal(row('dm_messages', (await sendD(alice, dm.id, { files: 'nope' })).id).files, 0);
   // Up to what one message may carry: 10 files with a thumbnail each for anyone but the instance's owner.
   const many = Array.from({ length: 30 }, () => `/uploads/${hex(8)}.bin`);
@@ -124,8 +125,23 @@ test('files counts the uploads a message listed: distinct, well-formed, thumbnai
   assert.equal(row('messages', c1.id).files, 2);
   const reply = await sendC(bob, general.id, { threadId: c1.id, files: [u1] });
   assert.equal(row('messages', reply.id).files, 1);
-  assert.equal((await as(alice, 'PATCH', `/messages/${c1.id}`, { ciphertext: cipher(), epoch: 1 })).status, 200);
+  const edited = await as(alice, 'PATCH', `/messages/${c1.id}`, { ciphertext: cipher(), epoch: 1 });
+  assert.equal(edited.status, 200);
   assert.equal(row('messages', c1.id).files, 2);
+  // Every serialized message says how many (the apps offer comments and tags only on a photo below that), a message
+  // without any too, and a forward with what it listed.
+  assert.equal(a.files, 2);
+  assert.equal(fwd.files, 2);
+  assert.equal(none.files, 0);
+  assert.equal(c1.files, 2);
+  assert.equal(edited.json.files, 2);
+  const dmPage = (await as(bob, 'GET', `/dms/${dm.id}/messages`)).json.messages;
+  assert.equal(dmPage.find((m) => m.id === a.id).files, 2);
+  assert.equal(dmPage.find((m) => m.id === none.id).files, 0);
+  assert.equal((await as(bob, 'GET', `/channels/${general.id}/messages`)).json.messages.find((m) => m.id === c1.id).files, 2);
+  const thread = (await as(bob, 'GET', `/messages/${c1.id}/thread`)).json;
+  assert.equal(thread.root.files, 2);
+  assert.equal(thread.messages.find((m) => m.id === reply.id).files, 1);
 });
 
 test('scheduled messages keep the count of what they listed (a forward’s included) and post with it', async () => {
@@ -640,6 +656,72 @@ test('join history: nothing from before a member’s history starts (pages, ids,
   }
 });
 
+test('join history: a reply to a message from before a member’s history starts is never a comment on it (posted, scheduled, edited, sent)', async () => {
+  const room = (await as(alice, 'POST', `/servers/${space.id}/channels`, { name: 'history-replies', type: 'text' })).json;
+  const late = await member('lateR');
+  const joinedAt = Date.now() - 30000;
+  const t0 = joinedAt - 60000;
+  const t1 = joinedAt + 1000;
+  // Before they joined: a photo, and a thread whose reply with photos was written after. After: one under their key
+  // (epoch 2), and one sent while theirs was on its way (epoch 1).
+  const old = insertC(room.id, alice, { files: 3, at: t0, id: idAt(t0) });
+  const oldRoot = insertC(room.id, alice, { at: t0 + 1, id: idAt(t0 + 1) });
+  const inOldThread = insertC(room.id, bob, { files: 3, threadId: oldRoot, at: t1, id: idAt(t1), epoch: 2 });
+  const fresh = insertC(room.id, bob, { files: 3, at: t1 + 1, id: idAt(t1 + 1), epoch: 2 });
+  const locked = insertC(room.id, bob, { files: 3, at: t1 + 2, id: idAt(t1 + 2), epoch: 1 });
+  srv.sql('UPDATE members SET key_from = 2, joined_at = ? WHERE server_id = ? AND user_id = ?', joinedAt, space.id, late.id);
+  srv.sql('UPDATE servers SET key_epoch = 2, needs_rotation = 0 WHERE id = ?', space.id);
+  const onCarol = collect(await sock(carol), 'message:file-replies');
+  const ref = () => crypto.randomBytes(12).toString('base64url');
+  const schedule = async (extra) => {
+    const r = await as(late, 'POST', `/channels/${room.id}/scheduled-messages`, { ciphertext: cipher(), epoch: 2, ref: ref(), draft: 'x1:' + b64(40), sendAt: Date.now() + 3600000, ...extra });
+    assert.equal(r.status, 200, r.text);
+    return r.json;
+  };
+  try {
+    // Posted now: a photo the message has comes back as none, as one past its uploads would, so a few posts can't
+    // count them; and it isn't stored as a comment. It's still a reply (that was always so), without the quote.
+    for (const parent of [old, inOldThread, locked]) {
+      const m = await sendC(late, room.id, { epoch: 2, replyTo: parent, replyFile: 1 });
+      assert.equal(m.replyTo, parent);
+      assert.equal(m.replyHidden, true);
+      assert.equal(m.replyFile, null, 'not a comment on a message they can’t see');
+      assert.equal(row('messages', m.id).reply_file, null);
+    }
+    // One they can see takes comments as usual.
+    assert.equal((await sendC(late, room.id, { epoch: 2, replyTo: fresh, replyFile: 2 })).replyFile, 2);
+    // Scheduled: refused on creating it, and on new ciphertext.
+    const s1 = await schedule({ replyTo: old, replyFile: 1 });
+    assert.equal(s1.replyFile, null);
+    assert.equal(row('scheduled_messages', s1.id).reply_file, null);
+    const s2 = await schedule({ replyTo: fresh, replyFile: 1 });
+    const s3 = await schedule({ replyTo: fresh, replyFile: 0 });
+    assert.equal(s2.replyFile, 1);
+    assert.equal(s3.replyFile, 0);
+    // They left and came back with the setting on (their history now starts after fresh): new ciphertext, and
+    // sending, drop the photo too.
+    srv.sql('UPDATE members SET joined_at = ? WHERE server_id = ? AND user_id = ?', t1 + 10, space.id, late.id);
+    const e = await as(late, 'PATCH', `/scheduled-messages/${s2.id}`, { ciphertext: cipher(), epoch: 2, draft: 'x1:' + b64(40), replyFile: 1 });
+    assert.equal(e.status, 200, e.text);
+    assert.equal(e.json.replyFile, null);
+    const sent = await as(late, 'POST', `/scheduled-messages/${s3.id}/send`, {});
+    assert.equal(sent.status, 200, sent.text);
+    assert.equal(sent.json.message.replyFile, null);
+    assert.equal(row('messages', sent.json.message.id).reply_file, null);
+    // Those who can see them heard of the one comment only, and that's all the counts say.
+    assert.ok(await until(() => onCarol.length === 1));
+    await sleep(200);
+    assert.deepEqual(onCarol.map((x) => x.id), [fresh]);
+    const page = (await as(carol, 'GET', `/channels/${room.id}/media`)).json.messages;
+    for (const id of [old, inOldThread, locked]) assert.equal(page.find((m) => m.id === id).fileReplies, undefined);
+    assert.deepEqual(page.find((m) => m.id === fresh).fileReplies, { 2: 1 });
+    for (const s of [s1, s2]) assert.equal((await as(late, 'DELETE', `/scheduled-messages/${s.id}`)).status, 200);
+  } finally {
+    srv.sql('UPDATE members SET key_from = NULL WHERE server_id = ? AND user_id = ?', space.id, late.id);
+    srv.sql('UPDATE servers SET key_epoch = 1, needs_rotation = 0 WHERE id = ?', space.id);
+  }
+});
+
 // ------------------------------------------------------------------ clean-up
 test('deleting messages deletes their tags, every way: a DM, a channel message with its thread, bulk delete, a ban’s cleanup, a channel, a server', async () => {
   const conv = (c) => 'c:' + c;
@@ -823,7 +905,9 @@ test('upgrading a version 20 database counts the files messages already have and
     freshEpoch(sp.id, s);
     const ch = sp.channels.find((c) => c.type === 'text');
     const d = (await as(a, 'POST', '/dms', { userId: b.id }, s)).json;
-    const dmPhoto = await sendD(a, d.id, { files: await uploads(a, 3, s) }, s);
+    const dmFiles = await uploads(a, 3, s);
+    const dmPhoto = await sendD(a, d.id, { files: dmFiles }, s);
+    const forward = await sendD(b, d.id, { files: dmFiles }, s); // its blobs stay dmPhoto's
     const chPhoto = await sendC(a, ch.id, { files: await uploads(a, 2, s) }, s);
     const plain = await sendD(a, d.id, {}, s);
     const sched = await as(a, 'POST', `/dms/${d.id}/scheduled-messages`, { ciphertext: cipher(), ref: crypto.randomBytes(12).toString('base64url'), draft: 'x1:' + b64(40),
@@ -838,6 +922,13 @@ test('upgrading a version 20 database counts the files messages already have and
     assert.equal(row('dm_messages', dmPhoto.id, s).files, 3);
     assert.equal(row('messages', chPhoto.id, s).files, 2);
     assert.equal(row('dm_messages', plain.id, s).files, 0);
+    // A forward from before has none of its own: it says files 0, so the apps offer no comments or tags on it (the
+    // panel can't list it either), which the server would refuse anyway.
+    const page = (await as(b, 'GET', `/dms/${d.id}/messages`, undefined, s)).json.messages;
+    assert.equal(page.find((m) => m.id === dmPhoto.id).files, 3);
+    assert.equal(page.find((m) => m.id === forward.id).files, 0);
+    assert.equal((await sendD(a, d.id, { replyTo: forward.id, replyFile: 0 }, s)).replyFile, null);
+    assert.equal((await as(a, 'POST', `/dm-messages/${forward.id}/tags`, { id: tagId(), fileIdx: 0, ciphertext: tagD() }, s)).status, 400);
     assert.equal(row('scheduled_messages', sched.json.id, s).file_count, 2);
     assert.equal(s.sql("SELECT COUNT(*) n FROM sqlite_master WHERE name IN ('idx_messages_files', 'idx_dm_messages_files', 'idx_messages_reply_file', 'idx_dm_messages_reply_file', 'media_tags', 'idx_media_tags_message', 'idx_media_tags_conv')")[0].n, 7);
     assert.equal(fs.readdirSync(path.join(s.dir, 'backups')).filter((f) => /^hearth-before-v21-.*\.db$/.test(f)).length, 1, 'after a backup copy');

@@ -254,10 +254,12 @@ module.exports = function setupScheduled(ctx) {
     let mentions = [];
     try { mentions = JSON.parse(r.mentions); } catch { /* none */ }
     // Its files are handed over rather than listed again, so it says how many it listed (a forward's included), and
-    // which photo it comments on, if the message it replies to is still there with that many files.
+    // which photo it comments on, if the message it replies to is still there with that many files (and, in a
+    // channel, still one its sender can see: they may have left and come back with their history starting later).
     const fileCount = r.file_count || filesOf(r).length;
     const msg = p.channel
-      ? postChannelMessage(p.channel, r.user_id, { ciphertext: r.ciphertext, epoch: r.epoch, files: [], fileCount, replyTo: p.replyTo, replyFile: replyFileIn('messages', p.replyTo, r.reply_file),
+      ? postChannelMessage(p.channel, r.user_id, { ciphertext: r.ciphertext, epoch: r.epoch, files: [], fileCount, replyTo: p.replyTo,
+        replyFile: replyFileIn('messages', p.replyTo, r.reply_file, { uid: r.user_id, serverId: p.channel.server_id }),
         threadId: p.threadId, mentions, everyone: !!r.everyone, ttl: r.ttl }, null, { within: handOver, scheduled: true })
       : postDmMessage(p.dm, r.user_id, { ciphertext: r.ciphertext, files: [], fileCount, replyTo: p.replyTo, replyFile: replyFileIn('dm_messages', p.replyTo, r.reply_file), ttl: r.ttl },
         null, { within: handOver, scheduled: true });
@@ -412,8 +414,9 @@ module.exports = function setupScheduled(ctx) {
     checkTtl(b, c.disappear_secs);
     roomFor(req.userId);
     const replyTo = replyIn(c, b.replyTo);
+    const replyFile = replyFileIn('messages', replyTo, fileAsked, { uid: req.userId, serverId: c.server_id });
     const r = create({
-      user_id: req.userId, server_id: c.server_id, channel_id: c.id, thread_id: threadId, reply_to: replyTo, reply_file: replyFileIn('messages', replyTo, fileAsked), ciphertext: b.ciphertext, epoch,
+      user_id: req.userId, server_id: c.server_id, channel_id: c.id, thread_id: threadId, reply_to: replyTo, reply_file: replyFile, ciphertext: b.ciphertext, epoch,
       ref, draft, session_id: req.session.id, own_key: ownKey(getUserRow(req.userId), true), ttl: ttlOf(b), mentions: cleanMentions(b.mentions), everyone: b.everyone === true, send_at: sendAt,
     }, files);
     res.json(serialize(r));
@@ -461,10 +464,13 @@ module.exports = function setupScheduled(ctx) {
     checkTtl(b, conv.disappear_secs);
     set.ttl = keepTtl(r.ttl, ttlOf(b));
     // v21 (photos): which photo it comments on is inside the ciphertext too, so new ciphertext may say it again (or
-    // say none, with null). Left out, it stays as it was. Kept only for a reply to a message with that many files.
+    // say none, with null). Left out, it stays as it was. Kept only for a reply to a message with that many files
+    // (and one its sender can see, in a channel).
     if (b.replyFile !== undefined) {
       const fi = parseReplyFile(b.replyFile);
-      set.reply_file = replyFileIn(r.channel_id ? 'messages' : 'dm_messages', r.reply_to, fi);
+      set.reply_file = r.channel_id
+        ? replyFileIn('messages', r.reply_to, fi, { uid: r.user_id, serverId: r.server_id })
+        : replyFileIn('dm_messages', r.reply_to, fi);
     }
     Object.assign(set, { ciphertext: b.ciphertext, own_key: ownKey(u, !!r.channel_id), session_id: req.session.id, updated_at: now(), status: 'pending', reason: null, told_at: null });
     // Who it pings goes with the words: new words replace them, so an @everyone or @name edited out pings nobody.
