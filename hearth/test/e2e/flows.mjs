@@ -2577,7 +2577,14 @@ async function awayAndStatus(t) {
   await dana.$('#user-panel .me-sub', { hasText: 'Online' }).waitFor({ state: 'attached' });
   check(!(await dana.$('#toasts .toast-error').count()), `Saving the profile should show no error (got ${JSON.stringify(await dana.$('#toasts .toast-error').allTextContents())}).`);
   await dana.closeSettings();
+  // The word beside Dana's name in Alice's DM with her follows her: it used to stay on the one it was drawn with.
+  await alice.member('dana').click();
+  await alice.page.locator('.pop-profile button', { hasText: exact('Message') }).click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message dana"]');
+  await alice.$('#main-head .head-topic', { hasText: 'Online' }).waitFor();
   await dana.close();
+  await alice.$('#main-head .head-topic', { hasText: 'Offline' }).waitFor({ timeout: 20000 });
+  await alice.$('#main-head .status-dot.st-offline').waitFor();
 
   // A status that clears itself after 30 minutes.
   await alice.$('#user-panel .me-btn').click();

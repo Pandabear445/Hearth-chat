@@ -665,6 +665,7 @@ function startApp() {
         d.title = STATUS_LABEL[presence] || '';
         d.setAttribute('aria-label', STATUS_LABEL[presence] || '');
       });
+      showPresenceText(id);
     }
     if (!changed) return;
     later(redrawPeople);
@@ -1153,10 +1154,15 @@ function refreshUserBits(id) {
     el.replaceWith(fresh);
   });
   $$(`[data-user-name="${id}"]`).forEach((el) => redrawName(el, u));
+  showPresenceText(id);
   if (id === S.me.id) renderUserPanel();
   if (S.panel === 'members' || S.view.type === 'dm') renderPanel();
   if (['friends', 'home'].includes(S.view.type) && S.view.tab !== 'add') renderMain();
   if (S.view.type === 'voice') renderMain();
+}
+// The words for someone's status drawn outside the lists (the DM header's "Online"), which nothing else redraws.
+function showPresenceText(id) {
+  $$(`[data-presence-of="${id}"]`).forEach((t) => { t.textContent = STATUS_LABEL[presenceOf(S.users[id], S.me.id)] || ''; });
 }
 // Someone came online, went Away, went offline or started a game: the lists that show it. The friends list and the
 // member list redraw only their rows, so what's typed in their search boxes (and focus there) stays; on Home only
@@ -3043,7 +3049,7 @@ function drawHeader(head) {
     const p = presenceOf(u, S.me.id);
     head.append(
       h('div', { class: 'head-title' }, avatarEl(u, 26, { status: true, meId: S.me.id }), h('h1', null, displayName(u)),
-        h('span', { class: 'head-topic' }, STATUS_LABEL[p] || '')),
+        h('span', { class: 'head-topic', 'data-presence-of': u.id }, STATUS_LABEL[p] || '')),
       headTools(
         sec.keyChanged(u)
           ? h('button', { class: 'head-badge warn', 'data-tip': 'This person\u2019s security key changed. Click to verify.', onclick: () => openSafetyNumber(u) }, icon('shield'), 'Key changed')
