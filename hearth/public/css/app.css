@@ -3242,7 +3242,73 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 }
 
 /* ======================================================================= Photos & videos panel (media-panel.js) */
+/* The side panel: as wide as a thread (the same resize handle sets it), its filters, then the tiles, newest first under
+   their months, three to a row at the panel's usual width. */
+#members[data-mode='media'] { width: var(--thread-w); }
+.mp-filters { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 8px; border-bottom: 1px solid var(--line); }
+.mp-kinds { align-self: flex-start; }
+.mp-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip.mp-tag { height: 28px; padding: 0 10px; gap: 6px; font-size: 12.5px; max-width: 100%; min-width: 0; }
+.chip.active.mp-tag { padding: 0 4px 0 0; }
+.mp-tag-name { display: inline-flex; align-items: center; gap: 6px; align-self: stretch; min-width: 0; padding: 0 2px 0 10px; color: inherit; font: inherit; }
+.mp-tag-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-tag-n { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.mp-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 2px 10px 16px; }
+.mp-month-name { margin: 12px 2px 6px; font-family: var(--font); font-size: 12px; font-weight: 700; letter-spacing: .02em; color: var(--muted); }
+.mp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 4px; }
+.mp-tile { position: relative; aspect-ratio: 1; min-width: 0; overflow: hidden; border-radius: 8px; background: var(--hover); }
+.mp-tile.loading { background: var(--active); }
+.mp-open { position: absolute; inset: 0; display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: inherit; background: none; color: inherit; cursor: pointer; }
+.mp-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mp-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* A video has no poster: a dark square with a play sign and its size. */
+.mp-tile.video { background: #16131c; color: #f2eff7; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .08); }
+.mp-ph { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 6px; text-align: center; font-size: 11.5px; color: var(--muted); }
+.mp-tile.video .mp-ph { color: #d8d3e2; }
+.mp-ph .ic { width: 24px; height: 24px; }
+.mp-ph .ic.mp-play { width: 34px; height: 34px; padding: 8px; border-radius: 50%; background: rgb(255 255 255 / .14); color: #fff; }
+.mp-size { font-variant-numeric: tabular-nums; }
+.mp-gif { position: absolute; top: 4px; left: 4px; padding: 1px 5px; border-radius: 5px; background: rgb(0 0 0 / .6); color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .05em; pointer-events: none; }
+.mp-badges { position: absolute; left: 4px; bottom: 4px; z-index: 1; display: flex; gap: 4px; max-width: calc(100% - 8px); }
+/* A spoiler, or a photo the word filter blurs: blurred under a cover until it's clicked (it loads behind it all the same). */
+.mp-tile.spoiler:not(.revealed) > :not(.mp-cover), .mp-tile.veiled > :not(.mp-cover) { filter: blur(14px); }
+.mp-cover { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 5px; background: rgb(0 0 0 / .3); color: #fff; font-size: 12px; font-weight: 700; }
+.mp-cover:hover { background: rgb(0 0 0 / .42); }
+.mp-cover .ic { width: 15px; height: 15px; }
+/* (Always there, even with nothing in it: thumbnails the word filter hides load as it comes near the screen.) */
+.mp-foot { min-height: 1px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 4px; }
+.mp-loading { display: flex; align-items: center; gap: 8px; padding: 16px; color: var(--muted); font-size: 13px; }
+.mp-foot .panel-empty { padding-top: 24px; }
+/* The header button is for wider screens: a phone's header is full, and the ⋯ menu has Photos & videos too. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  #main-head .head-media { display: none; }
+}
 
+/* The viewer (app.js openViewer), around the picture: videos play in the stage (a big one waits for Play), Jump to
+   message is in the bar, and a photo's comments and tags (photo-notes.js) are a column on the right that the
+   next-picture button keeps clear of. */
+.viewer-body { flex: 1; min-height: 0; display: flex; position: relative; }
+.viewer-body > .viewer-stage { flex: 1; min-width: 0; }
+.viewer-video { max-width: 100%; max-height: 100%; border-radius: 6px; background: #000; }
+.viewer-play { display: inline-flex; align-items: center; gap: 8px; padding: 12px 18px; border-radius: 999px; background: rgb(255 255 255 / .12); color: #fff; font-size: 14px; font-weight: 600; }
+.viewer-play:hover { background: rgb(255 255 255 / .2); }
+.viewer-play .ic { width: 20px; height: 20px; }
+.viewer-stage.loading-full[data-loading]::after { content: attr(data-loading); }
+.viewer-bar .viewer-jump { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; margin-right: 4px; border-radius: 8px; background: rgb(255 255 255 / .08); color: #d8d3e2; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.viewer-bar .viewer-jump:hover { background: rgb(255 255 255 / .16); color: #fff; }
+.viewer-bar .viewer-jump .ic { width: 15px; height: 15px; }
+.viewer-bar .viewer-side-btn.active { background: rgb(255 255 255 / .14); color: #fff; }
+.viewer-side-btn .badge { background: var(--accent); }
+.viewer-side { flex: none; width: 340px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; background: #17141d; border-left: 1px solid rgb(255 255 255 / .08); color: #f2eff7; }
+.viewer.side-open .viewer-nav.next { right: 354px; }
+/* Opened from inside the viewer (its More menu, its side panel's menus, popups and questions) and toasts: over it. */
+#layer > .over-viewer { z-index: 85; }
+body:has(> .viewer:not(.closing)) #toasts { z-index: 86; }
+/* PHONE LAYOUT: the side panel is a sheet over the bottom of the picture, and it scrolls with a finger. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  .viewer-side { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; width: auto; max-height: 60%; border-left: 0; border-top: 1px solid rgb(255 255 255 / .1); border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -10px 30px rgb(0 0 0 / .5); touch-action: pan-y; }
+  .viewer-video { border-radius: 0; }
+}
 /* (end of the Photos & videos panel) */
 
 

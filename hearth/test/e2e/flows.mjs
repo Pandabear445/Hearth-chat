@@ -4225,7 +4225,210 @@ async function updateBar(t) {
 }
 
 // ------------------------------------------------------------------ photos & videos panel
+// Every picture and video sent in a conversation, newest first, in a side panel (public/js/media-panel.js; the
+// server's GET /api/dms/:id/media and /api/channels/:id/media hand over the messages with files, and the app keeps the
+// pictures and videos): a header button in DMs and group chats, the ⋯ menu everywhere (the way in on a phone). All,
+// Photos and Videos; the viewer goes left and right through the panel's list, videos too, and jumps to the message;
+// a deleted message's tiles go and a new one's come on top as it happens.
 async function mediaPanel(t) {
+  const { alice, bob } = t.people;
+  const pic = (name, w, h) => ({ name, mimeType: 'image/png', buffer: makePng(w, h) });
+  const tiles = (p) => p.page.$$eval('#members .mp-tile .mp-open', (els) => els.map((e) => e.getAttribute('aria-label')));
+  const tileCount = (p, n) => p.page.waitForFunction((k) => document.querySelectorAll('#members .mp-tile').length === k, n);
+  const firstTile = (p, label) => p.page.waitForFunction((l) => { const x = document.querySelector('#members .mp-tile .mp-open'); return !!x && x.getAttribute('aria-label') === l; }, label);
+  // Is the message with these words in full view in the chat (as a jump leaves it)?
+  const shown = (words) => {
+    const el = [...document.querySelectorAll('#messages .msg[data-mid]')].find((m) => m.textContent.includes(words));
+    if (!el) return false;
+    const r = el.getBoundingClientRect(); const box = document.querySelector('#messages').getBoundingClientRect();
+    return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+  };
+  const inView = (p, text) => p.page.evaluate(shown, text);
+  const jumpedTo = (p, text) => p.page.waitForFunction(shown, text);
+
+  // ---- a DM: two pictures (and a PDF, which isn't shown), a video, one more picture, then enough to scroll them away.
+  await alice.railButton('Direct messages');
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  const clip = await alice.page.evaluate(async () => {
+    const c = document.createElement('canvas'); c.width = 160; c.height = 120;
+    const g = c.getContext('2d');
+    const rec = new MediaRecorder(c.captureStream(15), { mimeType: 'video/webm' });
+    const chunks = []; rec.ondataavailable = (e) => chunks.push(e.data);
+    let n = 0; const tick = setInterval(() => { g.fillStyle = `hsl(${(n += 20) % 360} 70% 50%)`; g.fillRect(0, 0, 160, 120); }, 60);
+    rec.start(200); await new Promise((r) => setTimeout(r, 800));
+    const stopped = new Promise((r) => { rec.onstop = r; }); rec.stop(); await stopped; clearInterval(tick);
+    const b = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    return btoa(String.fromCharCode(...b));
+  });
+  const sendWith = async (files, text) => {
+    await alice.$('.cw-main input[type=file]').setInputFiles(files);
+    await alice.send(text);
+    await bob.message(text).first().waitFor({ timeout: 60000 });
+  };
+  await sendWith([pic('dm-apple-1.png', 40, 30), pic('dm-apple-2.png', 30, 40), { name: 'dm-notes.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 notes') }], 'Photos from the trip: apple');
+  await sendWith([{ name: 'dm-clip.webm', mimeType: 'video/webm', buffer: Buffer.from(clip, 'base64') }], 'A short clip: banana');
+  await sendWith([pic('dm-cherry.png', 50, 20)], 'One more photo: cherry');
+  for (let i = 1; i <= 12; i++) {
+    // (Several lines each: send() would look for the words with their line breaks, which the message draws as breaks.)
+    await alice.$('#composer-input').fill(`Filler ${i}:\nso the photos\nscroll out\nof view`);
+    await alice.$('#composer-input').press('Enter');
+    await alice.message(`Filler ${i}:`).first().waitFor();
+  }
+  await bob.message('Filler 12:').first().waitFor();
+  check(!(await inView(bob, 'Photos from the trip: apple')), 'The first photos should have scrolled out of view.');
+
+  // The header button opens it beside the chat: newest first, each message's files in the order sent. secret.png (the
+  // disappearing flow's) is gone, and the PDF isn't a picture.
+  await bob.$('#main-head button[aria-label="Photos & videos"]').click();
+  await bob.$('#members .mp-tile').first().waitFor();
+  await tileCount(bob, 4);
+  const dmTiles = await tiles(bob);
+  check(JSON.stringify(dmTiles) === JSON.stringify(['Open dm-cherry.png', 'Open dm-clip.webm (video)', 'Open dm-apple-1.png', 'Open dm-apple-2.png']),
+    `The panel should list the DM’s pictures and video, newest first (got ${dmTiles.join(', ')}).`);
+  check((await bob.$('#members .panel-head h2').textContent()) === 'Photos & videos', 'The panel should be called Photos & videos.');
+  const pressed = bob.$('#main-head button[aria-label="Hide photos & videos"]');
+  check((await pressed.count()) === 1 && (await pressed.getAttribute('aria-pressed')) === 'true', 'Its header button should be pressed and say it hides them.');
+  const month = await bob.page.evaluate(() => new Date().toLocaleDateString([], { month: 'long', year: 'numeric' }));
+  check((await bob.$('#members .mp-month-name').first().textContent()) === month, `The tiles should sit under “${month}”.`);
+  await bob.page.waitForFunction(() => [...document.querySelectorAll('#members .mp-tile.img img')].length === 3
+    && [...document.querySelectorAll('#members .mp-tile.img img')].every((i) => i.complete && i.naturalWidth > 0 && i.src.startsWith('blob:')));
+  const video = bob.$('#members .mp-tile.video');
+  check(!(await video.locator('video').count()) && /\d+(\.\d+)? (B|KB)/.test(await video.textContent()), 'A video’s tile should show its size and download nothing.');
+  const box = await bob.$('#members').boundingBox();
+  check(box && box.width >= 380, `The panel should be as wide as a thread (got ${box && box.width}).`);
+
+  // All, Photos, Videos.
+  await bob.$('#members .seg-btn', { hasText: exact('Videos') }).click();
+  check(JSON.stringify(await tiles(bob)) === JSON.stringify(['Open dm-clip.webm (video)']), 'Videos should leave only the video.');
+  await bob.$('#members .seg-btn', { hasText: exact('Photos') }).click();
+  check(JSON.stringify(await tiles(bob)) === JSON.stringify(['Open dm-cherry.png', 'Open dm-apple-1.png', 'Open dm-apple-2.png']), 'Photos should leave only the pictures.');
+  await bob.$('#members .seg-btn', { hasText: exact('All') }).click();
+  await tileCount(bob, 4);
+
+  // The viewer from a tile: left and right go through the panel's list, the video too (it plays in the viewer).
+  await bob.$('#members .mp-open[aria-label="Open dm-apple-1.png"]').click();
+  await bob.$('.viewer').waitFor();
+  const at = async () => [await bob.$('.viewer-count').textContent(), await bob.$('.viewer-name').textContent()].join(' ');
+  check(await at() === '3 / 4 dm-apple-1.png', `The viewer should open on the tile clicked (got ${await at()}).`);
+  await bob.page.keyboard.press('ArrowRight');
+  check(await at() === '4 / 4 dm-apple-2.png', `Right should go to the next one (got ${await at()}).`);
+  await bob.page.keyboard.press('ArrowLeft');
+  await bob.page.keyboard.press('ArrowLeft');
+  check(await at() === '2 / 4 dm-clip.webm', `Left should reach the video (got ${await at()}).`);
+  await bob.page.waitForFunction(() => { const v = document.querySelector('.viewer-video'); return !!v && !v.hidden && v.src.startsWith('blob:'); }, null, { timeout: 30000 });
+  check(await bob.$('.viewer-img').evaluate((i) => i.hidden), 'A video should play in place of the picture.');
+  check(!(await bob.$('.viewer-bar button[aria-label="Zoom in (+)"]').isVisible()), 'A video doesn’t zoom.');
+  await bob.page.keyboard.press('ArrowLeft');
+  check(await at() === '1 / 4 dm-cherry.png', `Left again should reach the newest (got ${await at()}).`);
+  check(await bob.page.evaluate(() => !document.querySelector('.viewer-video').getAttribute('src')), 'Leaving the video should stop it.');
+  await bob.page.keyboard.press('ArrowLeft');
+  check(await at() === '4 / 4 dm-apple-2.png', `Left from the first should wrap to the last (got ${await at()}).`);
+  await bob.page.keyboard.press('ArrowLeft');
+  // Jump to message: the viewer closes and the chat goes to it; beside the chat, the panel stays.
+  await bob.$('.viewer-bar button', { hasText: 'Jump to message' }).click();
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  await jumpedTo(bob, 'Photos from the trip: apple');
+  check(await bob.$('#members .mp-tile').count() === 4, 'On a desktop the panel should stay open after a jump.');
+  // Esc closes the viewer only, and the tile gets the focus back.
+  await bob.$('#members .mp-open[aria-label="Open dm-cherry.png"]').click();
+  await bob.$('.viewer').waitFor();
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  check(await bob.page.evaluate(() => (document.activeElement && document.activeElement.getAttribute('aria-label')) === 'Open dm-cherry.png'), 'Focus should go back to the tile.');
+
+  // A deleted message's tiles go, and a new one's come on top, as it happens.
+  await alice.messageAction('One more photo: cherry', 'Delete message');
+  await alice.modal('Delete message?').locator('.modal-foot .btn.danger').click();
+  await bob.message('One more photo: cherry').waitFor({ state: 'detached' });
+  await tileCount(bob, 3);
+  check((await tiles(bob))[0] === 'Open dm-clip.webm (video)', 'The deleted picture’s tile should go.');
+  await sendWith([pic('dm-date.png', 24, 24)], 'Another photo: date');
+  await firstTile(bob, 'Open dm-date.png');
+
+  // ---- a group chat: going there closes the DM's panel; its own lists the group's, live.
+  await alice.dmRow('Fruit Club').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  await alice.$('.cw-main input[type=file]').setInputFiles([pic('club-fig.png', 60, 40)]);
+  await alice.send('Group photo: fig');
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  await bob.message('Group photo: fig').first().waitFor({ timeout: 60000 });
+  check(!(await bob.$('#members .mp-tile').count()), 'Another conversation should close the panel.');
+  await bob.$('#main-head button[aria-label="Photos & videos"]').click();
+  await firstTile(bob, 'Open club-fig.png');
+  await alice.$('.cw-main input[type=file]').setInputFiles([pic('club-grape.png', 40, 60)]);
+  await alice.send('Group photo: grape');
+  await firstTile(bob, 'Open club-grape.png');
+  check((await tiles(bob))[1] === 'Open club-fig.png', 'The older group photo should come after the new one.');
+  await bob.$('#members button[aria-label="Close panel"]').click();
+  await bob.$('#members .mp-tile').first().waitFor({ state: 'detached' });
+
+  // ---- a server channel: the ⋯ menu (no header button there). The owner's twelve files are in it too, and the
+  // quokka from discordHabits under its Spoiler cover until it's clicked.
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await alice.$('.cw-main input[type=file]').setInputFiles([pic('general-kiwi.png', 64, 48)]);
+  await alice.send('Channel photo: kiwi');
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await bob.message('Channel photo: kiwi').first().waitFor({ timeout: 60000 });
+  check(!(await bob.$('#main-head button[aria-label="Photos & videos"]').count()), 'A server channel should have no header button for it (the ⋯ menu has it).');
+  await bob.$('#main-head button[aria-label="More"]').click();
+  await bob.menuItem('Photos & videos').click();
+  await firstTile(bob, 'Open general-kiwi.png');
+  await bob.page.waitForFunction(() => {
+    const l = [...document.querySelectorAll('#members .mp-tile .mp-open')].map((e) => e.getAttribute('aria-label'));
+    return ['Open bob-picture-1.png', 'Open bob-picture-4.png', 'Open bob-clip.webm (video)'].every((x) => l.includes(x));
+  }, null, { timeout: 30000 });
+  const owner = await tiles(bob);
+  check(owner.indexOf('Open bob-picture-1.png') < owner.indexOf('Open bob-picture-4.png') && owner.indexOf('Open bob-picture-4.png') < owner.indexOf('Open bob-clip.webm (video)'),
+    `One message’s pictures and video should keep the order they were sent in (got ${owner.join(', ')}).`);
+  const quokka = bob.$('#members .mp-tile.spoiler', { has: bob.page.locator('.mp-open[aria-label="Open A quokka smiling at the camera"]') });
+  await quokka.waitFor({ timeout: 30000 });
+  await quokka.locator('.mp-cover').click();
+  check(await quokka.evaluate((el) => el.classList.contains('revealed')) && !(await bob.$('.viewer').count()), 'The first click on a spoiler should only uncover it.');
+  await bob.$('#members button[aria-label="Close panel"]').click();
+  await bob.$('#members .mp-tile').first().waitFor({ state: 'detached' });
+
+  // ---- a phone: the header is full, so the way in is the ⋯ menu; the panel covers the chat; Jump to message closes
+  // the viewer and the panel; Back closes the panel too.
+  const phone = await t.open('bob-photos', PHONE);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  const openNav = async () => {
+    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
+  };
+  await openNav();
+  await page.locator('#rail button[aria-label="Direct messages"]').tap();
+  await openNav();
+  await phone.dmRow('Alice Wonder').tap();
+  await page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  check(!(await page.locator('#main-head button[aria-label="Photos & videos"]').isVisible()), 'A phone’s header should have no button for it.');
+  await page.locator('#main-head button[aria-label="More"]').tap();
+  await phone.menuItem('Photos & videos').tap();
+  await tileCount(phone, 4);
+  // (Once it has slid in.)
+  await page.waitForFunction(() => { const r = document.querySelector('#members').getBoundingClientRect(); return r.left <= 1 && r.width >= innerWidth - 1; }, null, { timeout: 5000 })
+    .catch(() => check(false, 'On a phone the panel should cover the chat.'));
+  await page.locator('#members .mp-open[aria-label="Open dm-apple-2.png"]').tap();
+  await phone.$('.viewer').waitFor();
+  await page.locator('.viewer-bar button[aria-label="More"]').tap();
+  await phone.menuItem('Jump to message').tap();
+  await phone.$('.viewer').waitFor({ state: 'detached' });
+  await phone.$('#members .mp-tile').first().waitFor({ state: 'detached' });
+  await jumpedTo(phone, 'Photos from the trip: apple');
+  await page.locator('#main-head button[aria-label="More"]').tap();
+  await phone.menuItem('Photos & videos').tap();
+  await phone.$('#members .mp-tile').first().waitFor();
+  await page.goBack();
+  await phone.$('#members .mp-tile').first().waitFor({ state: 'detached' });
+  await phone.close();
+  delete t.people['bob-photos'];
 }
 
 // ------------------------------------------------------------------ photo comments and tags
