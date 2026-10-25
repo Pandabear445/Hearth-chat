@@ -488,7 +488,7 @@ async function signOutHere() {
   // runs again last, in case anything else did.)
   clearLocalCopies();
   SCHED.reset();
-  MEDIA.reset();
+  MEDIA.reset({ all: true });
   sec.reset();
   copies.clear();
   originals.clear();
@@ -1070,7 +1070,9 @@ async function loadBootstrap() {
   S.threads = {};
   S.threadState = {};
   S.threadsPanel = null;
-  MEDIA.reset(); // (an open Photos & videos panel asks for its newest page again)
+  // (An open Photos & videos panel asks for its newest page again, and lets go of the copies photo-notes.js handed it:
+  // comments, tags or edits made while this app was away aren't in them.)
+  MEDIA.reset({ all: true });
   await sec.ensureSigningKey(b.encSignPrivateKey);
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(b.keyStates || {})) await sec.applyState(st);
@@ -5243,7 +5245,14 @@ function openViewer(fromImg, { name, download, items: given = null, index = 0, s
   // The photo's comments and tags (photo-notes.js): a column on the right, or a sheet over the bottom on a phone, with
   // a Comments button that shows and hides it. On a wider screen it starts open on a photo that already has some.
   const sideBox = h('aside', { class: 'viewer-side', 'aria-label': 'Comments and tags', hidden: true });
-  const notesOn = (it) => !!it && !!it.m && ((it.m.fileReplies && Number(it.m.fileReplies[it.fi]) > 0) || (Array.isArray(it.m.tags) && it.m.tags.some((x) => x && x.fileIdx === it.fi)));
+  // Whether a photo has some, as its counts say (NOTES.counts: the latest comment count, and the tags that count). Its
+  // tags only count once they've been opened, which they often aren't yet as it opens here (a photo alone in its
+  // message has no counts in the chat to open them first): until then, any on it by someone you haven't blocked do.
+  const notesOn = (it) => {
+    if (!it || !it.m || !Number.isInteger(it.fi)) return false;
+    const c = NOTES.counts(it.m, it.fi);
+    return c.comments > 0 || c.tags > 0 || NOTES.unopened(it.m, it.fi) > 0;
+  };
   let sideOpen = !!side || (!isPhoneLayout() && notesOn(items[idx]));
   let sideFocus = side === 'comment' ? 'comment' : null;
   const sideBtn = ibtn('message', 'Comments', () => setSide(!sideOpen), { cls: 'viewer-side-btn with-badge' });
@@ -5570,15 +5579,28 @@ function recheckThread(rootId) {
   }, 300 + Math.floor(Math.random() * 700)));
 }
 function onDeleteMessage(key, id, { expired = false } = {}) {
-  const gone = new Set(Array.isArray(id) ? id : [id]);
+  const named = new Set(Array.isArray(id) ? id : [id]);
+  // In a channel, a thread's first message takes its replies with it: the server deletes them too, but its event names
+  // only the first. The replies this app holds go with it, wherever they are: in the thread as it was loaded here, and
+  // in Photos & videos and photo tags (which may hold older ones, or ones from a thread never opened here).
+  const threads = key.startsWith('c:') ? [...named].map((x) => S.threads[x]).filter(Boolean) : [];
+  const threadCopies = threads.flatMap((t) => [t.root, ...(t.list || [])]).filter(Boolean);
+  const gone = key.startsWith('c:')
+    ? new Set([...named, ...threadCopies.map((x) => x.id), ...MEDIA.repliesTo(named), ...NOTES.repliesTo(named, key)])
+    : named;
   forgetBindings(key, gone);
   MEDIA.onDelete(key, gone); // their tiles in Photos & videos, and the decrypted copies it had of them
   NOTES.onDelete(key, gone); // their photos' tags (the chips, the suggestions) and comments, and as comments
-  // Threads these messages started go with them (their counts, and their cards in the Threads panel).
-  if (key.startsWith('c:')) forgetThreads(key, gone);
+  // Threads these messages started go with them (their counts, and their cards in the Threads panel), and so does
+  // what was loaded of them: nothing finds their replies any more (loadedMessage, which Photos & videos takes copies
+  // from). One open in the side panel closes.
+  if (key.startsWith('c:')) {
+    forgetThreads(key, named);
+    for (const x of named) delete S.threads[x];
+  }
   const store = S.msgs[key];
   const removed = store ? store.list.filter((x) => gone.has(x.id)) : [];
-  if (S.thread && gone.has(S.thread.rootId)) { if (expired) delete S.threads[S.thread.rootId]; closeThread(); }
+  if (S.thread && named.has(S.thread.rootId)) closeThread();
   if (store) {
     store.list = store.list.filter((x) => !gone.has(x.id));
     let quotes = false;
@@ -5592,7 +5614,9 @@ function onDeleteMessage(key, id, { expired = false } = {}) {
       if (sc) sc.scrollTop = top;
     }
   }
-  if (expired) forgetCopies(removed, gone, key);
+  // (With what was loaded of their threads: a reply never outlives its thread's first message, and the timer's pass
+  // over the threads, purgeExpired, no longer finds them.)
+  if (expired) forgetCopies([...removed, ...threadCopies.filter((x) => !removed.includes(x))], gone, key);
 }
 function renderTyping() {
   $$('.typing').forEach((el) => {
@@ -5636,12 +5660,16 @@ async function openThread(root, focusId, { from = null } = {}) {
     await Promise.all([t.root, ...t.list].map(decryptMessage));
     t.list = t.list.filter((x) => !isExpired(x, nowServer()));
     if (isExpired(t.root, nowServer())) throw new Error('That thread no longer exists.');
-    if ([t.root, ...t.list].some(disappears)) setTimeout(armClientExpiry, 0);
-    S.threads[root.id] = t;
-    // Where you'd read up to before this: the "New" line, which stays put while the thread is open.
-    if (S.thread && S.thread.rootId === root.id && res.state && res.state.unread > 0) S.thread.markerId = res.state.lastReadId;
     if (res.state) applyThreadState(res.state);
-    if (S.thread && S.thread.rootId === root.id) { renderPanel(); markThreadRead(root.id); }
+    // Closed while it loaded, or its first message deleted (onDeleteMessage closes it): not kept, so nothing finds the
+    // replies it had (loadedMessage).
+    if (!S.thread || S.thread.rootId !== root.id) return;
+    S.threads[root.id] = t;
+    if ([t.root, ...t.list].some(disappears)) setTimeout(armClientExpiry, 0);
+    // Where you'd read up to before this: the "New" line, which stays put while the thread is open.
+    if (res.state && res.state.unread > 0) S.thread.markerId = res.state.lastReadId;
+    renderPanel();
+    markThreadRead(root.id);
   } catch (e) { toast(e.message, 'error'); closeThread(); }
 }
 // all: the panel's close button (otherwise a thread opened from the Threads panel goes back to it).
@@ -6436,6 +6464,8 @@ const NOTES = createPhotoNotes({
     if (isPhoneLayout() && panelMode()) closePanel();
     return m.dmId ? jumpToMessage('d:' + m.dmId, m.id) : jumpToMessageId(m.id);
   },
+  // (Comments and tagged messages it loads that disappear: the timer counts them in, NOTES.messages.)
+  armExpiry: () => armClientExpiry(),
 });
 // Disappearing messages that went from wherever else they were loaded: their tags and comments go too.
 expiryListeners.add((ids) => NOTES.onDelete(null, ids));

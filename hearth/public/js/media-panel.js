@@ -13,9 +13,10 @@
 //
 // What it leaves out: voice messages, songs and other files; messages it can't read (one waiting for its channel's key
 // shows once the key comes: onKeys); people you blocked; messages the word filter hides (one it blurs is blurred here
-// too); messages that disappeared. The app keeps it up to date (onNew, onUpdate, onDelete, onMeta for tags and photo
-// comments, onKeys), hands it the messages photo-notes.js fetched for its tag index (offer: they aren't asked for
-// twice), and hands it the disappearing timer's work (messages, expire).
+// too); messages that disappeared or were deleted. The app keeps it up to date (onNew, onUpdate, onDelete, onMeta for
+// tags and photo comments, onKeys), hands it the messages photo-notes.js fetched for its tag index (offer: they aren't
+// asked for twice), and hands it the disappearing timer's work (messages, expire). It tells the app which thread
+// replies it holds (repliesTo), as those go with their thread's first message.
 import { h, icon, fmtSize } from './util.js';
 import { mediaKind } from './files.js';
 import { whenVisible } from './media.js';
@@ -28,6 +29,7 @@ const MORE_WITHIN = 600; // px from the end of the grid at which the next page i
 // history at once, into the server's rate limit.
 export const IDLE_PAGES = 3;
 const SPARE_MAX = 1000; // copies photo-notes.js fetched for its tag index kept here (offer), as many as it keeps
+const GONE_MAX = 2000; // ids of deleted messages remembered (onDelete), so that no copy of one shows again
 
 // ---- what's shown, worked out without a page (test/media-panel-client.test.js)
 
@@ -149,6 +151,20 @@ export function createMediaPanel(deps) {
   // from here rather than asking for them and decrypting them again. They're photo-notes.js's copies, so they stay while
   // the panel is closed, as they do there (at most SPARE_MAX); deleted, edited or disappeared ones go.
   const spare = new Map();
+  // Messages deleted (onDelete), with the thread replies that went with their thread's first message: a copy of one
+  // still held somewhere (a thread the app loaded, a page that was on its way) is never shown again, and a tag picked
+  // doesn't ask for it. Kept while the panel is closed too (at most GONE_MAX): an id is never used again.
+  const deleted = new Set();
+  const remember = (ids) => {
+    for (const id of ids) { deleted.delete(id); deleted.add(id); }
+    while (deleted.size > GONE_MAX) deleted.delete(deleted.values().next().value);
+  };
+  const isDeleted = (m) => {
+    if (deleted.has(m.id)) return true;
+    if (!m.threadId || !deleted.has(m.threadId)) return false;
+    remember([m.id]); // (a reply that went with its thread's first message: a tag picked doesn't ask for it either)
+    return true;
+  };
 
   const fresh = (key) => ({
     key,
@@ -168,11 +184,14 @@ export function createMediaPanel(deps) {
 
   const keyOfMsg = (m) => (m.dmId ? 'd:' + m.dmId : 'c:' + m.channelId);
   // A decrypted copy of this conversation's message that the app has already (the chat's, or one photo-notes.js
-  // fetched), or null.
+  // fetched), or null. Never one of a message deleted since, nor of a reply in a thread whose first message was.
   const copyOf = (s, id) => {
+    if (deleted.has(id)) return null;
     const m = deps.known(id) || spare.get(id) || null;
-    return m && keyOfMsg(m) === s.key && !deps.expired(m) ? m : null;
+    return m && keyOfMsg(m) === s.key && !deps.expired(m) && !isDeleted(m) ? m : null;
   };
+  // The same version of a message: the same words and files (its ciphertext), edited as many times (when it was last).
+  const sameVersion = (a, b) => a.ciphertext === b.ciphertext && (a.editedAt || null) === (b.editedAt || null);
 
   // Is this message shown here, and how ('show', 'blur', 'hide' or null)? Asked at every drawing, so blocking someone,
   // a word filter change or a key arriving shows at once.
@@ -187,16 +206,23 @@ export function createMediaPanel(deps) {
   // holds never comes.
   const waitingKey = (m) => !!m.dec && !!m.dec.pending && !m.dec.before;
 
-  // Decrypts a page (reusing a copy the app has of a message already) and leaves out what has disappeared.
+  // Decrypts a page, and leaves out what has disappeared or was deleted (while it was on its way, say). A copy the app
+  // has of a message already is used instead when it's of the same version (sameVersion), with the page's tags and
+  // comment counts: photo-notes.js's copies (spare) aren't kept up to date live, and may be from before the app was
+  // offline for a while. A copy of another version (edited since, or before) isn't used: the page's is decrypted.
   async function take(s, messages) {
-    const list = (Array.isArray(messages) ? messages : []).filter((m) => m && typeof m.id === 'string');
+    const list = (Array.isArray(messages) ? messages : []).filter((m) => m && typeof m.id === 'string' && !isDeleted(m));
     const out = await Promise.all(list.map(async (m) => {
       const known = copyOf(s, m.id);
-      if (known) return known;
+      if (known && sameVersion(known, m)) {
+        known.tags = m.tags;
+        known.fileReplies = m.fileReplies;
+        return known;
+      }
       try { await deps.decrypt(m); } catch { /* it can't be read here: left out (readable) */ }
       return m;
     }));
-    const live = out.filter((m) => !deps.expired(m));
+    const live = out.filter((m) => !deps.expired(m) && !isDeleted(m));
     if (live.some((m) => deps.disappears(m))) setTimeout(() => deps.armExpiry(), 0);
     return live;
   }
@@ -271,15 +297,16 @@ export function createMediaPanel(deps) {
     render(s);
   }
   // The messages a tag's photos are in that aren't here yet: a copy the app has (the chat's, or the one photo-notes.js
-  // fetched for the tag index, which it did just now), else asked for by id.
+  // fetched for the tag index, which it did just now), else asked for by id. Not one deleted since (its tags went with
+  // it, and the chips are about to say so).
   async function fetchTagged(s, list) {
     for (const x of Array.isArray(list) ? list : []) {
       const id = x && x.messageId;
-      if (typeof id !== 'string' || s.msgs.has(id)) continue;
+      if (typeof id !== 'string' || s.msgs.has(id) || deleted.has(id)) continue;
       const m = copyOf(s, id);
       if (m) s.msgs.set(id, m);
     }
-    const batches = idBatches(list, (id) => s.msgs.has(id));
+    const batches = idBatches(list, (id) => s.msgs.has(id) || deleted.has(id));
     if (!batches.length) return;
     s.tagJobs++;
     s.tagError = null;
@@ -558,8 +585,11 @@ export function createMediaPanel(deps) {
     }, 300);
   }
 
-  // Closed, signed out, or the conversation is no longer there.
-  function reset() {
+  // Closed, signed out, or the conversation is no longer there. all: back online after missing whatever happened
+  // meanwhile (app.js loadBootstrap), or signed out: photo-notes.js's copies kept here go too (they may be out of date
+  // now: comments, tags or edits made meanwhile).
+  function reset({ all = false } = {}) {
+    if (all === true) spare.clear();
     const s = st;
     if (!s) return;
     st = null;
@@ -618,19 +648,32 @@ export function createMediaPanel(deps) {
       render(s);
     },
     // Messages deleted or disappeared (key null: wherever they were). Their tiles go, and so do their decrypted copies.
-    // A thread's first message takes its replies with it: the server deletes them too, but names only the first.
+    // A thread's first message takes its replies with it: the server deletes them too, but names only the first (the
+    // app adds the ones it knows of). They're remembered, so no copy of them comes back (copyOf, fetchTagged, take),
+    // and the tag chips are looked at again: their tags went with them (photo-notes.js).
     onDelete(key, ids) {
       const set = new Set(typeof ids === 'string' ? [ids] : ids || []);
       if (!set.size) return;
       const goes = (m) => set.has(m.id) || (!!m.threadId && set.has(m.threadId));
-      for (const [id, m] of [...spare]) if (goes(m)) spare.delete(id);
+      const went = [...spare.values()].filter(goes);
+      for (const m of went) spare.delete(m.id);
       const s = st;
-      if (!s || (key && s.key !== key)) return;
-      const gone = [...s.msgs.values()].filter(goes);
+      const here = !!s && (!key || s.key === key);
+      const gone = here ? [...s.msgs.values()].filter(goes) : [];
+      remember([...set, ...went.map((m) => m.id), ...gone.map((m) => m.id)]);
+      if (!here) return;
+      if (key || gone.length) tagsSoon(s);
       if (!gone.length) return;
       remove(s, gone);
       deps.drop(fileUrls(gone, deps.files));
       render(s);
+    },
+    // The thread replies to these messages (roots) that it holds a copy of, shown or kept (spare), by id: the app tells
+    // photo-notes.js they went with their thread's first message.
+    repliesTo(roots) {
+      const set = new Set(typeof roots === 'string' ? [roots] : roots || []);
+      const held = [...(st ? st.msgs.values() : []), ...spare.values()];
+      return [...new Set(held.filter((m) => !!m.threadId && set.has(m.threadId) && !set.has(m.id)).map((m) => m.id))];
     },
     // A message's tags or photo comment counts changed (photo-notes.js): its badges, and the tag chips.
     onMeta(key, messageId) {

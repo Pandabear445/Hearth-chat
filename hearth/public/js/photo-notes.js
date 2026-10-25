@@ -20,16 +20,18 @@
 //
 // What app.js gets (createPhotoNotes): side(item, ctx) for the picture viewer's side panel, badges(m, fi) for the counts on
 // a picture, tagsOf(m, fi), tagIndex(key) for the Photos & videos panel's tag filter, counts(m, fi) ({ comments, tags },
-// for the viewer's Comments button), and for the chat:
+// for the viewer's Comments button) and unopened(m, fi) (tags that may yet count there), and for the chat:
 // tileExtras (a picture's counts and its "Comment on this photo" button), and the live updates onTags, onFileReplies,
-// onDelete (messages deleted or disappeared), onKeys, onTrust (someone's keys verified or changed), onBlock and
-// reconnected; messages() and expire() for the app's disappearing timer.
+// onDelete (messages deleted or disappeared; repliesTo, the thread replies it holds that go with their thread's first
+// message), onKeys, onTrust (someone's keys verified or changed), onBlock and reconnected; messages() and expire() for
+// the app's disappearing timer.
 import { h, icon, fmtStamp } from './util.js';
 import { ibtn } from './ui.js';
 import { api } from './api.js';
 import { mediaKind } from './files.js';
 import { whenOnScreen } from './media.js';
 import { newUid, trustedBinding, PHOTO_MAX } from './binding.js';
+import { disappears } from './disappear.js';
 
 export const LABEL_MAX = 40; // characters (whole ones: an emoji counts once)
 export const TAGS_PER_PHOTO = 20; // the server's limit too (server/index.js)
@@ -223,6 +225,7 @@ function keepingFocus(box, draw, fallback) {
 //   onIndex(key)                  a conversation's tag index changed though no message's tags did (tags that opened
 //                                 at last, or that went with their message): the Photos & videos panel's chips again
 //   openMessage(m)                shows a message in the chat (a comment, from the side panel), closing the viewer
+//   armExpiry()                   (optional) the app's disappearing timer looks again (at messages(), among the rest)
 //   retryAfter                    (optional) ms before a tag whose author's keys couldn't be looked up is tried again
 export function createPhotoNotes(deps) {
   // tag (bound fields + ciphertext) -> what it said, with its conversation and message (conv, messageId, authorId):
@@ -269,6 +272,12 @@ export function createPhotoNotes(deps) {
   const several = (m) => photoCount(deps.filesOf(m)) >= 2;
   const commentOn = (c, m, f, fi) => isCommentOn(c, m, f, fi, deps);
   const enterSends = () => (typeof deps.enterSends === 'function' ? deps.enterSends() !== false : true);
+  // Messages added here that disappear (comments loaded or sent, copies fetched for the tag index): the app's timer
+  // looks again once they're where it finds them (messages()), as the Photos & videos panel does. Else one due before
+  // anything the chat holds stays past its time (offline, when the server's delete can't come).
+  const armFor = (list) => {
+    if (typeof deps.armExpiry === 'function' && list.some((m) => disappears(m))) setTimeout(() => deps.armExpiry(), 0);
+  };
   // A copy of a message in this conversation to open its tags on: the chat's, one fetched for the tag index, a side
   // panel's, or one a picture's counts were drawn for (the Photos & videos panel's). null when there's none here.
   function copyOf(conv, id) {
@@ -305,35 +314,44 @@ export function createPhotoNotes(deps) {
   }
   // Opens a message's tags that aren't yet; once they are, the counts and side panels showing it are drawn again, in
   // place. (Nothing about the message changed, so the Photos & videos panel isn't told: it would fetch it again.)
+  // Returns a Promise of that, or null when there's nothing to open (or it's under way already).
   function ensureOpen(m) {
-    if (!usable(m) || waiting.has(m.id)) return;
+    if (!usable(m) || waiting.has(m.id)) return null;
     const conv = keyOf(m);
     const todo = recsOf(m).filter((t) => !opened.has(recKey(conv, m.id, t)));
-    if (!todo.length) return;
+    if (!todo.length) return null;
     waiting.add(m.id);
-    Promise.all(todo.map((t) => open(conv, m.id, t))).then((rs) => {
+    return Promise.all(todo.map((t) => open(conv, m.id, t))).then((rs) => {
       waiting.delete(m.id);
       refreshSlots(m.id); // (also the ones drawn while they were opening: those may have nothing to show now)
       if (rs.some((r) => r.label)) refreshPanels(m.id);
-      ensureOpen(m); // any that arrived meanwhile
+      return ensureOpen(m); // any that arrived meanwhile
     });
   }
   // Tags opened again, those pick chooses among what's been opened (ones that failed, or waited for a key): the pictures
   // and side panels showing their messages are drawn again once they open, and their conversations' tag index (the
-  // Photos & videos panel's chips, the suggestions) is worked out again.
+  // Photos & videos panel's chips, the suggestions) is worked out again. A Promise of the opens it started.
   function reopen(pick) {
     const again = new Map(); // message id -> its conversation
     for (const [k, r] of [...opened]) if (pick(r)) { opened.delete(k); again.set(r.messageId, r.conv); }
     const hit = new Set(again.values());
     for (const conv of hit) indexes.delete(conv);
-    for (const [id, conv] of again) { const m = copyOf(conv, id); if (m) ensureOpen(m); }
+    const jobs = [];
+    for (const [id, conv] of again) { const m = copyOf(conv, id); if (m) jobs.push(ensureOpen(m)); }
     for (const conv of hit) { deps.onIndex(conv); suggestSoon(conv); }
+    return Promise.all(jobs);
   }
   // Tags that failed only because their author's keys couldn't be looked up, opened again a little later (less and
-  // less often, RETRY_TIMES times at most).
+  // less often, RETRY_TIMES times in a row at most). A round that leaves none failing that way ends the run: whatever
+  // fails next, however much later, starts again from the first wait.
   function retrySoon() {
     if (retryTimer || retryWait > retryFirst * 2 ** (RETRY_TIMES - 1)) return;
-    retryTimer = setTimeout(() => { retryTimer = null; reopen((r) => r.retry); }, retryWait);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      reopen((r) => r.retry).then(() => {
+        if (!retryTimer && ![...opened.values()].some((r) => r.retry)) retryWait = retryFirst;
+      });
+    }, retryWait);
     retryWait *= 2;
   }
   function retryAfresh() {
@@ -368,6 +386,13 @@ export function createPhotoNotes(deps) {
     if (!usable(m)) return { comments: 0, tags: 0 };
     ensureOpen(m);
     return { comments: commentCount(countsOf(m), fi), tags: entriesOn(m, fi).length };
+  }
+  // How many tags on photo fi haven't been opened yet, by people you haven't blocked: they may count there once they
+  // are (counts leaves them out until then). The viewer starts its side panel open on a photo with some.
+  function unopened(m, fi) {
+    if (!usable(m)) return 0;
+    const conv = keyOf(m);
+    return recsOf(m).filter((t) => t.fileIdx === fi && !deps.blocked(t.authorId) && !opened.has(recKey(conv, m.id, t))).length;
   }
 
   // ---------------------------------------------------------------- counts on a picture
@@ -420,9 +445,14 @@ export function createPhotoNotes(deps) {
   // A message's counts changed: its pictures in the chat and in the Photos & videos panel show the new ones, without
   // redrawing anything else (a message drawn again loads its pictures again).
   function refreshSlots(id) {
-    if (typeof document === 'undefined' || !MSG_ID.test(String(id || ''))) return;
-    for (const slot of document.querySelectorAll(`.pn-slot[data-pn-mid="${id}"]`)) if (slot._pn) fillSlot(slot);
-    for (const el of document.querySelectorAll(`.pn-badges[data-pn-mid="${id}"]`)) if (el._pn && !el.closest('.pn-slot')) fillBadges(el);
+    if (MSG_ID.test(String(id || ''))) refill(`[data-pn-mid="${id}"]`);
+  }
+  // The counts drawn on pictures (sel: which ones, '' for all), filled again in place: the chat's (in a .pn-slot) and
+  // the Photos & videos panel's (on their own).
+  function refill(sel) {
+    if (typeof document === 'undefined') return;
+    for (const slot of document.querySelectorAll(`.pn-slot${sel}`)) if (slot._pn) fillSlot(slot);
+    for (const el of document.querySelectorAll(`.pn-badges${sel}`)) if (el._pn && !el.closest('.pn-slot')) fillBadges(el);
   }
   function prune() {
     for (const p of panels) if (!p.el.isConnected && Date.now() - p.born > 5000) panels.delete(p);
@@ -481,13 +511,29 @@ export function createPhotoNotes(deps) {
     refreshPanels(id, { comments: true });
     deps.onMeta(key, id);
   }
+  // The thread replies to these messages (roots) that a copy held here is of, by id: a copy fetched for the tag index,
+  // a side panel's, a comment one lists, or the loaded copy of a message whose tags are listed here. key: their
+  // conversation (only a server channel's messages have threads), or null for any.
+  function repliesTo(roots, key = null) {
+    const set = new Set(typeof roots === 'string' ? [roots] : roots || []);
+    const out = new Set();
+    if (!set.size || (key && !String(key).startsWith('c:'))) return out;
+    const listed = [...convs].filter(([conv]) => conv.startsWith('c:') && (!key || conv === key)).flatMap(([, st]) => [...st.recs.keys()]);
+    const held = [...fetched.values(), ...[...panels].map((p) => p.m), ...[...threads.values()].flatMap((t) => t.list),
+      ...listed.filter((id) => !fetched.has(id)).map((id) => deps.loaded(id))];
+    for (const m of held) if (m && m.threadId && set.has(m.threadId) && !set.has(m.id) && (!key || keyOf(m) === key)) out.add(m.id);
+    return out;
+  }
   // Messages deleted or disappeared (key: their conversation, or null when it isn't known): everything kept of them
   // goes. Their tags leave the conversation's list, its tag index (the Photos & videos panel's chips, drawn again) and
   // the labels suggested; the copies fetched for the index, what their tags said and the comments on their photos are
-  // let go; and as comments, they leave the side panels listing them. (The server sends no tags event for them.)
+  // let go; and as comments, they leave the side panels listing them. (The server sends no tags event for them.) A
+  // thread's first message takes its replies with it: the server deletes them too, but names only the first (the app
+  // adds the ones it knows of), so those held here go as well.
   function onDelete(key, ids) {
     const gone = new Set(typeof ids === 'string' ? [ids] : [...(ids || [])]);
     if (!gone.size) return;
+    for (const id of repliesTo(gone, key)) gone.add(id);
     const here = (conv) => !key || conv === key;
     const hit = new Set(); // conversations whose tags changed
     for (const [conv, st] of convs) {
@@ -537,19 +583,22 @@ export function createPhotoNotes(deps) {
   }
   // Someone's keys were verified on this device (safety numbers compared), or changed (userId: theirs, or null for
   // anyone): the tags that didn't open are tried again. Theirs, and in DMs anyone's: a DM's tags open with the key both
-  // people share.
+  // people share. Tries start afresh, but one already on its way for others' tags (their keys couldn't be looked up)
+  // still comes: nothing here opens those again.
   function onTrust(userId = null) {
-    retryAfresh();
+    retryWait = retryFirst;
     reopen((r) => r.error && (!userId || r.authorId === userId || String(r.conv).startsWith('d:')));
   }
   // Someone was blocked or unblocked: their tags no longer count, or count again, in the side panels, the chips and the
-  // suggestions too. (The app draws the chat again itself.)
+  // suggestions too, and in every picture's counts drawn (the app draws the chat again, but the Photos & videos panel
+  // keeps its tiles as they are).
   function onBlock() {
     const keys = new Set([...indexes.keys(), ...built.keys()]);
     indexes.clear();
     built.clear();
     prune();
     for (const p of panels) p.drawTags();
+    refill('');
     for (const key of keys) { deps.onIndex(key); suggestSoon(key); }
   }
   // Back online after missing whatever happened meanwhile: what came live is forgotten (the copies loaded again say
@@ -597,15 +646,17 @@ export function createPhotoNotes(deps) {
         if (fetched.get(id) === m) put(fetched, id, m, FETCHED_MAX); // (the last to be forgotten now)
       } else if (!st.absent.has(id)) need.push(id);
     }
+    const added = [];
     for (let i = 0; i < need.length; i += IDS_PAGE) {
       const part = need.slice(i, i + IDS_PAGE);
       let list = [];
       try { const r = await api('GET', `${convBase(key)}/media?${new URLSearchParams({ ids: part.join(',') })}`); list = Array.isArray(r && r.messages) ? r.messages : []; } catch { continue; }
       list = list.filter((m) => m && typeof m === 'object' && part.includes(m.id) && keyOf(m) === key && !st.absent.has(m.id));
       await Promise.all(list.map((m) => Promise.resolve(deps.decrypt(m)).catch(() => {})));
-      for (const m of list) if (!st.absent.has(m.id)) { put(fetched, m.id, m, FETCHED_MAX); out.set(m.id, m); }
+      for (const m of list) if (!st.absent.has(m.id)) { put(fetched, m.id, m, FETCHED_MAX); out.set(m.id, m); added.push(m); }
       for (const id of part) if (!out.has(id)) st.absent.add(id);
     }
+    armFor(added);
     return out;
   }
   // label -> [{ messageId, fileIdx }] for the Photos & videos panel (groupIndex), each tag checked as on a picture
@@ -669,6 +720,7 @@ export function createPhotoNotes(deps) {
   function loadComments(t, m, f, fi, { more = false } = {}) {
     if (t.job) { if (!more) t.again = true; return t.job; }
     t.again = false;
+    const had = new Set(t.list.map((c) => c.id));
     t.job = (async () => {
       try {
         if (more) {
@@ -696,6 +748,7 @@ export function createPhotoNotes(deps) {
         t.error = e.message || 'Couldn’t load the comments.';
       } finally {
         t.job = null;
+        armFor(t.list.filter((c) => !had.has(c.id))); // (commentPage's, now that they're in the list)
         drawThread(t);
         if (t.again) loadComments(t, m, f, fi);
       }
@@ -880,7 +933,7 @@ export function createPhotoNotes(deps) {
         if (msg && msg.id) {
           await Promise.resolve(deps.decrypt(msg)).catch(() => {});
           await settled(thread); // (a load that began before it was sent wouldn't have it)
-          if (commentOn(msg, m, f, fi)) thread.list = mergeComments(thread.list, [msg]);
+          if (commentOn(msg, m, f, fi)) { thread.list = mergeComments(thread.list, [msg]); armFor([msg]); }
           drawThread(thread);
           const last = list.lastElementChild;
           if (last && last.scrollIntoView) last.scrollIntoView({ block: 'nearest' });
@@ -932,7 +985,7 @@ export function createPhotoNotes(deps) {
   }
 
   return {
-    side, badges, tagsOf, tagIndex, counts, tileExtras,
-    onTags, onFileReplies, onDelete, onKeys, onTrust, onBlock, reconnected, messages, expire,
+    side, badges, tagsOf, tagIndex, counts, unopened, tileExtras,
+    onTags, onFileReplies, onDelete, repliesTo, onKeys, onTrust, onBlock, reconnected, messages, expire,
   };
 }

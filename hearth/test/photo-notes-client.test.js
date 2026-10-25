@@ -457,6 +457,7 @@ function notes({ blocked = [], where = fakeWhere, files = PHOTOS, enterSends = t
   const opens = [];
   const loaded = new Map();
   const gone = new Set(); // ids of messages whose time has come
+  const armed = { n: 0 }; // times the app's disappearing timer was asked to look again
   // A fake openTag: the label is in the ciphertext (td1:<label>|<file address>), pending for 'tc1:wait', error for
   // 'bad' (or 'untrusted' until their key is accepted), and for 'blip' its author's keys can't be looked up at first.
   let keyHere = false;
@@ -496,10 +497,11 @@ function notes({ blocked = [], where = fakeWhere, files = PHOTOS, enterSends = t
     onMeta: (key, id) => metaCalls.push(`${key}|${id}`),
     onIndex: (key) => indexCalls.push(key),
     openMessage() {},
+    armExpiry: () => { armed.n += 1; },
     retryAfter,
   };
   const N = PN.createPhotoNotes(deps);
-  return { N, deps, metaCalls, indexCalls, opens, loaded, gone, keyCame: () => { keyHere = true; }, accept: () => { accepted = true; }, blip: (n) => { blips = n; } };
+  return { N, deps, metaCalls, indexCalls, opens, loaded, gone, armed, keyCame: () => { keyHere = true; }, accept: () => { accepted = true; }, blip: (n) => { blips = n; } };
 }
 
 test('photo-notes: a photo’s tags open once, count only on the very file they were put on, one per label, none from someone you blocked', async () => {
@@ -1022,6 +1024,154 @@ test('photo-notes: removing a tag, or someone else’s tag change, keeps keyboar
   el.remove();
 });
 
+test('photo-notes: a thread’s first message deleted takes its replies with it: their tags leave the index and the suggestions, and their copies, side panels and comments go; nothing is fetched again', async () => {
+  const { N, loaded, indexCalls } = notes();
+  const ch = (id, over = {}) => ({ id, channelId: 'c1', serverId: 's1', authorId: 'alice', createdAt: 1, threadId: null, ...over });
+  // p2: a reply loaded in the app (its thread was opened there), so not fetched for the index.
+  loaded.set('p2', { ...ch('p2', { threadId: 'r1' }), dec: { t: '', f: PHOTOS } });
+  const tags = [
+    { ...rec('a', 0, 'alice', 'beach', 1), messageId: 'p1' }, // on a reply in r1's thread, fetched for the index
+    { ...rec('b', 0, 'alice', 'beach', 2), messageId: 'm2' },
+    { ...rec('c', 1, 'alice', 'only on p1', 3), messageId: 'p1' },
+    { ...rec('d', 0, 'alice', 'only on p2', 4), messageId: 'p2' },
+  ];
+  // A comment on p1's second photo: a reply in the same thread.
+  const k1 = ch('k1', { threadId: 'r1', authorId: 'bob', createdAt: 5, dec: { t: 'nice', f: [], ph: { i: 1, u: URL2 }, b: { r: 'p1', u: 'u1', v: 0 }, verified: true } });
+  routes = (url) => {
+    if (url === '/api/channels/c1/tags') return { tags };
+    if (url.startsWith('/api/channels/c1/media?')) return { messages: [ch('p1', { threadId: 'r1' }), ch('m2')], next: null };
+    if (url.startsWith('/api/messages/p1/comments?')) return { messages: [{ ...k1, dec: { ...k1.dec } }], next: null };
+    return null;
+  };
+  let idx = await N.tagIndex('c:c1');
+  assert.deepEqual([...idx.keys()], ['beach', 'only on p1', 'only on p2']);
+  const held = (id) => N.messages().find((m) => m.id === id);
+  const onP1 = N.side({ m: held('p1'), f: PHOTOS[1], fi: 1 });
+  const onM2 = N.side({ m: held('m2'), f: PHOTOS[1], fi: 1 });
+  page.body.append(onP1, onM2);
+  await settle();
+  assert.equal(shown(onP1), 1);
+  assert.deepEqual(suggestions(onM2), ['#beach', '#only on p1', '#only on p2']);
+  assert.deepEqual(N.messages().map((m) => m.id).sort(), ['k1', 'm2', 'p1']);
+  assert.deepEqual([...N.repliesTo(['r1'], 'c:c1')].sort(), ['k1', 'p1', 'p2'], 'the copy it fetched, the comment it loaded, the loaded copy one of its tags is on');
+  assert.deepEqual([...N.repliesTo(['r1'], 'd:d1')], [], 'no threads in a DM');
+  asked.length = 0;
+  indexCalls.length = 0;
+  // The server deletes the whole thread, and names only its first message.
+  N.onDelete('c:c1', new Set(['r1']));
+  assert.deepEqual(indexCalls, ['c:c1'], 'the Photos & videos panel’s chips are worked out again');
+  assert.deepEqual(suggestions(onM2), ['#beach'], 'not suggested any more, at once');
+  idx = await N.tagIndex('c:c1');
+  assert.deepEqual([...idx.keys()], ['beach']);
+  assert.deepEqual(idx.get('beach'), [{ messageId: 'm2', fileIdx: 0 }], '“#beach 1”');
+  assert.deepEqual(N.messages().map((m) => m.id), ['m2'], 'the reply’s copy and the comment on it let go');
+  // Its side panel is let go of too: a late count for its photo loads nothing.
+  N.onFileReplies('c:c1', 'p1', { 1: 2 });
+  await settle();
+  assert.deepEqual(asked, [], 'nothing fetched again');
+  onP1.remove();
+  onM2.remove();
+});
+
+test('photo-notes: a key verified doesn’t call off the retry on its way for someone else’s tags, and each run of retries starts afresh', async () => {
+  const { N, loaded, blip } = notes({ retryAfter: 30 });
+  const m = { id: 'm7', channelId: 'c1', serverId: 's1', authorId: 'bob', dec: { t: '', f: PHOTOS }, tags: [rec('a', 0, 'carol', 'sea blip', 1)] };
+  loaded.set('m7', m);
+  blip(1);
+  assert.deepEqual(N.tagsOf(m, 0), []);
+  await tick(); await tick();
+  // Carol's keys couldn't be looked up; meanwhile Bob's changed (a channel's tags are each their author's).
+  N.onTrust('bob');
+  await new Promise((r) => setTimeout(r, 120));
+  await settle();
+  assert.deepEqual(N.tagsOf(m, 0), ['sea blip'], 'tried again all the same');
+  // Lookups that fail now and then through one connection: each run is tried again, from the first wait.
+  for (let i = 1; i <= 7; i++) {
+    blip(1);
+    N.onTags('c:c1', 'm7', [...m.tags, rec(`w${i}`, 1, 'carol', `wave ${i} blip`, 1 + i)]);
+    await new Promise((r) => setTimeout(r, 120));
+    await settle();
+    assert.ok(N.tagsOf(m, 1).includes(`wave ${i} blip`), `run ${i}`);
+  }
+});
+
+test('photo-notes: comments and tagged messages it loads or sends that disappear set the app’s disappearing timer again', async () => {
+  const soon = Date.now() + 3600000;
+  const all = [comment(1)];
+  const mine = { ...comment(3), expiresAt: soon };
+  routes = (url) => {
+    if (url.startsWith('/api/dm-messages/m1/comments?')) return commentsPage(all, url);
+    if (url === '/api/dms/d1/tags') return { tags: [{ ...rec('a', 0, 'alice', 'beach', 1), messageId: 'm9' }] };
+    if (url.startsWith('/api/dms/d1/media?')) return { messages: [{ id: 'm9', dmId: 'd1', authorId: 'alice', createdAt: 1, expiresAt: soon }], next: null };
+    return null;
+  };
+  const { N, loaded, armed } = notes({ sendComment: async () => ({ ...mine, dec: { ...mine.dec } }) });
+  // A tagged message fetched for the tag index.
+  await N.tagIndex('d:d1');
+  await settle();
+  assert.equal(armed.n, 1);
+  // Comments that stay don't; one that disappears does.
+  const m = photoMsg({ fileReplies: { 1: 1 } });
+  loaded.set('m1', m);
+  const el = N.side({ m, f: PHOTOS[1], fi: 1 });
+  page.body.append(el);
+  await settle();
+  assert.equal(shown(el), 1);
+  assert.equal(armed.n, 1);
+  all.push({ ...comment(2), expiresAt: soon });
+  N.onFileReplies('d:d1', 'm1', { 1: 2 });
+  await settle();
+  assert.equal(shown(el), 2);
+  assert.equal(armed.n, 2);
+  // And one you send.
+  const ta = $(el, 'textarea.pn-box');
+  ta.value = 'mine';
+  ta.fire('keydown', { key: 'Enter' });
+  await settle();
+  assert.equal(shown(el), 3);
+  assert.equal(armed.n, 3);
+  el.remove();
+});
+
+test('photo-notes: blocking someone fills every picture’s counts again, in the chat and on the Photos & videos panel’s tiles', async () => {
+  const blocked = [];
+  const { N, loaded } = notes({ blocked });
+  const m = { id: 'm8', dmId: 'd1', authorId: 'bob', dec: { t: '', f: PHOTOS }, tags: [rec('a', 0, 'mallory', 'rude', 1)] };
+  loaded.set('m8', m);
+  N.tagsOf(m, 0);
+  await tick(); await tick();
+  const [slot, btn] = N.tileExtras(m, 0, () => {}); // in the chat
+  const tile = document.createElement('span'); // a Photos & videos tile's place for them (kept as it is when the chat is drawn again)
+  tile.append(N.badges(m, 0));
+  page.body.append(slot, tile);
+  assert.equal($(slot, '.pn-badges').getAttribute('aria-label'), '1 tag');
+  assert.equal(tile.firstChild.getAttribute('aria-label'), '1 tag');
+  blocked.push('mallory');
+  // (The document finds what's on the page: only plain selectors, as onBlock asks for all of them.)
+  const find = document.querySelectorAll;
+  document.querySelectorAll = (sel) => (sel.includes('[') ? [] : page.body.querySelectorAll(sel));
+  try { N.onBlock(); } finally { document.querySelectorAll = find; }
+  assert.equal(tile.firstChild.hidden, true);
+  assert.equal(tile.firstChild.getAttribute('aria-label'), null);
+  assert.equal($(slot, '.pn-badges').hidden, true);
+  assert.equal(btn.getAttribute('aria-label'), 'Comment on this photo');
+  slot.remove();
+  tile.remove();
+});
+
+test('photo-notes: tags not opened yet are told apart (the viewer opens its side panel on them), leaving out those from someone you blocked', async () => {
+  const { N, loaded } = notes({ blocked: ['mallory'] });
+  const m = { id: 'm6', dmId: 'd1', authorId: 'bob', dec: { t: '', f: PHOTOS }, tags: [rec('a', 0, 'alice', 'beach', 1), rec('b', 1, 'mallory', 'rude', 2), rec('c', 1, 'alice', 'bad', 3)] };
+  loaded.set('m6', m);
+  assert.deepEqual([0, 1, 2].map((fi) => N.unopened(m, fi)), [1, 1, 0]);
+  assert.equal(N.counts(m, 0).tags, 0, 'counted only once it’s opened');
+  await tick(); await tick();
+  assert.deepEqual([0, 1].map((fi) => N.unopened(m, fi)), [0, 0]);
+  assert.deepEqual(N.counts(m, 0), { comments: 0, tags: 1 });
+  assert.deepEqual(N.counts(m, 1), { comments: 0, tags: 0 }, 'one that didn’t open, and one from someone blocked');
+  assert.equal(N.unopened({ ...m, dec: { error: true } }, 0), 0);
+});
+
 test('static: app.js tells photo-notes.js of deletes, disappearing, verified keys and blocks; the comment button never opens a hidden spoiler', () => {
   const app = read('public', 'js', 'app.js');
   const fn = (name) => { const at = app.search(new RegExp(`^(async )?function ${name}\\(`, 'm')); assert.ok(at > 0, name); return app.slice(at, app.indexOf('\n}\n', at)); };
@@ -1034,6 +1184,12 @@ test('static: app.js tells photo-notes.js of deletes, disappearing, verified key
   assert.match(fn('toggleBlock'), /NOTES\.onBlock\(\)/);
   assert.match(app, /enterSends: \(\) => P\.chat\.enterToSend !== false/);
   assert.match(app, /onIndex: \(key\) => MEDIA\.onMeta\(key, null\)/);
+  assert.match(app, /armExpiry: \(\) => armClientExpiry\(\),\n\}\);\n\/\/ Disappearing messages that went from wherever else they were loaded: their tags and comments go too\./);
+  // The viewer opens its side panel by itself on what counts (NOTES.counts), and on tags not opened yet.
+  const viewer = app.slice(app.indexOf('function openViewer('), app.indexOf('\nasync function toPng('));
+  const notesOn = viewer.slice(viewer.indexOf('const notesOn = '), viewer.indexOf('\n  };\n', viewer.indexOf('const notesOn = ')));
+  assert.match(notesOn, /const c = NOTES\.counts\(it\.m, it\.fi\);\n {4}return c\.comments > 0 \|\| c\.tags > 0 \|\| NOTES\.unopened\(it\.m, it\.fi\) > 0;/);
+  assert.doesNotMatch(notesOn, /it\.m\.(fileReplies|tags)/);
   assert.match(fn('attachmentEl'), /NOTES\.tileExtras\(m, fi, \(\) => \{ if \(!holder\.matches\('\.att-spoiler:not\(\.revealed\)'\)\) openPhotoViewer\(el, 'comment'\); \}\)/);
   const css = read('public', 'css', 'app.css');
   assert.match(css, /\.att-spoiler:not\(\.revealed\) \.pn-comment-btn \{ display: none; \}/, 'no key or screen reader reaches it');

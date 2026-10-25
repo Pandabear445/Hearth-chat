@@ -3313,6 +3313,9 @@ body:has(> .viewer:not(.closing)) #toasts { z-index: 86; }
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   .viewer-body { flex-direction: column; }
   .viewer-side { position: relative; flex: none; z-index: 3; width: auto; max-height: 60%; border-left: 0; border-top: 1px solid rgb(255 255 255 / .1); border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -10px 30px rgb(0 0 0 / .5); touch-action: pan-y; }
+  /* The sheet keeps clear of the home bar itself: the picture above it doesn't have to, nor does its loading label. */
+  .viewer.side-open .viewer-stage { padding-bottom: 0; }
+  .viewer.side-open .viewer-stage.loading-full::after { bottom: 14px; }
   .viewer-video { border-radius: 0; }
 }
 /* (end of the Photos & videos panel) */

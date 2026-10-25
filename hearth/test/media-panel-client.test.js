@@ -535,6 +535,83 @@ test('live: new messages on top, edits drawn again, a thread’s first message d
   t.close();
 });
 
+test('a thread’s first message deleted: no copy of its replies comes back, from a page on its way, the chat or a tag picked, and the chips are asked for again', async () => {
+  const msgs = [];
+  for (let n = 100; n <= 140; n++) msgs.push(sent(n, [png(`p${n}`)]));
+  const root = sent(10, [png('root')]);
+  const paged = sent(141, [png('paged')], { threadId: idOf(10) }); // in the first page, which is on its way
+  const old = sent(11, [png('old')], { threadId: idOf(10) }); // older than the pages: only the chat has a copy
+  const kept = sent(12, [png('kept')], { threadId: idOf(10) }); // photo-notes.js's copy, handed over (offer)
+  const named = sent(13, [png('named')], { threadId: idOf(10) }); // no copy here: the app names it (its thread)
+  const tags = new Map([['beach', [paged, old, kept, named, msgs[0]].map((m) => ({ messageId: m.id, fileIdx: 0 }))]]);
+  const t = panel({ msgs: [...msgs, root, paged, old, kept, named], tags, tall: true });
+  const copy = async (m) => { const c = t.net(m); await t.deps.decrypt(c); return c; };
+  // The thread as the chat loaded it (deps.known), and photo-notes.js's copy.
+  t.chat.set(old.id, await copy(old));
+  t.P.offer(await copy(kept));
+  let asked = 0;
+  const index = t.deps.tagIndex;
+  t.deps.tagIndex = (key) => { asked++; return index(key); };
+  // The first page waits on the network while the delete comes.
+  let arrive;
+  const held = new Promise((r) => { arrive = r; });
+  const get = t.deps.get;
+  t.deps.get = async (p) => { const res = await get(p); if (/[?&]limit=/.test(p)) await held; return res; };
+  t.draw();
+  await settle();
+  assert.deepEqual(t.P.repliesTo(new Set([root.id])), [kept.id], 'the replies it holds, for the app to tell photo-notes.js');
+  // The server deletes the whole thread, and names only its first message (the app adds the reply it knows of).
+  t.server.msgs = msgs;
+  const before = asked;
+  t.P.onDelete('c:ch1', new Set([root.id, named.id]));
+  arrive();
+  await settle();
+  assert.ok(!t.shown().includes(`${paged.id}:0`), 'the page answered before the delete doesn’t bring it back');
+  assert.equal(t.shown().length, 29, 'the rest of that page');
+  await new Promise((r) => setTimeout(r, 450));
+  assert.ok(asked > before, 'the tag chips are worked out again: their tags went too');
+  // #beach picked (the chip as it was): only the photo still there shows, and only it is asked for.
+  t.log.requests.length = 0;
+  t.el.querySelector('button.mp-tag').click();
+  await settle();
+  assert.deepEqual(t.shown(), [`${msgs[0].id}:0`]);
+  assert.deepEqual(t.log.requests, [`/channels/ch1/media?ids=${msgs[0].id}`], 'none of the replies is asked for');
+  assert.ok(!t.P.messages().some((m) => m.threadId === root.id));
+  t.close();
+});
+
+test('a page takes a copy the app has only when it’s the same version, with the page’s tags and counts; a resync lets go of photo-notes.js’s', async () => {
+  const same = sent(3, [png('same')], { fileReplies: { 0: 0 } });
+  const edited = sent(2, [png('edited')]);
+  const later = sent(1, [png('later')]);
+  const t = panel({ msgs: [same, edited, later] });
+  const copy = async (m) => { const c = t.net(m); await t.deps.decrypt(c); return c; };
+  const kept = { same: await copy(same), edited: await copy(edited), later: await copy(later) };
+  for (const m of Object.values(kept)) t.P.offer(m);
+  // Meanwhile, as photo-notes.js's copies don't hear: two comments and a tag on the first one's photo, the second edited.
+  const tag = { id: 'T'.repeat(22), fileIdx: 0, authorId: 'u2', ciphertext: 'td1:x', createdAt: 9 };
+  t.server.msgs = [{ ...same, fileReplies: { 0: 2 }, tags: [tag] }, { ...edited, plain: { t: 'edited', f: [png('edited')] }, editedAt: 5 }, later];
+  t.draw();
+  await settle();
+  const held = (m) => t.P.messages().find((x) => x.id === m.id);
+  assert.equal(held(same), kept.same, 'the same version: not decrypted again');
+  assert.deepEqual(held(same).fileReplies, { 0: 2 }, 'with the page’s counts');
+  assert.deepEqual(held(same).tags, [tag], 'and tags');
+  assert.notEqual(held(edited), kept.edited, 'edited since: the page’s copy');
+  assert.equal(held(edited).dec.t, 'edited');
+  // Closed and opened again, photo-notes.js's copies are still used; after a resync (app.js loadBootstrap) they aren't.
+  t.P.reset();
+  t.draw();
+  await settle();
+  assert.equal(held(later), kept.later);
+  t.P.reset({ all: true });
+  t.draw();
+  await settle();
+  assert.notEqual(held(later), kept.later);
+  assert.deepEqual(held(later).dec, kept.later.dec);
+  t.close();
+});
+
 test('a comment or tag on a photo changes its badges in place: the tile, its picture and the focus stay', async () => {
   const m = sent(1, [png('a'), png('b')]);
   const t = panel({ msgs: [m] });
@@ -693,6 +770,13 @@ test('app.js: the panel is a side panel of DMs, group chats and channels, and ke
   assert.match(fn('onThreadMessage'), /MEDIA\.onNew\('c:' \+ m\.channelId, m\)/);
   assert.match(fn('onUpdateMessage'), /if \(i < 0\) return MEDIA\.onUpdate\(key, m\);/);
   assert.match(fn('onDeleteMessage'), /MEDIA\.onDelete\(key, gone\);/);
+  // A thread's first message deleted: its replies the app holds go too (the thread's, Photos & videos', photo tags'),
+  // and so does the thread as it was loaded, whose copies the panel would take (known).
+  assert.match(fn('onDeleteMessage'), /\.\.\.MEDIA\.repliesTo\(named\), \.\.\.NOTES\.repliesTo\(named, key\)/);
+  assert.match(fn('onDeleteMessage'), /for \(const x of named\) delete S\.threads\[x\];/);
+  assert.doesNotMatch(fn('onDeleteMessage'), /if \(expired\) delete S\.threads/);
+  // After a resync, photo-notes.js's copies it was handed (which may be out of date) go too.
+  assert.match(fn('loadBootstrap'), /MEDIA\.reset\(\{ all: true \}\);/);
   assert.match(fn('onDeleteChannelMessages'), /MEDIA\.onDelete\('c:' \+ channelId, replies\)/);
   assert.match(fn('armClientExpiry'), /for \(const m of MEDIA\.messages\(\)\) items\.push\(m\);/);
   assert.match(fn('purgeExpired'), /MEDIA\.expire\(\);/);
@@ -755,6 +839,9 @@ test('app.css: the panel’s rules are in its own section, as wide as a thread, 
   assert.match(mine, /\.mp-badges \{[^}]*pointer-events: none;[^}]*\}/);
   assert.match(mine, /\.mp-badges :is\(button, a\) \{ pointer-events: auto; \}/);
   assert.match(mine, /\.mp-badges:empty \{ display: none; \}/);
+  // On a phone the sheet keeps clear of the home bar itself: the picture above it doesn't pad for it too.
+  assert.match(mine, /\.viewer\.side-open \.viewer-stage \{ padding-bottom: 0; \}/);
+  assert.match(mine, /\.viewer\.side-open \.viewer-stage\.loading-full::after \{ bottom: 14px; \}/);
   // Nothing about the panel outside it.
   assert.doesNotMatch(css.slice(0, start) + css.slice(end), /\.mp-|head-media|viewer-side|viewer-video|viewer-jump|over-viewer/);
 });
