@@ -43,6 +43,7 @@
 
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
+  body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 21; background: var(--bg); }
   html { -webkit-text-size-adjust: 100%; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 var(--font); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
   a { color: var(--accent-text); }
@@ -54,7 +55,7 @@
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
   /* top bar */
-  .top { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+  .top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
   .top .wrap { display: flex; align-items: center; gap: 12px; height: 58px; }
   .brand { display: flex; align-items: center; gap: 10px; font: 800 19px var(--display); text-decoration: none; color: var(--text); margin-right: auto; }
   .brand svg { width: 28px; height: 28px; flex: none; }
@@ -1162,8 +1163,16 @@
   function bind() {
     el('quick').addEventListener('click', e => { const b = e.target.closest('[data-add]'); if (b) addDrink(b.dataset.add); });
     el('addCustom').addEventListener('click', () => addDrink('custom'));
-    el('clearDrinks').addEventListener('click', () => {
-      if (!state.drinks.length || !confirm('Remove all drinks?')) return;
+    let clearArmed;
+    el('clearDrinks').addEventListener('click', e => {
+      const b = e.currentTarget;
+      if (!state.drinks.length) return;
+      if (!clearArmed) {
+        b.textContent = 'Tap again to remove all';
+        clearArmed = setTimeout(() => { clearArmed = null; b.textContent = 'Clear all'; }, 3000);
+        return;
+      }
+      clearTimeout(clearArmed); clearArmed = null; b.textContent = 'Clear all';
       state.drinks = []; renderDrinks(); update();
     });
 
@@ -1227,14 +1236,15 @@
     setInterval(() => { if (state.evalMode === 'now' && !document.hidden) render(); }, 30000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
 
-    el('shareBtn').addEventListener('click', async () => {
+    el('shareBtn')?.addEventListener('click', async () => {
       const data = { ...state, drinks: state.drinks.map(({ id, ...d }) => d) };
       const url = location.origin + location.pathname + '#s=' + btoa(unescape(encodeURIComponent(JSON.stringify(data))));
       try { await navigator.clipboard.writeText(url); toast('Link copied. It includes your weight and drinks.'); }
-      catch (e) { prompt('Copy this link:', url); }
+      catch (e) { toast('Copying was blocked. Copy the address bar instead.'); history.replaceState(null, '', url); }
     });
 
     // theme
+    if (!el('themeBtn')) return;
     const modes = ['auto', 'light', 'dark'];
     let theme = 'auto';
     try { theme = localStorage.getItem(THEME_KEY) || 'auto'; } catch (e) { /* ignore */ }
