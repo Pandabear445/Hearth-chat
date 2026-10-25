@@ -58,9 +58,9 @@
 //
 // Routes (all signed in; only your own scheduled messages, anyone else's answer 404 like one that doesn't exist)
 //   GET    /scheduled-messages                         yours, soonest first (keys checked first, see listing)
-//   POST   /channels/:id/scheduled-messages            { ciphertext, epoch, ref, draft, sendAt, ttl?, replyTo?, threadId?, files?, mentions?, everyone? }
-//   POST   /dms/:id/scheduled-messages                 { ciphertext, ref, draft, sendAt, ttl?, replyTo?, files? }
-//   PATCH  /scheduled-messages/:id                     { sendAt?, ciphertext?, draft?, epoch?, ttl?, mentions?, everyone?, sendNow? }
+//   POST   /channels/:id/scheduled-messages            { ciphertext, epoch, ref, draft, sendAt, ttl?, replyTo?, replyFile?, threadId?, files?, mentions?, everyone? }
+//   POST   /dms/:id/scheduled-messages                 { ciphertext, ref, draft, sendAt, ttl?, replyTo?, replyFile?, files? }
+//   PATCH  /scheduled-messages/:id                     { sendAt?, ciphertext?, draft?, epoch?, ttl?, replyFile?, mentions?, everyone?, sendNow? }
 //          reschedule (sendAt), or edit / re-encrypt / confirm (ciphertext with its draft; for a channel, mentions and
 //          everyone are replaced along with it)
 //   POST   /scheduled-messages/:id/send                send it now (refusals answered, the message left as it was); with
@@ -107,7 +107,7 @@ module.exports = function setupScheduled(ctx) {
     api, auth, db, fail, rateLimit, limitMessages, newId, now, perms, PM, requireChannel, requireDm, isMember, serverOf, isBlocked,
     getUserRow, stillSuspended, validCipher, cipherMax, maxFilesOf, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,
     postChannelMessage, postDmMessage, pushTo, maintenance, nameOf, emitTo, ready = () => true,
-    hasChat = (c) => c.type === 'text', checkTtl = () => {},
+    hasChat = (c) => c.type === 'text', checkTtl = () => {}, parseReplyFile = () => null, replyFileIn = () => null,
   } = ctx;
   // The disappearing timer the app encrypted it for (checked by checkTtl against the conversation's), or null when
   // the app didn't say (then the conversation's timer when it's posted decides alone).
@@ -141,6 +141,8 @@ module.exports = function setupScheduled(ctx) {
   const filesOf = (r) => { try { return JSON.parse(r.files); } catch { return []; } };
   const serialize = (r) => ({
     id: r.id, serverId: r.server_id || null, channelId: r.channel_id || null, dmId: r.dm_id || null, threadId: r.thread_id || null, replyTo: r.reply_to || null,
+    // v21 (photos): the photo of replyTo it comments on, or null.
+    replyFile: r.reply_file == null ? null : r.reply_file,
     ciphertext: r.ciphertext, epoch: r.epoch == null ? null : r.epoch, files: filesOf(r).length, sendAt: r.send_at, status: r.status,
     reason: r.reason || null, note: r.reason ? WHY[r.reason] || null : null, createdAt: r.created_at,
     // When this ciphertext was written, and the sender's own copy of it (see the top of this file).
@@ -220,7 +222,8 @@ module.exports = function setupScheduled(ctx) {
       if (!(cp & PM.VIEW_CHANNEL)) return { fail: 'no_access' };
       // Before the permissions: a timeout takes Send Messages away, and this says why.
       if (perms.timedOut(s.id, r.user_id)) return { fail: 'timed_out' };
-      if (!(cp & PM.SEND_MESSAGES) || (filesOf(r).length && !(cp & PM.ATTACH_FILES)) || (r.thread_id && !(cp & PM.CREATE_THREADS))) return { fail: 'no_permission' };
+      // Files: the ones it lists (file_count, a forward's included), as for a message sent now; or those it holds.
+      if (!(cp & PM.SEND_MESSAGES) || ((r.file_count || filesOf(r).length) && !(cp & PM.ATTACH_FILES)) || (r.thread_id && !(cp & PM.CREATE_THREADS))) return { fail: 'no_permission' };
       const keys = waitsFor(r, u);
       if (keys) return keys;
       const threadId = r.thread_id ? threadRootIn(c, r.thread_id) : null;
@@ -250,9 +253,14 @@ module.exports = function setupScheduled(ctx) {
     };
     let mentions = [];
     try { mentions = JSON.parse(r.mentions); } catch { /* none */ }
+    // Its files are handed over rather than listed again, so it says how many it listed (a forward's included), and
+    // which photo it comments on, if the message it replies to is still there with that many files.
+    const fileCount = r.file_count || filesOf(r).length;
     const msg = p.channel
-      ? postChannelMessage(p.channel, r.user_id, { ciphertext: r.ciphertext, epoch: r.epoch, files: [], replyTo: p.replyTo, threadId: p.threadId, mentions, everyone: !!r.everyone, ttl: r.ttl }, null, { within: handOver, scheduled: true })
-      : postDmMessage(p.dm, r.user_id, { ciphertext: r.ciphertext, files: [], replyTo: p.replyTo, ttl: r.ttl }, null, { within: handOver, scheduled: true });
+      ? postChannelMessage(p.channel, r.user_id, { ciphertext: r.ciphertext, epoch: r.epoch, files: [], fileCount, replyTo: p.replyTo, replyFile: replyFileIn('messages', p.replyTo, r.reply_file),
+        threadId: p.threadId, mentions, everyone: !!r.everyone, ttl: r.ttl }, null, { within: handOver, scheduled: true })
+      : postDmMessage(p.dm, r.user_id, { ciphertext: r.ciphertext, files: [], fileCount, replyTo: p.replyTo, replyFile: replyFileIn('dm_messages', p.replyTo, r.reply_file), ttl: r.ttl },
+        null, { within: handOver, scheduled: true });
     emitTo(r.user_id, 'scheduled:remove', { id: r.id, messageId: msg.id });
     return msg;
   }
@@ -346,9 +354,12 @@ module.exports = function setupScheduled(ctx) {
     const id = newId();
     const t = now();
     db.transaction(() => {
-      db.prepare(`INSERT INTO scheduled_messages (id, user_id, server_id, channel_id, dm_id, thread_id, reply_to, ciphertext, epoch, ref, draft, session_id, own_key, peer_key, ttl, mentions, everyone, send_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, row.user_id, row.server_id || null, row.channel_id || null, row.dm_id || null, row.thread_id || null, row.reply_to || null,
-        row.ciphertext, row.epoch == null ? null : row.epoch, row.ref, row.draft, row.session_id || null, row.own_key, row.peer_key || null, row.ttl == null ? null : row.ttl, JSON.stringify(row.mentions || []), row.everyone ? 1 : 0, row.send_at, t, t);
+      // file_count: every upload it lists (v21; files below holds only the blobs it got, which leaves out a forward's).
+      db.prepare(`INSERT INTO scheduled_messages (id, user_id, server_id, channel_id, dm_id, thread_id, reply_to, reply_file, ciphertext, epoch, ref, draft, session_id, own_key, peer_key, ttl, mentions, everyone, send_at, created_at, updated_at, file_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, row.user_id, row.server_id || null, row.channel_id || null, row.dm_id || null, row.thread_id || null, row.reply_to || null,
+        row.reply_to && row.reply_file != null ? row.reply_file : null,
+        row.ciphertext, row.epoch == null ? null : row.epoch, row.ref, row.draft, row.session_id || null, row.own_key, row.peer_key || null, row.ttl == null ? null : row.ttl, JSON.stringify(row.mentions || []), row.everyone ? 1 : 0, row.send_at, t, t,
+        files.length);
       attachBlobs(files, row.user_id, id);
       const kept = db.prepare('SELECT name FROM blobs WHERE message_id = ?').all(id).map((b) => '/uploads/' + b.name);
       db.prepare('UPDATE scheduled_messages SET files = ? WHERE id = ?').run(JSON.stringify(kept), id);
@@ -383,6 +394,7 @@ module.exports = function setupScheduled(ctx) {
     const ref = checkRef(b.ref);
     const draft = checkDraft(b.draft, req.userId);
     const sendAt = checkSendAt(b.sendAt);
+    const fileAsked = parseReplyFile(b.replyFile);
     const s = serverOf(c);
     if (perms.timedOut(s.id, req.userId)) fail(403, 'You’re timed out in this server for now.', 'timed_out');
     const cp = perms.channel(s, c, req.userId);
@@ -399,8 +411,9 @@ module.exports = function setupScheduled(ctx) {
     // The disappearing timer the app encrypted for must be the one in force now, as for a message sent now.
     checkTtl(b, c.disappear_secs);
     roomFor(req.userId);
+    const replyTo = replyIn(c, b.replyTo);
     const r = create({
-      user_id: req.userId, server_id: c.server_id, channel_id: c.id, thread_id: threadId, reply_to: replyIn(c, b.replyTo), ciphertext: b.ciphertext, epoch,
+      user_id: req.userId, server_id: c.server_id, channel_id: c.id, thread_id: threadId, reply_to: replyTo, reply_file: replyFileIn('messages', replyTo, fileAsked), ciphertext: b.ciphertext, epoch,
       ref, draft, session_id: req.session.id, own_key: ownKey(getUserRow(req.userId), true), ttl: ttlOf(b), mentions: cleanMentions(b.mentions), everyone: b.everyone === true, send_at: sendAt,
     }, files);
     res.json(serialize(r));
@@ -417,10 +430,12 @@ module.exports = function setupScheduled(ctx) {
     const ref = checkRef(b.ref);
     const draft = checkDraft(b.draft, req.userId);
     const sendAt = checkSendAt(b.sendAt);
+    const fileAsked = parseReplyFile(b.replyFile);
     checkTtl(b, d.disappear_secs);
     roomFor(req.userId);
+    const replyTo = dmReplyIn(d, b.replyTo);
     const r = create({
-      user_id: req.userId, dm_id: d.id, reply_to: dmReplyIn(d, b.replyTo), ciphertext: b.ciphertext, ref, draft, session_id: req.session.id,
+      user_id: req.userId, dm_id: d.id, reply_to: replyTo, reply_file: replyFileIn('dm_messages', replyTo, fileAsked), ciphertext: b.ciphertext, ref, draft, session_id: req.session.id,
       own_key: ownKey(getUserRow(req.userId), false), peer_key: peerKey(peer), ttl: ttlOf(b), send_at: sendAt,
     }, cleanFiles(b.files, req.userId));
     res.json(serialize(r));
@@ -445,6 +460,12 @@ module.exports = function setupScheduled(ctx) {
     // of that and the one it was written for (the app puts the same one inside it, x).
     checkTtl(b, conv.disappear_secs);
     set.ttl = keepTtl(r.ttl, ttlOf(b));
+    // v21 (photos): which photo it comments on is inside the ciphertext too, so new ciphertext may say it again (or
+    // say none, with null). Left out, it stays as it was. Kept only for a reply to a message with that many files.
+    if (b.replyFile !== undefined) {
+      const fi = parseReplyFile(b.replyFile);
+      set.reply_file = replyFileIn(r.channel_id ? 'messages' : 'dm_messages', r.reply_to, fi);
+    }
     Object.assign(set, { ciphertext: b.ciphertext, own_key: ownKey(u, !!r.channel_id), session_id: req.session.id, updated_at: now(), status: 'pending', reason: null, told_at: null });
     // Who it pings goes with the words: new words replace them, so an @everyone or @name edited out pings nobody.
     if (r.channel_id) {
