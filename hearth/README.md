@@ -5,9 +5,10 @@ A self-hosted place to hang out with your friends: servers with text and voice c
 - **Servers** with categories you can collapse, channels and categories you drag into order (or move from their menus), text and voice channels, invites, bans and per-server notification levels.
 - **Roles and permissions:** unlimited custom roles with colors, emoji badges, hierarchy, "show separately" in the member list and @mentions; roles members pick themselves (ping roles, pronouns, colors, opt-in channels); 17 permissions; per-channel overrides for any role or person (private channels, read-only announcements, listen-only voice); slowmode per channel.
 - **Make your server yours:** banner (positionable, GIFs animate), description, accent color, a server-wide background (presets, custom gradients or an image), welcome message, icon shape, role-colored names, and up to 200 custom emoji — animated GIF, WebP and APNG included, uploaded in bulk or grabbed straight from GIPHY — that members can use in any server or DM.
-- **Conversations** with replies, threads (with what's new in each, and a Threads list per channel), reactions, pins, edits, forwarding, saved messages, @mentions (including @everyone and @channel), #channel links, Markdown with Discord's headings, lists and >>> quotes, spoilers, timestamps (`<t:…>`), code blocks, GIFs, emoji search, spell checking and correction as you type (on your device only; Settings → Chat → Spelling), and image/video/file attachments (up to 10 in a message, 100 for the server's owner; with spoilers and image descriptions) with a full-screen image viewer.
+- **Conversations** with replies, threads (with what's new in each, and a Threads list per channel), reactions, pins, edits, forwarding, saved messages, @mentions (including @everyone and @channel), #channel links, Markdown with Discord's headings, lists and >>> quotes, spoilers, timestamps (`<t:…>`), code blocks, GIFs, emoji search, spell checking and correction as you type (on your device only; Settings → Chat → Spelling), and image/video/file attachments (up to 10 in a message, 100 for the server's owner; with spoilers and image descriptions) with a full-screen viewer. When several photos go in one message, each can get its own comments and **tags** (labels you make, like `#trip`), end-to-end encrypted like everything else.
 - **GIFs, stickers and emoji in one picker, laid out like Discord's:** GIFs / Stickers / Emoji tabs, big Favorites, Trending and category tiles, a back arrow out of any category or search, results in two steady columns that keep loading as you scroll, and a star on every GIF. Through KLIPY or GIPHY, with a privacy proxy so they never see your members' IP addresses.
 - **Direct messages and group DMs** (up to 25 people, with group voice calls).
+- **Photos & videos** in every DM, group chat and channel: one panel with every picture and video ever sent there, newest first, filtered by photos, videos or a tag, so nobody has to scroll up to find one (see [Photos & videos](#photos--videos-comments-on-one-photo-and-tags)).
 - **Home screen** with recent and pinned conversations, online friends, your servers and recent activity.
 - **Search everything with Ctrl+K**: people, channels, servers, messages, files and links, with filters like `from:`, `in:`, `before:` and `has:`. Because messages are end-to-end encrypted, message search runs on your device; the server never sees the words (see [Search](#search-ctrlk)).
 - **Notification center** for mentions, replies and friend requests, plus unread and mention indicators that respect muted channels and servers.
@@ -489,7 +490,7 @@ All chats are end-to-end encrypted: your browser encrypts each message and file 
 | Server channel messages and files | **No** — end-to-end encrypted, signed by the sender |
 | Direct messages and files | **No** — end-to-end encrypted |
 | Voice | **No** — encrypted between browsers (DTLS-SRTP), handshakes signed; a relay, when one is needed, only forwards encrypted packets |
-| Who's in which server, who messages whom and when, emoji reactions, server/channel names, avatars and profiles, file sizes, which GIFs people pick and load, and when and where (not what) you search | Yes |
+| Who's in which server, who messages whom and when, emoji reactions, server/channel names, avatars and profiles, file sizes, which messages carry files (and how many), which photo of a message a comment is about, that a photo has tags (by whom and when, not the words), which GIFs people pick and load, and when and where (not what) you search | Yes |
 | Whether each of your open apps is in use or idle (for automatic **Away**), and how long a custom status should last | Yes. Away, like Online, goes to everyone signed in on this Hearth (people you've blocked too), so it shows when you stop and start using Hearth. See [Away and custom statuses](#away-and-custom-statuses) |
 | Links you ask a **link preview** for (and that it was you, and when) | Yes: the server fetches the page for you. The preview itself then travels inside the encrypted message. See [Link previews](#link-previews) |
 | **Scheduled messages** (Send later) | **No** for what they say: encrypted on your device like any message. Yes for where each is going, when it's due, when and from which session you wrote or changed it and how big it is, before it's sent. See [Send later](#send-later-scheduled-messages) |
@@ -1024,6 +1025,30 @@ them: **your app does, on your device**, and never tells the server what it hid.
 - Up to 200 entries per list, 60 characters each. Checking a message is bounded, so no list can freeze the app: a
   message that would take too long to check (only possible with a list built for that) counts as a match, one click
   from showing.
+
+## Photos & videos, comments on one photo, and tags
+
+- **Photos & videos**: every DM, group chat and channel has a panel with every picture and video sent there, newest
+  first and grouped by month, so nobody has to scroll up through the chat to find one. Open it with the pictures
+  button at the top of a DM or group chat, or **⋯ → Photos & videos** anywhere (that's the way in on a phone). Filter
+  by **All**, **Photos** or **Videos**, or by a tag. Click one to open it full screen. Left and right go through the
+  panel's pictures and videos, and **Jump to message** takes you to where it was sent. It keeps to the chat's rules:
+  - spoilers stay covered until opened;
+  - word-filtered messages are hidden or blurred;
+  - people you blocked are left out;
+  - disappearing messages go from it on time;
+  - in a DM or group chat it's hidden while you share your screen.
+- **Comments on one photo**: when several photos go in one message, hover one (or open it) and comment on just that
+  one. The comment is an ordinary reply, so everyone sees it and gets notified. In the chat it shows a small copy of
+  that exact photo. Each photo shows how many comments it has, and the viewer lists them beside it.
+- **Tags**: label photos with your own words (`#trip`, `#memes`, up to 40 characters, up to 20 per photo). Typing a
+  new one makes it; the box suggests the ones already used in that conversation. The Photos & videos panel filters by
+  them. Anyone who can post in the conversation can add one. The person who added a tag, the photo's sender and (in
+  a server) anyone with Manage Messages can remove it.
+- **What the server sees**: the words of a comment and of a tag are end-to-end encrypted like messages, and a tag is
+  locked to its photo, so the server can't move it to another one. It does see which messages carry files and how
+  many, which photo of a message a comment is about, and that a photo has tags: by whom and when, never the words
+  ([SECURITY.md](SECURITY.md) §4).
 
 ## Group chats
 

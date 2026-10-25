@@ -1766,3 +1766,83 @@ Back closes the drawer, the members panel, a picture, a menu and settings (then 
 swipes and Esc close them, closing by their own buttons leaves `history.length` unchanged, and on a desktop opening
 members and settings adds nothing to the history; the flow "phone message actions": Back cancels a reply, an edit and
 a recording and stays in Hearth, and focus goes back to the message without a ring.
+
+## Photos & videos, comments on one photo, and tags
+
+What people asked for: a place in a DM to find every photo and video without scrolling up, and, when several photos
+go in one message, a way to comment on each and to tag them, in DMs and servers.
+
+### The Photos & videos panel
+`public/js/media-panel.js` (`createMediaPanel`) is a side panel (`S.panel = 'media'`, as wide as a thread). It is in
+DMs, group chats and channels. The way in is a header button in DMs and group chats on wider screens, and
+**⋯ → Photos & videos** everywhere.
+- **Paging.** It pages through `GET /api/dms/:id/media` and `/api/channels/:id/media` (`server/photos.js`). The
+  server can't tell a photo from a PDF, so these return the messages that listed any uploads (`files > 0`), newest
+  first, 30 at a time. The app keeps the photos and videos of each (`mediaEntries`: by type, leaving out voice
+  messages) and groups them by month.
+- **Filters.** All, Photos, Videos, and a tag. For a tag, `NOTES.tagIndex` lists its photos and any messages the panel
+  doesn't have yet come from `?ids=` (100 at a time).
+- **Live updates.**
+  - New messages, edits and deletes reach it, thread replies included.
+  - Disappearing messages leave on time: `armClientExpiry`, `purgeExpired` and `expiryListeners` cover messages only
+    the panel holds.
+  - Its state lives outside the draw, so the many presence-driven redraws of a DM's panel don't fetch again or lose the
+    scroll position.
+- **The chat's rules apply.**
+  - Spoilers stay covered.
+  - Word-filtered messages are hidden or blurred, but their thumbnails still load, so the server sees the same
+    downloads as in chat.
+  - Blocked people's and unreadable messages are left out.
+  - DMs and group chats are hidden while you share your screen.
+  - Tiles never carry `data-mid`, since `replaceMessageEl` would turn them into chat rows.
+
+### The viewer
+`openViewer` (app.js) takes a list of items (`{ m, f, fi, key, kind, thumb, full, name, alt, download }`). The panel
+passes its list, videos included. The chat builds the list from `img._item`, which `attachmentEl` sets on each picture.
+- **Videos** play in the stage, with no zoom. One over 20 MB, or of unknown size, waits for Play.
+- **Jump to message** is in the bar, and in More on phones.
+- **Side panel.** It hosts `NOTES.side(item)`: a column on the right, or a sheet over the bottom on a phone, behind a
+  Comments button.
+
+### Comments on one photo
+A comment is an ordinary encrypted reply, sent through the normal send path (`sendComment`).
+- **Inside the encryption**, it says which photo it is about: `ph: { i, u }`, the photo's index in the replied-to
+  message's files and its address, checked by `binding.js photoOf`. Edits and scheduled re-encryptions keep it; a
+  forward drops it.
+- **In the clear**, the request carries `replyFile: i`, so the server can count comments per photo (`reply_file`
+  column; `fileReplies` on every serialized message; `dm:file-replies` and `message:file-replies` when a comment is
+  posted, deleted or disappears).
+- **Which photo a comment is about** is only ever read from the decrypted `ph`. The viewer's list
+  (`GET /api/{dm-}messages/:id/comments?file=i`) keeps only replies whose binding says they reply to that message and
+  whose `ph` names that photo.
+- **In chat**, the quote shows a thumbnail of that exact photo. Tiles of messages with two or more photos or videos get
+  counts and a "Comment on this photo" button.
+
+### Tags
+`public/js/photo-notes.js` covers labels on photos.
+- **Labels.** At most 40 characters, normalised (NFC; control and invisible characters removed) and compared without
+  case. At most 20 per photo and 300 per message.
+- **Storage.** Kept beside the message in `media_tags`, schema v21, through these routes:
+  - `GET /api/dms/:id/tags` and `/api/channels/:id/tags`;
+  - `POST /api/dm-messages/:id/tags` and `/api/messages/:id/tags`, with `{ id, fileIdx, ciphertext }`;
+  - `DELETE …/tags/:tagId`.
+
+  Events are `dm:tags` and `message:tags`.
+- **Sealing** (`e2ee.js`, `secure.js encryptTag` / `openTag`). The formats are new:
+  - `tc1:` in channels and group chats: the server's current key epoch, signed like messages;
+  - `td1:` in DMs.
+
+  Each has its own key derivation, and its additional data binds the conversation, epoch, message, file index, the
+  tag's id (picked by the app, the row's primary key) and its author. So the server can't move a tag or copy it under
+  another id, and a tag never opens as a message, nor a message as a tag. The payload `{ n, fu }` (label, the file's
+  address, checked against the photo on opening) is padded to exactly 256 bytes, so every tag is the same size. A tag
+  counts only when a key this device trusts for its author opened it.
+- **Who may tag and remove.** Adding needs what posting there needs: in a DM, not after a block either way; in a
+  channel, Send Messages and not timed out. Removing is for the tag's author, the photo's sender, or Manage Messages.
+
+Tests:
+- `test/photos.test.js` (routes, counts, permissions, clean-up on every delete path, query plans, the v20 → v21
+  upgrade);
+- `test/media-panel-client.test.js`;
+- `test/photo-notes-client.test.js` (sealing, binding, tampering, labels);
+- the e2e flows "photos & videos" and "photo comments and tags".
