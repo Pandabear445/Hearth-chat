@@ -2,8 +2,9 @@
 // binding.js photoOf). The modules run here as they are, with the same WebCrypto the browser uses. Proves that a tag
 // opens only where it was put (that photo of that message, by that person, in that conversation and key epoch), that a
 // tag and a message can never pass for one another, that tampering is caught, that only tags vouched for by a key this
-// device trusts count, that labels come out as short plain text, and that a comment keeps the photo it's about through
-// opening, edits and scheduling.
+// device trusts count (and only those are suggested or filtered by), that labels come out as short plain text, that a
+// comment keeps the photo it's about through opening, edits and scheduling and is only listed under that photo, and
+// that the side panel (on a page small enough for Node) keeps what it loaded, its focus and the user's Enter setting.
 const { test, before, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -20,9 +21,66 @@ let routes = () => null;
 const asked = [];
 globalThis.fetch = async (url, opts = {}) => {
   asked.push([opts.method || 'GET', String(url)]);
-  const body = routes(String(url), opts);
+  const body = await routes(String(url), opts); // (a route may answer later: a Promise)
   return { ok: body !== null, status: body === null ? 404 : 200, headers: { get: () => null }, json: async () => body || { error: 'Not found.' } };
 };
+
+// The elements the side panel is made of (util.js h), enough of them to draw it, type in it, click and focus. Only
+// what's under page.body is on screen. (document.querySelectorAll still finds nothing: no picture is drawn here.)
+class FakeNode {
+  constructor() { this.parentNode = null; }
+  get isConnected() { let n = this; while (n.parentNode) n = n.parentNode; return n === page.body; }
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+}
+class FakeText extends FakeNode {
+  constructor(s) { super(); this.data = String(s); }
+  get textContent() { return this.data; }
+}
+class FakeEl extends FakeNode {
+  constructor(tag) { super(); this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.dataset = {}; this.style = { setProperty() {} }; this.on = {}; this.value = ''; this.className = ''; }
+  get classList() {
+    const set = (on) => (c) => { const l = this.className.split(/\s+/).filter((x) => x && x !== c); this.className = (on ? [...l, c] : l).join(' '); };
+    return { contains: (c) => this.className.split(/\s+/).includes(c), add: set(true), remove: set(false), toggle: (c, on) => set(on === undefined ? !this.classList.contains(c) : on)(c) };
+  }
+  append(...kids) { for (const k of kids) { const n = typeof k === 'string' ? new FakeText(k) : k; if (n.parentNode) n.parentNode.removeChild(n); n.parentNode = this; this.children.push(n); } }
+  appendChild(k) { this.append(k); return k; }
+  removeChild(k) { this.children = this.children.filter((x) => x !== k); k.parentNode = null; return k; }
+  replaceChildren(...kids) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...kids); }
+  get firstChild() { return this.children[0] || null; }
+  get lastElementChild() { return [...this.children].reverse().find((c) => c instanceof FakeEl) || null; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  hasAttribute(k) { return k in this.attrs; }
+  get hidden() { return 'hidden' in this.attrs; }
+  set hidden(v) { if (v) this.attrs.hidden = ''; else delete this.attrs.hidden; }
+  get disabled() { return 'disabled' in this.attrs; }
+  set disabled(v) { if (v) this.attrs.disabled = ''; else delete this.attrs.disabled; }
+  set innerHTML(v) { this.html = v; }
+  get textContent() { return this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this.replaceChildren(...(v ? [String(v)] : [])); }
+  addEventListener(type, fn) { (this.on[type] = this.on[type] || []).push(fn); }
+  removeEventListener() {}
+  fire(type, props = {}) {
+    const e = { type, target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...props };
+    for (const fn of this.on[type] || []) fn(e);
+    return e;
+  }
+  focus() { globalThis.document.activeElement = this; }
+  contains(n) { for (let x = n; x; x = x.parentNode) if (x === this) return true; return false; }
+  // 'tag', '.class' or 'tag.class'
+  matches(sel) { const [, tag, cls] = /^([a-z]*)(?:\.([\w-]+))?$/.exec(sel) || []; return (!tag || this.tagName === tag.toUpperCase()) && (!cls || this.classList.contains(cls)); }
+  closest(sel) { for (let x = this; x instanceof FakeEl; x = x.parentNode) if (x.matches(sel)) return x; return null; }
+  querySelectorAll(sel) { const out = []; const walk = (n) => { for (const c of n.children) if (c instanceof FakeEl) { if (c.matches(sel)) out.push(c); walk(c); } }; walk(this); return out; }
+  querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+  setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; }
+  scrollIntoView() {}
+}
+globalThis.Node = FakeNode;
+const page = { body: new FakeEl('body') };
+Object.assign(globalThis.document, { createElement: (t) => new FakeEl(t), createTextNode: (s) => new FakeText(s), body: page.body, activeElement: null });
+const $ = (root, sel) => root.querySelector(sel);
+const $$ = (root, sel) => root.querySelectorAll(sel);
 
 const js = (f) => pathToFileURL(path.join(__dirname, '..', 'public', 'js', f)).href;
 const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
@@ -309,6 +367,24 @@ test('secure.js: DM tags open with the key both people share, refused to write w
   assert.deepEqual(await A.sec.openTag({ ...t, authorId: 'bob', ciphertext: fromNew }), { n: 'new', fu: URL1 });
 });
 
+test('secure.js: a tag whose author’s keys couldn’t be looked up (offline, the server busy) says it’s worth trying again; one that doesn’t check out doesn’t', async () => {
+  const alice = await person('alice'); const bob = await person('bob'); const carol = await person('carol');
+  const raw = { 1: E.newGroupKey() };
+  const B = await device(bob, [alice], { raw });
+  const where = { serverId: 's1', channelId: 'c1' };
+  const sealed = await E.encryptGroupTag({ raw: raw[1], serverId: 's1', channelId: 'c1', epoch: 1, messageId: 'm1', fileIndex: 1, tagId: TAG, authorId: 'carol', signKey: carol.signKey, payload: { n: 'x', fu: URL2 } });
+  routes = () => null; // GET /users/carol fails
+  assert.deepEqual(await B.sec.openTag(tagOf(where, sealed, { authorId: 'carol' })), { error: true, retry: true });
+  assert.deepEqual(await B.sec.openTag(tagOf(where, tamper(sealed, 4), { authorId: 'alice' })), { error: true }, 'tampered with: final');
+  // In a DM: the other person's keys not known here yet, and not to be had right now.
+  const at = { dmId: 'd1', messageId: 'm1', fileIndex: 0, tagId: TAG, authorId: 'alice' };
+  const dmTag = { ...at, id: TAG, fileIndex: 0, ciphertext: await E.encryptDmTag({ myPriv: alice.privateKey, theirPub: bob.publicKey, ...at, payload: { n: 'cat', fu: URL1 } }), createdAt: Date.now() - 1000 };
+  assert.deepEqual(await B.sec.openTag(dmTag), { n: 'cat', fu: URL1 });
+  B.S.users.alice = { id: 'alice', username: 'alice' };
+  assert.deepEqual(await B.sec.openTag(dmTag), { error: true, retry: true });
+  assert.deepEqual(await B.sec.openTag({ ...dmTag, dmId: 'd2' }), { error: true }, 'a conversation this device doesn’t have: final');
+});
+
 test('secure.js: both openers say which photo a comment is about (ph), and drop a malformed one', async () => {
   const alice = await person('alice'); const bob = await person('bob');
   const raw = { 1: E.newGroupKey() };
@@ -375,12 +451,17 @@ const PHOTOS = [{ url: URL1, type: 'image/png', name: 'a.png' }, { url: URL2, ty
 const rec = (id, fileIdx, authorId, n, createdAt) => ({ id: id.padEnd(22, 'x'), fileIdx, authorId, ciphertext: `td1:${n}`, createdAt });
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const fakeWhere = (key) => (key.startsWith('d:') ? { dmId: key.slice(2) } : key.startsWith('c:') ? { serverId: 's1', channelId: key.slice(2) } : null);
-function notes({ blocked = [], where = fakeWhere } = {}) {
+function notes({ blocked = [], where = fakeWhere, files = PHOTOS, enterSends = true, sendComment = null, retryAfter = 5 } = {}) {
   const metaCalls = [];
+  const indexCalls = [];
   const opens = [];
   const loaded = new Map();
-  // A fake openTag: the label is in the ciphertext (td1:<label>|<file address>), pending for 'tc1:wait', error for 'bad'.
+  const gone = new Set(); // ids of messages whose time has come
+  // A fake openTag: the label is in the ciphertext (td1:<label>|<file address>), pending for 'tc1:wait', error for
+  // 'bad' (or 'untrusted' until their key is accepted), and for 'blip' its author's keys can't be looked up at first.
   let keyHere = false;
+  let accepted = false;
+  let blips = 0;
   const deps = {
     me: () => ({ id: 'me' }),
     where,
@@ -388,22 +469,37 @@ function notes({ blocked = [], where = fakeWhere } = {}) {
       opens.push(t.id);
       if (t.ciphertext === 'tc1:wait') return keyHere ? { n: 'came later', fu: URL1 } : { pending: true, before: false };
       if (t.ciphertext.endsWith('bad')) return { error: true };
+      if (t.ciphertext.endsWith('untrusted') && !accepted) return { error: true };
+      if (t.ciphertext.endsWith('blip') && blips > 0) { blips -= 1; return { error: true, retry: true }; }
       const [n, fu] = t.ciphertext.slice(4).split('|');
       return { n, fu: fu || [URL1, URL2, '/uploads/v3.bin'][t.fileIndex] };
     },
-    decrypt: async (m) => { if (!m.dec) m.dec = { t: '', f: PHOTOS }; },
+    encryptTag: async (w, tag) => ({ ciphertext: `td1:${tag.payload.n}|${tag.payload.fu}` }),
+    decrypt: async (m) => { if (!m.dec) m.dec = { t: '', f: files }; },
     readable: (m) => !!m.dec && !m.dec.error && !m.dec.pending,
     filesOf: (m) => (m.dec && m.dec.f) || [],
-    expired: () => false,
+    expired: (m) => gone.has(m.id),
     blocked: (id) => blocked.includes(id),
+    getUser: (id) => ({ id, username: id }),
+    nameOf: (m, u) => u.username,
+    avatar: () => document.createElement('span'),
+    textEl: (c) => { const el = document.createElement('div'); el.append(c.dec.t); return el; },
+    canPost: () => null,
+    canManage: () => false,
+    sendComment: sendComment || (async () => null),
+    enterSends: () => enterSends,
+    spellBox() {},
+    spelled: (ta) => ta.value,
+    spellcheck: () => 'true',
     copies: (id) => (loaded.has(id) ? [loaded.get(id)] : []),
     loaded: (id) => loaded.get(id) || null,
     onMeta: (key, id) => metaCalls.push(`${key}|${id}`),
-    canPost: () => null,
-    canManage: () => false,
+    onIndex: (key) => indexCalls.push(key),
+    openMessage() {},
+    retryAfter,
   };
   const N = PN.createPhotoNotes(deps);
-  return { N, deps, metaCalls, opens, loaded, keyCame: () => { keyHere = true; } };
+  return { N, deps, metaCalls, indexCalls, opens, loaded, gone, keyCame: () => { keyHere = true; }, accept: () => { accepted = true; }, blip: (n) => { blips = n; } };
 }
 
 test('photo-notes: a photo’s tags open once, count only on the very file they were put on, one per label, none from someone you blocked', async () => {
@@ -464,8 +560,8 @@ test('photo-notes: live updates replace a message’s tags and counts on every l
   assert.equal(N.counts({ ...panelCopy, fileReplies: { 1: 1 } }, 1).comments, 1);
 });
 
-test('photo-notes: a tag waiting for its key opens when the key comes', async () => {
-  const { N, loaded, keyCame } = notes();
+test('photo-notes: a tag waiting for its key opens when the key comes, and the Photos & videos panel’s chips are worked out again', async () => {
+  const { N, loaded, keyCame, indexCalls } = notes();
   const m = { id: 'm5', channelId: 'c1', serverId: 's1', authorId: 'bob', dec: { t: '', f: PHOTOS }, tags: [{ ...rec('w', 0, 'alice', '', 1), ciphertext: 'tc1:wait' }] };
   loaded.set('m5', m);
   N.tagsOf(m, 0);
@@ -475,6 +571,9 @@ test('photo-notes: a tag waiting for its key opens when the key comes', async ()
   N.onKeys('s1');
   await tick(); await tick();
   assert.deepEqual(N.tagsOf(m, 0), ['came later']);
+  assert.deepEqual(indexCalls, ['c:c1']);
+  N.onKeys('s2');
+  assert.deepEqual(indexCalls, ['c:c1'], 'another server’s keys: nothing to do here');
 });
 
 test('photo-notes: the tag index for the Photos & videos panel fetches the tags once, and the messages it lacks a hundred at a time', async () => {
@@ -516,4 +615,426 @@ test('photo-notes: the tag index for the Photos & videos panel fetches the tags 
   assert.deepEqual(again.get('cat'), [{ messageId: 'm1', fileIdx: 0 }]);
   assert.deepEqual(asked, [], 'no request at all');
   assert.deepEqual(await N.tagIndex('x:nowhere'), new Map(), 'a conversation this app doesn’t have');
+});
+
+// ------------------------------------------------------------------ which comments a photo lists (isCommentOn)
+const appLike = { readable: (m) => !!m.dec && !m.dec.error && !m.dec.pending, expired: (m) => !!m.gone, blocked: (id) => id === 'mallory' };
+test('a comment counts only under the very photo and message it says it’s about, written by an app this device trusts, in the same conversation', () => {
+  const m = { id: 'm1', dmId: 'd1', authorId: 'alice' };
+  const f = { url: URL2, type: 'image/png', name: 'b.png' };
+  const c = (over = {}, dec = {}) => ({ id: 'c1', dmId: 'd1', authorId: 'bob', createdAt: 1, ...over, dec: { t: 'nice', f: [], ph: { i: 1, u: URL2 }, b: { r: 'm1', u: 'x', v: 0 }, ...dec } });
+  const on = (x, mm = m, ff = f, fi = 1) => PN.isCommentOn(x, mm, ff, fi, appLike);
+  assert.equal(on(c()), true);
+  assert.equal(on(c({}, { keyNote: 'pinned' })), true, 'opened with a key this device pinned for them back then');
+  for (const [what, x] of [
+    ['about another photo’s address', c({}, { ph: { i: 1, u: URL1 } })],
+    ['about the photo before', c({}, { ph: { i: 0, u: URL2 } })],
+    ['about the photo after', c({}, { ph: { i: 2, u: URL2 } })],
+    ['about no photo: an ordinary reply', c({}, { ph: undefined })],
+    ['written as a reply to another message (the server moved it)', c({}, { b: { r: 'm9', u: 'x', v: 0 } })],
+    ['nothing inside says what it replies to', c({}, { b: undefined })],
+    ['opened only with a new key not verified yet', c({}, { keyNote: 'new' })],
+    ['opened only with a key the server merely lists', c({}, { keyNote: 'listed' })],
+    ['in another DM', c({ dmId: 'd2' })],
+    ['in a channel', c({ dmId: undefined, channelId: 'c1', serverId: 's1' }, { verified: true })],
+    ['from someone you blocked', c({ authorId: 'mallory' })],
+    ['disappeared', c({ gone: true })],
+    ['didn’t open', { id: 'c1', dmId: 'd1', authorId: 'bob', dec: { error: true } }],
+    ['still waiting for its key', { id: 'c1', dmId: 'd1', authorId: 'bob', dec: { pending: true } }],
+    ['not opened at all', { id: 'c1', dmId: 'd1', authorId: 'bob' }],
+  ]) assert.equal(on(x), false, what);
+  assert.equal(on(c(), m, f, 0), false, 'listed under photo 1 of the same message');
+  assert.equal(on(c(), { ...m, id: 'm2' }), false, 'listed under another message');
+  assert.equal(on(null), false);
+  // In a channel: only a message that verified as its author's.
+  const cm = { id: 'm1', channelId: 'c1', serverId: 's1', authorId: 'alice' };
+  const cc = (dec) => c({ dmId: undefined, channelId: 'c1', serverId: 's1' }, dec);
+  assert.equal(on(cc({ verified: true }), cm), true);
+  assert.equal(on(cc({ verified: false }), cm), false, 'its signature didn’t check out');
+  assert.equal(on(cc({}), cm), false, 'not verified either');
+  assert.equal(on(cc({ verified: true }), { ...cm, channelId: 'c2' }), false, 'in another channel');
+});
+
+test('a real comment, as both openers give it, is listed under its photo and nowhere else', async () => {
+  const alice = await person('alice'); const bob = await person('bob');
+  const raw = { 1: E.newGroupKey() };
+  const B = await device(bob, [alice], { raw });
+  const payload = { t: 'nice one', f: [], ...BD.bindNew({ replyTo: 'm1', at: Date.now() }), ph: { i: 1, u: URL2 } };
+  const ch = { id: 'x', serverId: 's1', channelId: 'c1', authorId: 'alice', createdAt: Date.now(), replyTo: 'm1',
+    ciphertext: await E.encryptGroup({ raw: raw[1], serverId: 's1', channelId: 'c1', epoch: 1, authorId: 'alice', signKey: alice.signKey, payload }) };
+  await B.sec.decryptChannelMessage(ch);
+  const dm = { id: 'y', dmId: 'd1', authorId: 'alice', createdAt: Date.now(), replyTo: 'm1',
+    ciphertext: await E.encryptDm({ myPriv: alice.privateKey, theirPub: bob.publicKey, dmId: 'd1', authorId: 'alice', payload }) };
+  await B.sec.decryptDmMessage(dm);
+  const f = { url: URL2, type: 'image/png', name: 'b.png' };
+  for (const [c, m] of [[ch, { id: 'm1', serverId: 's1', channelId: 'c1' }], [dm, { id: 'm1', dmId: 'd1' }]]) {
+    assert.equal(PN.isCommentOn(c, m, f, 1, appLike), true, c.id);
+    assert.equal(PN.isCommentOn(c, { ...m, id: 'm2' }, f, 1, appLike), false, 'the server says it replies to another message');
+    assert.equal(PN.isCommentOn(c, m, f, 0, appLike), false, 'the server counts it under another photo');
+    assert.equal(PN.isCommentOn(c, m, { ...f, url: URL1 }, 1, appLike), false, 'that message’s files changed since');
+  }
+});
+
+// ------------------------------------------------------------------ what the server keeps; label length
+test('photo-notes: no comment or tag controls on a photo the server keeps none for (a forward from before it counted files); an older server that doesn’t say keeps today’s', async () => {
+  assert.equal(PN.serverKeeps({ files: 3 }, 2), true);
+  assert.equal(PN.serverKeeps({ files: 3 }, 3), false);
+  assert.equal(PN.serverKeeps({ files: 0 }, 0), false, 'a forward from before v21');
+  assert.equal(PN.serverKeeps({}, 5), true, 'an older server: not known, so as before');
+  assert.equal(PN.serverKeeps({ files: 3 }, -1), false);
+  assert.equal(PN.serverKeeps({ files: 3 }, 1.5), false);
+  const { N } = notes();
+  routes = () => null;
+  const m = { id: 'm1', dmId: 'd1', authorId: 'bob', dec: { t: '', f: PHOTOS }, files: 0 };
+  for (const fi of [0, 1, 2]) {
+    assert.deepEqual(N.tileExtras(m, fi, () => {}), [], `no counts or button on photo ${fi + 1}`);
+    assert.equal(N.side({ m, f: PHOTOS[fi], fi }), null, 'no side panel: nothing to show, and nothing could be added');
+  }
+  const two = { ...m, files: 2 };
+  assert.deepEqual(N.tileExtras(two, 2, () => {}), [], 'past the count');
+  assert.equal(N.tileExtras(two, 1, () => {}).length, 2, 'within it: the counts and the button');
+  assert.equal(N.tileExtras({ ...m, files: undefined }, 2, () => {}).length, 2, 'an older server');
+  assert.ok(N.side({ m: two, f: PHOTOS[1], fi: 1 }));
+});
+
+test('labels: the tag box takes 40 whole characters, an emoji once (as normLabel counts them, not as a browser’s maxlength would)', async () => {
+  assert.equal(PN.fitLabel('😀'.repeat(30)), null, '30 emoji fit');
+  assert.deepEqual(PN.fitLabel('😀'.repeat(45)), { value: '😀'.repeat(40), caret: 80 });
+  assert.equal(PN.fitLabel('x'.repeat(40)), null);
+  assert.deepEqual(PN.fitLabel(`ab${'x'.repeat(50)}`, 1), { value: `ab${'x'.repeat(38)}`, caret: 1 }, 'the cursor stays where it was');
+  assert.equal(PN.normLabel(PN.fitLabel('🇫🇷'.repeat(25)).value), '🇫🇷'.repeat(20), 'a flag is two characters, as normLabel counts');
+  const { N, loaded } = notes();
+  routes = () => null;
+  const m = { id: 'm1', dmId: 'd1', authorId: 'bob', dec: { t: '', f: PHOTOS } };
+  loaded.set('m1', m);
+  const el = N.side({ m, f: PHOTOS[1], fi: 1 });
+  page.body.append(el);
+  const box = $(el, 'input.pn-tag-in');
+  assert.ok(Number(box.getAttribute('maxlength')) >= 2 * PN.LABEL_MAX, 'maxlength never cuts 40 emoji short');
+  box.value = '😀'.repeat(45);
+  box.selectionEnd = box.value.length;
+  box.fire('input');
+  assert.equal(box.value, '😀'.repeat(40));
+  assert.equal($$(el, 'p.pn-note')[0].textContent, 'A tag can be at most 40 characters.');
+  box.value = 'x'.repeat(41);
+  box.selectionEnd = 41;
+  box.fire('input', { isComposing: true });
+  assert.equal(box.value.length, 41, 'not while an input method is composing');
+  box.fire('compositionend');
+  assert.equal(box.value, 'x'.repeat(40));
+  el.remove();
+});
+
+// ------------------------------------------------------------------ the chips and suggestions, deletes and expiry
+const settle = async () => { for (let i = 0; i < 20; i++) await tick(); };
+const suggestions = (el) => $$(el, '.pn-suggestion').map((b) => b.textContent);
+
+test('photo-notes: the chips and the suggestions only have tags that count: not one sealed for another file, nor one on a file that isn’t a photo or video', async () => {
+  const files = [PHOTOS[0], PHOTOS[1], { url: '/uploads/v3.bin', type: 'application/pdf', name: 'notes.pdf' }];
+  const { N, loaded } = notes({ files });
+  const m1 = { id: 'm1', dmId: 'd1', authorId: 'bob', dec: { t: '', f: files } };
+  loaded.set('m1', m1);
+  const tags = [
+    { ...rec('a', 0, 'alice', 'real', 1), messageId: 'm1' },
+    { ...rec('b', 2, 'mallory', 'planted on a pdf', 2), messageId: 'm1' }, // sealed for the PDF's address
+    { ...rec('c', 1, 'mallory', `planted elsewhere|${URL1}`, 3), messageId: 'm1' },
+    { ...rec('d', 0, 'mallory', `planted again|${URL2}`, 4), messageId: 'm1' },
+  ];
+  routes = (url) => (url === '/api/dms/d1/tags' ? { tags } : null);
+  const idx = await N.tagIndex('d:d1');
+  assert.deepEqual([...idx.keys()], ['real'], 'no chip that filters to nothing');
+  assert.deepEqual(N.tagsOf(m1, 2), [], 'nothing counts on the PDF');
+  const el = N.side({ m: m1, f: files[1], fi: 1 });
+  page.body.append(el);
+  await settle();
+  assert.deepEqual(suggestions(el), ['#real'], 'only what counts is suggested');
+  el.remove();
+});
+
+test('photo-notes: a deleted or disappeared message leaves the tag index, its chips and the suggestions, and its copy is let go; nothing is fetched again', async () => {
+  const { N, loaded, indexCalls, gone } = notes();
+  const m1 = { id: 'm1', dmId: 'd1', authorId: 'bob', dec: { t: '', f: PHOTOS } };
+  loaded.set('m1', m1);
+  const tags = [
+    { ...rec('a', 0, 'alice', 'beach', 1), messageId: 'm1' },
+    { ...rec('b', 1, 'alice', 'beach', 2), messageId: 'm2' },
+    { ...rec('c', 0, 'alice', 'only on m2', 3), messageId: 'm2' },
+    { ...rec('d', 0, 'alice', 'only on m3', 4), messageId: 'm3' },
+  ];
+  routes = (url) => {
+    if (url === '/api/dms/d1/tags') return { tags };
+    if (url.startsWith('/api/dms/d1/media?')) return { messages: ['m2', 'm3'].map((id) => ({ id, dmId: 'd1', authorId: 'alice', createdAt: 1 })), next: null };
+    return null;
+  };
+  const el = N.side({ m: m1, f: PHOTOS[1], fi: 1 });
+  page.body.append(el);
+  let idx = await N.tagIndex('d:d1');
+  assert.equal(idx.get('beach').length, 2);
+  assert.deepEqual(N.messages().map((m) => m.id).sort(), ['m2', 'm3'], 'the copies it fetched, for the disappearing timer');
+  await settle();
+  assert.deepEqual(suggestions(el), ['#beach', '#only on m2', '#only on m3']);
+  asked.length = 0;
+  indexCalls.length = 0;
+  N.onDelete('d:d1', new Set(['m2']));
+  assert.deepEqual(indexCalls, ['d:d1'], 'the Photos & videos panel’s chips are worked out again');
+  assert.deepEqual(suggestions(el), ['#beach', '#only on m3'], 'not suggested any more, at once');
+  idx = await N.tagIndex('d:d1');
+  assert.deepEqual([...idx.keys()], ['beach', 'only on m3']);
+  assert.deepEqual(idx.get('beach'), [{ messageId: 'm1', fileIdx: 0 }], '“#beach 1”');
+  assert.deepEqual(asked, [], 'nothing fetched again');
+  assert.deepEqual(N.messages().map((m) => m.id), ['m3'], 'its copy let go');
+  // m3's time comes while only this holds it: the app's disappearing timer says so (expire).
+  gone.add('m3');
+  N.expire();
+  assert.deepEqual([...(await N.tagIndex('d:d1')).keys()], ['beach']);
+  assert.deepEqual(N.messages(), []);
+  assert.deepEqual(suggestions(el), ['#beach']);
+  // Gone from somewhere the app had it (the conversation not known): the same.
+  N.onDelete(null, ['m1']);
+  assert.deepEqual([...(await N.tagIndex('d:d1')).keys()], []);
+  assert.deepEqual(asked, []);
+  el.remove();
+});
+
+test('photo-notes: a tag that didn’t open is opened again a little later when its author’s keys couldn’t be looked up, once their key is verified, and after reconnecting', async () => {
+  const { N, loaded, opens, indexCalls, accept, blip } = notes({ retryAfter: 150 });
+  blip(1);
+  const m = { id: 'm1', dmId: 'd1', authorId: 'bob', dec: { t: '', f: PHOTOS }, tags: [rec('a', 0, 'alice', 'sea blip', 1), rec('b', 1, 'bob', 'new key untrusted', 2)] };
+  loaded.set('m1', m);
+  assert.deepEqual(N.tagsOf(m, 0), []);
+  await tick(); await tick();
+  assert.deepEqual(N.tagsOf(m, 0), [], 'its author’s keys couldn’t be looked up');
+  await new Promise((r) => setTimeout(r, 200));
+  await settle();
+  assert.deepEqual(N.tagsOf(m, 0), ['sea blip'], 'tried again a little later');
+  assert.deepEqual(N.tagsOf(m, 1), [], 'one that doesn’t check out isn’t tried again by itself…');
+  const n = opens.length;
+  await new Promise((r) => setTimeout(r, 200));
+  N.tagsOf(m, 1);
+  await settle();
+  assert.equal(opens.length, n, '…nor every time it’s drawn');
+  // Bob's new key verified (safety numbers compared): it counts now.
+  accept();
+  indexCalls.length = 0;
+  N.onTrust('bob');
+  await settle();
+  assert.deepEqual(N.tagsOf(m, 1), ['new key untrusted']);
+  assert.deepEqual(indexCalls, ['d:d1'], 'the Photos & videos panel’s chips are worked out again');
+  // Offline for a while: back online, it's tried again at once.
+  blip(1000);
+  N.onTags('d:d1', 'm1', [...m.tags, rec('c', 2, 'alice', 'wave blip', 3)]);
+  await settle();
+  assert.deepEqual(N.tagsOf(m, 2), []);
+  blip(0);
+  N.reconnected();
+  await settle();
+  assert.deepEqual(N.tagsOf(m, 2), ['wave blip']);
+});
+
+test('photo-notes: in a conversation with more tagged messages than used to be kept, a tag change works the index out again without fetching them again', async () => {
+  const { N } = notes();
+  const ids = Array.from({ length: 1500 }, (_, i) => `n${String(i).padStart(4, '0')}`);
+  const tags = ids.map((id, i) => ({ ...rec(`t${i}`, 0, 'alice', 'big', i), messageId: id }));
+  routes = (url) => {
+    if (url === '/api/dms/d1/tags') return { tags };
+    if (url.startsWith('/api/dms/d1/media?')) return { messages: new URL(url, 'http://x').searchParams.get('ids').split(',').map((id) => ({ id, dmId: 'd1', authorId: 'bob', createdAt: 1 })), next: null };
+    return null;
+  };
+  asked.length = 0;
+  assert.equal((await N.tagIndex('d:d1')).get('big').length, 1500);
+  assert.equal(asked.filter(([, u]) => u.includes('/media?')).length, 15, 'a hundred at a time');
+  asked.length = 0;
+  for (const [i, id] of ids.slice(0, 3).entries()) {
+    N.onTags('d:d1', id, [rec(`new${i}`, 1, 'carol', 'more', 9999)]);
+    await N.tagIndex('d:d1');
+  }
+  const idx = await N.tagIndex('d:d1');
+  assert.equal(idx.get('big').length, 1497);
+  assert.equal(idx.get('more').length, 3);
+  assert.deepEqual(asked, [], 'every message it needs was kept');
+});
+
+// ------------------------------------------------------------------ the side panel's comments
+const cid = (i) => `c${String(i).padStart(4, '0')}`; // ids that sort in the order they were made, as the server's
+const comment = (i) => ({ id: cid(i), dmId: 'd1', authorId: 'bob', createdAt: i, dec: { t: `comment ${i}`, f: [], ph: { i: 1, u: URL2 }, b: { r: 'm1', u: `u${i}`, v: 0 } } });
+// GET …/comments as the server answers it: oldest first, after ?after, ?limit at most, next when the page is full.
+function commentsPage(all, url) {
+  const q = new URL(url, 'http://x').searchParams;
+  const list = all.filter((c) => !q.get('after') || c.id > q.get('after')).slice(0, Number(q.get('limit')));
+  return { messages: list.map((c) => ({ ...c, dec: { ...c.dec } })), next: list.length === Number(q.get('limit')) ? list[list.length - 1].id : null };
+}
+const shown = (el) => $$(el, 'li.pn-c').length;
+const heading = (el) => $(el, '.pn-count').textContent;
+const photoMsg = (over = {}) => ({ id: 'm1', dmId: 'd1', authorId: 'alice', dec: { t: '', f: PHOTOS }, ...over });
+
+test('photo-notes: on a photo with more than a page of comments, a reload keeps what Show more loaded and the comment you just sent; the heading counts them all', async () => {
+  const all = Array.from({ length: 150 }, (_, i) => comment(i + 1));
+  const send = async () => { const c = comment(all.length + 1); all.push(c); return { ...c, dec: { ...c.dec } }; };
+  routes = (url) => (url.startsWith('/api/dm-messages/m1/comments?') ? commentsPage(all, url) : null);
+  const { N, loaded } = notes({ sendComment: send });
+  const m = photoMsg({ fileReplies: { 1: 150 } });
+  loaded.set('m1', m);
+  const el = N.side({ m, f: PHOTOS[1], fi: 1 });
+  page.body.append(el);
+  await settle();
+  assert.equal(shown(el), 100);
+  assert.equal(heading(el), '150', 'the server’s count while some aren’t loaded');
+  assert.equal($(el, '.pn-more').hidden, false);
+  $(el, '.pn-more').fire('click');
+  await settle();
+  assert.equal(shown(el), 150);
+  assert.equal($(el, '.pn-more').hidden, true);
+  // Someone else comments: loaded again, all of them and the new one.
+  all.push(comment(151));
+  N.onFileReplies('d:d1', 'm1', { 1: 151 });
+  await settle();
+  assert.equal(shown(el), 151, 'what Show more loaded stays');
+  assert.equal(heading(el), '151');
+  // Your own: shown at once, and still there after the reload its count brings.
+  const ta = $(el, 'textarea.pn-box');
+  ta.value = 'mine';
+  ta.fire('keydown', { key: 'Enter' });
+  await settle();
+  assert.equal(shown(el), 152);
+  N.onFileReplies('d:d1', 'm1', { 1: 152 });
+  await settle();
+  assert.equal(shown(el), 152);
+  assert.match($$(el, 'li.pn-c')[151].textContent, /comment 152/);
+  el.remove();
+
+  // Only the first page loaded: a reload stays at one page, until you comment; then it goes as far as yours.
+  const two = notes({ sendComment: send });
+  two.loaded.set('m1', m);
+  const el2 = two.N.side({ m, f: PHOTOS[1], fi: 1 });
+  page.body.append(el2);
+  await settle();
+  assert.equal(shown(el2), 100);
+  two.N.onFileReplies('d:d1', 'm1', { 1: 152 });
+  await settle();
+  assert.equal(shown(el2), 100, 'one page, as before');
+  const ta2 = $(el2, 'textarea.pn-box');
+  ta2.value = 'mine again';
+  ta2.fire('keydown', { key: 'Enter' });
+  await settle();
+  assert.equal(shown(el2), 101, 'yours shows at once');
+  two.N.onFileReplies('d:d1', 'm1', { 1: 153 });
+  await settle();
+  assert.equal(shown(el2), 153, 'loaded as far as yours');
+  assert.equal($(el2, '.pn-more').hidden, true);
+  // A comment deleted (or gone on its timer) leaves the list.
+  two.N.onDelete('d:d1', [cid(153)]);
+  assert.equal(shown(el2), 152);
+  el2.remove();
+});
+
+test('photo-notes: two side panels on one photo share one load and are both drawn when it ends; Show more during a reload asks for the next page after it', async () => {
+  const all = Array.from({ length: 120 }, (_, i) => comment(i + 1));
+  const held = [];
+  routes = (url) => (url.startsWith('/api/dm-messages/m1/comments?') ? new Promise((resolve) => held.push(() => resolve(commentsPage(all, url)))) : null);
+  const { N, loaded } = notes();
+  const m = photoMsg({ fileReplies: { 1: 120 } });
+  loaded.set('m1', m);
+  const p1 = N.side({ m, f: PHOTOS[1], fi: 1 });
+  page.body.append(p1);
+  await tick();
+  assert.equal(held.length, 1, 'one request');
+  // Flipped to another photo and back while it loads: a new panel on the same photo.
+  p1.remove();
+  const p2 = N.side({ m, f: PHOTOS[1], fi: 1 });
+  page.body.append(p2);
+  await tick();
+  assert.equal(held.length, 1, 'it waits for the one under way');
+  assert.match(p2.textContent, /Loading…/);
+  held.shift()();
+  await settle();
+  assert.equal(shown(p2), 100, 'the new panel is drawn too');
+  assert.equal(held.length, 1, 'and the load it asked for comes once after');
+  held.shift()();
+  await settle();
+  assert.equal(held.length, 0);
+  // A comment comes (one reload for both panels), and Show more is pressed while that's under way.
+  N.onFileReplies('d:d1', 'm1', { 1: 120 });
+  await tick();
+  assert.equal(held.length, 1);
+  $(p2, '.pn-more').fire('click');
+  await tick();
+  assert.equal(held.length, 1, 'Show more waits for it');
+  held.shift()();
+  await settle();
+  assert.equal(held.length, 1, 'then asks for the next page');
+  assert.match(asked[asked.length - 1][1], /after=c0100/);
+  held.shift()();
+  await settle();
+  assert.equal(shown(p2), 120);
+  assert.equal($(p2, '.pn-more').hidden, true);
+  p2.remove();
+});
+
+test('photo-notes: the comment box follows “Enter sends the message”', async () => {
+  routes = () => null;
+  for (const enterSends of [true, false]) {
+    const sent = [];
+    const { N, loaded } = notes({ enterSends, sendComment: async (item, text) => { sent.push(text); return null; } });
+    loaded.set('m1', photoMsg());
+    const el = N.side({ m: photoMsg(), f: PHOTOS[1], fi: 1 });
+    page.body.append(el);
+    const ta = $(el, 'textarea.pn-box');
+    assert.equal($(el, '.pn-send').getAttribute('data-tip'), enterSends ? 'Send (Enter)' : 'Send (Ctrl+Enter)');
+    const press = async (keys) => { ta.value = JSON.stringify(keys); const e = ta.fire('keydown', { key: 'Enter', ...keys }); await settle(); return e.defaultPrevented; };
+    assert.equal(await press({}), enterSends, 'Enter');
+    assert.equal(await press({ shiftKey: true }), false, 'Shift+Enter: a new line');
+    assert.equal(await press({ ctrlKey: true }), true, 'Ctrl+Enter');
+    assert.equal(await press({ metaKey: true }), true, '⌘+Enter');
+    assert.equal(await press({ isComposing: true }), false, 'an input method composing a word');
+    assert.deepEqual(sent.map((s) => JSON.parse(s)), [...(enterSends ? [{}] : []), { ctrlKey: true }, { metaKey: true }]);
+    el.remove();
+  }
+});
+
+test('photo-notes: removing a tag, or someone else’s tag change, keeps keyboard focus among the tags, and says what happened', async () => {
+  routes = (url, opts) => (opts.method === 'DELETE' ? {} : null);
+  const { N, loaded } = notes();
+  const m = photoMsg({ tags: [rec('a', 1, 'me', 'first', 1), rec('b', 1, 'me', 'second', 2), rec('c', 1, 'me', 'third', 3)] });
+  loaded.set('m1', m);
+  N.tagsOf(m, 1);
+  await settle();
+  const el = N.side({ m, f: PHOTOS[1], fi: 1 });
+  page.body.append(el);
+  const x = (label) => $$(el, '.chip-x').find((b) => b.dataset.label === label);
+  x('second').focus();
+  x('second').fire('click');
+  await settle();
+  assert.deepEqual($$(el, '.pn-chip-text').map((s) => s.textContent), ['#first', '#third']);
+  assert.equal(document.activeElement, x('third'), 'on the one now in its place');
+  assert.equal($(el, '.pn-said').textContent, 'Removed the tag second.');
+  // Someone else adds one while focus is on a chip: it stays there.
+  N.onTags('d:d1', 'm1', [...m.tags, rec('d', 1, 'carol', 'another', 4)]);
+  await settle();
+  assert.deepEqual($$(el, '.pn-chip-text').map((s) => s.textContent), ['#first', '#third', '#another']);
+  assert.equal(document.activeElement, x('third'));
+  // The last removable ones go: to the one before, then into the box.
+  x('third').fire('click');
+  await settle();
+  assert.equal(document.activeElement, x('first'));
+  x('first').fire('click');
+  await settle();
+  assert.equal(document.activeElement, $(el, 'input.pn-tag-in'));
+  el.remove();
+});
+
+test('static: app.js tells photo-notes.js of deletes, disappearing, verified keys and blocks; the comment button never opens a hidden spoiler', () => {
+  const app = read('public', 'js', 'app.js');
+  const fn = (name) => { const at = app.search(new RegExp(`^(async )?function ${name}\\(`, 'm')); assert.ok(at > 0, name); return app.slice(at, app.indexOf('\n}\n', at)); };
+  assert.match(fn('onDeleteMessage'), /MEDIA\.onDelete\(key, gone\);[^\n]*\n\s*NOTES\.onDelete\(key, gone\);/, 'after the Photos & videos panel let go of them');
+  assert.match(fn('onDeleteChannelMessages'), /NOTES\.onDelete\('c:' \+ channelId, replies\)/);
+  assert.match(app, /expiryListeners\.add\(\(ids\) => NOTES\.onDelete\(null, ids\)\);/);
+  assert.match(fn('purgeExpired'), /NOTES\.expire\(\)/);
+  assert.match(fn('armClientExpiry'), /NOTES\.messages\(\)/);
+  assert.match(fn('openSafetyNumber'), /sec\.acceptKeys\(user\);[\s\S]{0,200}NOTES\.onTrust\(user\.id\)/);
+  assert.match(fn('toggleBlock'), /NOTES\.onBlock\(\)/);
+  assert.match(app, /enterSends: \(\) => P\.chat\.enterToSend !== false/);
+  assert.match(app, /onIndex: \(key\) => MEDIA\.onMeta\(key, null\)/);
+  assert.match(fn('attachmentEl'), /NOTES\.tileExtras\(m, fi, \(\) => \{ if \(!holder\.matches\('\.att-spoiler:not\(\.revealed\)'\)\) openPhotoViewer\(el, 'comment'\); \}\)/);
+  const css = read('public', 'css', 'app.css');
+  assert.match(css, /\.att-spoiler:not\(\.revealed\) \.pn-comment-btn \{ display: none; \}/, 'no key or screen reader reaches it');
 });

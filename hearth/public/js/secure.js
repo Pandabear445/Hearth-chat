@@ -636,11 +636,15 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   }
   // A tag as the server lists it ({ id, messageId, fileIndex, authorId, ciphertext, createdAt }, with serverId and
   // channelId, or dmId): { n, fu } as its author sealed them, { pending: true } while the server key it was sealed
-  // with isn't here yet (before: it never will be, as for messages), or { error: true }. Never throws.
+  // with isn't here yet (before: it never will be, as for messages), or { error: true }, with retry: true when it
+  // couldn't be checked because someone's keys couldn't be looked up (offline, the server busy): worth trying again
+  // later, unlike a tag that doesn't check out. Never throws.
   // A tag has no room for the warnings a message carries, so it only counts when it checks out with a key this device
   // trusts for its author: in a channel signed with their current key or one this device pinned for them back then
   // ('now' or 'pinned', as for a verified message), in a DM opened with such a key. Anything only a new key not
   // verified yet, or a key the server merely lists, would vouch for is left out.
+  const LOOKUP = new Error('Keys not looked up');
+  const lookedUp = (p) => p.catch(() => { throw LOOKUP; });
   async function openTag(t) {
     try {
       const at = Number(t.createdAt) || 0;
@@ -655,7 +659,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
           const held = [...mine.keys()];
           return { pending: true, before: held.length > 0 && epoch < Math.max(...held) };
         }
-        const author = await userWithKeys(t.authorId);
+        const author = await lookedUp(userWithKeys(t.authorId));
         if (t.authorId === S.me.id) await ownKeysOk();
         const keys = keysOf(author, 's', at);
         const r = await E2EE.decryptGroupTag({ raw, serverId: t.serverId, channelId: t.channelId, ...bound, authorSignPub: keys.map((k) => k.key), text: t.ciphertext });
@@ -663,15 +667,16 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
         if (how !== 'now' && how !== 'pinned') return { error: true };
         payload = r.payload;
       } else {
-        for (const { key, trust: how } of await dmKeys(t.dmId, at)) {
+        if (!S.dms.some((d) => d.id === t.dmId)) return { error: true };
+        for (const { key, trust: how } of await lookedUp(dmKeys(t.dmId, at))) {
           if (how !== 'now' && how !== 'pinned') continue;
           try { payload = (await E2EE.decryptDmTag({ myPriv: S.privateKey, theirPub: key, dmId: t.dmId, ...bound, text: t.ciphertext })).payload; break; } catch { /* not this key */ }
         }
       }
       if (!payload || typeof payload !== 'object' || typeof payload.n !== 'string' || typeof payload.fu !== 'string') return { error: true };
       return { n: payload.n, fu: payload.fu };
-    } catch {
-      return { error: true };
+    } catch (e) {
+      return e === LOOKUP ? { error: true, retry: true } : { error: true };
     }
   }
 

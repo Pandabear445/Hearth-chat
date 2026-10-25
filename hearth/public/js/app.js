@@ -693,7 +693,10 @@ function startApp() {
     const roleBefore = S.me.staffRole;
     const outsideBefore = outsideMode(S.me.privacy);
     const wasWaiting = sec.awaitingVerify(S.users[u.id]) || (u.id === S.me.id && sec.awaitingVerify(S.me));
+    const keysNow = () => { const x = S.users[u.id]; return x ? `${x.publicKey || ''}|${x.signPublicKey || ''}` : ''; };
+    const keysBefore = keysNow();
     setUser(u); sec.trust(u); refreshUserBits(u.id);
+    if (keysNow() !== keysBefore) NOTES.onTrust(u.id); // photo tags that didn't open with the keys known before
     // Outside images changed on another device: the image links on screen follow the new choice.
     if (u.id === S.me.id && outsideMode(S.me.privacy) !== outsideBefore) later(redrawImageLinks);
     // Verified after a reset without their recovery key (crypto-2): their servers' keys can go to them now.
@@ -1449,6 +1452,7 @@ function armClientExpiry() {
   for (const t of Object.values(S.threads)) { if (t.root) items.push(t.root); for (const m of t.list || []) items.push(m); }
   if (S.threadsPanel) for (const x of S.threadsPanel.items) items.push(x.root);
   for (const m of MEDIA.messages()) items.push(m); // (Photos & videos keep messages the chat may not have)
+  for (const m of NOTES.messages()) items.push(m); // (and so do photo tags and comments)
   for (const d of S.dms) if (d.last) items.push(d.last);
   for (const sv of S.servers) if (sv.last) items.push(sv.last);
   for (const exp of [...P.inbox.map((x) => x.exp), ...reminderDeadlines()]) if (exp) items.push({ expiresAt: exp });
@@ -1477,6 +1481,7 @@ function purgeExpired() {
   if (goneRoots.length) forgetThreads('c:' + tp.channelId, new Set(goneRoots));
   // Photos & videos of messages the chat hasn't loaded (the rest went with the conversations above).
   MEDIA.expire();
+  NOTES.expire(); // and the copies photo tags and comments keep by themselves
   const sidebar = () => { if (!S.view.serverId) later(renderSidebar); };
   for (const d of S.dms) if (d.last && isExpired(d.last, t)) { d.last = newestLive('d:' + d.id); previewDm(d).then(sidebar); }
   for (const g of groups()) if (g.last && isExpired(g.last, t)) { const c = textChannel(g); g.last = c ? newestLive('c:' + c.id) : null; previewGroup(g).then(sidebar); }
@@ -5024,8 +5029,9 @@ function attachmentEl(f, m, { many = false, fi = 0 } = {}) {
     if (media === 'audio') holder.prepend(h('div', { class: 'att-audio-name' }, icon('file', 'ic'), f.name, h('span', { class: 'att-size' }, fmtSize(f.size || 0))));
     holder.append(meter, mediaDownloadBtn(m, f));
     // One of several photos and videos in a message (photo-notes.js): its comment and tag counts, and on hover "Comment
-    // on this photo", which opens it in the viewer with the comment box ready.
-    if (media !== 'audio') holder.append(...NOTES.tileExtras(m, fi, () => openPhotoViewer(el, 'comment')));
+    // on this photo", which opens it in the viewer with the comment box ready. Never a spoiler nobody has opened yet
+    // (the button only shows once it's open, app.css).
+    if (media !== 'audio') holder.append(...NOTES.tileExtras(m, fi, () => { if (!holder.matches('.att-spoiler:not(.revealed)')) openPhotoViewer(el, 'comment'); }));
     // Load only when it scrolls near the screen, a few at a time; images show the small thumbnail first.
     const load = () => {
       holder.classList.add('loading');
@@ -5548,6 +5554,7 @@ function onDeleteChannelMessages(channelId, list, { expired = false } = {}) {
   if (S.thread && threads.has(S.thread.rootId)) renderPanel();
   const replies = list.filter((x) => x.threadId).map((x) => x.id);
   if (replies.length) { forgetBindings('c:' + channelId, replies); MEDIA.onDelete('c:' + channelId, replies); }
+  if (replies.length) NOTES.onDelete('c:' + channelId, replies); // their photos' tags and comments, and as comments
   if (top.length) onDeleteMessage('c:' + channelId, top, { expired });
   if (expired && removed.length) forgetCopies(removed, new Set(removed.map((x) => x.id)), 'c:' + channelId);
 }
@@ -5566,6 +5573,7 @@ function onDeleteMessage(key, id, { expired = false } = {}) {
   const gone = new Set(Array.isArray(id) ? id : [id]);
   forgetBindings(key, gone);
   MEDIA.onDelete(key, gone); // their tiles in Photos & videos, and the decrypted copies it had of them
+  NOTES.onDelete(key, gone); // their photos' tags (the chips, the suggestions) and comments, and as comments
   // Threads these messages started go with them (their counts, and their cards in the Threads panel).
   if (key.startsWith('c:')) forgetThreads(key, gone);
   const store = S.msgs[key];
@@ -6407,6 +6415,7 @@ const NOTES = createPhotoNotes({
   canPost: (key, threadId) => photoPostBlock(key, threadId),
   canManage: (key) => { const c = key.startsWith('c:') ? channelById(key.slice(2)) : null; return !!c && canIn(c, PERMS.MANAGE_MESSAGES); },
   sendComment: (item, text) => sendComment(item, text),
+  enterSends: () => P.chat.enterToSend !== false, // as the message box (Settings → "Enter sends the message")
   spellBox: (ta) => spellBox(ta),
   spelled: (ta) => spelled(ta),
   spellcheck: () => spellcheckAttr(),
@@ -6417,6 +6426,8 @@ const NOTES = createPhotoNotes({
     const v = $('.viewer:not(.closing)');
     if (v && v._photoChanged) v._photoChanged(id);
   },
+  // (MEDIA.onMeta about no message in particular: only its tag chips again.)
+  onIndex: (key) => MEDIA.onMeta(key, null),
   // A comment, from the viewer's side panel: the viewer closes (and on a phone the side panel it may have been opened
   // from, which covers the chat), then the chat goes to it.
   openMessage: (m) => {
@@ -6426,6 +6437,8 @@ const NOTES = createPhotoNotes({
     return m.dmId ? jumpToMessage('d:' + m.dmId, m.id) : jumpToMessageId(m.id);
   },
 });
+// Disappearing messages that went from wherever else they were loaded: their tags and comments go too.
+expiryListeners.add((ids) => NOTES.onDelete(null, ids));
 // Why you can't add a comment or a tag here (a sentence), or null when you can: the same rules as the message box.
 function photoPostBlock(key, threadId) {
   if (key.startsWith('d:')) {
@@ -8112,6 +8125,7 @@ async function toggleBlock(userId, on) {
   try {
     await api(on ? 'POST' : 'DELETE', `/blocks/${userId}`);
     if (on) S.blocked.add(userId); else S.blocked.delete(userId);
+    NOTES.onBlock(); // (their photo tags in the chips and suggestions)
     toast(on ? `${displayName(u)} is blocked.` : `${displayName(u)} is unblocked.`);
     renderAll();
   } catch (e) { toast(e.message, 'error'); }
@@ -8248,6 +8262,7 @@ async function openSafetyNumber(u) {
         { label: vouch ? 'Numbers match \u2014 verify and share keys' : changed ? 'Numbers match \u2014 trust new key' : 'Numbers match', kind: 'primary', action: async () => {
           sec.acceptKeys(user);
           SCHED.onKeys(); // a scheduled DM waiting for their new key
+          NOTES.onTrust(user.id); // photo tags only their new key vouches for
           if (vouch) {
             // Tells the server too, with the key compared: everyone's apps share the keys of the servers and groups
             // you're both in with them again (and of all theirs, once each one they were in has been verified).
