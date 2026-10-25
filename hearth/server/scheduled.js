@@ -108,7 +108,7 @@ module.exports = function setupScheduled(ctx) {
     getUserRow, stillSuspended, validCipher, cipherMax, maxFilesOf, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,
     postChannelMessage, postDmMessage, pushTo, maintenance, nameOf, emitTo, ready = () => true,
     hasChat = (c) => c.type === 'text', checkTtl = () => {}, parseReplyFile = () => null, replyFileIn = () => null,
-  } = ctx;
+    msgFor = (msg) => msg } = ctx;
   // The disappearing timer the app encrypted it for (checked by checkTtl against the conversation's), or null when
   // the app didn't say (then the conversation's timer when it's posted decides alone).
   const ttlOf = (b) => (typeof b.ttl === 'number' ? b.ttl : null);
@@ -532,7 +532,10 @@ module.exports = function setupScheduled(ctx) {
     if (p.hold) { mark(r, 'held', p.hold); fail(409, WHY[p.hold], 'held'); }
     if (p.fail) fail(p.fail === 'no_access' ? 404 : 403, WHY[p.fail], p.fail);
     if (p.later) fail(429, `Slowmode is on. You can send another message in ${Math.ceil((p.later - now()) / 1000)}s.`, 'slowmode');
-    res.json({ message: post(go, p) });
+    const msg = post(go, p);
+    // As the post route answers: without the quote of a message from before the sender's history in the server
+    // starts (they may have left and come back since scheduling it).
+    res.json({ message: msg && msg.serverId ? msgFor(msg, msg.serverId, req.userId) : msg });
   });
 
   api.delete('/scheduled-messages/:id', auth, (req, res) => {

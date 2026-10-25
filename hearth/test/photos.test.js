@@ -707,6 +707,9 @@ test('join history: a reply to a message from before a member’s history starts
     const sent = await as(late, 'POST', `/scheduled-messages/${s3.id}/send`, {});
     assert.equal(sent.status, 200, sent.text);
     assert.equal(sent.json.message.replyFile, null);
+    // Nor does the answer carry the quote of the message they can no longer see (as the post route answers).
+    assert.equal(sent.json.message.reply, null);
+    assert.equal(sent.json.message.replyHidden, true);
     assert.equal(row('messages', sent.json.message.id).reply_file, null);
     // Those who can see them heard of the one comment only, and that's all the counts say.
     assert.ok(await until(() => onCarol.length === 1));

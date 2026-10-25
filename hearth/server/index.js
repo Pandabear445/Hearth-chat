@@ -6683,7 +6683,7 @@ SA = require('./serveraudit')({ api, auth, db, fail, rateLimit, perms, PM, ALL: 
 require('./imports')({ api, auth, db, fail, rateLimit, limitNet, countHit, hitsSoFar, newId, now, features, isStaff, ALL: ALL_PERMS, CHANNEL_SCOPED, PM,
   serializeServer, keyState, getIo: () => io, auditLog, requirePerm });
 // Scheduled messages, "Send later" (server/scheduled.js): ciphertext held until its time, then posted as if sent then.
-SCHED = require('./scheduled')({ api, auth, db, fail, rateLimit, limitMessages, newId, now, perms, PM, requireChannel, requireDm, isMember, serverOf,
+SCHED = require('./scheduled')({ api, auth, db, fail, rateLimit, limitMessages, newId, now, perms, PM, requireChannel, requireDm, isMember, serverOf, msgFor,
   isBlocked, getUserRow, stillSuspended, validCipher, cipherMax, maxFilesOf, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,
   postChannelMessage, postDmMessage, pushTo, maintenance, nameOf, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), ready: () => !!io,
   // Voice channels' chats take scheduled messages like text channels; the disappearing timer a message was encrypted
