@@ -123,6 +123,16 @@ All decryption happens in the app; the server only ever sends ciphertext.
 
 - **Pictures**: thumbnail first (when the sender made one), full size on demand. Clicking opens the gallery: every
   picture in the conversation's loaded messages, ← → keys and buttons, wraps around, zoom, download, copy image.
+  Until a picture is drawn, it's a plain shimmering box of its size (the size the sender's app put in the message;
+  220×150 without one), never the browser's broken-image icon with the file name. The picture is in the page but
+  see-through, so screen readers and the keyboard still find it. "Couldn't load — tap to retry" shows only when
+  the file really couldn't be fetched or decrypted.
+- **Redraws**: a message drawn again (a reaction, a pin, a thread reply count, an edit of its words, another message
+  deleted from the conversation) keeps the pictures, videos and songs it already shows (`shownMedia` and `keptMedia`
+  in `app.js`). So nothing goes blank while a copy is decoded again, a playing video plays on, and an uncovered
+  spoiler stays uncovered. What it reuses is matched on the file's full details from the message, kept in memory,
+  never in the page. The browser flow "redraws" (`test/e2e/flows.mjs`) checks every frame through two reactions and
+  a delete, and the placeholder's size and look while a file is held back and when it fails to decrypt.
 - **Video and audio**: played from a decrypted `blob:` URL with the browser's controls. Encrypted videos and songs
   over 20 MB show "Play video · size" and download (with a progress bar) only when pressed.
 - **Other files**: a card with the name, size, kind ("PDF document", "ZIP archive", "XYZ file"), "Encrypted"

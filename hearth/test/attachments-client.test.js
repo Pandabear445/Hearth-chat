@@ -57,3 +57,31 @@ test('the app sends both inside the message, reads alt for pictures and blurs sp
     .map((f) => fs.readFileSync(path.join(__dirname, '..', 'server', f), 'utf8')).join('\n');
   assert.doesNotMatch(server, /\balt_text\b|\bspoiler\b/i);
 });
+
+// The browser flow "redraws" (test/e2e/flows.mjs) watches this happen frame by frame; these are the pieces it rests on.
+test('a message drawn again keeps the pictures it shows, and a picture is a plain box until it’s drawn', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'app.css'), 'utf8');
+  // A reaction, a pin or an edit (replaceMessageEl) and a whole redraw (renderMessages) hand the old row's media over,
+  // and attachmentEl takes the same file (same key, description and spoiler) over instead of decrypting it again.
+  assert.match(app, /keptMedia = shownMedia\(el\)\.get\(m\.id\) \|\| null;/);
+  assert.match(app, /keptMedia = shown\.get\(m\.id\) \|\| null;/);
+  assert.match(app, /const att = JSON\.stringify\(f\);\s+const kept = keptMedia && keptMedia\.get\(att\);\s+if \(kept\) \{ keptMedia\.delete\(att\); return kept; \}/);
+  // Only what's drawn (or gone): one still waiting loads as usual, and one that failed tries again.
+  const shown = app.slice(app.indexOf('function shownMedia('), app.indexOf('function attachmentEl('));
+  assert.match(shown, /x\.classList\.contains\('failed'\)/);
+  assert.match(shown, /img\[src\], video\[src\], audio\[src\]/);
+  // The file's details (its key among them) stay in memory: never in the page's markup.
+  assert.match(app, /holder\._att = att;/);
+  assert.doesNotMatch(app, /dataset: \{[^}]*\batt\b|data-att/);
+  // A picture starts as a placeholder and stops being one when it's drawn, not when it gets an address.
+  assert.match(app, /class: `att-media\$\{enc \|\| media === 'img' \? ' locked' : ''\}`/);
+  assert.match(app, /if \(media === 'img'\) for \(const ev of \['load', 'error'\]\) el\.addEventListener\(ev, \(\) => holder\.classList\.remove\('locked'\)\);/);
+  assert.match(app, /el\.src = u; holder\.classList\.remove\('loading', 'failed'\); if \(media !== 'img'\) holder\.classList\.remove\('locked'\);/);
+  // Until then the picture is see-through (no broken-image icon or file name) but still there for screen readers and
+  // the keyboard, and a picture whose size is known keeps exactly that size.
+  assert.match(css, /\.att-media\.locked \.att-img \{ opacity: 0; \}/);
+  assert.doesNotMatch(css, /\.att-media\.locked \.att-img \{[^}]*(display: none|visibility: hidden)/);
+  assert.match(css, /\.att-media\.locked:not\(\.sized\) \{ min-width: 220px; min-height: 150px; \}/);
+  assert.match(css, /\.att-media\.locked:has\(> \.att-img:focus-visible\) \{ outline: 2px solid var\(--focus\)/);
+});

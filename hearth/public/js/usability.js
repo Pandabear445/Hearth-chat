@@ -1,5 +1,6 @@
 // Message usability helpers: composer drafts kept on this device, one notification per message across tabs,
-// quiet hours, and "Export my data" (decrypted here, packed into a zip here; the server only hands out ciphertext).
+// quiet hours, unread counts after a delete, and "Export my data" (decrypted here, packed into a zip here; the server
+// only hands out ciphertext).
 
 // ---------------------------------------------------------------- drafts (this device only)
 // What you were typing in each conversation, kept across switching conversations and reloads. Stays in this
@@ -136,6 +137,22 @@ export function quietNow(settings, t = Date.now()) {
   if (start === end) return on(day);
   if (start < end) return on(day) && mins >= start && mins < end;
   return (on(day) && mins >= start) || (on(day - 1) && mins < end);
+}
+
+// ---------------------------------------------------------------- unread counts after a delete
+// How many deleted messages (ids) counted as unread after a read marker: newer than it, and not your own. The ones this
+// app had loaded (loaded: id -> message) say who wrote them. Any other counts as someone else's, as the server counted
+// it (a ban's cleanup and bulk deletes come as ids only), unless onlyLoaded: disappearing messages, which this app's own
+// timer takes away first, so the server's delete that follows names them again.
+export function unreadGone(ids, marker, loaded, meId, { onlyLoaded = false } = {}) {
+  if (marker == null) return 0;
+  let n = 0;
+  for (const id of ids) {
+    if (!(id > marker)) continue;
+    const m = loaded.get(id);
+    if (m ? m.authorId !== meId : !onlyLoaded) n++;
+  }
+  return n;
 }
 
 // ---------------------------------------------------------------- zip (stored, no compression)

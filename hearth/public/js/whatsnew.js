@@ -35,6 +35,7 @@ export const CHANGES = [
     'Discord habits: type # to link a channel (people who can\u2019t see it just see #unknown-channel), and posts copied from Discord keep their # headings, -# small print, - and 1. lists, >>> quotes and <t:\u2026> times. Server welcome messages link #channel names too.',
     'Attachments: press the pencil on a file before sending to add a description (alt text) or mark it as a spoiler. Spoilers stay blurred until clicked, and both are end-to-end encrypted with the message. Your word filter checks descriptions too.',
     'Keyboard shortcuts: press Ctrl+/ (\u2318+/ on a Mac) to see them all, and Shift+Esc to mark the server you\u2019re in as read.',
+    'Fixes: a picture no longer blinks when someone reacts to its message, and while it\u2019s decrypted it shows a plain box of its size instead of a broken-image icon and its file name. A ban that deletes someone\u2019s messages now takes them off the \u201cnew messages\u201d bar and the channel\u2019s unread dot.',
   ] },
   { version: '1.28.2', items: [
     'Privacy: call relays (including other regions\u2019 relays) no longer get your account id, just a stand-in name that stays the same for you. They still see your IP address, as before.',

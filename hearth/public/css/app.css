@@ -857,8 +857,13 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .embed-ask-sub { color: var(--muted); font-size: 12.5px; }
 .embed-ask .btn { flex: none; }
 .att-media { position: relative; border-radius: 12px; overflow: hidden; max-width: min(440px, 100%); background: var(--hover); border: 1px solid var(--line); }
-.att-media.locked { min-width: 220px; min-height: 150px; }
-.att-media.locked::after { content: ''; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 30%, rgb(var(--text-rgb) / .06) 50%, transparent 70%) 0 0 / 200% 100%; animation: shimmer 1.4s linear infinite; }
+/* Not shown yet (app.js attachmentEl): a plain shimmering box, the picture's own size when the sender said it (.sized).
+   The picture itself is see-through until drawn, so no broken-image icon or file name shows while it's decrypted;
+   it stays there for screen readers and the keyboard (the box shows its focus). */
+.att-media.locked:not(.sized) { min-width: 220px; min-height: 150px; }
+.att-media.locked:not(.failed)::after { content: ''; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 30%, rgb(var(--text-rgb) / .06) 50%, transparent 70%) 0 0 / 200% 100%; animation: shimmer 1.4s linear infinite; }
+.att-media.locked .att-img { opacity: 0; }
+.att-media.locked:has(> .att-img:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
 .att-img { max-width: 100%; max-height: 340px; cursor: zoom-in; object-fit: contain; display: block; }
 .att-video { max-width: 100%; max-height: 360px; display: block; background: #000; }
 .att-audio { width: 340px; max-width: 100%; display: block; }

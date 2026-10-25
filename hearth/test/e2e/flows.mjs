@@ -3322,6 +3322,123 @@ async function discordHabits(t) {
   await unread.waitFor({ state: 'detached' });
 }
 
+// ------------------------------------------------------------------ redraws: pictures that stay put, unread counts after a ban
+// In a server of its own (bob bans alice from it at the end, so nothing else is touched): a picture being decrypted is
+// a plain box of its size (no broken-image icon or file name), and says it couldn't load only when it really couldn't.
+// Reactions and a deleted message redraw the picture's message, and the picture stays on screen in every frame. A ban
+// that deletes the member's messages takes them off the "N new messages" bar and off a channel's unread dot.
+async function redraws(t) {
+  const { alice, bob } = t.people;
+  const LAB = 'Glitch Lab';
+  await bob.createServer(LAB);
+  await bob.serverMenu('Create channel');
+  const cc = await bob.dialog('Create channel');
+  await cc.locator('.field', { hasText: 'Channel name' }).locator('input').fill('side-room');
+  await cc.locator('.modal-foot .btn.primary').click();
+  await bob.noModals();
+  await bob.openChannel('general');
+  await alice.join(await bob.inviteLink(), LAB);
+  await alice.openChannel('general');
+
+  // Bob's copy of the picture waits (the encrypted file is held back), then gets bytes that don't decrypt.
+  const encrypted = (url) => /^\/uploads\/[a-z0-9]+\.bin$/.test(url.pathname);
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let tries = 0;
+  await bob.page.route(encrypted, async (route) => {
+    if (tries++) return route.continue();
+    await held;
+    await route.fulfill({ status: 200, headers: { 'content-type': 'application/octet-stream', 'cache-control': 'no-store' }, body: crypto.randomBytes(400) });
+  });
+  await alice.$('.cw-main input[type=file]').setInputFiles([{ name: 'game.png', mimeType: 'image/png', buffer: makePng(64, 48) }]);
+  await alice.send('Look at my game');
+  const pic = bob.message('Look at my game').first();
+  const box = pic.locator('.att-media');
+  const looks = () => box.evaluate((el) => {
+    const img = el.querySelector('.att-img'); const r = el.getBoundingClientRect();
+    return { w: Math.round(r.width), h: Math.round(r.height), opacity: getComputedStyle(img).opacity, src: img.getAttribute('src'), alt: img.alt, locked: el.classList.contains('locked') };
+  });
+  await pic.locator('.att-media.locked.loading').waitFor();
+  const waiting = await looks();
+  check(waiting.opacity === '0' && !waiting.src, `While it's decrypted, the picture should be a plain box, not a broken image with its name (got ${JSON.stringify(waiting)}).`);
+  check(Math.abs(waiting.w - 64) <= 1 && Math.abs(waiting.h - 48) <= 1, `The box should be the picture's size, 64×48 (got ${waiting.w}×${waiting.h}).`);
+  check(waiting.alt === 'game.png', `Screen readers should still get the picture's name (got “${waiting.alt}”).`);
+  release();
+  await box.locator('.att-retry', { hasText: 'Couldn’t load' }).waitFor();
+  const failed = await looks();
+  check(failed.opacity === '0' && !failed.src, `A file that doesn't decrypt should say so, without a broken image (got ${JSON.stringify(failed)}).`);
+  await box.locator('.att-retry').click();
+  await bob.page.waitForFunction((el) => { const img = el.querySelector('.att-img'); return img.complete && img.naturalWidth > 0 && !el.classList.contains('locked'); }, await box.elementHandle());
+  const drawn = await looks();
+  check(drawn.opacity === '1' && drawn.w === waiting.w && drawn.h === waiting.h, `The picture should take the box's place without moving anything (got ${JSON.stringify(drawn)}, was ${waiting.w}×${waiting.h}).`);
+  await bob.page.unroute(encrypted);
+  const mid = await pic.getAttribute('data-mid');
+  await alice.page.waitForFunction((id) => { const img = document.querySelector(`#messages [data-mid="${id}"] .att-img`); return img && img.complete && img.naturalWidth > 0; }, mid);
+
+  // Every frame from here until the check: is the picture there and drawn, and is it still the same element?
+  const watch = (p) => p.page.evaluate((id) => {
+    const find = () => document.querySelector(`#messages [data-mid="${id}"] .att-img`);
+    const s = { img: find(), frames: 0, blank: 0, stop: false };
+    window.__pic = s;
+    const tick = () => {
+      const img = find();
+      s.frames++;
+      if (!img || !img.naturalWidth || getComputedStyle(img).opacity !== '1') s.blank++;
+      if (!s.stop) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }, mid);
+  const stayed = async (p, what) => {
+    const s = await p.page.evaluate((id) => { const x = window.__pic; x.stop = true; return { same: x.img === document.querySelector(`#messages [data-mid="${id}"] .att-img`), frames: x.frames, blank: x.blank }; }, mid);
+    check(s.same && !s.blank, `${p.name}: the picture should stay on screen through ${what} (same element: ${s.same}, ${s.blank} of ${s.frames} frames without it).`);
+  };
+  for (const p of [alice, bob]) await watch(p);
+  await pic.hover();
+  await pic.locator('button[aria-label="React with thumbs up"]').click();
+  await alice.message('Look at my game').locator('.reaction[aria-label="👍 1"]').waitFor();
+  const onAlice = alice.message('Look at my game').first();
+  await onAlice.hover();
+  await onAlice.locator('button[aria-label="React with thumbs up"]').click();
+  for (const p of [alice, bob]) await p.message('Look at my game').locator('.reaction[aria-label="👍 2"]').waitFor();
+  for (const p of [alice, bob]) await stayed(p, 'two reactions');
+  // A deleted message redraws the whole list.
+  await bob.send('A line to delete');
+  await alice.message('A line to delete').waitFor();
+  for (const p of [alice, bob]) await watch(p);
+  await bob.messageAction('A line to delete', 'Delete message');
+  await bob.modal('Delete message?').locator('.modal-foot .btn.danger').click();
+  for (const p of [alice, bob]) await p.message('A line to delete').waitFor({ state: 'detached' });
+  for (const p of [alice, bob]) await stayed(p, 'a message deleted');
+
+  // Bob is elsewhere while alice posts in both channels; back in #general, the bar counts what's new.
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  for (const n of ['one', 'two', 'three']) await alice.send(`Raid message ${n}`);
+  await alice.openChannel('side-room');
+  for (const n of ['four', 'five']) await alice.send(`Raid message ${n}`);
+  const sideUnread = bob.$('#sidebar-body .ch-row.unread').filter({ has: bob.$('.ch-name', { hasText: exact('side-room') }) });
+  await bob.railButton(LAB);
+  await bob.page.waitForSelector('#composer-input[placeholder="Message #general"]');
+  await bob.$('#unread-bar', { hasText: '3 new messages since' }).waitFor();
+  await sideUnread.waitFor();
+  // Banned with her messages from the last 24 hours: they go, and so does everything that counted them.
+  await bob.showMembers();
+  await bob.member('Alice Wonder').click({ button: 'right' });
+  await bob.menuItem('Ban Alice Wonder').click();
+  const ban = await bob.dialog('Ban Alice Wonder?');
+  await ban.locator('select[aria-label="Delete their messages from the last"]').selectOption('24');
+  await ban.locator('.modal-foot .btn.danger', { hasText: 'Ban' }).click();
+  await bob.toast('Alice Wonder is banned and 6 of their messages were deleted.');
+  await bob.message('Raid message').first().waitFor({ state: 'detached' });
+  await bob.$('#unread-bar').waitFor({ state: 'hidden' });
+  check(!(await bob.$('#messages .new-div').count()), 'The “New messages” line should go with the messages it was for.');
+  await sideUnread.waitFor({ state: 'detached' });
+  await bob.openChannel('side-room');
+  await bob.$('#messages .welcome').waitFor();
+  check(await bob.$('#unread-bar').isHidden(), `#side-room should open with nothing new (got “${await bob.$('#unread-bar').innerText()}”).`);
+  await alice.$(`#rail button[aria-label="${LAB}"]`).waitFor({ state: 'detached' });
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -3367,4 +3484,5 @@ export const FLOWS = [
   ['join history: new members can’t read back (setting, audit log); someone joining again sees one line instead of locked rows, in a channel and a voice chat; later messages both ways', joinHistory],
   ['alert channels: add a signed webhook, its secret shown once, Test reaches it, masked address; off and remove need the password; the page stays put', alertChannels],
   ['discord habits: # picks a channel and the link opens it (unknown ones stay plain); headings, lists and >>> quotes; a spoiler picture with a description; Ctrl+/ and Shift+Esc', discordHabits],
+  ['redraws: a picture is a plain box of its size while decrypted and says so only if it fails; reactions and a deleted message keep it on screen; a ban’s cleanup takes its messages off the unread bar and dot', redraws],
 ];

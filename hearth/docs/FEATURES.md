@@ -72,7 +72,14 @@ is encrypted or assembled on the device.
     page around the marker if it isn't loaded yet;
   - **Jump to latest**, which already existed;
   - **Mark as read** and **Mark unread** on messages, channels, DMs and group chats, and **Mark server as read**
-    (`POST /servers/:id/read`).
+    (`POST /servers/:id/read`);
+  - deleted messages stop counting at once: one message, a bulk delete, a ban that deletes the member's messages, or
+    disappearing messages (`uncountDeleted` in `app.js`, `unreadGone` in `public/js/usability.js`). They come off the
+    unread bar's count and the conversation's unread count; when nothing new is left, the bar, the "New messages"
+    line and the channel's dot go. A deleted message the app never loaded counts as someone else's, as the server
+    counted it (a ban's cleanup sends only ids). Mention counts that are left are asked for again (`GET /me/unread`),
+    since only the server knows which of those messages mentioned you. Before, the bar kept the count it opened with
+    ("12 new messages" over a channel a ban had emptied), and a channel stayed marked unread.
 
 ### Threads: unread replies and the Threads list (v19)
 Before this, a thread reply counted nowhere: not as unread, not as a mention, and nothing listed a channel's threads.
@@ -403,7 +410,7 @@ line); **Back to threads** puts the keyboard on that thread's card; the panel fo
 arrives while the member list covers the thread stays new; a ping that's deleted leaves no badge; a thread started by
 someone you blocked is folded away in the panel; "Mark as read" on the channel clears its threads.
 
-`test/usability.test.js` (12 tests):
+`test/usability.test.js` (13 tests):
 - **Saved messages**: per account; other people can't read or delete your saved items; you can't save what you
   can't see; notes must be ciphertext; "no longer available" after a delete or after losing access; sync goes
   only to the owner's sockets.
@@ -437,7 +444,13 @@ someone you blocked is folded away in the panel; "Mark as read" on the channel c
   expiry and early lifting work; audit entries are written.
 - **Reports**: you see your own, and repeats return the existing report.
 - **App helpers**: quiet hours give the same answer as the server; the zip is valid (headers and CRC-32s); saving
-  no longer writes plaintext to the browser.
+  no longer writes plaintext to the browser; deleted messages come off the unread counts only when they were after
+  the marker and not yours (those not loaded count, except disappearing ones, which the app's own timer removed
+  already).
+
+Browser flow (`test/e2e/flows.mjs`, "redraws"): a moderator in #general with "3 new messages" bans the member who
+wrote them, deleting their messages from the last 24 hours. The bar and the "New messages" line go, and so does the
+dot on another channel the member had posted in, which then opens with nothing new.
 
 Browser check (Playwright, not part of `npm test`): two real accounts registered through the UI, and a second
 device for one of them. It covers:

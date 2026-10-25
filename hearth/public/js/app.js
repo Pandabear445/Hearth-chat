@@ -39,7 +39,7 @@ import { webhooksPanel, onWebhooksUpdate } from './webhooks.js';
 import { initServerAudit, auditTab, reportsTab } from './serveraudit.js';
 import { openDiscordImport } from './discord-import.js';
 import { loadAppearance, saveAppearance, setServerTheme, BACKGROUNDS } from './appearance.js';
-import { createDrafts, clearAllDrafts, clearLocalCopies, expireLocalCopies, claimOnce, rememberNotification, closeNotifications, closeNotificationFor, alsoCloseNotifications, quietNow } from './usability.js';
+import { createDrafts, clearAllDrafts, clearLocalCopies, expireLocalCopies, claimOnce, rememberNotification, closeNotifications, closeNotificationFor, alsoCloseNotifications, quietNow, unreadGone } from './usability.js';
 import { label as disLabel, deadline, expired as isExpired, disappears, serverKept, nextDeadline, waitFor, sysLineParts, remaining, TIMERS, setChoices as setTimerChoices, weaker as weakerTimer, stricter as stricterTimer } from './disappear.js';
 import { createScheduled } from './scheduled.js';
 import { bindNew, bindEdit, describe as describeBinding, createVersions, createCopies, createOriginals, noteMessage, bindingState } from './binding.js';
@@ -1437,8 +1437,8 @@ function forgetCopies(msgs, ids, key = null) {
   if (key ? S.unread.has(key) || S.mentions.has(key) || S.threadMentions.has(key) : S.unread.size || S.mentions.size || S.threadMentions.size) refreshUnreadSoon();
   armClientExpiry();
 }
-// Unread and mention counts still include messages that have since disappeared: ask the server again, a moment after
-// its sweep, and at most every 30 seconds.
+// Unread and mention counts still include messages that have since disappeared (or pings among deleted messages,
+// uncountDeleted): ask the server again, a moment after its sweep, and at most every 30 seconds.
 let unreadTimer = 0;
 let unreadAsked = 0;
 function refreshUnreadSoon() {
@@ -3614,6 +3614,7 @@ function renderMessages(stick) {
   if (!sc) return;
   const key = currentKey();
   const store = S.msgs[key];
+  const shown = shownMedia(sc); // (the same messages drawn again keep their pictures)
   clear(sc);
   if (!store || !store.loaded) {
     sc.append(h('div', { class: 'msg-skeleton', 'aria-label': 'Loading messages' }, [1, 2, 3, 4].map(() => h('div', { class: 'sk-row' }, h('span', { class: 'sk-av' }), h('span', { class: 'sk-lines' }, h('i'), h('i'))))));
@@ -3637,7 +3638,8 @@ function renderMessages(stick) {
       newShown = true;
       prev = null;
     }
-    sc.append(messageEl(m, prev, 'main'));
+    keptMedia = shown.get(m.id) || null;
+    try { sc.append(messageEl(m, prev, 'main')); } finally { keptMedia = null; }
     prev = m;
   }
   while (li < lines.length) line();
@@ -4290,12 +4292,15 @@ function replaceMessageEl(m) {
     const ctx = el.dataset.ctx || 'main';
     const list = ctx === 'thread' ? threadList() : (S.msgs[keyOfMessage(m)] || { list: [] }).list;
     const i = list.findIndex((x) => x.id === m.id);
-    const fresh = messageEl(m, i > 0 ? list[i - 1] : null, ctx);
+    const focused = el.contains(document.activeElement) ? document.activeElement : null;
+    keptMedia = shownMedia(el).get(m.id) || null;
+    let fresh;
+    try { fresh = messageEl(m, i > 0 ? list[i - 1] : null, ctx); } finally { keptMedia = null; }
     const wasCurrent = el.tabIndex === 0;
-    const hadFocus = el.contains(document.activeElement);
     el.replaceWith(fresh);
     if (wasCurrent) setCurrentMessage(fresh.parentElement, fresh);
-    if (hadFocus) fresh.focus({ preventScroll: true });
+    // (A picture the new row took over gets its focus back: moving it lost it.)
+    if (focused) (fresh.contains(focused) ? focused : fresh).focus({ preventScroll: true });
     if (S.editing === m.id) { const ta = fresh.querySelector('textarea'); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }
   });
 }
@@ -4583,6 +4588,23 @@ function mediaDownloadBtn(m, f) {
   return b;
 }
 const loadQueue = makeQueue(3);
+// The pictures, videos and songs that rows of messages already show, by message id and then by file. Drawing the
+// same message again (replaceMessageEl, renderMessages) for something that leaves its files alone, like a reaction, a
+// pin, an edit of its words or another message deleted, takes each one over as it is (attachmentEl). Drawing a new
+// one would leave a blank gap for a moment while it's decrypted and decoded again. A playing video plays on, and an
+// uncovered spoiler stays uncovered. Not one still waiting to load, which is drawn afresh and loads as any new one
+// would (so does a row the word filter now hides, filteredEl), or one that failed, which tries again.
+let keptMedia = null; // while a message is drawn again: what its old row showed, file -> holder
+function shownMedia(root) {
+  const out = new Map();
+  for (const x of root.querySelectorAll('.att-media')) {
+    const row = x.closest('.msg[data-mid]');
+    if (!row || !x._att || x.classList.contains('failed') || !(x.classList.contains('gone') || x.querySelector('img[src], video[src], audio[src]'))) continue;
+    if (!out.has(row.dataset.mid)) out.set(row.dataset.mid, new Map());
+    out.get(row.dataset.mid).set(x._att, x);
+  }
+  return out;
+}
 function attachmentEl(f, m) {
   // Unencrypted entries (older messages) load straight from this server; anything else was dropped when the
   // message was decrypted (see attachments.js), and is refused here too.
@@ -4592,11 +4614,20 @@ function attachmentEl(f, m) {
   const type = f.type || '';
   const media = mediaKind(type, f.name);
   if (media) {
+    // The same file shown the same way (its key, size, description and spoiler are all in here).
+    const att = JSON.stringify(f);
+    const kept = keptMedia && keptMedia.get(att);
+    if (kept) { keptMedia.delete(att); return kept; }
     // The sender's description (alt text) is what screen readers say; the file name stands in without one.
     const el = media === 'img'
       ? h('img', { class: 'att-img', alt: f.alt || f.name || 'Image', tabindex: '0', role: 'button', 'aria-label': `Open ${f.alt || f.name || 'image'}` })
       : h(media, { class: `att-${media}`, controls: true, preload: 'metadata', 'aria-label': f.alt || null });
-    const holder = h('div', { class: `att-media${enc ? ' locked' : ''}`, dataset: { name: f.name || '' } }, el);
+    // A picture shows a plain placeholder of its size (locked) until it's drawn: an image without one yet would show
+    // the browser's broken-image icon and the file name. It stays in the page for screen readers and the keyboard.
+    const holder = h('div', { class: `att-media${enc || media === 'img' ? ' locked' : ''}`, dataset: { name: f.name || '' } }, el);
+    holder._att = att;
+    // Drawn, or its bytes aren't a picture after all (the browser then says so its own way).
+    if (media === 'img') for (const ev of ['load', 'error']) el.addEventListener(ev, () => holder.classList.remove('locked'));
     if (f.alt && media !== 'audio') { holder.classList.add('has-alt'); holder.append(altChip(f.alt)); }
     if (f.sp) spoilerCover(holder, el, media);
     // Reserve the right space up front so the chat doesn't jump while images load.
@@ -4622,7 +4653,7 @@ function attachmentEl(f, m) {
     const load = () => {
       holder.classList.add('loading');
       const want = media === 'img' && f.th ? () => decryptedUrl(m, { ...f.th, type: 'image/webp' }) : fullWatched;
-      loadQueue(want).then((u) => { el.src = u; holder.classList.remove('locked', 'loading', 'failed'); })
+      loadQueue(want).then((u) => { el.src = u; holder.classList.remove('loading', 'failed'); if (media !== 'img') holder.classList.remove('locked'); })
         .catch((e) => {
           holder.classList.remove('loading');
           if (e && e.code === 'gone') return markGone(holder);
@@ -4932,6 +4963,7 @@ function onDeleteMessage(key, id, { expired = false } = {}) {
   if (key.startsWith('c:')) forgetThreads(key, gone);
   const store = S.msgs[key];
   const removed = store ? store.list.filter((x) => gone.has(x.id)) : [];
+  const fewerNew = uncountDeleted(key, gone, removed, expired);
   if (S.thread && gone.has(S.thread.rootId)) { if (expired) delete S.threads[S.thread.rootId]; closeThread(); }
   if (store) {
     store.list = store.list.filter((x) => !gone.has(x.id));
@@ -4944,9 +4976,36 @@ function onDeleteMessage(key, id, { expired = false } = {}) {
       const top = sc ? sc.scrollTop : 0;
       renderMessages(false);
       if (sc) sc.scrollTop = top;
-    }
+    } else if (fewerNew && currentKey() === key) renderUnreadBar(); // (only ones that weren't loaded went)
   }
   if (expired) forgetCopies(removed, gone, key);
+}
+// Deleted messages that were unread stop counting (a ban's cleanup, a bulk delete, one deleted, one that disappeared):
+// in the conversation's unread count, whose dot goes with the last of them, and in "N new messages" over it, which
+// goes once none are left. Pings are counted again by the server (refreshUnreadSoon): only it knows which deleted
+// messages this app never loaded mentioned you. removed: the deleted ones this app had. Returns whether the bar's
+// count changed.
+function uncountDeleted(key, gone, removed, expired) {
+  const loaded = new Map(removed.map((x) => [x.id, x]));
+  const count = (marker) => unreadGone(gone, marker, loaded, S.me.id, { onlyLoaded: expired });
+  const was = S.unreadCounts && S.unreadCounts[key];
+  // (Where "New messages" would go, as setView puts it: a channel made since start-up has no read marker yet.)
+  const left = was ? Math.max(0, was - count(S.lastRead[key] || S.chatFloor[key] || '0')) : 0;
+  if (was && left !== was) {
+    S.unreadCounts[key] = left;
+    if (!left) { S.unread.delete(key); S.mentions.delete(key); }
+    else if (S.mentions.has(key) && !expired) refreshUnreadSoon(); // (forgetCopies asks for disappearing ones)
+    updateTitle(); later(renderRail); later(renderSidebar);
+  }
+  if (S.unreadMarker !== key) return false;
+  const n = count(S.markerId);
+  if (!n) return false;
+  S.markerCount = Math.max(0, (S.markerCount || 0) - n);
+  // Nothing new left: the conversation reads as if they had never been there (no bar and no "New messages" line,
+  // also for what comes next).
+  const st = S.msgs[key];
+  if (!S.markerCount && st && st.loaded && !st.list.some((x) => !gone.has(x.id) && x.id > S.markerId && x.authorId !== S.me.id)) S.unreadMarker = null;
+  return true;
 }
 function renderTyping() {
   $$('.typing').forEach((el) => {

@@ -538,6 +538,33 @@ test('app helpers: quiet hours follow the same rule as the server, and the expor
   assert.ok(seen['attachments/a.bin'].equals(files['attachments/a.bin']));
 });
 
+test('app helpers: deleted messages that were unread come off the counts (a ban’s cleanup, bulk delete, disappearing)', async () => {
+  const { pathToFileURL } = require('node:url');
+  const U = await import(pathToFileURL(path.join(__dirname, '..', 'public', 'js', 'usability.js')).href);
+  // Message ids as the server makes them: the time first, so later ones sort after.
+  const id = (n) => (1_760_000_000_000 + n).toString(36).padStart(9, '0') + 'a1b2c3d4e5';
+  const me = 'me'; const them = 'raider';
+  const loaded = new Map([[id(5), { id: id(5), authorId: them }], [id(6), { id: id(6), authorId: me }], [id(7), { id: id(7), authorId: them }]]);
+  const gone = [id(3), id(5), id(6), id(7), id(9)];
+  // After the marker (4): 5 and 7 are theirs and count, 6 is yours, 3 was read already. 9 isn't loaded: the server
+  // counted it (a ban's cleanup sends ids only), so it comes off too.
+  assert.equal(U.unreadGone(gone, id(4), loaded, me), 3);
+  // Disappearing messages: only those this app still had (its own timer took the others, and the server's delete
+  // names them again).
+  assert.equal(U.unreadGone(gone, id(4), loaded, me, { onlyLoaded: true }), 2);
+  assert.equal(U.unreadGone(new Set([id(1), id(2)]), '0', new Map(), me), 2, 'a conversation without a read marker yet');
+  assert.equal(U.unreadGone(gone, id(9), loaded, me), 0, 'nothing after the marker');
+  for (const marker of [null, undefined]) assert.equal(U.unreadGone(gone, marker, loaded, me), 0, 'no marker, nothing to take off');
+  // The app takes them off the conversation's unread count (its dot goes with the last one) and the "N new messages"
+  // bar, for every delete: one message, a bulk delete, a ban's cleanup, a disappearing message.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+  const del = src.slice(src.indexOf('function onDeleteMessage('), src.indexOf('function renderTyping('));
+  assert.match(del, /const fewerNew = uncountDeleted\(key, gone, removed, expired\);/);
+  assert.match(del, /S\.markerCount = Math\.max\(0, \(S\.markerCount \|\| 0\) - n\);/);
+  assert.match(del, /if \(!left\) \{ S\.unread\.delete\(key\); S\.mentions\.delete\(key\); \}/);
+  assert.match(del, /else if \(fewerNew && currentKey\(\) === key\) renderUnreadBar\(\);/, 'the bar is drawn again when only messages that weren’t loaded went');
+});
+
 test('app: saved messages and read markers are no longer kept as plaintext in the browser', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
   assert.doesNotMatch(src, /get saved\(\)/, 'no local saved list');
