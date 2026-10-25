@@ -32,7 +32,7 @@ const SQL = {
 const { alive } = require('./disappear');
 
 module.exports = function setupSearch(ctx) {
-  const { api, auth, db, fail, rateLimit, canIn, PM, requireServer, requireChannel, requireDm, serializeMessage, serializeDmMessage, reactionsFor, history } = ctx;
+  const { api, auth, db, fail, rateLimit, canIn, PM, requireServer, requireChannel, requireDm, serializeMessage, serializeDmMessage, extrasFor, history } = ctx;
   const DEFAULT_LIMIT = 100;
   const MAX_LIMIT = 200;
   const MAX_SOURCES = 100;
@@ -154,7 +154,8 @@ module.exports = function setupSearch(ctx) {
     const rows = new Map();
     load('messages', page.filter((x) => x.src.kind === 'c').map((x) => x.p[1])).forEach((r) => rows.set('c' + r.id, r));
     load('dm_messages', page.filter((x) => x.src.kind === 'd').map((x) => x.p[1])).forEach((r) => rows.set('d' + r.id, r));
-    const reactions = reactionsFor(page.map((x) => x.p[1]));
+    // Reactions, photo comment counts and tags for the whole page at once (it can mix channels and DMs).
+    const extras = extrasFor(page.map((x) => x.p[1]));
     const messages = [];
     for (const { p, src } of page) {
       const row = rows.get(src.kind + p[1]);
@@ -162,7 +163,7 @@ module.exports = function setupSearch(ctx) {
       // locked with a key from before the caller's (the few sent while theirs was on its way), nor a reply in a thread
       // started before the caller joined (that thread is closed to them, server/joinhistory.js).
       if (row && alive(row) && (src.kind !== 'c' || history.visible(row, src.since))) {
-        messages.push(src.kind === 'c' ? serializeMessage(row, src.channel, reactions, src.since) : serializeDmMessage(row, reactions));
+        messages.push(src.kind === 'c' ? serializeMessage(row, src.channel, extras, src.since) : serializeDmMessage(row, extras));
       }
     }
     res.json({ messages, nextCursor: more && page.length ? encodeCursor(page[page.length - 1].p) : null, conversations: chosen.length });

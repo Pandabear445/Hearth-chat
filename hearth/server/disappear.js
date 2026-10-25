@@ -12,8 +12,9 @@
 //
 // Deleting: one timer armed for the next deadline, plus a sweep every minute as a safety net. Each run deletes in
 // batches of 500 through partial indexes that only hold disappearing messages, with everything hanging off them
-// (files, reactions, poll votes, mention marks, saved entries, pin history), then tells open apps with the same live
-// events a normal delete sends (message:delete-bulk, thread:update, dm:delete, saved:update).
+// (files, reactions, poll votes, mention marks, saved entries, pin history, photo tags), then tells open apps with the
+// same live events a normal delete sends (message:delete-bulk, thread:update, dm:delete, saved:update, and the
+// photo comment counts of messages that lost a comment: message:file-replies, dm:file-replies).
 //
 // Routes
 //   PUT /channels/:id/disappearing  { seconds }   group chat: any member; server channel: Manage Channels there (and
@@ -57,7 +58,7 @@ const arm = (at) => { if (current && at != null) current.arm(at); };
 module.exports = function setupDisappear(ctx) {
   const { api, auth, db, fail, rateLimit, newId, now, requireChannel, requireDm, requireManageableChannel, serverOf, isBlocked, getUserRow,
     toChannel, getIo, emitTo, removeUpload, unseal, threadInfo, groupLast, bots, serverAudit = () => {}, chanRef = () => null,
-    toChannelAbout = (c) => toChannel(c), visibilityOf = () => null, historyStart = () => null } = ctx;
+    toChannelAbout = (c) => toChannel(c), visibilityOf = () => null, historyStart = () => null, emitFileReplies = () => {} } = ctx;
 
   // ---------------------------------------------------------------- the timer
   function parseTimer(v) {
@@ -169,11 +170,12 @@ module.exports = function setupDisappear(ctx) {
   function expireTable(kind) {
     const t = now();
     const table = kind === 'c' ? 'messages' : 'dm_messages';
-    const due = db.prepare(`SELECT id, ${kind === 'c' ? 'channel_id, thread_id, author_id' : 'dm_id, author_id'} FROM ${table} WHERE expires_at <= ? ORDER BY expires_at LIMIT ?`).all(t, BATCH);
+    // reply_to and reply_file: a comment on a photo (v21) that goes takes one off that photo's count.
+    const due = db.prepare(`SELECT id, ${kind === 'c' ? 'channel_id, thread_id, author_id' : 'dm_id, author_id'}, reply_to, reply_file FROM ${table} WHERE expires_at <= ? ORDER BY expires_at LIMIT ?`).all(t, BATCH);
     if (!due.length) return 0;
     if (kind === 'c') {
       const have = new Set(due.map((r) => r.id));
-      for (const r of db.prepare(`SELECT id, channel_id, thread_id, author_id FROM messages WHERE thread_id ${IN}`).all(json([...have]))) if (!have.has(r.id)) { have.add(r.id); due.push(r); }
+      for (const r of db.prepare(`SELECT id, channel_id, thread_id, author_id, reply_to, reply_file FROM messages WHERE thread_id ${IN}`).all(json([...have]))) if (!have.has(r.id)) { have.add(r.id); due.push(r); }
     }
     const ids = json(due.map((r) => r.id));
     const files = db.prepare(`SELECT name FROM blobs WHERE message_id ${IN}`).all(ids).map((b) => '/uploads/' + b.name);
@@ -182,7 +184,7 @@ module.exports = function setupDisappear(ctx) {
     const savers = db.prepare(`SELECT user_id, message_id FROM saved_messages WHERE message_id ${IN}`).all(ids);
     db.transaction(() => {
       db.prepare(`DELETE FROM blobs WHERE message_id ${IN}`).run(ids);
-      for (const x of ['reactions', 'poll_votes', 'poll_closed', 'mention_marks', 'saved_messages', 'pin_log']) db.prepare(`DELETE FROM ${x} WHERE message_id ${IN}`).run(ids);
+      for (const x of ['reactions', 'poll_votes', 'poll_closed', 'mention_marks', 'media_tags', 'saved_messages', 'pin_log']) db.prepare(`DELETE FROM ${x} WHERE message_id ${IN}`).run(ids);
       db.prepare(`DELETE FROM ${table} WHERE id ${IN}`).run(ids);
     })();
     // After the commit, like every other delete: a failure can't leave a message whose files are already gone.
@@ -222,6 +224,10 @@ module.exports = function setupDisappear(ctx) {
       }
     }
     if (io) for (const s of savers) emitTo(s.user_id, 'saved:update', { messageId: s.message_id, saved: false });
+    // Photos that lost a comment (one that disappeared on a message that's still there): their new counts.
+    const gone = new Set(rows.map((r) => r.id));
+    const commented = rows.filter((r) => r.reply_file != null && r.reply_to && !gone.has(r.reply_to)).map((r) => r.reply_to);
+    if (io && commented.length) emitFileReplies(kind === 'c' ? 'messages' : 'dm_messages', commented);
   }
   const lastDm = (dmId) => {
     const m = db.prepare(`SELECT id, author_id, ciphertext, created_at, expires_at FROM dm_messages WHERE dm_id = ? AND ${LIVE} ORDER BY id DESC LIMIT 1`).get(dmId, now());

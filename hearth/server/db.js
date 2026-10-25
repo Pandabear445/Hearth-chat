@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 20;
+const SCHEMA_VERSION = 21;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1590,6 +1590,58 @@ CREATE INDEX IF NOT EXISTS idx_servers_join_rotate ON servers(join_rotate_at) WH
 // who aren't signed in and to link-preview bots (server/invitepreview.js). Off by default: the card then only says
 // "You're invited to a server on <instance>".
 addColumn('servers', 'invite_preview', 'INTEGER NOT NULL DEFAULT 0');
+
+// v21 (photos): the Photos & videos panel, comments on one photo and tags on photos (server/photos.js).
+//   files       how many uploads a message listed when it was posted (files and their thumbnails: the distinct
+//               well-formed /uploads/ addresses, up to what one message may carry). It counts what was posted, not
+//               what attachBlobs linked, so a forward (whose blobs stay the original's) counts too. The server can't
+//               tell a photo from a PDF (file types are inside the encrypted message), so this only says "has
+//               files"; the apps keep the photos and videos. Older messages get it from their linked blobs (a
+//               forward from before this version has none, so it stays 0).
+//   reply_file  for a reply that is a comment on one photo of the message it replies to: that photo's place in its
+//               file list (0-99); NULL for every other message. Only the per-photo counts depend on it: which
+//               photo a comment is about is also inside the encrypted reply, and the apps go by that.
+//   scheduled_messages.file_count and reply_file: the same two, kept until a scheduled message is posted (its
+//               files column lists only the blobs it holds, which leaves out a forward's).
+//   media_tags  one encrypted tag on one photo (file_idx) of one message, sealed on the device with the
+//               conversation's key. The server learns which photo of which message has a tag, who added it and
+//               when, never its words. id is the app's (bound into the ciphertext, so the server can't copy or move
+//               a tag); conv is 'c:<channel>' | 'd:<dm>' like read_states; epoch is the server key epoch a channel
+//               tag is locked with (NULL in DMs). No foreign key to the messages (channel and DM messages share it,
+//               as with reactions): every way of deleting messages deletes their tags (forgetMessages and the rest).
+// The partial indexes only hold messages with files, and comments: a Photos & videos page walks only those, newest
+// first, and a message's comment counts are one range per message.
+addColumn('messages', 'files', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('dm_messages', 'files', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('messages', 'reply_file', 'INTEGER');
+addColumn('dm_messages', 'reply_file', 'INTEGER');
+addColumn('scheduled_messages', 'file_count', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('scheduled_messages', 'reply_file', 'INTEGER');
+if (hasData && fromVersion < 21) {
+  for (const t of ['messages', 'dm_messages']) {
+    db.exec(`UPDATE ${t} SET files = (SELECT COUNT(*) FROM blobs WHERE blobs.message_id = ${t}.id)
+      WHERE id IN (SELECT message_id FROM blobs WHERE message_id IS NOT NULL)`);
+  }
+  db.exec("UPDATE scheduled_messages SET file_count = json_array_length(files) WHERE json_valid(files) AND json_array_length(files) > 0");
+}
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_messages_files ON messages(channel_id, id) WHERE files > 0;
+CREATE INDEX IF NOT EXISTS idx_dm_messages_files ON dm_messages(dm_id, id) WHERE files > 0;
+CREATE INDEX IF NOT EXISTS idx_messages_reply_file ON messages(reply_to, reply_file) WHERE reply_file IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dm_messages_reply_file ON dm_messages(reply_to, reply_file) WHERE reply_file IS NOT NULL;
+CREATE TABLE IF NOT EXISTS media_tags (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL,
+  conv TEXT NOT NULL,
+  file_idx INTEGER NOT NULL,
+  author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ciphertext TEXT NOT NULL,
+  epoch INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_tags_message ON media_tags(message_id, file_idx);
+CREATE INDEX IF NOT EXISTS idx_media_tags_conv ON media_tags(conv, created_at);
+`);
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
 db.exec('COMMIT');
