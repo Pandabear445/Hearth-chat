@@ -571,6 +571,17 @@ if [ "$KIND" = member ] && head -1 /etc/turnserver.conf 2>/dev/null | grep -q 'w
   esac
   RELAY_IP="\${EXT%%/*}"
 fi
+# A member relay's firewall rule that keeps it away from this machine's own services (setup-turn.sh --member) is loaded
+# when coturn starts. Reloading or updating nftables (its "flush ruleset") takes it away with every other rule, so it's
+# put back here; if it can't be, the relay stops.
+if [ -e /etc/systemd/system/coturn.service.d/hearth-relay-guard.conf ] && systemctl is-active --quiet coturn && ! nft list table inet hearth_relay >/dev/null 2>&1; then
+  if nft -f /etc/hearth-region/relay-guard.nft >/dev/null 2>&1; then
+    logger -t hearth-relay "The firewall rule that keeps the relay away from this machine's own services was gone (an nftables reload or update takes it away), so it was put back." 2>/dev/null || true
+  else
+    systemctl stop coturn >/dev/null 2>&1 || true
+    logger -t hearth-relay "The firewall rule that keeps the relay away from this machine's own services was gone and couldn't be put back (sudo nft -f /etc/hearth-region/relay-guard.nft says why), so the relay is stopped. Once it loads, start the relay again (with the rule): sudo systemctl start coturn" 2>/dev/null || true
+  fi
+fi
 IFACE="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") print $(i + 1)}' | head -1)"
 TX=0; RX=0
 if [ -n "$IFACE" ] && [ -r "/sys/class/net/$IFACE/statistics/tx_bytes" ]; then
@@ -883,6 +894,13 @@ echo "To remove it from this machine later: sudo hearth-relay-uninstall"
       tooManyMoves(r, ip);
       const why = await claimedBy(ip, r);
       if (why) fail(409, `This relay can't use ${ip}: ${why}.`);
+      // An offer takes one of the waiting places when its machine first checks in (MEMBER_PENDING); until a place is free
+      // its check-ins are turned away (it tries again every minute). Asked before the address check below as well, so one
+      // turned away anyway doesn't use up its checks of its address (and the proof would be thrown away with it).
+      const waitForPlace = (row) => {
+        if (row.status === 'pending' && !row.last_seen && waitingCount() >= MEMBER_PENDING) fail(409, `${WAITING_FULL}. This relay keeps checking in, and gets a place once the owner has gone through them.`);
+      };
+      waitForPlace(r);
       // Where it checks in from. A check-in that crossed the internet from another address (through a proxy in front of
       // this server, such as Cloudflare's, or over IPv6) proves the address instead: the relay there has to answer a login
       // made with this relay's own secret, which only it holds (turnprobe.js). A proved address is taken for VERIFIED_MS.
@@ -903,9 +921,7 @@ echo "To remove it from this machine later: sudo hearth-relay-uninstall"
       r = db.prepare('SELECT * FROM regions WHERE id = ?').get(r.id);
       if (!checkToken(r, token)) refuseToken(req.params.id, r);
       tooManyMoves(r, ip);
-      // An offer takes one of the waiting places when its machine first checks in (MEMBER_PENDING); until a place is free
-      // its check-ins are turned away (it tries again every minute).
-      if (r.status === 'pending' && !r.last_seen && waitingCount() >= MEMBER_PENDING) fail(409, `${WAITING_FULL}. This relay keeps checking in, and gets a place once the owner has gone through them.`);
+      waitForPlace(r);
     }
     const host = ip.includes(':') ? `[${ip}]` : ip;
     const urls = [`turn:${host}:3478?transport=udp`, `turn:${host}:3478?transport=tcp`];

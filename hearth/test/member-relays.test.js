@@ -125,7 +125,9 @@ test('an offer gives an install command for the relay\'s own secret, with the me
   assert.match(turn, /\n\$MEMBER_CONF\nsimple-log\nCONF\n/);
   assert.match(turn, /\nEXTRA=""; \[ "\$MEMBER" = yes \] && EXTRA="nftables"/);
   const guard = /cat > \/etc\/hearth-region\/relay-guard\.nft <<'NFT_EOF'\n([\s\S]*?)\nNFT_EOF\n/.exec(turn)[1];
-  assert.match(guard, /^table inet hearth_relay\ndelete table inet hearth_relay\ntable inet hearth_relay \{\n\tchain out \{\n\t\ttype filter hook output priority 0; policy accept;\n/m, 'its own table, replaced whole each time');
+  // Before destination NAT (nat's output hook is at -100): Docker, Podman and Kubernetes rewrite a packet for a port they
+  // publish to a container's own address there, which isn't this machine's, and a rule after them would let it through.
+  assert.match(guard, /^table inet hearth_relay\ndelete table inet hearth_relay\ntable inet hearth_relay \{\n\tchain out \{\n\t\ttype filter hook output priority -150; policy accept;\n/m, 'its own table, replaced whole each time, and looked at before destination NAT');
   for (const p of ['udp', 'tcp']) assert.ok(guard.includes(`\t\tmeta skuid "turnserver" ${p} sport 49160-49400 fib daddr type local ${p} dport != 49160-49400 reject\n`), p);
   assert.match(turn, /^min-port=49160\nmax-port=49400$/m, 'the same relay ports');
   assert.match(turn, /\n {2}"\$NFT" -f \/etc\/hearth-region\/relay-guard\.nft \|\| die "[^"]+"\n/, 'loaded at once, or the install stops');
@@ -171,6 +173,45 @@ test('an offer gives an install command for the relay\'s own secret, with the me
   const list = (await as(maya, 'GET', '/me/relays')).json.relays;
   assert.deepEqual(list.map((r) => r.id), [a.id, b.id]);
   assert.ok(actions().includes('member_relay_offered'));
+});
+
+// The guard as setup-turn.sh writes it, loaded for real where that can be done (root, with network namespaces, nftables
+// and coturn's account), next to what Docker, Podman and Kubernetes do for a published port: a nat rule (output, priority
+// -100) that sends a packet for this machine's own address on to a container's. Packets from coturn's account and relay
+// ports never get there; anyone else's still do.
+test('the relay guard keeps the relay away from a container\'s published port too (it looks before destination NAT)', async (t) => {
+  if (!(process.getuid && process.getuid() === 0 && ['nft', 'ip', 'runuser', 'python3'].every(has) && spawnSync('id', ['turnserver'], { stdio: 'ignore' }).status === 0)) { t.skip('needs root, ip netns, nftables, python3 and a turnserver account'); return; }
+  const turn = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'setup-turn.sh'), 'utf8');
+  const guard = /cat > \/etc\/hearth-region\/relay-guard\.nft <<'NFT_EOF'\n([\s\S]*?)\nNFT_EOF\n/.exec(turn)[1];
+  const ns = `hrg${process.pid}`;
+  const sh = (cmd) => spawnSync('bash', ['-c', cmd], { encoding: 'utf8', timeout: 30000 });
+  if (sh(`ip netns add ${ns}h && ip netns add ${ns}c`).status !== 0) { sh(`ip netns del ${ns}h; ip netns del ${ns}c`); t.skip('can\'t make network namespaces here'); return; }
+  let echo = null;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hearth-guard-'));
+  try {
+    // This machine (192.168.1.50 on its network), and a container at 172.17.0.2 whose port 5353 it publishes.
+    const rules = path.join(dir, 'rules.nft');
+    fs.writeFileSync(rules, `${guard}\ntable ip like_docker {\n\tchain out {\n\t\ttype nat hook output priority -100; policy accept;\n\t\tfib daddr type local udp dport 5353 dnat to 172.17.0.2:5353\n\t}\n}\n`);
+    const setup = sh([
+      `ip -n ${ns}h link set lo up`, `ip -n ${ns}c link set lo up`, `ip -n ${ns}h link add veth0 type veth peer name veth1 netns ${ns}c`,
+      `ip -n ${ns}h addr add 192.168.1.50/24 dev veth0`, `ip -n ${ns}h addr add 172.17.0.1/16 dev veth0`, `ip -n ${ns}h link set veth0 up`,
+      `ip -n ${ns}c addr add 172.17.0.2/16 dev veth1`, `ip -n ${ns}c link set veth1 up`, `ip -n ${ns}c route add default via 172.17.0.1`,
+      `ip netns exec ${ns}h nft -f ${rules}`,
+    ].join(' && '));
+    assert.equal(setup.status, 0, setup.stderr);
+    echo = require('node:child_process').spawn('ip', ['netns', 'exec', `${ns}c`, 'python3', '-I', '-c',
+      "import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.bind(('0.0.0.0', 5353))\nwhile True:\n  d, a = s.recvfrom(2048)\n  s.sendto(d, a)"], { stdio: 'ignore' });
+    await new Promise((r) => setTimeout(r, 400));
+    // From a relay port to this machine's own address, port 5353: how many of 3 come back.
+    const send = "import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.bind(('192.168.1.50', 49200))\ns.settimeout(1)\nn = 0\nfor i in range(3):\n  try:\n    s.sendto(b'hi', ('192.168.1.50', 5353)); s.recvfrom(64); n += 1\n  except OSError:\n    pass\nprint(n)";
+    const answers = (asTurn) => spawnSync('ip', ['netns', 'exec', `${ns}h`, ...(asTurn ? ['runuser', '-u', 'turnserver', '--'] : []), 'python3', '-I', '-c', send], { encoding: 'utf8', timeout: 30000 }).stdout.trim();
+    assert.equal(answers(true), '0', 'the relay never reaches the container');
+    assert.equal(answers(false), '3', 'anything else on the machine does, as before');
+  } finally {
+    if (echo) echo.kill();
+    sh(`ip netns del ${ns}h; ip netns del ${ns}c`);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('the uninstaller undoes the install, and the installer marks whether it added coturn and which firewall openings it made', async () => {
@@ -356,7 +397,8 @@ test('the agent: its token never on a command line, the backup key goes with an 
     // The same agent, pointed at a folder of its own.
     const agent = path.join(t, 'agent');
     fs.writeFileSync(agent, agentSrc.split('/etc/hearth-region').join(etc).split('/etc/ssh/hearth-backup.keys').join(keys).split('/etc/turnserver.conf').join(conf)
-      .split('/var/lib/hearth-backup/backups').join(bdir).split('/etc/ssh/ssh_host_ed25519_key.pub').join(path.join(t, 'hostkey.pub')));
+      .split('/var/lib/hearth-backup/backups').join(bdir).split('/etc/ssh/ssh_host_ed25519_key.pub').join(path.join(t, 'hostkey.pub'))
+      .split('/etc/systemd/system/coturn.service.d/hearth-relay-guard.conf').join(path.join(t, 'guard.conf')));
     const env = (kind) => fs.writeFileSync(path.join(etc, 'env'), `MAIN=${ORIGIN}\nREGION=${o.id}\nTOKEN=${o.token}\nPIN=\nKIND=${kind}\n`);
     env('member');
     fs.writeFileSync(path.join(etc, 'ip'), '203.0.113.7\n');
@@ -375,6 +417,8 @@ test('the agent: its token never on a command line, the backup key goes with an 
     stub('logger', `echo "$*" >> "${t}/logger.log"`);
     stub('sshd', 'echo "port 22"');
     stub('ip', `cat "${t}/route" 2>/dev/null; exit 0`);
+    // nft: the relay's table is there while nft-table is; loading it makes it, unless nft-broken is there.
+    stub('nft', `echo "$*" >> "${t}/nft.log"; case "$1" in list) [ -f "${t}/nft-table" ] ;; -f) [ ! -f "${t}/nft-broken" ] && touch "${t}/nft-table" ;; *) exit 1 ;; esac`);
     const run = (code, body) => {
       fs.writeFileSync(path.join(t, 'code'), code);
       fs.writeFileSync(path.join(t, 'body'), body);
@@ -475,6 +519,28 @@ test('the agent: its token never on a command line, the backup key goes with an 
     run('200', JSON.stringify({ ok: true, name: 'Pi' }));
     assert.ok(!fs.existsSync(path.join(etc, 'refused-since')));
     assert.ok(!fs.existsSync(path.join(etc, 'last-error')));
+    // A member relay's firewall rule that keeps it away from its own machine (setup-turn.sh --member) is loaded when coturn
+    // starts. Reloading or updating nftables flushes every rule, so each check-in puts it back if it's gone, and the relay
+    // stops if it can't be. Nothing on a machine without it.
+    env('member');
+    for (const f of ['systemctl.log', 'logger.log', 'nft.log']) fs.writeFileSync(path.join(t, f), '');
+    run('200', JSON.stringify({ ok: true, name: 'Pi', status: 'approved' }));
+    assert.equal(log('nft.log'), '', 'no rule here (an owner\'s region): nothing asked');
+    fs.writeFileSync(path.join(t, 'guard.conf'), '[Service]\n');
+    fs.writeFileSync(path.join(t, 'nft-table'), '');
+    run('200', JSON.stringify({ ok: true, name: 'Pi', status: 'approved' }));
+    assert.equal(log('nft.log'), 'list table inet hearth_relay\n', 'there: left alone');
+    fs.rmSync(path.join(t, 'nft-table')); // sudo systemctl reload nftables
+    run('200', JSON.stringify({ ok: true, name: 'Pi', status: 'approved' }));
+    assert.ok(fs.existsSync(path.join(t, 'nft-table')), 'put back');
+    assert.match(log('nft.log'), new RegExp(`^-f ${etc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/relay-guard\\.nft$`, 'm'));
+    assert.match(log('logger.log'), /hearth-relay .*was gone .*so it was put back/);
+    assert.doesNotMatch(log('systemctl.log'), /stop/);
+    fs.rmSync(path.join(t, 'nft-table'));
+    fs.writeFileSync(path.join(t, 'nft-broken'), '');
+    run('200', JSON.stringify({ ok: true, name: 'Pi', status: 'approved' }));
+    assert.match(log('systemctl.log'), /^stop coturn$/m, 'can\'t be put back: the relay stops');
+    assert.match(log('logger.log'), /couldn't be put back .*so the relay is stopped/);
   } finally { fs.rmSync(t, { recursive: true, force: true }); }
 });
 
@@ -1218,11 +1284,12 @@ test('a check-in from another address is taken when the relay at the address it 
   // to a request signed with the login's key (or "unauthorized" again when it isn't).
   const fakeRelay = (host, secret) => new Promise((resolve, reject) => {
     const sock = require('node:dgram').createSocket('udp4');
-    const asked = [];
+    const asked = []; const users = [];
     sock.on('message', (buf, from) => {
       const m = decode(buf);
       if (!m) return;
       asked.push(m.type);
+      if (m.attrs.get(A.USERNAME)) users.push(String(m.attrs.get(A.USERNAME)));
       const reply = (type, attrs, key) => sock.send(encode(type, m.tid, attrs, key), from.port, from.address);
       const err401 = () => reply(ALLOCATE | ERROR, [[A.ERROR_CODE, Buffer.from([0, 0, 4, 1])], [A.REALM, Buffer.from('hearth')], [A.NONCE, Buffer.from('n0nce')]]);
       const user = m.attrs.get(A.USERNAME);
@@ -1232,7 +1299,7 @@ test('a check-in from another address is taken when the relay at the address it 
       reply((m.type & ~0x0110) | SUCCESS, [[A.LIFETIME, Buffer.from([0, 0, 2, 88])]], key);
     });
     sock.once('error', reject);
-    sock.bind(3478, host, () => resolve({ asked, close: () => sock.close() }));
+    sock.bind(3478, host, () => resolve({ asked, users, close: () => sock.close() }));
   });
   const two = await startServer({ REGIONS_ALLOW_PRIVATE: '1' });
   let relay;
@@ -1253,6 +1320,9 @@ test('a check-in from another address is taken when the relay at the address it 
     for (let i = 0; i < 20 && relay.asked.length < 3; i++) await new Promise((r) => setTimeout(r, 25));
     assert.deepEqual(relay.asked.slice(0, 2), [ALLOCATE, ALLOCATE], 'asked, then asked again with the login');
     assert.equal(relay.asked[2], 0x0004, 'and the address it handed out given back');
+    // A login that runs out hours from now (coturn refuses one that has run out by its own clock, which may be ahead).
+    const until = Number(relay.users[0].split(':')[0]);
+    assert.ok(until - Date.now() / 1000 > 11 * 3600, relay.users[0]);
     // Proved: taken without asking again for a while, from any other address the proxy uses.
     const n = relay.asked.length;
     assert.equal((await beatVia('172.70.20.20')).status, 200);
@@ -1263,6 +1333,22 @@ test('a check-in from another address is taken when the relay at the address it 
     const wrong = await beatVia('172.70.10.10', '127.0.0.78');
     assert.equal(wrong.status, 400, wrong.text);
     assert.match(wrong.json.error, /checks in from 172\.70\.10\.10 but says its address is 127\.0\.0\.78, and the relay at 127\.0\.0\.78 didn’t answer as this one/);
+    relay.close(); relay = null;
+    // An offer whose machine hasn't checked in yet, while all 20 waiting places are taken: turned away before its address
+    // is checked, so its every-minute tries don't use up those checks (10 an hour) and it's in as soon as a place is free.
+    const later = await call(u, 'POST', '/me/relays', { name: 'Waiting behind a proxy', capMbit: 25, backups: false, origin: ORIGIN });
+    assert.equal(later.status, 200, later.text);
+    const s2 = (await two.call('GET', `/regions/install/${later.json.relay.id}?k=${linkIn(later.json.command)}`, { ip: nextIp() })).text;
+    relay = await fakeRelay('127.0.0.79', secretIn(s2));
+    const ins = 'INSERT INTO regions (id, name, token_hash, last_seen, created_at, kind, owner_id, status) VALUES (?, ?, ?, ?, ?, \'member\', ?, ?)';
+    for (let i = 0; i < 20; i++) two.sql(ins, `wait${i}${hex(3)}`, `Waiting ${i}`, 'x'.repeat(64), Date.now() - 60000, Date.now(), two.owner.id, 'pending');
+    const beatLater = () => two.api('POST', `/regions/${later.json.relay.id}/heartbeat`, { ip: '172.70.10.10', headers: { 'x-region-token': tokenIn(s2) }, body: { ip: '127.0.0.79', relayIp: '127.0.0.79', relay: true, version: 5 } });
+    for (let i = 0; i < 12; i++) assert.equal((await beatLater()).status, 409);
+    assert.deepEqual(relay.asked, [], 'never asked while it waits for a place');
+    two.sql("DELETE FROM regions WHERE id LIKE 'wait%'");
+    const inNow = await beatLater();
+    assert.equal(inNow.status, 200, inNow.text);
+    assert.equal(relay.asked[0], ALLOCATE, 'asked once a place is free');
   } finally { if (relay) relay.close(); await two.stop(); }
 });
 
@@ -1278,6 +1364,10 @@ test('the address check against a real coturn: its own secret is proved, another
     let up = false;
     for (let i = 0; i < 40 && !up; i++) { await new Promise((r) => setTimeout(r, 100)); up = await probeTurn({ host: '127.0.0.1', port, secret: 'its-own-secret', timeout: 400 }); }
     assert.ok(up, 'its own secret');
+    // A relay whose clock is an hour ahead of this server's (coturn refuses a login that has run out by its own clock).
+    const realNow = Date.now;
+    Date.now = () => realNow() - 3600000;
+    try { assert.ok(await probeTurn({ host: '127.0.0.1', port, secret: 'its-own-secret' }), 'a relay an hour ahead'); } finally { Date.now = realNow; }
     assert.equal(await probeTurn({ host: '127.0.0.1', port, secret: 'another-secret' }), false);
     assert.equal(await probeTurn({ host: '127.0.0.1', port: port + 60, secret: 'its-own-secret', timeout: 800 }), false);
   } finally { ts.kill(); fs.rmSync(t, { recursive: true, force: true }); }

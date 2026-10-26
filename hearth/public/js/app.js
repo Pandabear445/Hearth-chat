@@ -1047,9 +1047,13 @@ function startApp() {
 // minute in the background (calls in progress switch to them too).
 // { force }: fetch now, however new they are. { maxAge }: also when the list is older than that (in ms).
 // { remeasure }: measure the relays again afterwards, even the ones measured before.
-let iceAt = 0; // when S.iceServers was asked for (its age counts from then)
+// Ages and waits here go by performance.now(), a clock that only moves forward: setting the device's clock (by hand, or
+// its time service putting it right) doesn't move it. Only the logins' expiry is a time of day, the server's, so it's
+// compared with the server's time (this device's clock corrected by the bootstrap's clockOffset).
+let iceAt = -Infinity; // when S.iceServers was asked for (its age counts from then)
 let iceFor = null; // and for which choice: avoidsMemberRelays(S.me) then (the list depends on it, see followRelayChoice)
 let iceAsked = 0; // the latest fetch: an older one that answers after it is stale (the choice may have changed since)
+let iceAskedAt = -Infinity; // when that one was asked for
 const ICE_CHECK = 10 * 60000; // how old a list with member relays in it gets before it's fetched again
 // The relays in a list this app may use (with a login), as one string to compare.
 const relaySet = (list) => usableIce(list, avoidsMemberRelays(S.me)).filter(isRelay).map((e) => [].concat(e.urls).join(',')).sort().join(' ');
@@ -1068,10 +1072,10 @@ function takeIce(list, avoid, at) {
   return before;
 }
 async function freshIce({ force = false, maxAge = Infinity, remeasure = false } = {}) {
-  if (!force && iceFor === avoidsMemberRelays(S.me) && !iceStale(S.iceServers) && Date.now() - iceAt < maxAge) return;
+  if (!force && iceFor === avoidsMemberRelays(S.me) && !iceStale(S.iceServers, Date.now() + (S.clockOffset || 0)) && performance.now() - iceAt < maxAge) return;
   const n = ++iceAsked;
   const avoid = avoidsMemberRelays(S.me);
-  const asked = Date.now();
+  const asked = iceAskedAt = performance.now();
   try {
     const list = await api('GET', '/ice');
     if (n !== iceAsked) return;
@@ -1081,14 +1085,16 @@ async function freshIce({ force = false, maxAge = Infinity, remeasure = false } 
     if (remeasure || !S.relayRanks || relaySet(list) !== relaySet(before)) rankNearest({ force: remeasure });
   } catch { /* keep the old ones: the next check is soon */ }
 }
-// The bootstrap's list (at the start, and after every reconnect), taken like any other. A choice made on another device
-// while this one was away (its user:update missed) is followed as followRelayChoice would have: turned on, every
-// connection in a call that may use a member relay starts over without them.
+// The bootstrap's list (at the start, and after every reconnect; `at`: when the bootstrap was asked for), taken like any
+// other, as long as it's the newest: a fetch asked for before the bootstrap is older (dropped when it answers), but one
+// asked for while the bootstrap was on its way (told of a change meanwhile: ice:changed) is newer, and its list stays.
+// A choice made on another device while this one was away (its user:update missed) is followed as followRelayChoice
+// would have: turned on, every connection in a call that may use a member relay starts over without them.
 function bootIce(list, at) {
   const was = relayChoice;
-  iceAsked++; // (a fetch still on its way is older than this list)
-  takeIce(list, avoidsMemberRelays(S.me), at);
-  relayChoice = iceFor;
+  if (iceAskedAt < at) iceAsked++;
+  if (at >= iceAt) takeIce(list, avoidsMemberRelays(S.me), at);
+  relayChoice = avoidsMemberRelays(S.me);
   if (relayChoice && was === false && voice) voice.avoidChanged();
 }
 // The background check, every minute: a list whose logins are about to run out is fetched again, and so is a list with
@@ -1111,7 +1117,7 @@ let iceChangeTokens = ICE_CHANGED_BURST; // fetches that may go out at once, one
 let iceChangeTokensAt = null;
 function iceChanged() {
   if (iceChangeTimer) return; // one is coming: it brings this change too
-  const t = Date.now();
+  const t = performance.now();
   if (iceChangeTokensAt !== null) iceChangeTokens = Math.min(ICE_CHANGED_BURST, iceChangeTokens + (t - iceChangeTokensAt) / ICE_CHANGED_EVERY);
   iceChangeTokensAt = t;
   const wait = (iceChangeTokens >= 1 ? 0 : (1 - iceChangeTokens) * ICE_CHANGED_EVERY) + Math.floor(Math.random() * 3000);
@@ -1155,6 +1161,7 @@ async function loadBootstrap() {
   // Your word filter comes alongside too, and is opened before anything is drawn, so nothing it hides shows first.
   const filterList = api('GET', '/me/word-filter').catch(() => null);
   const asked = Date.now();
+  const askedAt = performance.now(); // (for the relay list in it: see bootIce)
   const b = await api('GET', '/bootstrap');
   // How far this device's clock is from the server's (at most a day either way), for disappearing messages and the
   // time inside each message you send (binding.js ts). Further off than that, the times inside your messages are off
@@ -1170,7 +1177,7 @@ async function loadBootstrap() {
   S.me = b.me;
   drafts = createDrafts(S.me.id);
   S.mediaToken = b.mediaToken;
-  bootIce(b.iceServers, asked);
+  bootIce(b.iceServers, askedAt);
   setTimeout(() => rankNearest(), 4000);
   S.e2eeSince = rememberE2eeSince(b.e2eeSince);
   S.users = b.users;

@@ -75,7 +75,9 @@ function probeTurn({ host, port = 3478, secret, timeout = 3000 }) {
     if (!net.isIP(host) || !secret) { resolve(false); return; }
     const sock = dgram.createSocket(net.isIPv6(host) ? 'udp6' : 'udp4');
     // A login as coturn takes them with use-auth-secret: "<expiry>:<name>", and its password the secret's HMAC of it.
-    const username = Buffer.from(`${Math.floor(Date.now() / 1000) + 300}:hearth-check`);
+    // coturn refuses one whose expiry has passed by its own clock, so it runs out 12 hours from now, like the logins apps
+    // get: a relay whose clock is a few minutes (or hours) ahead still answers. (The relayed address goes back at once.)
+    const username = Buffer.from(`${Math.floor(Date.now() / 1000) + 12 * 3600}:hearth-check`);
     const password = crypto.createHmac('sha1', String(secret)).update(username).digest('base64');
     let key = null; let realm = null; let nonce = null; let tid = null; let msg = null; let staleTries = 0;
     let resend = null; let done = false;

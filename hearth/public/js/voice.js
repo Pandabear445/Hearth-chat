@@ -649,11 +649,16 @@ export class Voice {
   }
   // New relay logins (the old ones run out): connections in progress use them from their next network change on.
   // (An address it already has on a member relay stays in use meanwhile, so that relay stays among its memberHosts.)
+  // A connection built without member relays that's given some now (avoiding was turned off) may go through one from
+  // then on, so it no longer counts as built without them (noMember: see avoidChanged, and an offer or answer that says
+  // they avoid them).
   updateIceServers() {
     for (const peer of this.peers.values()) {
       const config = this.rtcConfig(peer.userId);
       try { peer.pc.setConfiguration(config); } catch { continue; /* keeps the old ones */ }
-      for (const x of this.memberHostsIn(config)) (peer.memberHosts ||= new Set()).add(x);
+      const hosts = this.memberHostsIn(config);
+      for (const x of hosts) (peer.memberHosts ||= new Set()).add(x);
+      if (hosts.size) peer.noMember = false;
     }
   }
   // The member relays among the relays in a connection's settings (by host).
@@ -741,7 +746,7 @@ export class Voice {
     // pcId / remotePc: which connection each signal belongs to, so one meant for a connection that has since been
     // replaced is ignored instead of breaking the new one.
     const peer = { pc, pcId: newPcId(), remotePc: null, socketId, userId, audio: null, screenAudio: null, cam: null, screen: null, pending: [], initiator, hold: true, outbox: [], createdAt: Date.now(), events: [] };
-    peer.noMember = this.noMemberRelays(userId); // built without member relays (see rtcConfig)
+    peer.noMember = this.noMemberRelays(userId); // built without member relays (see rtcConfig), until it's given some (updateIceServers)
     peer.memberHosts = this.memberHostsIn(config); // the member relays it was set up with (see followMemberRelays)
     // Closing a connection leaves whatever it was still doing (making an offer, say) unsettled forever, so every
     // step on it also gives up when it closes (see op()).

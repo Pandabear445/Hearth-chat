@@ -24,7 +24,7 @@
 # device usually have global IPv6 addresses too, and traffic from the relay starts inside the network, past the
 # router's firewall. coturn relays to the machine's own addresses whatever its denied-peer-ip rules say (it counts them
 # as its own, and hands its public address over to its own one), so a firewall rule (nftables) keeps it away from the
-# services on this machine, loaded each time coturn starts.
+# services on this machine (and the containers whose ports it publishes), loaded each time coturn starts.
 set -Eeuo pipefail
 c_y=$'\033[1;33m'; c_g=$'\033[1;32m'; c_r=$'\033[1;31m'; c_0=$'\033[0m'
 step() { printf '%s▸%s %s\n' "$c_y" "$c_0" "$*"; }
@@ -162,20 +162,23 @@ if [ "$MEMBER" = yes ]; then
   step "Keeping the relay away from this machine's own services…"
   # Relayed packets (sent from coturn's relay ports, as coturn's user) to any address of this machine are refused, except
   # to coturn's relay ports themselves, so two people on this relay still reach each other through it. Without it, anyone
-  # with a login could reach the UDP services here (a Pi-hole's DNS, mDNS, WireGuard…) through the relay. Its own table,
-  # so it never touches other firewall rules. coturn only starts with it in place (the drop-in below), and
-  # hearth-relay-uninstall takes both away.
+  # with a login could reach the UDP services here (a Pi-hole's DNS, mDNS, WireGuard…) through the relay. It looks before
+  # destination NAT (priority -150, ahead of nat's -100): Docker, Podman and Kubernetes send packets for a port they
+  # publish on to a container's own address there, which isn't this machine's, so a rule after it would let them through.
+  # Its own table, so it never touches other firewall rules. coturn only starts with it in place (the drop-in below), the
+  # check-in agent puts it back if a firewall reload took it away, and hearth-relay-uninstall takes both away.
   NFT="$(command -v nft || true)"
   [ -n "$NFT" ] || die "A member relay needs nftables, for the rule that keeps it away from this machine's own services (sudo apt-get install nftables)."
   install -d -m 700 /etc/hearth-region
   cat > /etc/hearth-region/relay-guard.nft <<'NFT_EOF'
 # Written by Hearth (scripts/setup-turn.sh --member): the relay never passes anything on to this machine itself, except
-# to its own relay ports. Loaded each time coturn starts; sudo hearth-relay-uninstall removes it.
+# to its own relay ports (looked at before destination NAT, so a container's published port counts too). Loaded each
+# time coturn starts, and again by the check-in agent if it's gone; sudo hearth-relay-uninstall removes it.
 table inet hearth_relay
 delete table inet hearth_relay
 table inet hearth_relay {
 	chain out {
-		type filter hook output priority 0; policy accept;
+		type filter hook output priority -150; policy accept;
 		meta skuid "turnserver" udp sport 49160-49400 fib daddr type local udp dport != 49160-49400 reject
 		meta skuid "turnserver" tcp sport 49160-49400 fib daddr type local tcp dport != 49160-49400 reject
 	}
