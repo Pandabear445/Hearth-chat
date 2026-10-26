@@ -413,6 +413,9 @@ function groupLastRow(channels) {
 }
 const groupLastOut = (m) => (m ? { id: m.id, authorId: m.author_id, channelId: m.channel_id, ciphertext: m.ciphertext, createdAt: m.created_at, expiresAt: m.expires_at || null } : null);
 const groupLast = (s) => groupLastOut(groupLastRow(db.prepare('SELECT * FROM channels WHERE server_id = ?').all(s.id)));
+// What a delete event in a group chat carries besides the message: the group's newest message now, which the apps
+// show (decrypted) as its line in the conversation list. Nothing for a server's channels, which have no such line.
+const lastIfGroup = (s) => (s && s.kind === 'group' ? { last: groupLast(s) } : {});
 // What one member sees of a server: channels they can view (with their permissions), roles, emoji, theme.
 // ev: permissions already worked out for many members at once (perms.forServer), when there is one.
 function serializeServer(s, uid, common = serverCommon(s), ev = null) {
@@ -678,14 +681,19 @@ function serializeDmMessage(row, extras) {
   };
 }
 
+// A DM's newest message that hasn't disappeared, as the apps show it in the conversation list (decrypted there).
+// Sent with the DM and again with each delete, since a delete can take the newest one away.
+function dmLast(dmId) {
+  const m = db.prepare(`SELECT id, author_id, ciphertext, created_at, expires_at FROM dm_messages WHERE dm_id = ? AND ${LIVE} ORDER BY id DESC LIMIT 1`).get(dmId, now());
+  return m ? { id: m.id, authorId: m.author_id, ciphertext: m.ciphertext, createdAt: m.created_at, expiresAt: m.expires_at || null } : null;
+}
 // disappear: the conversation's timer in seconds (0 = off). last: the newest message that hasn't disappeared.
 // look: its chat background (server/looks.js), sealed, or null.
 function serializeDm(row, userId) {
-  const last = db.prepare(`SELECT id, author_id, ciphertext, created_at, expires_at FROM dm_messages WHERE dm_id = ? AND ${LIVE} ORDER BY id DESC LIMIT 1`).get(row.id, now());
   return {
     id: row.id, userId: row.user_a === userId ? row.user_b : row.user_a, lastMessageAt: row.last_message_at, region: row.rtc_region || null, regionVersion: row.rtc_region_v || 0,
     disappear: row.disappear_secs || 0,
-    last: last ? { id: last.id, authorId: last.author_id, ciphertext: last.ciphertext, createdAt: last.created_at, expiresAt: last.expires_at || null } : null,
+    last: dmLast(row.id),
     look: LOOKS ? LOOKS.lookOf('d:' + row.id) : null,
   };
 }
@@ -1287,7 +1295,7 @@ function purgeChannelMessages(rows, actorId) {
     if (!c) continue;
     const room = toChannel(c);
     // Open apps drop them all and redraw once (the batched form of message:delete).
-    room.emit('message:delete-bulk', { channelId: c.id, messages: list.map((r) => ({ id: r.id, threadId: r.thread_id || null })) });
+    room.emit('message:delete-bulk', { channelId: c.id, messages: list.map((r) => ({ id: r.id, threadId: r.thread_id || null })), ...lastIfGroup(serverOf(c)) });
     // Threads that are still there but lost replies: their reply counts.
     // Not to members the thread is from before (server/joinhistory.js): they never got it.
     for (const rootId of new Set(list.filter((r) => r.thread_id && !all.has(r.thread_id)).map((r) => r.thread_id))) {
@@ -3985,7 +3993,7 @@ api.delete('/messages/:id', auth, (req, res) => {
   deleteMessageTree(m.id);
   // Someone else's message: the server's audit log says whose and where, never what it said.
   if (m.author_id !== req.userId) serverAudit(s, req.userId, 'message_delete', m.author_id, { channel: chanRef(s, c), thread: m.thread_id ? true : undefined }, c.id);
-  toChannel(c).emit('message:delete', { id: m.id, channelId: c.id, threadId: m.thread_id || null });
+  toChannel(c).emit('message:delete', { id: m.id, channelId: c.id, threadId: m.thread_id || null, ...lastIfGroup(s) });
   if (m.thread_id) toChannelAbout(c, visibilityOf(m.thread_id)).emit('thread:update', { rootId: m.thread_id, channelId: c.id, threadCount: 0, ...threadInfo({ id: m.thread_id }) });
   BOTS.event('message.deleted', c.server_id, { messageId: m.id, channelId: c.id, authorId: m.author_id, threadId: m.thread_id || null, deletedBy: req.userId }, { channel: c, actorId: req.userId });
   res.json({ ok: true });
@@ -4246,7 +4254,7 @@ api.delete('/dm-messages/:id', auth, (req, res) => {
   const d = requireDm(m.dm_id, req.userId);
   forgetMessages([m.id]);
   db.prepare('DELETE FROM dm_messages WHERE id = ?').run(m.id);
-  io.to([`user:${d.user_a}`, `user:${d.user_b}`]).emit('dm:delete', { id: m.id, dmId: d.id });
+  io.to([`user:${d.user_a}`, `user:${d.user_b}`]).emit('dm:delete', { id: m.id, dmId: d.id, last: dmLast(d.id) });
   // A comment on a photo: that photo has one fewer.
   if (m.reply_file != null) emitFileReplies('dm_messages', [m.reply_to]);
   res.json({ ok: true });
@@ -5998,13 +6006,13 @@ api.delete('/admin/messages/:id', auth, staffOnly, (req, res) => {
     if (above) fail(403, `This thread has replies by ${staffRole(above) === 'owner' ? 'the owner' : 'staff at your level or above'}, so someone ranked above them has to remove it.`);
     deleteMessageTree(m.id);
     if (c && !group) { const srv = serverOf(c); serverAudit(srv, null, 'message_delete', m.author_id, { channel: chanRef(srv, c), thread: m.thread_id ? true : undefined, staff: true }, c.id); }
-    if (c) toChannel(c).emit('message:delete', { id: m.id, channelId: c.id, threadId: m.thread_id || null });
+    if (c) toChannel(c).emit('message:delete', { id: m.id, channelId: c.id, threadId: m.thread_id || null, ...lastIfGroup(serverOf(c)) });
     if (c) BOTS.event('message.deleted', c.server_id, { messageId: m.id, channelId: c.id, authorId: m.author_id, threadId: m.thread_id || null, deletedBy: req.userId }, { channel: c, actorId: req.userId });
   } else {
     const dm = db.prepare('SELECT * FROM dm_channels WHERE id = ?').get(d.dm_id);
     forgetMessages([d.id]);
     db.prepare('DELETE FROM dm_messages WHERE id = ?').run(d.id);
-    if (dm) io.to([`user:${dm.user_a}`, `user:${dm.user_b}`]).emit('dm:delete', { id: d.id, dmId: dm.id });
+    if (dm) io.to([`user:${dm.user_a}`, `user:${dm.user_b}`]).emit('dm:delete', { id: d.id, dmId: dm.id, last: dmLast(dm.id) });
     if (d.reply_file != null) emitFileReplies('dm_messages', [d.reply_to]);
   }
   adminLog(req, 'delete_message', req.params.id);
@@ -6721,7 +6729,7 @@ USE = require('./usability')({ api, auth, db, fail, wrap, rateLimit, stepUp, aud
 // passed (it runs once right here, before anyone can connect).
 DIS = require('./disappear')({ api, auth, db, fail, rateLimit, newId, now, requireChannel, requireDm, requireManageableChannel, serverOf, isBlocked, getUserRow,
   // (io is declared further down: during the start-up sweep it doesn't exist yet, and there's nobody to tell.)
-  toChannel: (c) => toChannel(c), getIo: () => { try { return io || null; } catch { return null; } }, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), removeUpload, unseal, threadInfo, groupLast,
+  toChannel: (c) => toChannel(c), getIo: () => { try { return io || null; } catch { return null; } }, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), removeUpload, unseal, threadInfo, groupLast, dmLast,
   bots: () => BOTS, serverAudit, chanRef,
   // "New members can't read messages from before they joined" (server/joinhistory.js): thread counts of a thread from
   // before someone joined don't reach them, nor do timer changes from before.

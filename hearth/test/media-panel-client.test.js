@@ -766,7 +766,8 @@ test('app.js: the panel is a side panel of DMs, group chats and channels, and ke
   assert.equal((head.match(/mediaButton\(\),/g) || []).length, 2, 'group chats and DMs');
   assert.match(head, /label: S\.panel === 'media' \? 'Hide photos & videos' : 'Photos & videos', icon: 'images'/);
   // Live: new, edited, deleted and disappearing messages, and the word filter.
-  assert.match(fn('onNewMessage'), /if \(isExpired\(m, nowServer\(\)\)\) return;\n {2}MEDIA\.onNew\(key, m\);/);
+  // (An expired one returns first, once the conversation's line has its newest message back.)
+  assert.match(fn('onNewMessage'), /if \(isExpired\(m, nowServer\(\)\)\) \{ [^\n]*return; \}\n {2}MEDIA\.onNew\(key, m\);/);
   assert.match(fn('onThreadMessage'), /MEDIA\.onNew\('c:' \+ m\.channelId, m\)/);
   assert.match(fn('onUpdateMessage'), /if \(i < 0\) return MEDIA\.onUpdate\(key, m\);/);
   assert.match(fn('onDeleteMessage'), /MEDIA\.onDelete\(key, gone\);/);

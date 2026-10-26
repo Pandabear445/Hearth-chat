@@ -359,6 +359,40 @@ async function directMessages(t) {
   await bob.$('.friend-row', { hasText: 'alice' }).locator('button', { hasText: 'Accept' }).click();
   await alice.page.locator('#main-head .tab', { hasText: exact('All') }).click();
   await alice.$('.friend-row', { hasText: 'bob' }).waitFor();
+
+  // The conversation list follows an edit and a delete of the newest message, on both people's screens and on a
+  // second device of bob's that never opened the conversation (it shows Home, whose recent conversations show it too).
+  const laptop = await t.open('bob-laptop');
+  await laptop.login('bob', t.pw.bob);
+  await laptop.$('.home-view').waitFor();
+  const line = (p, name, text) => p.dmRow(name).locator('.dm-row-status', { hasText: text });
+  const card = (text) => laptop.$('.home-view .conv-card').filter({ has: laptop.$('.conv-card-text strong', { hasText: exact('alice') }) })
+    .locator('.conv-card-text > span', { hasText: text });
+  const everywhere = async (text) => {
+    for (const p of [bob, laptop]) await line(p, 'alice', text).waitFor();
+    await card(text).waitFor();
+    await line(alice, 'bob', `You: ${text}`).waitFor();
+  };
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await alice.send('I am the wrost');
+  await everywhere('I am the wrost');
+  await alice.messageAction('I am the wrost', 'Edit message');
+  const box = alice.$('#messages textarea.edit-input');
+  await box.fill('I am the worst');
+  await box.press('Enter');
+  await everywhere('I am the worst');
+  // Deleted: the line goes back to the message before it (bob's, written while alice was on Home).
+  await alice.messageAction('I am the worst', 'Delete message');
+  await alice.modal('Delete message?').locator('.modal-foot .btn.danger').click();
+  const before = 'Written while you were on Home: lychee';
+  for (const p of [bob, laptop]) await line(p, 'alice', `You: ${before}`).waitFor();
+  await card(`You: ${before}`).waitFor();
+  await line(alice, 'bob', exact(before)).waitFor();
+  check(!(await line(bob, 'alice', 'I am the').count()) && !(await card('I am the').count()), 'The deleted message should be gone from bob’s conversation lists.');
+  await laptop.logout();
+  await laptop.close();
+  delete t.people['bob-laptop'];
 }
 
 // ------------------------------------------------------------------ 5. attachments
@@ -1130,6 +1164,18 @@ async function groupChat(t) {
   await alice.message('Group reply: date').waitFor();
   await typingLineSays(alice, '');
   await listLineSays(alice.dmRow('Fruit Club').locator('.dm-row-status'), 'bob: Group reply: date', 'The group’s row in alice’s sidebar');
+  // The group's line in the conversation list follows an edit and a delete of its newest message.
+  const line = (p, text) => p.dmRow('Fruit Club').locator('.dm-row-status', { hasText: text });
+  await bob.messageAction('Group reply: date', 'Edit message');
+  const box = bob.$('#messages textarea.edit-input');
+  await box.fill('Group reply: dates');
+  await box.press('Enter');
+  await line(alice, 'bob: Group reply: dates').waitFor();
+  await line(bob, 'You: Group reply: dates').waitFor();
+  await bob.messageAction('Group reply: dates', 'Delete message');
+  await bob.modal('Delete message?').locator('.modal-foot .btn.danger').click();
+  await line(alice, 'You: Group hello: cherry').waitFor();
+  await line(bob, ': Group hello: cherry').waitFor();
   await typeOnly(alice, 'Group typing back: elderberry');
   await typingLineSays(bob, 'Alice Wonder is typing\u2026');
   await listLineTyping(bob.dmRow('Fruit Club').locator('.dm-row-status'), 'Alice Wonder is typing\u2026', 'The group’s row in bob’s sidebar');

@@ -806,7 +806,8 @@ function startApp() {
     if (keyState) sec.applyState(keyState);
     // Added to a group chat that has a background (chat-look.js): it opens once the group's key is here.
     if (isGroup(server) && server.look !== undefined) LOOK.onEvent('group:look', { serverId: server.id, look: server.look });
-    previewGroup(server);
+    // A group chat's line in the conversation list, from the copy the list draws (drawn again once decrypted).
+    if (isGroup(server)) previewGroup(S.servers.find((s) => s.id === server.id)).then(redrawConvList);
     renderRail();
     if (!S.view.serverId) renderSidebar();
   });
@@ -833,7 +834,9 @@ function startApp() {
     if (isGroup(server) && server.look !== undefined) LOOK.onEvent('group:look', { serverId: server.id, look: server.look });
     const w = serverWaiters.get(server.id);
     if (w) { serverWaiters.delete(server.id); setTimeout(w, 0); }
-    previewGroup(server);
+    // A group chat comes with its newest message (deleting a channel can change it): its line in the conversation
+    // list is drawn again once decrypted.
+    if (isGroup(server)) previewGroup(server).then(redrawConvList);
     renderRail();
     if (S.view.serverId === server.id) {
       applyServerTheme();
@@ -910,12 +913,13 @@ function startApp() {
 
   socket.on('message:new', (m) => { if (!S.me) return; if (m.threadId) onThreadMessage(m); else onNewMessage('c:' + m.channelId, m); });
   socket.on('message:update', (m) => { if (m.threadId) onThreadUpdate(m); else onUpdateMessage('c:' + m.channelId, m); });
-  socket.on('message:delete', ({ id, channelId, threadId }) => onDeleteChannelMessages(channelId, [{ id, threadId }]));
+  // Deletes in a group chat carry its newest message now (last), for its line in the conversation list.
+  socket.on('message:delete', ({ id, channelId, threadId, last }) => { onDeleteChannelMessages(channelId, [{ id, threadId }]); groupLastIs(channelId, last); });
   // Bulk delete and a ban's cleanup: many at once, one redraw. Disappearing messages that reached their time come
-  // the same way (expired: true, with a group chat's new last message for its preview).
+  // the same way (expired: true).
   socket.on('message:delete-bulk', ({ channelId, messages, expired, last } = {}) => {
     if (Array.isArray(messages)) onDeleteChannelMessages(channelId, messages, { expired: !!expired });
-    if (last !== undefined) { const s = serverOfChannel(channelId); if (isGroup(s)) { s.last = last; previewGroup(s).then(() => { if (!S.view.serverId) later(renderSidebar); }); } }
+    groupLastIs(channelId, last);
   });
   socket.on('disappear:update', (p) => onDisappearUpdate(p));
   // Chat backgrounds (chat-look.js): a DM's or group chat's background changed, with its line in the conversation.
@@ -962,10 +966,11 @@ function startApp() {
     if (!S.view.serverId) renderSidebar();
   });
   socket.on('dm:update', (m) => onUpdateMessage('d:' + m.dmId, m));
+  // With the DM's newest message now (last), for its line in the conversation list.
   socket.on('dm:delete', ({ id, dmId, expired, last }) => {
     onDeleteMessage('d:' + dmId, id, { expired: !!expired });
     const d = last !== undefined && S.dms.find((x) => x.id === dmId);
-    if (d) { d.last = last; previewDm(d).then(() => { if (!S.view.serverId) later(renderSidebar); }); }
+    if (d) setLast(d, last);
   });
   // Kept for every conversation, open or not: the lists show it too, and it's there when you open one.
   socket.on('typing', (p) => {
@@ -1258,27 +1263,69 @@ function applyNick(serverId, userId, nickname) {
 }
 
 // ======================================================================= conversation previews (decrypted locally)
+// Each DM and group chat keeps its newest message (d.last / s.last: from the server, then kept up to date by new
+// messages, edits and deletes as they come), and the conversation list shows it decrypted. Decrypting takes a
+// moment, in which the newest message can change again (a delete, then a new message): a preview is only written
+// while the message it was worked out from is still the conversation's newest, and whatever replaced it writes its own.
 async function loadPreviews() {
   for (const d of S.dms) await previewDm(d);
   for (const s of S.servers.filter((x) => x.kind === 'group')) await previewGroup(s);
   if (!S.view.serverId) renderSidebar();
   if (S.view.type === 'home') renderMain();
 }
+function dmById(id) { return S.dms.find((x) => x.id === id); }
 async function previewDm(d) {
-  if (!d.last) { S.previews['d:' + d.id] = ''; return; }
-  const m = { ...d.last, dmId: d.id };
+  const last = d.last;
+  if (!last) { S.previews['d:' + d.id] = ''; return; }
+  const m = { ...last, dmId: d.id };
   await sec.decryptDmMessage(m);
+  if ((dmById(d.id) || {}).last !== last) return;
   // A last message that has disappeared shows nothing (the server sends the one before it with its next update).
   S.previews['d:' + d.id] = isExpired(m, nowServer()) ? '' : previewText(m);
-  if (disappears(m)) { d.last.dec = m.dec; armClientExpiry(); }
+  if (disappears(m)) { last.dec = m.dec; armClientExpiry(); }
 }
 async function previewGroup(s) {
   if (s.kind !== 'group') return;
-  if (!s.last) { S.previews['g:' + s.id] = ''; return; }
-  const m = { ...s.last, serverId: s.id };
+  const last = s.last;
+  if (!last) { S.previews['g:' + s.id] = ''; return; }
+  const m = { ...last, serverId: s.id };
   if (m.ciphertext) await sec.decryptChannelMessage(m); else m.dec = { t: '' };
+  if ((serverById(s.id) || {}).last !== last) return;
   S.previews['g:' + s.id] = isExpired(m, nowServer()) ? '' : previewText(m, true);
-  if (disappears(m)) { s.last.dec = m.dec; armClientExpiry(); }
+  if (disappears(m)) { last.dec = m.dec; armClientExpiry(); }
+}
+// The DM or group chat that a conversation ('d:<dm>' | 'c:<channel>') is a line of the conversation list for, or
+// null (a server's channel).
+function convOf(key) {
+  if (key.startsWith('d:')) return dmById(key.slice(2)) || null;
+  const s = serverOfChannel(key.slice(2));
+  return isGroup(s) ? s : null;
+}
+// A conversation's newest message changed (a delete, an edit, one disappearing): its line is worked out again and
+// drawn where it shows.
+function setLast(conv, last) {
+  conv.last = last;
+  return (isGroup(conv) ? previewGroup(conv) : previewDm(conv)).then(redrawConvList);
+}
+// Deletes in a group chat come with its newest message now (server/index.js lastIfGroup).
+function groupLastIs(channelId, last) {
+  const s = last !== undefined && serverOfChannel(channelId);
+  if (isGroup(s)) setLast(s, last);
+}
+// An edit to a conversation's newest message changes its line too, whether or not the conversation is loaded here:
+// the newest message takes the new words (still encrypted, as the server keeps it) and is decrypted again.
+function lastEdited(key, m) {
+  const conv = convOf(key);
+  if (!conv || !conv.last || conv.last.id !== m.id) return;
+  setLast(conv, {
+    id: m.id, authorId: m.authorId, ...(m.channelId ? { channelId: m.channelId } : {}), ciphertext: m.ciphertext,
+    createdAt: m.createdAt, expiresAt: m.expiresAt || null, editedAt: m.editedAt || null,
+  });
+}
+// The conversation list is the sidebar on Home, in a DM and in a group chat; Home's recent conversations show it too.
+function redrawConvList() {
+  if (!S.view.serverId || isGroup(currentServer())) later(renderSidebar);
+  if (S.view.type === 'home') later(renderMain);
 }
 function previewText(m, group = false) {
   if (!m.dec || m.dec.error) return 'Encrypted message';
@@ -1542,9 +1589,8 @@ function purgeExpired() {
   MEDIA.expire();
   NOTES.expire(); // and the copies photo tags and comments keep by themselves
   SIDE.expire(); // and the side view's
-  const sidebar = () => { if (!S.view.serverId) later(renderSidebar); };
-  for (const d of S.dms) if (d.last && isExpired(d.last, t)) { d.last = newestLive('d:' + d.id); previewDm(d).then(sidebar); }
-  for (const g of groups()) if (g.last && isExpired(g.last, t)) { const c = textChannel(g); g.last = c ? newestLive('c:' + c.id) : null; previewGroup(g).then(sidebar); }
+  for (const d of S.dms) if (d.last && isExpired(d.last, t)) setLast(d, newestLive('d:' + d.id));
+  for (const g of groups()) if (g.last && isExpired(g.last, t)) { const c = textChannel(g); setLast(g, c ? newestLive('c:' + c.id) : null); }
   purgeInbox();
   purgeReminders();
   armClientExpiry();
@@ -5767,19 +5813,23 @@ async function toPng(blob) {
 // ======================================================================= incoming events
 async function onNewMessage(key, m) {
   const store = S.msgs[key];
+  // In a DM or group chat it's the newest message from now on, set before decrypting: a delete or a newer message
+  // that comes meanwhile takes its place, and this one's preview is then left alone (see previewDm).
+  const conv = convOf(key);
+  const before = conv && conv.last;
+  if (conv && (!before || m.id >= before.id)) conv.last = m;
   await decryptMessage(m);
   if (m.nonce) dropPendingSend(m.nonce);
   // Already past its time (a timer shorter than the trip here, or a server that held on to it): never shown.
-  if (isExpired(m, nowServer())) return;
+  if (isExpired(m, nowServer())) { const cur = convOf(key); if (cur && cur.last === m) cur.last = before; return; }
   MEDIA.onNew(key, m); // its pictures and videos go on top in Photos & videos, if that's open here
-  if (key.startsWith('d:')) {
-    S.previews[key] = previewText(m);
-    // The preview goes at the message's time too, by the timer inside it (the server's copy can't be decrypted there).
-    const d = S.dms.find((x) => x.id === key.slice(2));
-    if (d && d.last && d.last.id === m.id) d.last.dec = m.dec;
-  } else {
-    const s = S.servers.find((x) => x.id === m.serverId);
-    if (isGroup(s)) { s.last = m; s.lastMessageAt = m.createdAt; S.previews['g:' + s.id] = previewText(m, true); }
+  // Kept decrypted as the newest message, the preview also goes at its time by the timer inside it (the server's copy
+  // can't be decrypted there).
+  const cur = convOf(key);
+  if (cur && cur.last === m) {
+    const group = isGroup(cur);
+    S.previews[(group ? 'g:' : 'd:') + cur.id] = previewText(m, group);
+    if (group) cur.lastMessageAt = m.createdAt;
   }
   if (store && store.loaded && !store.hasNewer && !store.list.find((x) => x.id === m.id)) {
     store.list.push(m);
@@ -5876,6 +5926,7 @@ function notify(author, body, key, msgId = null) {
 }
 async function onUpdateMessage(key, m) {
   SIDE.onUpdate(key, m); // (the side view decrypts it itself when it shows it, whether or not the chat has it)
+  lastEdited(key, m);
   const store = S.msgs[key];
   const i = store ? store.list.findIndex((x) => x.id === m.id) : -1;
   // (Photos & videos may have it when the chat doesn't: it decrypts it itself then.)

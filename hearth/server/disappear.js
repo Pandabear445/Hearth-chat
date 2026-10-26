@@ -57,7 +57,7 @@ const arm = (at) => { if (current && at != null) current.arm(at); };
 
 module.exports = function setupDisappear(ctx) {
   const { api, auth, db, fail, rateLimit, newId, now, requireChannel, requireDm, requireManageableChannel, serverOf, isBlocked, getUserRow,
-    toChannel, getIo, emitTo, removeUpload, unseal, threadInfo, groupLast, bots, serverAudit = () => {}, chanRef = () => null,
+    toChannel, getIo, emitTo, removeUpload, unseal, threadInfo, groupLast, dmLast, bots, serverAudit = () => {}, chanRef = () => null,
     toChannelAbout = (c) => toChannel(c), visibilityOf = () => null, historyStart = () => null, emitFileReplies = () => {} } = ctx;
 
   // ---------------------------------------------------------------- the timer
@@ -219,7 +219,7 @@ module.exports = function setupDisappear(ctx) {
         const d = db.prepare('SELECT * FROM dm_channels WHERE id = ?').get(id);
         if (!d) continue;
         const room = io.to([`user:${d.user_a}`, `user:${d.user_b}`]);
-        const last = lastDm(d.id);
+        const last = dmLast(d.id);
         for (const r of list) room.emit('dm:delete', { id: r.id, dmId: d.id, expired: true, last });
       }
     }
@@ -229,10 +229,6 @@ module.exports = function setupDisappear(ctx) {
     const commented = rows.filter((r) => r.reply_file != null && r.reply_to && !gone.has(r.reply_to)).map((r) => r.reply_to);
     if (io && commented.length) emitFileReplies(kind === 'c' ? 'messages' : 'dm_messages', commented);
   }
-  const lastDm = (dmId) => {
-    const m = db.prepare(`SELECT id, author_id, ciphertext, created_at, expires_at FROM dm_messages WHERE dm_id = ? AND ${LIVE} ORDER BY id DESC LIMIT 1`).get(dmId, now());
-    return m ? { id: m.id, authorId: m.author_id, ciphertext: m.ciphertext, createdAt: m.created_at, expiresAt: m.expires_at || null } : null;
-  };
 
   // In WAL mode a deleted row's old bytes stay in hearth.db-wal until it's reset. secure_delete (db.js) overwrites
   // them in the database file; truncating the WAL after a sweep that deleted something removes the rest. At most

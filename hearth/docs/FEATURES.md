@@ -257,7 +257,8 @@ Before this, a thread reply counted nowhere: not as unread, not as a mention, an
   - `POST /channels/:id/messages/bulk-delete` with `{ ids: [...] }` (up to 100) or `{ count: 1–100 }` (the newest
     messages). Manage Messages in the channel; messages older than 14 days can't be picked; messages by people at
     or above your highest role are kept (the answer says how many). One transaction, one
-    `message:delete-bulk { channelId, messages: [{ id, threadId }] }` event per channel, one audit log entry
+    `message:delete-bulk { channelId, messages: [{ id, threadId }] }` event per channel (in a group chat also `last`,
+    its newest message now, as every delete there carries for the conversation list), one audit log entry
     (`messages_bulk_deleted`). Like a single delete, thread replies, files, reactions and poll votes go too, and bots
     get `message.deleted` for each message (written in one transaction per channel, `BOTS.events`). Refused while
     you're timed out.
