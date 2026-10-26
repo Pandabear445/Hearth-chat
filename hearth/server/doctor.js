@@ -185,8 +185,15 @@ async function runDoctor({ dataDir, env = process.env, flags = new Set() }) {
 
   // ---------------------------------------------------------------- relays
   if (db && has('regions')) {
-    const rows = db.prepare('SELECT id, name, ip, turn_urls, last_seen FROM regions ORDER BY created_at').all();
+    // Member relays (database version 23+) are someone's own machine: counted on one line, never warned about.
+    let kinds = false;
+    try { kinds = db.prepare('PRAGMA table_info(regions)').all().some((c) => c.name === 'kind'); } catch { /* older database */ }
+    const rows = db.prepare(`SELECT id, name, ip, turn_urls, last_seen FROM regions${kinds ? " WHERE kind = 'region'" : ''} ORDER BY created_at`).all();
     if (!rows.length) pass('Relay regions', 'none');
+    if (kinds) {
+      const m = db.prepare("SELECT COUNT(*) AS approved, COALESCE(SUM(last_seen > ?), 0) AS up FROM regions WHERE kind = 'member' AND status = 'approved'").get(Date.now() - 3 * 60000);
+      if (m.approved) pass('Member relays', `${m.approved} approved, ${m.up} up`);
+    }
     for (const r of rows) {
       const alive = r.last_seen && Date.now() - r.last_seen < 3 * 60000;
       if (!r.last_seen) warn(`Region ${r.name}`, 'waiting for its install (no heartbeat yet)');

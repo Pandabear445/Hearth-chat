@@ -127,7 +127,9 @@ function setupHealth(ctx) {
       worker: w ? { lastRun: w.lastRun, lastOk: w.lastOk, failures: w.failures, lastError: w.lastError } : null };
   }
   function regionsHealth() {
-    const rows = db.prepare('SELECT id, name, last_seen FROM regions ORDER BY created_at').all();
+    // The owner's regions only: a member's relay (Settings → Help host) is someone's own machine, which may well be a
+    // home PC that's switched off at night, and that mustn't mark this server degraded or raise alerts.
+    const rows = db.prepare("SELECT id, name, last_seen FROM regions WHERE kind = 'region' ORDER BY created_at").all();
     const list = rows.map((r) => ({ id: r.id, name: r.name, lastSeen: r.last_seen || null, installed: !!r.last_seen, alive: !!isAlive(r) }));
     const down = list.filter((r) => r.installed && !r.alive);
     return { status: down.length ? 'degraded' : 'ok', code: down.length ? 'relay_down' : list.length ? 'ok' : 'none', regions: list, down: down.length };
