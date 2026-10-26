@@ -24,13 +24,30 @@
 // Who may change it: in a DM, either person, but not after a block either way nor once the other account is deleted
 // (as for sending a message); in a group chat, anyone in it (as for renaming it).
 //
+// Sealing it again after a key change (group chats). A group look is sealed with the key the group had when it was set,
+// and someone who joins after the key changed (someone left, say) is only ever handed the new one, so on its own the
+// look would stay shut for them for good. So the first app in the group that opens it, and holds the current key, seals
+// the same look again with that key: { reseal: true }, the next version as usual, the epoch inside it the current one,
+// and exactly the uploads the look already uses. That's taken only while the look stored is still sealed with an older
+// key than the group's, so it happens once per key change, and it gets no line in the history (nothing changed; the
+// live group:look has event: null). It's sealed and signed by the re-sealer (authorId), but still whoever set it chose
+// it: the look says so (setBy, the person on the newest line), so the apps go on counting it as theirs (one set by
+// someone you blocked stays hidden; one sealed again by someone you blocked still shows).
+// The server can't see inside, so a member could pass a different background off as one sealed again. Once per key
+// change is no real limit there: any member may replace the group's key by hand (keys/rotate, 10 minutes after the last
+// one) and seal "again" right after. All it saves them is the line (anyone in a group chat may change it anyway), and
+// only on apps that open it fresh: an app that had the background open sees it isn't the same one, and shows it as that
+// member's change, with a line (public/js/chat-look.js).
+//
 // Routes (all signed in; look:<uid> 20 a minute between them)
-//   PUT    /dms/:id/look, /groups/:id/look     { version, ciphertext, files } -> { look }
+//   PUT    /dms/:id/look, /groups/:id/look     { version, ciphertext, files, reseal? } -> { look }
 //   DELETE /dms/:id/look, /groups/:id/look     { version } -> { look }
-// look: { ciphertext, epoch, authorId, version, updatedAt }, { version, cleared: true } once removed, or null when the
-// conversation never had one. Every DM (serializeDm) and every group chat (serializeServer) carries its look.
+// look: { ciphertext, epoch, authorId, version, updatedAt, setBy? } (setBy only on one sealed again by someone other
+// than whoever set it), { version, cleared: true } once removed, or null when the conversation never had one. Every DM
+// (serializeDm) and every group chat (serializeServer) carries its look.
 // Live: dm:look { dmId, look, event } to both people, group:look { serverId, look, event } to the group's members, with
-// event: { id, userId, action: 'set' | 'clear', createdAt }, the line the apps show in the conversation. History pages
+// event: { id, userId, action: 'set' | 'clear', createdAt }, the line the apps show in the conversation (null for a look
+// sealed again after a key change, which has none). History pages
 // (GET /dms/:id/messages, and GET /channels/:id/messages for a group chat's chat) carry lookEvents: the same entries in
 // the page's time range (eventsBetween, as the disappearing timer's).
 const { idTime } = require('./disappear');
@@ -72,13 +89,26 @@ module.exports = function setupLooks(ctx) {
     if (!Array.isArray(v) || v.length > FILES_MAX || new Set(v).size !== v.length || !v.every((u) => typeof u === 'string' && UPLOAD.test(u))) fail(400, BAD, 'bad_look');
     return v;
   }
+  // reseal: true for the same look sealed again with a group's new key; absent (or false) for a change. Only group
+  // chats have keys that change.
+  function resealIn(v, dm) {
+    if (v === undefined || v === false) return false;
+    if (v !== true || dm) fail(400, BAD, 'bad_look');
+    return true;
+  }
 
   // ---------------------------------------------------------------- reading
   const rowOf = (conv) => db.prepare('SELECT * FROM chat_looks WHERE conv = ?').get(conv);
+  // Who chose the look stored: the person on the conversation's newest line. A look sealed again after a key change has
+  // no line of its own, so that's whoever set it before, and the look says so (setBy) when it's not its author.
+  const lastLine = (conv) => db.prepare('SELECT user_id, action FROM look_log WHERE conv = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(conv);
   function lookOut(r) {
     if (!r) return null;
     if (!r.ciphertext) return { version: r.version, cleared: true };
-    return { ciphertext: r.ciphertext, epoch: r.epoch == null ? null : r.epoch, authorId: r.author_id, version: r.version, updatedAt: r.updated_at };
+    const out = { ciphertext: r.ciphertext, epoch: r.epoch == null ? null : r.epoch, authorId: r.author_id, version: r.version, updatedAt: r.updated_at };
+    const last = lastLine(r.conv);
+    if (last && last.action === 'set' && last.user_id !== r.author_id) out.setBy = last.user_id;
+    return out;
   }
   const lookOf = (conv) => lookOut(rowOf(conv));
   const logOut = (r) => ({ id: r.id, userId: r.user_id, action: r.action, createdAt: r.created_at });
@@ -120,10 +150,11 @@ module.exports = function setupLooks(ctx) {
   const stale = (res, cur) => res.status(409).json({ error: 'Someone just changed the chat background. Have a look and try again.', code: 'stale_look', look: lookOut(cur) });
   // The look (or its removal), its files and its line in the history, in one transaction; the uploads it no longer
   // uses are removed once that has committed. Every file listed must be one its author uploaded that isn't attached to
-  // anything, or one the conversation's look already uses; otherwise nothing changes.
+  // anything, or one the conversation's look already uses; otherwise nothing changes. action null: the same look sealed
+  // again (set), which gets no line.
   function write(where, uid, version, next, action) {
     const t = now();
-    const event = { id: newId(), userId: uid, action, createdAt: t };
+    const event = action ? { id: newId(), userId: uid, action, createdAt: t } : null;
     const names = next.files.map((u) => u.slice(UPLOADS.length));
     let gone = [];
     db.transaction(() => {
@@ -136,8 +167,10 @@ module.exports = function setupLooks(ctx) {
         ON CONFLICT(conv) DO UPDATE SET ciphertext = excluded.ciphertext, epoch = excluded.epoch, author_id = excluded.author_id,
         version = excluded.version, files = excluded.files, updated_at = excluded.updated_at`)
         .run(where.conv, next.ciphertext, next.epoch, uid, version, JSON.stringify(next.files), t);
-      db.prepare('INSERT INTO look_log (id, conv, user_id, action, created_at) VALUES (?, ?, ?, ?, ?)').run(event.id, where.conv, uid, action, t);
-      db.prepare(`DELETE FROM look_log WHERE conv = ? AND id NOT IN (SELECT id FROM look_log WHERE conv = ? ORDER BY created_at DESC, id DESC LIMIT ${LOG_KEEP})`).run(where.conv, where.conv);
+      if (event) {
+        db.prepare('INSERT INTO look_log (id, conv, user_id, action, created_at) VALUES (?, ?, ?, ?, ?)').run(event.id, where.conv, uid, action, t);
+        db.prepare(`DELETE FROM look_log WHERE conv = ? AND id NOT IN (SELECT id FROM look_log WHERE conv = ? ORDER BY created_at DESC, id DESC LIMIT ${LOG_KEEP})`).run(where.conv, where.conv);
+      }
     })();
     // removeUpload also drops the uploader's user_files row, so their storage use goes down.
     gone.forEach((n) => removeUpload(UPLOADS + n));
@@ -150,12 +183,21 @@ module.exports = function setupLooks(ctx) {
     const version = versionIn(b.version);
     const epoch = lookCipher(b.ciphertext, where.dm);
     const files = filesIn(b.files);
+    const reseal = resealIn(b.reseal, where.dm);
     const cur = rowOf(where.conv);
+    // (A re-seal that lost the race to another member's is told here too: someone else did it.)
     if (version !== nextVersion(cur)) return stale(res, cur);
     // Sealed with the group's current key, like a message sent now. The epoch is the one inside the ciphertext (bound
     // into it and signed), never one beside it.
     if (!where.dm) requireCurrentEpoch(where.serverId, epoch);
-    res.json({ look: write(where, req.userId, version, { ciphertext: b.ciphertext, epoch, files }, 'set') });
+    if (reseal) {
+      // Only a look that's there and sealed with an older key than the group's (the epoch is the current one now), and
+      // exactly the uploads it already uses: the same look, not a new one.
+      if (!cur || !cur.ciphertext || !Number.isInteger(cur.epoch) || cur.epoch >= epoch) fail(409, 'This background doesn’t need sealing again.', 'not_stale');
+      const had = JSON.parse(cur.files || '[]');
+      if (files.length !== had.length || !files.every((u) => had.includes(u))) fail(400, BAD, 'bad_look');
+    }
+    res.json({ look: write(where, req.userId, version, { ciphertext: b.ciphertext, epoch, files }, reseal ? null : 'set') });
   }
   function clear(req, res, where) {
     const version = versionIn(body(req).version);
