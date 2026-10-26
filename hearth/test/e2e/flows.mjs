@@ -4661,7 +4661,8 @@ async function chatBackgrounds(t) {
     await p.menuItem('Chat background…').click();
     return p.dialog('Chat background');
   };
-  const tile = (m, name) => m.locator('.bg-tile').filter({ has: m.locator('.bg-tile-name', { hasText: exact(name) }) });
+  // (The inner locator of has: is relative to each tile, so it starts from the page, not the dialog.)
+  const tile = (m, name) => m.locator('.bg-tile').filter({ has: m.page().locator('.bg-tile-name', { hasText: exact(name) }) });
   const sealed = (p, re) => p.page.waitForRequest((r) => re.test(r.url()) && r.method() === 'PUT');
   const line = (p, text) => p.$('#messages .sys-line', { hasText: text });
 

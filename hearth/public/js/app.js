@@ -823,6 +823,7 @@ function startApp() {
   socket.on('server:update', (server) => {
     const i = S.servers.findIndex((s) => s.id === server.id);
     if (i >= 0) S.servers[i] = server;
+    // A group chat carries its chat background (chat-look.js keeps only a newer one than it has).
     if (isGroup(server) && server.look !== undefined) LOOK.onEvent('group:look', { serverId: server.id, look: server.look });
     const w = serverWaiters.get(server.id);
     if (w) { serverWaiters.delete(server.id); setTimeout(w, 0); }
