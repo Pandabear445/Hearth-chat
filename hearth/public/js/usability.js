@@ -46,7 +46,9 @@ export const clearAllDrafts = () => {
 // those as their time comes, but only for its own account while it runs. So signing out (or deleting the account)
 // removes every account's from this browser, like drafts: the next person here doesn't get them, and no deadline is
 // left that nobody would keep. And each time Hearth opens, any copy past its deadline goes, whoever it belongs to.
-const COPIES = ['hearth.inbox.', 'hearth.reminders.'];
+// The side view's list (hearth.sideview.<account>, side-view.js) goes with them: which messages someone pinned to the
+// side is theirs alone. (It has no deadlines, so expireLocalCopies leaves it as it is.)
+const COPIES = ['hearth.inbox.', 'hearth.reminders.', 'hearth.sideview.'];
 function copyKeys() {
   const out = [];
   try {

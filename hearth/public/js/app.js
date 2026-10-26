@@ -46,7 +46,7 @@ import { createScheduled } from './scheduled.js';
 import { createMediaPanel } from './media-panel.js';
 import { createPhotoNotes } from './photo-notes.js';
 import { createChatLook } from './chat-look.js';
-import { createSideView } from './side-view.js';
+import { createSideView, placeLabel as sidePlaceLabel } from './side-view.js';
 import { bindNew, bindEdit, describe as describeBinding, createVersions, createCopies, createOriginals, noteMessage, bindingState } from './binding.js';
 import { trackViewport } from './viewport.js';
 import { isPhone, isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
@@ -72,7 +72,7 @@ const S = {
   blocked: new Set(),
   voice: {},
   view: { type: 'home' },
-  panel: null,          // right panel: 'members' | 'pins' | 'threads' | 'thread' | 'media' (Photos & videos) | null
+  panel: null,          // right panel: 'members' | 'pins' | 'threads' | 'thread' | 'media' (Photos & videos) | 'side' (Pinned to side) | null
   thread: null,         // { rootId, channelId, serverId, from: 'threads' when opened from the Threads panel }
   msgs: {},             // 'c:<channelId>' | 'd:<dmId>' -> { list, hasMore, hasNewer, loaded }
   threads: {},          // rootId -> { root, list, loaded }
@@ -492,6 +492,7 @@ async function signOutHere() {
   clearLocalCopies();
   SCHED.reset();
   MEDIA.reset({ all: true });
+  SIDE.reset({ all: true }); // (its list in this browser went with the local copies above)
   sec.reset();
   copies.clear();
   originals.clear();
@@ -822,6 +823,7 @@ function startApp() {
   socket.on('server:update', (server) => {
     const i = S.servers.findIndex((s) => s.id === server.id);
     if (i >= 0) S.servers[i] = server;
+    if (isGroup(server) && server.look !== undefined) LOOK.onEvent('group:look', { serverId: server.id, look: server.look });
     const w = serverWaiters.get(server.id);
     if (w) { serverWaiters.delete(server.id); setTimeout(w, 0); }
     previewGroup(server);
@@ -948,6 +950,7 @@ function startApp() {
     const i = S.dms.findIndex((d) => d.id === dm.id);
     if (i >= 0) S.dms.splice(i, 1);
     S.dms.unshift(dm);
+    if (dm.look !== undefined) LOOK.onEvent('dm:look', { dmId: dm.id, look: dm.look }); // (a new DM's chat background)
     await onNewMessage('d:' + dm.id, message);
     if (!S.view.serverId) renderSidebar();
   });
@@ -1081,6 +1084,7 @@ async function loadBootstrap() {
   // (An open Photos & videos panel asks for its newest page again, and lets go of the copies photo-notes.js handed it:
   // comments, tags or edits made while this app was away aren't in them.)
   MEDIA.reset({ all: true });
+  SIDE.reset(); // (and the side view loads what's pinned there again: edited or deleted meanwhile)
   await sec.ensureSigningKey(b.encSignPrivateKey);
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(b.keyStates || {})) await sec.applyState(st);
@@ -1497,6 +1501,7 @@ function armClientExpiry() {
   for (const t of Object.values(S.threads)) { if (t.root) items.push(t.root); for (const m of t.list || []) items.push(m); }
   if (S.threadsPanel) for (const x of S.threadsPanel.items) items.push(x.root);
   for (const m of MEDIA.messages()) items.push(m); // (Photos & videos keep messages the chat may not have)
+  for (const m of SIDE.messages()) items.push(m); // (and so does the side view)
   for (const m of NOTES.messages()) items.push(m); // (and so do photo tags and comments)
   for (const d of S.dms) if (d.last) items.push(d.last);
   for (const sv of S.servers) if (sv.last) items.push(sv.last);
@@ -1527,6 +1532,7 @@ function purgeExpired() {
   // Photos & videos of messages the chat hasn't loaded (the rest went with the conversations above).
   MEDIA.expire();
   NOTES.expire(); // and the copies photo tags and comments keep by themselves
+  SIDE.expire(); // and the side view's
   const sidebar = () => { if (!S.view.serverId) later(renderSidebar); };
   for (const d of S.dms) if (d.last && isExpired(d.last, t)) { d.last = newestLive('d:' + d.id); previewDm(d).then(sidebar); }
   for (const g of groups()) if (g.last && isExpired(g.last, t)) { const c = textChannel(g); g.last = c ? newestLive('c:' + c.id) : null; previewGroup(g).then(sidebar); }
@@ -1772,6 +1778,9 @@ function setView(v) {
   if (S.panel === 'pins' || (S.panel === 'threads' && (!S.threadsPanel || S.threadsPanel.channelId !== v.channelId))) S.panel = null;
   // Photos & videos belong to their conversation: going to another one closes them (coming back to the same one doesn't).
   if (S.panel === 'media' && (!['channel', 'dm'].includes(v.type) || currentKey() !== from)) S.panel = null;
+  // The side view ('side') stays: what's pinned there is from anywhere, and it's there to keep beside another chat. On a
+  // phone, where it covers the chat, going to another conversation shows that conversation instead.
+  if (S.panel === 'side' && isPhoneLayout() && currentKey() !== from) S.panel = null;
   if (S.panel === null && P.showMembers && wideEnoughForPanel() && (v.type === 'channel' || v.type === 'dm')) S.panel = 'members';
   document.body.classList.remove('nav-open');
   // Going somewhere draws the side panel afresh (a voice chat panel otherwise stays as it is through redraws).
@@ -1794,6 +1803,7 @@ async function openDmWith(userId) {
   try {
     const d = await api('POST', '/dms', { userId });
     if (!S.dms.find((x) => x.id === d.id)) S.dms.unshift(d);
+    if (d.look !== undefined) LOOK.onEvent('dm:look', { dmId: d.id, look: d.look }); // its chat background (chat-look.js)
     openDm(d.id);
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -2218,8 +2228,8 @@ function resizeHandle(which) {
   const cfg = () => {
     const d = document.documentElement.dataset;
     if (which === 'sidebar') return { key: 'sideW', v: '--side-w', min: 200, max: 420, def: 256, dir: d.sidebarSide === 'right' ? -1 : 1, box: $('#sidebar') };
-    // Conversations in the panel share one width, and Photos & videos (a grid of them) takes it too.
-    const thread = panelMode() === 'thread' || panelMode() === 'chat' || panelMode() === 'media';
+    // Conversations in the panel share one width, and Photos & videos (a grid of them) and the side view take it too.
+    const thread = panelMode() === 'thread' || panelMode() === 'chat' || panelMode() === 'media' || panelMode() === 'side';
     return { key: thread ? 'threadW' : 'panelW', v: thread ? '--thread-w' : '--members-w', min: thread ? 300 : 220, max: thread ? 680 : 520, def: thread ? 400 : 272, dir: d.panelSide === 'left' ? 1 : -1, box: $('#members') };
   };
   const save = (key, w) => { const a = loadAppearance(); a.layout[key] = Math.round(w); saveAppearance(a); };
@@ -3044,6 +3054,17 @@ function threadsButton(channelId) {
   else if (fresh) b.append(h('span', { class: 'unread-dot', 'aria-hidden': 'true' }));
   return b;
 }
+// The side view (side-view.js): shows and hides it, with how many things are pinned there. Only once something is (the
+// ⋯ menu always has it), and not in the phone layout, whose header is full (app.css).
+function sideButton() {
+  const n = SIDE.count();
+  const open = S.panel === 'side';
+  if (!n && !open) return null;
+  const label = `${open ? 'Hide pinned to side' : 'Pinned to side'}${n ? ` (${n})` : ''}`;
+  const b = ibtn('sidebar', label, () => togglePanel('side'), { active: open, cls: 'with-badge head-side' });
+  if (n) b.append(h('span', { class: 'sv-count', 'aria-hidden': 'true' }, String(n)));
+  return b;
+}
 // Show or hide the chat beside a call. While it's hidden, its badge counts your pings there, and a dot means new
 // messages (when they count for you: you opened it before, or you're in the call).
 function voiceChatButton(c) {
@@ -3088,6 +3109,10 @@ function drawHeader(head) {
   const mediaButton = () => ibtn('images', S.panel === 'media' ? 'Hide photos & videos' : 'Photos & videos', () => togglePanel('media'), { active: S.panel === 'media', cls: 'head-media' });
   // Counted when the menu opens, so it's never out of date.
   const SCHED_ITEM = () => { const n = key ? SCHED.forKey(key).length : 0; return { label: 'Scheduled messages', icon: 'clock', hint: n ? String(n) : null, action: () => SCHED.openList(key) }; };
+  // Pinned to side (side-view.js): in the ⋯ menu of every chat, with how many (the header's button, sideButton, is for
+  // wider screens).
+  const sideCount = SIDE.count();
+  const SIDE_ITEM = { label: S.panel === 'side' ? 'Hide pinned to side' : 'Pinned to side', icon: 'sidebar', hint: sideCount ? String(sideCount) : null, action: () => togglePanel('side') };
   if (v.type === 'channel' && server && !isGroup(server)) {
     const c = server.channels.find((x) => x.id === v.channelId);
     if (!c) return;
@@ -3101,8 +3126,9 @@ function drawHeader(head) {
         // Notification options live in the ⋯ menu; the bell only shows up as a reminder when it's muted.
         isMuted(key) ? ibtn('bellOff', 'Muted. Click to change.', (e) => menu(e.currentTarget, notifyMenu(key), { align: 'end' }), { attrs: { 'data-pop-anchor': '' } }) : null,
         threadsButton(c.id),
+        sideButton(),
         ibtn('people', S.panel === 'members' ? 'Hide members' : 'Show members', () => togglePanel('members'), { active: S.panel === 'members' }),
-        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), ...channelMenuItems(c, server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' || S.panel === 'media' })));
+        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), SIDE_ITEM, ...channelMenuItems(c, server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' || S.panel === 'media' })));
   } else if (v.type === 'channel' && isGroup(server)) {
     const call = server.channels.find((c) => c.type === 'voice');
     const inCall = voice && call && voice.channelId === call.id;
@@ -3119,8 +3145,9 @@ function drawHeader(head) {
         ibtn('search', 'Search (Ctrl+K)', () => openSearch({ scope: key })),
         threadsButton(v.channelId),
         mediaButton(),
+        sideButton(),
         ibtn('people', 'Members', () => togglePanel('members'), { active: S.panel === 'members' }),
-        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), ...groupMenuItems(server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
+        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), SIDE_ITEM, ...groupMenuItems(server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
   } else if (v.type === 'dm') {
     const d = S.dms.find((x) => x.id === v.dmId);
     if (!d) return;
@@ -3146,8 +3173,9 @@ function drawHeader(head) {
         })(),
         ibtn('search', 'Search (Ctrl+K)', () => openSearch({ scope: key })),
         mediaButton(),
+        sideButton(),
         ibtn('user', S.panel === 'members' ? 'Hide profile' : 'Show profile', () => togglePanel('members'), { active: S.panel === 'members' }),
-        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), ...dmMenuItems(d), '-', blockItem(u)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
+        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), SIDE_ITEM, ...dmMenuItems(d), '-', blockItem(u)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
   } else if (v.type === 'voice' && server) {
     const c = server.channels.find((x) => x.id === v.channelId);
     const ck = 'c:' + v.channelId;
@@ -3796,6 +3824,7 @@ async function onKeysChanged(serverId, added, heldChanged) {
     }
     // Photos & videos: what was waiting for this key shows there now (its own copies are opened; the chat's just were).
     MEDIA.onKeys(serverId);
+    SIDE.onKeys(serverId); // (and in the side view)
     if (server && isGroup(server)) { await previewGroup(server); if (!S.view.serverId) renderSidebar(); }
   }
   if (S.view.serverId === serverId && composers.main) { composers.main.renderExtras(); renderHeader(); }
@@ -4547,6 +4576,7 @@ function messageMenuItems(m, ctx) {
     '-',
     canPin ? { label: m.pinnedAt ? 'Unpin message' : 'Pin message', icon: 'pin', action: () => togglePin(m) } : null,
     ok ? { label: saved ? 'Remove from saved' : 'Save message', icon: 'bookmark', action: () => toggleSaved(m) } : null,
+    SIDE.menuItemFor(m), // Pin to side (side-view.js): beside the chat, wherever you go next
     ctx === 'main' ? { label: 'Mark unread', icon: 'eye', action: () => markUnread(keyOfMessage(m), m.id) } : null,
     ...(ok ? remindItems(m, keyOfMessage(m), quoteOf(m, m.dec && m.dec.p ? `Poll: ${m.dec.p.q}` : 'Attachment')).map((it) => it && { ...it, key: 'remind' }) : []),
     '-',
@@ -4654,8 +4684,8 @@ function wordFilterChanged() {
 function redrawFiltered() {
   redrawFilterChanges();
   const mode = panelMode();
-  // (Photos & videos draw only the tiles whose filtering changed.)
-  if (mode === 'pins' || mode === 'threads' || mode === 'media') renderPanel();
+  // (Photos & videos draw only the tiles whose filtering changed, and the side view only such cards.)
+  if (mode === 'side' || mode === 'pins' || mode === 'threads' || mode === 'media') renderPanel();
   if (S.view.type === 'saved') renderMain();
   loadPreviews();
 }
@@ -5387,6 +5417,10 @@ function openViewer(fromImg, { name, download, items: given = null, index = 0, s
   const zoomInBtn = ibtn('zoomIn', 'Zoom in (+)', () => zoom(1.4));
   const fullBtn = ibtn('maximize', 'Fullscreen', fullscreen);
   const copyBtn = ibtn('copy', 'Copy image', copy);
+  // Pin to side (side-view.js): the picture or video shown, which stays beside the chat once the viewer closes. In the
+  // bar, and under More on a phone; it says Unpin when it's there already.
+  const sideItem = () => { const it = items[idx]; return it && it.m && Number.isInteger(it.fi) ? SIDE.menuItemFor(it.m, it.fi) : null; };
+  const sidePin = ibtn('sidebar', 'Pin to side', () => { const p = sideItem(); if (p) p.action(); fit(); }, { cls: 'viewer-pin' });
   let morePop = null;
   const more = ibtn('more', 'More', () => {
     const it = items[idx];
@@ -5397,6 +5431,7 @@ function openViewer(fromImg, { name, download, items: given = null, index = 0, s
       many ? { label: `Previous${what}`, icon: 'chevronLeft', action: () => show(idx - 1) } : null,
       many ? { label: `Next${what}`, icon: 'chevronRight', action: () => show(idx + 1) } : null,
       jumpable(it) ? { label: 'Jump to message', icon: 'arrowUp', action: jump } : null,
+      sideItem(),
       many || jumpable(it) ? '-' : null,
       vid ? null : { label: 'Zoom in', icon: 'zoomIn', action: () => zoom(1.4) },
       vid ? null : { label: 'Zoom out', icon: 'zoomOut', action: () => zoom(1 / 1.4) },
@@ -5412,12 +5447,15 @@ function openViewer(fromImg, { name, download, items: given = null, index = 0, s
     zoomOutBtn.hidden = phone || vid; zoomInBtn.hidden = phone || vid; copyBtn.hidden = phone || vid;
     fullBtn.hidden = phone;
     jumpBtn.hidden = phone || !jumpable(items[idx]);
+    const pin = sideItem();
+    sidePin.hidden = phone || !pin;
+    if (pin) { sidePin.setAttribute('aria-label', pin.label); sidePin.dataset.tip = pin.label; sidePin.classList.toggle('active', pin.label !== 'Pin to side'); }
     more.hidden = !phone;
     setCaption(captionText);
   };
   const stopFitting = onDeviceChange(fit);
   const bar = h('div', { class: 'viewer-bar' }, caption, counter, h('span', { class: 'spacer' }),
-    jumpBtn, zoomOutBtn, zoomInBtn, fullBtn, copyBtn, ibtn('download', 'Download', dl), sideBtn, more, ibtn('close', 'Close (Esc)', close));
+    jumpBtn, sidePin, zoomOutBtn, zoomInBtn, fullBtn, copyBtn, ibtn('download', 'Download', dl), sideBtn, more, ibtn('close', 'Close (Esc)', close));
   const overlay = h('div', { class: 'viewer', role: 'dialog', 'aria-label': 'Image viewer', 'aria-modal': 'true' }, bar,
     h('div', { class: 'viewer-body' }, stage, sideBox),
     items.length > 1 ? h('button', { class: 'viewer-nav prev', 'aria-label': 'Previous image', onclick: () => show(idx - 1) }, icon('chevronLeft')) : null,
@@ -5577,6 +5615,7 @@ function notify(author, body, key, msgId = null) {
   } catch { /* ignore */ }
 }
 async function onUpdateMessage(key, m) {
+  SIDE.onUpdate(key, m); // (the side view decrypts it itself when it shows it, whether or not the chat has it)
   const store = S.msgs[key];
   const i = store ? store.list.findIndex((x) => x.id === m.id) : -1;
   // (Photos & videos may have it when the chat doesn't: it decrypts it itself then.)
@@ -5612,6 +5651,7 @@ function onDeleteChannelMessages(channelId, list, { expired = false } = {}) {
   const replies = list.filter((x) => x.threadId).map((x) => x.id);
   if (replies.length) { forgetBindings('c:' + channelId, replies); MEDIA.onDelete('c:' + channelId, replies); }
   if (replies.length) NOTES.onDelete('c:' + channelId, replies); // their photos' tags and comments, and as comments
+  if (replies.length) SIDE.onDelete('c:' + channelId, replies); // and in the side view, they say they're gone
   if (top.length) onDeleteMessage('c:' + channelId, top, { expired });
   if (expired && removed.length) forgetCopies(removed, new Set(removed.map((x) => x.id)), 'c:' + channelId);
 }
@@ -5639,6 +5679,7 @@ function onDeleteMessage(key, id, { expired = false } = {}) {
   forgetBindings(key, gone);
   MEDIA.onDelete(key, gone); // their tiles in Photos & videos, and the decrypted copies it had of them
   NOTES.onDelete(key, gone); // their photos' tags (the chips, the suggestions) and comments, and as comments
+  SIDE.onDelete(key, gone); // their cards in the side view say they're gone, and its decrypted copies of them go
   // Threads these messages started go with them (their counts, and their cards in the Threads panel), and so does
   // what was loaded of them: nothing finds their replies any more (loadedMessage, which Photos & videos takes copies
   // from). One open in the side panel closes.
@@ -5829,6 +5870,7 @@ function countThreadReply(m) {
   threadsPanelReply(m);
 }
 async function onThreadUpdate(m) {
+  SIDE.onUpdate('c:' + m.channelId, m);
   const t = S.threads[m.threadId];
   const i = t ? t.list.findIndex((x) => x.id === m.id) : -1;
   if (i < 0) return MEDIA.onUpdate('c:' + m.channelId, m);
@@ -5851,6 +5893,9 @@ function renderPanel() {
   const mode = panelMode();
   // Closed (or showing something else): it lets go of what it had, and starts from the newest when it opens again.
   if (mode !== 'media') MEDIA.reset();
+  // The side view keeps what it loaded while it's open, though not shown in a view without a side panel (Friends,
+  // say): back in a chat, it's there as it was. Closed, it lets go of it.
+  if (S.panel !== 'side') SIDE.reset();
   // A voice channel's chat stays as it is through the panel's redraws (people joining, server updates): drawing it
   // again would lose your place in it and the focus of what you're typing. Going somewhere else draws it afresh.
   if (mode === 'chat' && el.dataset.mode === 'chat' && el.dataset.key === currentKey() && el.querySelector(':scope > .chat')) {
@@ -5861,6 +5906,12 @@ function renderPanel() {
   // back, its list would stop scrolling midway. Only what changed in it is drawn again.
   if (mode === 'media' && el.dataset.mode === 'media' && !hiddenWhileSharing(privateKey()) && MEDIA.drawn(el)) {
     MEDIA.draw(el);
+    return;
+  }
+  // And the side view, which stays through going from one conversation to another: only cards that changed are drawn
+  // again (it covers the ones from DMs and group chats itself while you share your screen).
+  if (mode === 'side' && el.dataset.mode === 'side' && SIDE.drawn(el)) {
+    SIDE.draw(el);
     return;
   }
   clear(el);
@@ -5875,6 +5926,7 @@ function renderPanel() {
   if (mode === 'chat') return voiceChatPanel(el);
   if (mode === 'pins') return pinsPanel(el);
   if (mode === 'threads') return threadsPanel(el, refocus && refocus.dataset.root);
+  if (mode === 'side') return SIDE.draw(el);
   if (mode === 'media') {
     MEDIA.draw(el);
     if (mediaFocus && mediaFocus.isConnected) mediaFocus.focus({ preventScroll: true });
@@ -6515,8 +6567,6 @@ const NOTES = createPhotoNotes({
   // (Comments and tagged messages it loads that disappear: the timer counts them in, NOTES.messages.)
   armExpiry: () => armClientExpiry(),
 });
-// Disappearing messages that went from wherever else they were loaded: their tags and comments go too.
-expiryListeners.add((ids) => NOTES.onDelete(null, ids));
 
 // Chat backgrounds (chat-look.js): a background for a DM or group chat, set by someone in it.
 const LOOK = createChatLook({
@@ -6543,8 +6593,76 @@ const LOOK = createChatLook({
 });
 
 // The side view (side-view.js): messages and pictures pinned to a panel that stays open while you chat.
+// Where a conversation is, for a card ("#general · Indie Game Club", "DM with maya", a group's name), or null when it's
+// not one you're in any more. private: a DM or a group chat (covered while you share your screen).
+function sidePlace(key) {
+  if (key.startsWith('d:')) {
+    const d = S.dms.find((x) => x.id === key.slice(2));
+    return d ? { kind: 'dm', private: true, label: sidePlaceLabel({ dm: displayName(getUser(d.userId)) }) } : null;
+  }
+  const c = channelById(key.slice(2));
+  const s = c && serverOfChannel(c.id);
+  if (!c || !s) return null;
+  if (isGroup(s)) return { kind: 'group', private: true, label: sidePlaceLabel({ group: groupName(s) }) };
+  return { kind: 'channel', private: false, label: sidePlaceLabel({ channel: chanLabel(c), server: s.name }) };
+}
 const SIDE = createSideView({
+  userId: () => (S.me ? S.me.id : null),
+  get: (path) => api('GET', path),
+  decrypt: (m) => decryptMessage(m),
+  // The chat's own copy, when it has one: nothing is decrypted twice.
+  known: (id) => { const m = loadedMessage(id); return m && m.dec ? m : null; },
+  keyOf: (m) => keyOfMessage(m),
+  files: (m) => filesOf(m),
+  readable: (m) => readable(m),
+  expired: (m) => isExpired(m, nowServer()),
+  disappears: (m) => disappears(m),
+  blocked: (id) => S.blocked.has(id),
+  veiled: (m) => veiled(m),
+  filterLabel: (wf) => previewLabel(wf),
+  reveal: (m) => revealFiltered(loadedMessage(m.id) || m),
+  place: (key) => sidePlace(key),
+  // DMs and group chats while you share your screen, unless you chose to show that one (Show while sharing).
+  hidden: (key) => { const p = sidePlace(key); return !!p && p.private && hiddenWhileSharing(key); },
+  author: (m) => { const u = getUser(m.authorId); return [avatarEl(u, 20), nameEl(u, { server: msgServer(m) })]; },
+  stamp: (ts) => fmtStamp(ts),
+  // Its words as the chat draws them (Markdown, mentions, spoilers a click shows), or a poll's question.
+  textEl: (m) => {
+    const t = textOf(m);
+    if (t) {
+      return h('div', { class: 'sv-text md', html: md(t, { mentionName: S.me.username }),
+        onclick: (e) => { const sp = e.target.closest('.md-spoiler'); if (sp) sp.classList.add('revealed'); } });
+    }
+    return m.dec && m.dec.p ? h('div', { class: 'sv-text' }, h('em', null, `Poll: ${m.dec.p.q}`)) : null;
+  },
+  thumb: (m, f) => decryptedUrl(m, { ...f.th, type: 'image/webp', thumb: true }),
+  full: (m, f) => mediaCopy(m, f),
+  queue: (fn, opts) => loadQueue(fn, opts),
+  autoloadMax: AUTOLOAD_MAX, // a picture pinned on its own, as in the chat
+  thumbMax: MANY_AUTOLOAD_MAX, // a message's pictures, small: like the tiles of a message with many files
+  open: (from, opts) => openViewer(from, opts),
+  download: (m, f) => downloadAttachment(m, f),
+  // Jump: the chat goes to it. Beside the chat the panel stays; on a phone, which it covers, it closes first.
+  jump: (it, m) => {
+    if (isPhoneLayout() && panelMode()) closePanel();
+    if (m && m.threadId) jumpToMessageId(m.id); else jumpToMessage(it.key, it.messageId);
+  },
+  panelHead: (title, sub) => panelHead(title, sub),
+  // Pinning opens the panel. Somewhere it can't show (Friends, say), or under the picture viewer, a toast says so.
+  show: () => {
+    if (S.panel !== 'side') togglePanel('side');
+    if (panelMode() !== 'side' || $('.viewer:not(.closing)')) toast('Pinned to the side.');
+  },
+  changed: () => { if (S.me) renderHeader(); },
+  toast: (text) => toast(text),
+  forget: (msgs, ids, key) => forgetCopies(msgs, ids, key),
+  drop: (urls) => urls.forEach((u) => fileUrls.drop(u, true)),
+  armExpiry: () => armClientExpiry(),
 });
+// Disappearing messages that went from wherever else they were loaded: their side view cards say they're gone.
+expiryListeners.add((ids) => SIDE.onDelete(null, ids));
+// Disappearing messages that went from wherever else they were loaded: their tags and comments go too.
+expiryListeners.add((ids) => NOTES.onDelete(null, ids));
 // Why you can't add a comment or a tag here (a sentence), or null when you can: the same rules as the message box.
 function photoPostBlock(key, threadId) {
   if (key.startsWith('d:')) {

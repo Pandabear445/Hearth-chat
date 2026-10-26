@@ -3438,5 +3438,64 @@ textarea.pn-box { flex: 1; min-height: 38px; max-height: 140px; padding: 8px 11p
 
 
 /* ======================================================================= The side view (side-view.js) */
+/* "Pinned to side": as wide as a thread (the same resize handle sets it), its cards newest first, each saying who, when
+   and where; a picture pinned on its own as wide as the panel, a message's pictures small. */
+#members[data-mode='side'] { width: var(--thread-w); }
+.sv-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px 10px 16px; }
+.sv-list { display: flex; flex-direction: column; gap: 10px; }
+.sv-card { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--hover); }
+.sv-meta { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--muted); }
+.sv-meta .uname { min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-when { flex: none; white-space: nowrap; }
+.sv-where { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 12px; color: var(--muted); }
+.sv-where .ic { width: 13px; height: 13px; flex: none; }
+.sv-where span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sv-text { font-size: 14px; color: var(--msg-text); overflow-wrap: anywhere; max-height: 50vh; overflow-y: auto; }
+.sv-veil { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0; font-size: 13.5px; color: var(--muted); }
+.sv-veil .ic { width: 15px; height: 15px; }
+/* A card with nothing in it but a line (loading, gone, hidden while sharing your screen): the × in its corner. */
+.sv-note { display: flex; align-items: center; gap: 8px; min-height: 26px; padding-right: 30px; font-size: 13.5px; color: var(--muted); }
+.sv-note .ic { width: 16px; height: 16px; flex: none; }
+.sv-card > .sv-x { position: absolute; top: 8px; right: 8px; }
+.sv-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sv-actions .btn .ic { width: 14px; height: 14px; }
+/* The picture pinned on its own: the panel's width, never taller than most of the screen. */
+.sv-pic { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; max-height: 70vh; min-height: 48px; overflow: hidden; border-radius: 10px; background: var(--active); }
+.sv-pic .sv-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: inherit; background: none; color: inherit; cursor: zoom-in; }
+.sv-pic .sv-img { display: block; width: 100%; height: 100%; max-height: 70vh; object-fit: contain; }
+.sv-pic.video { min-height: 140px; background: #16131c; }
+.sv-video { display: block; width: 100%; max-height: 70vh; background: #000; }
+.sv-play { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px; background: rgb(255 255 255 / .14); color: #fff; font-size: 13.5px; font-weight: 600; }
+.sv-play:hover { background: rgb(255 255 255 / .22); }
+.sv-play .ic { width: 18px; height: 18px; }
+/* A message's pictures and videos: small squares, as in Photos & videos. */
+.sv-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 4px; }
+.sv-thumbs.one { grid-template-columns: minmax(0, 200px); }
+.sv-tile { position: relative; aspect-ratio: 1; min-width: 0; overflow: hidden; border-radius: 8px; background: var(--active); }
+.sv-tile .sv-open { position: absolute; inset: 0; display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: inherit; background: none; color: inherit; cursor: pointer; }
+.sv-tile .sv-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sv-tile.video { background: #16131c; color: #d8d3e2; }
+.sv-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sv-ph { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 6px; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sv-tile.video .sv-ph { color: #d8d3e2; }
+.sv-ph .ic { width: 22px; height: 22px; }
+/* A spoiler: blurred under a cover until it's clicked (it loads behind it all the same). */
+.sv-pic.spoiler > :not(.sv-cover), .sv-tile.spoiler > :not(.sv-cover) { filter: blur(14px); }
+.sv-cover { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 5px; background: rgb(0 0 0 / .3); color: #fff; font-size: 12px; font-weight: 700; }
+.sv-cover:hover { background: rgb(0 0 0 / .42); }
+.sv-cover .ic { width: 15px; height: 15px; }
+.sv-files { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.sv-file { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
+.sv-file > .ic { width: 15px; height: 15px; flex: none; color: var(--muted); }
+.sv-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-size { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sv-empty[hidden] { display: none; }
+/* The header button's count: how many things are pinned, not something new, so not in the alert colour. */
+.icon-btn.with-badge .sv-count { position: absolute; top: -3px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: rgb(var(--s1)); box-shadow: inset 0 0 0 1px var(--line); color: var(--text); font: 700 10px/16px var(--font); text-align: center; pointer-events: none; }
+/* The header button is for wider screens: a phone's header is full, and the ⋯ menu has Pinned to side too. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  #main-head .head-side { display: none; }
+}
 
 /* (end of the side view) */

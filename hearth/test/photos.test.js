@@ -898,7 +898,7 @@ test('the panel’s, comments’ and tags’ queries use their partial indexes, 
 
 test('upgrading a version 20 database counts the files messages already have and builds the new indexes and table', async () => {
   const CURRENT = Number(/const SCHEMA_VERSION = (\d+);/.exec(fs.readFileSync(path.join(__dirname, '..', 'server', 'db.js'), 'utf8'))[1]);
-  assert.equal(CURRENT, 21);
+  assert.ok(CURRENT >= 21);
   const s = await startServer();
   try {
     const a = await s.register(`upa${hex(3)}`); const b = await s.register(`upb${hex(3)}`);
@@ -934,9 +934,9 @@ test('upgrading a version 20 database counts the files messages already have and
     assert.equal((await as(a, 'POST', `/dm-messages/${forward.id}/tags`, { id: tagId(), fileIdx: 0, ciphertext: tagD() }, s)).status, 400);
     assert.equal(row('scheduled_messages', sched.json.id, s).file_count, 2);
     assert.equal(s.sql("SELECT COUNT(*) n FROM sqlite_master WHERE name IN ('idx_messages_files', 'idx_dm_messages_files', 'idx_messages_reply_file', 'idx_dm_messages_reply_file', 'media_tags', 'idx_media_tags_message', 'idx_media_tags_conv')")[0].n, 7);
-    assert.equal(fs.readdirSync(path.join(s.dir, 'backups')).filter((f) => /^hearth-before-v21-.*\.db$/.test(f)).length, 1, 'after a backup copy');
+    assert.equal(fs.readdirSync(path.join(s.dir, 'backups')).filter((f) => new RegExp(`^hearth-before-v${CURRENT}-.*\\.db$`).test(f)).length, 1, 'after a backup copy');
     assert.deepEqual((await as(b, 'GET', `/dms/${d.id}/media`, undefined, s)).json.messages.map((m) => m.id), [dmPhoto.id]);
     const d2 = s.db();
-    try { assert.equal(d2.pragma('user_version', { simple: true }), 21); } finally { d2.close(); }
+    try { assert.equal(d2.pragma('user_version', { simple: true }), CURRENT); } finally { d2.close(); }
   } finally { await s.stop(); }
 });

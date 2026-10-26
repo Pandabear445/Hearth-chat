@@ -286,7 +286,7 @@ export function createChatLook(deps) {
     }
   }
   // choice: { preset } | { file, dim } (a picture just picked) | { current: true, dim } (the picture there now, dimmed
-  // differently: it goes up again, since what a background links to is always a fresh upload of its setter's).
+  // differently: the server keeps a file the background already uses, so it doesn't go up again).
   // onStatus(text) says how it's going.
   async function save(key, choice, onStatus = () => {}) {
     if (!exists(key)) throw new Error('This conversation isn’t available.');
@@ -296,17 +296,16 @@ export function createChatLook(deps) {
     if (choice.preset) {
       look = cleanLook({ bg: { kind: 'preset', preset: choice.preset }, dim: 0 });
       if (!look || !PRESETS.some((b) => b.id === choice.preset)) throw new Error('That background isn’t one of the app’s.');
+    } else if (choice.current) {
+      const e = convs.get(key);
+      const cur = e && e.look && e.look.bg.kind === 'image' ? e.look.bg : null;
+      if (!cur) throw new Error('The picture there now isn’t there any more. Pick one again.');
+      look = cleanLook({ bg: cur, dim: choice.dim });
+      if (!look) throw new Error('That picture can’t be a background.');
+      files = [cur.url];
     } else {
-      let r;
-      if (choice.file) {
-        onStatus('Getting your picture ready…');
-        r = await deps.prepareImage(choice.file);
-      } else {
-        const e = convs.get(key);
-        const cur = e && e.look && e.look.bg.kind === 'image' ? e.look.bg : null;
-        if (!cur || !e.img || !e.img.blob) throw new Error('The picture there now couldn’t be loaded. Pick it again.');
-        r = { file: e.img.blob, w: cur.w, h: cur.h };
-      }
+      onStatus('Getting your picture ready…');
+      const r = await deps.prepareImage(choice.file);
       const file = r.file;
       if (!LOOK_TYPES.includes(file.type)) throw new Error('Pick a photo: a JPEG, PNG, WebP, GIF or AVIF picture.');
       if (file.size > IMAGE_MAX) throw new Error('That picture is too big for a background, even made smaller (10 MB at most).');

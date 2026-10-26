@@ -1184,7 +1184,9 @@ test('static: app.js tells photo-notes.js of deletes, disappearing, verified key
   assert.match(fn('toggleBlock'), /NOTES\.onBlock\(\)/);
   assert.match(app, /enterSends: \(\) => P\.chat\.enterToSend !== false/);
   assert.match(app, /onIndex: \(key\) => MEDIA\.onMeta\(key, null\)/);
-  assert.match(app, /armExpiry: \(\) => armClientExpiry\(\),\n\}\);\n\/\/ Disappearing messages that went from wherever else they were loaded: their tags and comments go too\./);
+  // (NOTES' own deps: the second armExpiry, after MEDIA's; then its listener for messages that went from elsewhere.)
+  assert.match(app, /const NOTES = createPhotoNotes\(\{[\s\S]*?armExpiry: \(\) => armClientExpiry\(\),\n\}\);/);
+  assert.match(app, /\/\/ Disappearing messages that went from wherever else they were loaded: their tags and comments go too\.\nexpiryListeners\.add\(\(ids\) => NOTES\.onDelete\(null, ids\)\);/);
   // The viewer opens its side panel by itself on what counts (NOTES.counts), and on tags not opened yet.
   const viewer = app.slice(app.indexOf('function openViewer('), app.indexOf('\nasync function toPng('));
   const notesOn = viewer.slice(viewer.indexOf('const notesOn = '), viewer.indexOf('\n  };\n', viewer.indexOf('const notesOn = ')));

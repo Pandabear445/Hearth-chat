@@ -489,14 +489,22 @@ test('chat-look.js: a picture is resized, sealed, uploaded and linked; shown onl
   off.look.fromBootstrap([{ id: 'd1', userId: 'alice', look: srv.looks.get('d:d1') }], []);
   await settle();
   assert.equal(off.look.themeFor(DM_VIEW), null);
-  // Dimmed differently: the picture goes up again (what a background links to is always a fresh upload of its setter's).
+  // Dimmed differently: the same picture, listed again (the server keeps a file the background already uses), and
+  // the copy already here stays.
   srv.me = 'bob';
+  asked.length = 0;
   await B.look.save('d:d1', { current: true, dim: 0.2 });
+  assert.equal(srv.uploads.size, 1, 'nothing went up again');
+  assert.deepEqual(asked.find((x) => x.method === 'PUT').body.files, [url]);
+  assert.equal(B.look.themeFor(DM_VIEW).background.image, first, 'the same copy');
+  assert.ok(!revoked.has(first));
+  assert.equal(B.look.themeFor(DM_VIEW).background.dim, 0.2);
+  // Another picture: the old copy is let go of once the new one shows.
+  await B.look.save('d:d1', { file: new File([new Uint8Array([1, 2, 3])], 'hill.webp', { type: 'image/webp' }), dim: 0.3 });
   assert.equal(srv.uploads.size, 2);
   const second = B.look.themeFor(DM_VIEW).background.image;
   assert.notEqual(second, first);
   assert.ok(revoked.has(first), 'the old copy was let go of');
-  assert.equal(B.look.themeFor(DM_VIEW).background.dim, 0.2);
   // A preset instead: the picture's copy goes too; reset lets go of everything.
   await B.look.save('d:d1', { preset: 'embers' });
   assert.ok(revoked.has(second));
