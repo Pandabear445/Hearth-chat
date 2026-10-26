@@ -4647,7 +4647,152 @@ async function chatBackgrounds(t) {
 }
 
 // ------------------------------------------------------------------ the side view
+// Bob pins a message (from its ⋯ menu) and a photo (from the viewer) in his DM with Alice. Both stay at the side while
+// he goes to the group chat, untouched; the photo opens in the viewer from there, and Jump takes him back to the
+// message. × takes one off; a pinned message Alice deletes says it's no longer available. On his phone, a long press
+// pins one, the panel covers the chat, Back closes it, and signing out clears the list from the phone.
 async function sideView(t) {
+  const { alice, bob } = t.people;
+  const pic = (name, w, h) => ({ name, mimeType: 'image/png', buffer: makePng(w, h) });
+  const sids = (p) => p.page.$$eval('#members .sv-card', (els) => els.map((e) => e.dataset.sid));
+  const card = (p, sid) => p.$(`#members .sv-card[data-sid="${sid}"]`);
+  const headButton = (p) => p.$('#main-head button.head-side');
+  // Is the message with these words in full view in the chat (as a jump leaves it)?
+  const shown = (words) => {
+    const el = [...document.querySelectorAll('#messages .msg[data-mid]')].find((m) => m.textContent.includes(words));
+    if (!el) return false;
+    const r = el.getBoundingClientRect(); const box = document.querySelector('#messages').getBoundingClientRect();
+    return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+  };
+
+  // ---- In the DM: words, and a photo.
+  for (const p of [alice, bob]) await p.railButton('Direct messages');
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  const recipe = 'Side view: the recipe is two cups of flour';
+  await alice.send(recipe);
+  await bob.message(recipe).first().waitFor({ timeout: 60000 });
+  await alice.$('.cw-main input[type=file]').setInputFiles([pic('side-plum.png', 240, 160)]);
+  await alice.send('Side view photo: plum');
+  const plum = bob.message('Side view photo: plum').first();
+  await plum.waitFor({ timeout: 60000 });
+  const recipeId = await bob.message(recipe).first().getAttribute('data-mid');
+  const plumId = await plum.getAttribute('data-mid');
+  check(!(await headButton(bob).count()), 'With nothing pinned, the header should have no button for it.');
+
+  // The message, from its ⋯ menu: the panel opens, as wide as a thread, saying where it's from.
+  await bob.messageAction(recipe, 'Pin to side');
+  await card(bob, recipeId).locator('.sv-text').waitFor();
+  check((await bob.$('#members .panel-head h2').textContent()) === 'Pinned to side', 'The panel should be called Pinned to side.');
+  check(/DM with Alice Wonder/.test(await card(bob, recipeId).locator('.sv-where').textContent()), 'A card should say where it’s from.');
+  check((await card(bob, recipeId).locator('.sv-text').textContent()).includes('two cups of flour'), 'A card should show the message’s words.');
+  check((await headButton(bob).getAttribute('aria-label')) === 'Hide pinned to side (1)', `The header button should count it (got ${await headButton(bob).getAttribute('aria-label')}).`);
+  const box = await bob.$('#members').boundingBox();
+  check(box && box.width >= 380, `The panel should be as wide as a thread (got ${box && box.width}).`);
+  // (Pinned already: its menu offers to take it off.)
+  await bob.message(recipe).first().hover();
+  await bob.message(recipe).first().locator('button[aria-label="More actions"]').click();
+  await bob.menuItem('Unpin from side').waitFor();
+  await bob.page.keyboard.press('Escape');
+
+  // The photo, from the viewer's bar: it goes on top, as wide as the panel.
+  await bob.page.waitForFunction((id) => { const i = document.querySelector(`#messages .msg[data-mid="${id}"] .att-img`); return !!i && i.src.startsWith('blob:'); }, plumId, { timeout: 30000 });
+  await plum.locator('.att-img').click({ position: { x: 24, y: 80 } }); // (clear of its download button)
+  await bob.$('.viewer').waitFor();
+  await bob.$('.viewer-bar button[aria-label="Pin to side"]').click();
+  await bob.$('.viewer-bar button[aria-label="Unpin from side"]').waitFor();
+  await bob.toast('Pinned to the side.');
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  await bob.page.waitForFunction(() => document.querySelectorAll('#members .sv-card').length === 2);
+  check(JSON.stringify(await sids(bob)) === JSON.stringify([`${plumId}:0`, recipeId]), `The newest pinned should come first (got ${(await sids(bob)).join(', ')}).`);
+  await bob.page.waitForFunction((sid) => { const i = document.querySelector(`#members .sv-card[data-sid="${sid}"] .sv-pic img`); return !!i && i.complete && i.naturalWidth === 240 && i.src.startsWith('blob:'); }, `${plumId}:0`, { timeout: 30000 });
+  const picWidth = (await card(bob, `${plumId}:0`).locator('.sv-pic').boundingBox()).width;
+  check(picWidth >= 300, `A pinned picture should be as wide as the panel (got ${picWidth}).`);
+  check((await headButton(bob).getAttribute('aria-label')) === 'Hide pinned to side (2)', 'The count should follow.');
+  // Nothing in the panel looks like a chat row (the app redraws those by data-mid).
+  check(!(await bob.$('#members [data-mid]').count()), 'No card should carry data-mid.');
+
+  // ---- Another conversation: the panel stays, with both, as they were (nothing drawn again).
+  await bob.page.$eval(`#members .sv-card[data-sid="${plumId}:0"] .sv-pic img`, (i) => { i.__kept = true; });
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  check(JSON.stringify(await sids(bob)) === JSON.stringify([`${plumId}:0`, recipeId]), 'Going to another conversation should leave the side view open, with both.');
+  check(await bob.page.$eval(`#members .sv-card[data-sid="${plumId}:0"] .sv-pic img`, (i) => i.__kept === true), 'The picture should stay as it was, not be drawn again.');
+  check((await headButton(bob).getAttribute('aria-label')) === 'Hide pinned to side (2)', 'The group chat’s header should have the button too.');
+
+  // The picture opens in the viewer from the side.
+  await card(bob, `${plumId}:0`).locator('.sv-open').click();
+  await bob.$('.viewer').waitFor();
+  check((await bob.$('.viewer-name').textContent()) === 'side-plum.png', 'The viewer should open on the pinned picture.');
+  await bob.$('.viewer-bar button[aria-label="Unpin from side"]').waitFor();
+  await bob.page.waitForFunction(() => { const i = document.querySelector('.viewer-img'); return !!i && i.src.startsWith('blob:') && i.naturalWidth === 240; });
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+
+  // ---- Jump: back to the DM, at the message; beside the chat, the panel stays.
+  await card(bob, recipeId).locator('.sv-actions .btn', { hasText: 'Jump' }).click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await bob.page.waitForFunction(shown, recipe);
+  check((await sids(bob)).length === 2, 'On a desktop the panel should stay open after a jump.');
+
+  // ---- × takes one off.
+  await card(bob, recipeId).locator('.sv-x').click();
+  await card(bob, recipeId).waitFor({ state: 'detached' });
+  check((await headButton(bob).getAttribute('aria-label')) === 'Hide pinned to side (1)', 'Unpinning should lower the count.');
+
+  // ---- A pinned message deleted: its card says so, and × removes it.
+  await alice.messageAction('Side view photo: plum', 'Delete message');
+  await alice.modal('Delete message?').locator('.modal-foot .btn.danger').click();
+  await card(bob, `${plumId}:0`).filter({ hasText: 'This message is no longer available' }).waitFor({ timeout: 20000 });
+  check(!(await card(bob, `${plumId}:0`).locator('img').count()), 'A deleted message’s picture should go from its card.');
+  await card(bob, `${plumId}:0`).locator('.sv-x').click();
+  await bob.$('#members .sv-empty:not([hidden])').waitFor();
+  // The ⋯ menu shows and hides it too; closed with nothing pinned, the header has no button for it.
+  await bob.$('#main-head button[aria-label="More"]').click();
+  await bob.menuItem('Hide pinned to side').click();
+  await bob.$('#members .sv-scroll').waitFor({ state: 'detached' });
+  check(!(await headButton(bob).count()), 'Closed with nothing pinned, the header button should go.');
+
+  // ---- A phone: a long press pins it, the panel covers the chat, Back closes it; signing out clears the list.
+  const phone = await t.open('bob-side', PHONE);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  const openNav = async () => {
+    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
+  };
+  await openNav();
+  await page.locator('#rail button[aria-label="Direct messages"]').tap();
+  await openNav();
+  await phone.dmRow('Alice Wonder').tap();
+  await page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  const held = phone.message(recipe).first();
+  await held.waitFor({ timeout: 30000 });
+  const cdp = await phone.context.newCDPSession(page);
+  const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+  await held.scrollIntoViewIfNeeded();
+  const b = await held.locator('.msg-text').boundingBox();
+  await touch('touchStart', b.x + 40, b.y + b.height / 2);
+  await page.waitForTimeout(700);
+  await touch('touchEnd');
+  const sheet = page.locator('.sheet-backdrop:not(.closing) .sheet');
+  await sheet.waitFor();
+  await sheet.locator('.sheet-row', { hasText: exact('Pin to side') }).tap();
+  await phone.$(`#members .sv-card[data-sid="${recipeId}"] .sv-text`).waitFor();
+  await page.waitForFunction(() => { const r = document.querySelector('#members').getBoundingClientRect(); return r.left <= 1 && r.width >= innerWidth - 1; }, null, { timeout: 5000 })
+    .catch(() => check(false, 'On a phone the panel should cover the chat.'));
+  check(!(await page.locator('#main-head button.head-side').isVisible()), 'A phone’s header should have no button for it.');
+  check(await page.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith('hearth.sideview.'))), 'The list should be kept on the phone.');
+  await page.goBack();
+  await phone.$('#members .sv-card').first().waitFor({ state: 'detached' });
+  await openNav();
+  await phone.logout();
+  check(await page.evaluate(() => !Object.keys(localStorage).some((k) => k.startsWith('hearth.sideview.'))), 'Signing out should clear the side view from this device.');
+  await phone.close();
+  delete t.people['bob-side'];
 }
 
 export const FLOWS = [
