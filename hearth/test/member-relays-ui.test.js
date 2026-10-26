@@ -119,6 +119,9 @@ test('Admin → Regions → Member relays: the password again where someone else
   assert.match(m, /r\.status === 'pending' \? btn\('Approve', \(\) => approve\(r\), 'btn primary sm'\) : null,/);
   // The page refreshes on its own when a member's relay changes, with one timer however often it's redrawn.
   assert.match(fnSource(a, 'regions', '  '), /clearInterval\(timer\);\n {4}timer = setInterval\(/);
+  // "Measure from this device" leaves members' relays alone for an admin who avoids them (the choice read then).
+  assert.match(fnSource(a, 'regions', '  '), /const ice = usableIce\(await api\('GET', '\/ice'\), avoidsMemberRelays\(me\(\)\)\);\n {6}const ranks = await rankRelays\(ice, \{ force: true \}\);/);
+  assert.match(read('public', 'js', 'app.js'), /adminView\(\{ role: S\.me\.staffRole, confirm: \(fn, opts\) => confirmedCall\(app, fn, opts\), me: \(\) => S\.me,/);
 });
 
 test('the app hands settings pages a way to follow a server event, and the e2e flow runs just before the last one', () => {

@@ -4,7 +4,7 @@ import { api } from './api.js';
 import { avatarEl } from './profile-ui.js';
 import { modal, confirmDialog, field, menu } from './ui.js';
 import { renderDoc, render as md } from './markdown.js';
-import { rankRelays, relayTime } from './relays.js';
+import { rankRelays, relayTime, usableIce, avoidsMemberRelays } from './relays.js';
 import { underWay } from './auto-update.js';
 import { markNotesSeen } from './whatsnew.js';
 
@@ -95,7 +95,8 @@ export function relayBackupText(r) {
   return `${r.backup.files} backup cop${r.backup.files === 1 ? 'y' : 'ies'}`;
 }
 
-export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, role = 'admin', confirm = null } = {}) {
+// me: the signed-in user, read when it's needed (their privacy choices can change while the dashboard is open).
+export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, role = 'admin', confirm = null, me = () => null } = {}) {
   const myRank = RANK[role] || 0;
   confirmPw = confirm;
   const tabs = TABS.filter((t) => myRank >= t[3]);
@@ -757,7 +758,8 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
     const measured = h('div', { class: 'stack' });
     const measure = async (btn) => {
       btn.disabled = true; clear(measured).append(h('span', { class: 'spinner' }));
-      const ice = await api('GET', '/ice');
+      // Someone who avoids members' relays (Privacy & safety) never contacts one, here either: they aren't measured or listed.
+      const ice = usableIce(await api('GET', '/ice'), avoidsMemberRelays(me()));
       const ranks = await rankRelays(ice, { force: true });
       clear(measured);
       const relays = ice.filter((e) => [].concat(e.urls || []).some((u) => /^turns?:/.test(u)));

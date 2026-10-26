@@ -2995,7 +2995,7 @@ function renderMain() {
   else if (v.type === 'people') main.append(peopleView());
   else if (v.type === 'updates') main.append(updates.view());
   else if (v.type === 'study') main.append(study.view());
-  else if (v.type === 'admin' && S.me.staffRole) main.append(S.adminEl = adminView({ role: S.me.staffRole, confirm: (fn, opts) => confirmedCall(app, fn, opts), tab: v.tab, setTab: (t) => { S.view.tab = t; }, openReports: S.adminReports, onCount: (n) => { if (S.adminReports !== n) { S.adminReports = n; renderRail(); } } }));
+  else if (v.type === 'admin' && S.me.staffRole) main.append(S.adminEl = adminView({ role: S.me.staffRole, confirm: (fn, opts) => confirmedCall(app, fn, opts), me: () => S.me, tab: v.tab, setTab: (t) => { S.view.tab = t; }, openReports: S.adminReports, onCount: (n) => { if (S.adminReports !== n) { S.adminReports = n; renderRail(); } } }));
   else if ((v.type === 'channel' || v.type === 'dm') && hiddenWhileSharing(privateKey(v))) main.append(shareCover(privateKey(v)));
   else if (v.type === 'channel' || v.type === 'dm') main.append(chatView());
   else if (v.type === 'voice') main.append(voiceRoomView());
