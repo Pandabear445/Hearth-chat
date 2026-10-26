@@ -129,7 +129,10 @@ third (Asia or US West) covers thousands of people. Oracle's free tier makes the
 
 **Optional, for the web app itself:** Cloudflare's free plan in front of your domain serves the app's files from
 near everyone, hides your server's IP and blocks floods, also at $0. WebSockets work on the free plan. It needs
-a domain (next section).
+a domain (next section). Behind its proxy, Hearth sees Cloudflare's addresses instead of visitors' (for sign-in
+limits, IP bans and the audit log) until Caddy is told to trust Cloudflare's published address ranges (Caddy's
+`trusted_proxies` option). Members' relays work either way: one whose check-in comes from an address that isn't its
+own proves its address by answering Hearth's check at it.
 
 ## Operating notes
 

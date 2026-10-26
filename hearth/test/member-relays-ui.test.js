@@ -98,8 +98,8 @@ test('Settings → Help host: in the Servers group, on the member routes, live w
     'the same person always has the same one, and whoever sees when people join calls can often work out whose it is',
     // The name stays with the member and the owner.
     'Its name doesn’t: only you and the owner see that',
-    // Its own home network, IPv6 included (setup-turn.sh --member).
-    'or to your own public address, and it relays over IPv4 only']) assert.ok(host.includes(said), said);
+    // Its own home network, IPv6 included, and the machine itself (setup-turn.sh --member: relay-ip and the nftables rule).
+    'to the machine itself (a firewall rule it sets up) or to your own public address, and it relays over IPv4 only']) assert.ok(host.includes(said), said);
   assert.doesNotMatch(host, /doesn’t see who’s who/, 'no promise it can’t keep');
   // The install command says how long its link works and what it installs.
   const cmd = s.slice(s.indexOf('const relayCommand = '), s.indexOf('function hostTab('));

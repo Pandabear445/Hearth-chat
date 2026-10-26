@@ -44,7 +44,7 @@ const hasWindow = typeof window !== 'undefined';
 const md = () => (typeof navigator !== 'undefined' && navigator.mediaDevices) || null;
 
 export class Voice {
-  constructor({ socket, getIceServers, ensureIce, avoidHosts, avoids, onChange, onSpeaking, signSdp, verifySdp, onSecurityWarning, isPeerMuted, onNotice, onRegion, onMoved, myId }) {
+  constructor({ socket, getIceServers, ensureIce, avoidHosts, avoids, memberRelayHosts, onChange, onSpeaking, signSdp, verifySdp, onSecurityWarning, isPeerMuted, onNotice, onRegion, onMoved, myId }) {
     this.socket = socket;
     this.isPeerMuted = isPeerMuted;
     // Offers/answers are signed with the sender's signing key and checked before use. The DTLS
@@ -65,6 +65,9 @@ export class Voice {
     // and the other side's app builds its connection with us without member relays as well (theyAvoid, rtcConfig).
     this.avoids = avoids || (() => false);
     this.theyAvoid = new Set(); // people in the call who avoid member relays (userIds)
+    // Where the member relays in this app's relay list are (a Set of hosts), so each connection knows which of the relays
+    // it was set up with are members' (see followMemberRelays).
+    this.memberRelayHosts = memberRelayHosts || (() => new Set());
     this.onChange = onChange || (() => {});
     this.onSpeaking = onSpeaking || (() => {});
     this.onNotice = onNotice || (() => {}); // something the person should be told (a device went away, say)
@@ -645,8 +648,18 @@ export class Voice {
     for (const p of peers || []) if (p && p.userId) { if (p.avoid === true) this.theyAvoid.add(p.userId); else this.theyAvoid.delete(p.userId); }
   }
   // New relay logins (the old ones run out): connections in progress use them from their next network change on.
+  // (An address it already has on a member relay stays in use meanwhile, so that relay stays among its memberHosts.)
   updateIceServers() {
-    for (const peer of this.peers.values()) { try { peer.pc.setConfiguration(this.rtcConfig(peer.userId)); } catch { /* keeps the old ones */ } }
+    for (const peer of this.peers.values()) {
+      const config = this.rtcConfig(peer.userId);
+      try { peer.pc.setConfiguration(config); } catch { continue; /* keeps the old ones */ }
+      for (const x of this.memberHostsIn(config)) (peer.memberHosts ||= new Set()).add(x);
+    }
+  }
+  // The member relays among the relays in a connection's settings (by host).
+  memberHostsIn(config) {
+    const members = this.memberRelayHosts() || new Set();
+    return new Set([...relayHosts((config && config.iceServers) || [])].filter((x) => members.has(x)));
   }
   // This person turned avoiding member relays on during a call. New relay addresses alone only count from the next
   // network change (the path in use, and the other side's addresses already taken, would stay on a member relay), so
@@ -656,14 +669,16 @@ export class Voice {
     if (!this.channelId || !this.avoids()) return;
     for (const peer of [...this.peers.values()]) if (!peer.noMember) this.reconnectPeer(peer.socketId).catch(() => {});
   }
-  // Member relays that left this app's relay list (app.js: the owner paused or removed one, its member was suspended).
-  // A connection set up with one may be going through it, and new relay addresses alone wouldn't move it, so it
-  // starts over. (The other side's app does the same for its own.)
-  relaysGone(hosts) {
-    if (!this.channelId || !hosts || !hosts.size) return;
+  // The member relays in this app's relay list now (app.js, a Set of hosts: with a login or without). One the owner paused
+  // or removed, or whose member was suspended, isn't among them any more: a connection set up with it may be going through
+  // it (its machine still takes the login), and new relay addresses alone wouldn't move it, so it starts over without it.
+  // One that's only offline for a few minutes, or that's no longer among this person's 8, is still listed, and the
+  // connections set up with it are left alone. (The other side's app does the same for its own.)
+  followMemberRelays(listed) {
+    if (!this.channelId || !listed) return;
     for (const peer of [...this.peers.values()]) {
-      if (![...(peer.relayHosts || [])].some((x) => hosts.has(x))) continue;
-      this.log('A member relay it was set up with left the relay list: starting over', peer);
+      if (![...(peer.memberHosts || [])].some((x) => !listed.has(x))) continue;
+      this.log('A member relay it was set up with left calls: starting over', peer);
       this.reconnectPeer(peer.socketId).catch(() => {});
     }
   }
@@ -727,7 +742,7 @@ export class Voice {
     // replaced is ignored instead of breaking the new one.
     const peer = { pc, pcId: newPcId(), remotePc: null, socketId, userId, audio: null, screenAudio: null, cam: null, screen: null, pending: [], initiator, hold: true, outbox: [], createdAt: Date.now(), events: [] };
     peer.noMember = this.noMemberRelays(userId); // built without member relays (see rtcConfig)
-    peer.relayHosts = relayHosts(config.iceServers); // the machines of the relays it was set up with (see relaysGone)
+    peer.memberHosts = this.memberHostsIn(config); // the member relays it was set up with (see followMemberRelays)
     // Closing a connection leaves whatever it was still doing (making an offer, say) unsettled forever, so every
     // step on it also gives up when it closes (see op()).
     peer.closing = new Promise((_, reject) => { peer.abort = () => reject(new Error('This connection was closed.')); });

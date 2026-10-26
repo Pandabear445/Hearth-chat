@@ -20,9 +20,11 @@
 # what your VPS plan includes), e.g.  TURN_CAPACITY_MBIT=200 bash scripts/setup-turn.sh
 #
 # --member (a member's relay, Settings → Help host: often a PC or a Pi on someone's home network): it relays over IPv4
-# only and never to this machine's own public address. Private addresses are refused anyway, but at home the router
-# and every other device usually have global IPv6 addresses too, and traffic from the relay starts inside the network,
-# past the router's firewall.
+# only and never to this machine itself. Private addresses are refused anyway, but at home the router and every other
+# device usually have global IPv6 addresses too, and traffic from the relay starts inside the network, past the
+# router's firewall. coturn relays to the machine's own addresses whatever its denied-peer-ip rules say (it counts them
+# as its own, and hands its public address over to its own one), so a firewall rule (nftables) keeps it away from the
+# services on this machine, loaded each time coturn starts.
 set -Eeuo pipefail
 c_y=$'\033[1;33m'; c_g=$'\033[1;32m'; c_r=$'\033[1;31m'; c_0=$'\033[0m'
 step() { printf '%s▸%s %s\n' "$c_y" "$c_0" "$*"; }
@@ -85,7 +87,8 @@ if [ "$RELAY_ONLY" = no ]; then
 fi
 
 step "Installing coturn (the standard TURN relay)…"
-{ apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq coturn curl openssl; } >/dev/null 2>&1 || die "Couldn't install coturn."
+EXTRA=""; [ "$MEMBER" = yes ] && EXTRA="nftables" # (the rule that keeps a member's relay away from its own machine)
+{ apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq coturn curl openssl $EXTRA; } >/dev/null 2>&1 || die "Couldn't install coturn${EXTRA:+ and $EXTRA}."
 
 FAM=""; [ "$MEMBER" = yes ] && FAM="-4" # (a member's relay is IPv4 only, so its address is the IPv4 one)
 PUBLIC_IP="$(curl -fsS $FAM --max-time 8 https://api.ipify.org || curl -fsS $FAM --max-time 8 https://ifconfig.me || true)"
@@ -96,10 +99,9 @@ EXTERNAL="$PUBLIC_IP"
 MEMBER_CONF=""
 if [ "$MEMBER" = yes ]; then
   [[ "$PUBLIC_IP" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && [ -n "$PRIVATE_IP" ] || die "A member relay needs an IPv4 internet connection (this machine has none)."
-  # relay-ip: relayed addresses only ever on this IPv4 address, so nothing is relayed to anyone's IPv6 address. And
-  # never to this machine's own public address (at home, the router's).
-  MEMBER_CONF="$(printf '%s\n' "# A member's relay: IPv4 only, and never to this machine's own public address (at home, the router's)." \
-    "relay-ip=$PRIVATE_IP" "denied-peer-ip=$PUBLIC_IP")"
+  # relay-ip: relayed addresses only ever on this IPv4 address, so nothing is relayed to anyone's IPv6 address. (Never to
+  # this machine itself: that's the firewall rule below. A denied-peer-ip for its own addresses does nothing.)
+  MEMBER_CONF="$(printf '%s\n' "# A member's relay: IPv4 only (and never to this machine itself: /etc/hearth-region/relay-guard.nft)." "relay-ip=$PRIVATE_IP")"
 fi
 [ -n "$SECRET" ] || SECRET="$(openssl rand -hex 32)"
 
@@ -156,6 +158,37 @@ if getent group turnserver >/dev/null 2>&1; then chgrp turnserver "$CONF_NEW"; f
 chmod 640 "$CONF_NEW"
 mv -f "$CONF_NEW" /etc/turnserver.conf
 [ -f /etc/default/coturn ] && sed -i 's/^#\?TURNSERVER_ENABLED=.*/TURNSERVER_ENABLED=1/' /etc/default/coturn
+if [ "$MEMBER" = yes ]; then
+  step "Keeping the relay away from this machine's own services…"
+  # Relayed packets (sent from coturn's relay ports, as coturn's user) to any address of this machine are refused, except
+  # to coturn's relay ports themselves, so two people on this relay still reach each other through it. Without it, anyone
+  # with a login could reach the UDP services here (a Pi-hole's DNS, mDNS, WireGuard…) through the relay. Its own table,
+  # so it never touches other firewall rules. coturn only starts with it in place (the drop-in below), and
+  # hearth-relay-uninstall takes both away.
+  NFT="$(command -v nft || true)"
+  [ -n "$NFT" ] || die "A member relay needs nftables, for the rule that keeps it away from this machine's own services (sudo apt-get install nftables)."
+  install -d -m 700 /etc/hearth-region
+  cat > /etc/hearth-region/relay-guard.nft <<'NFT_EOF'
+# Written by Hearth (scripts/setup-turn.sh --member): the relay never passes anything on to this machine itself, except
+# to its own relay ports. Loaded each time coturn starts; sudo hearth-relay-uninstall removes it.
+table inet hearth_relay
+delete table inet hearth_relay
+table inet hearth_relay {
+	chain out {
+		type filter hook output priority 0; policy accept;
+		meta skuid "turnserver" udp sport 49160-49400 fib daddr type local udp dport != 49160-49400 reject
+		meta skuid "turnserver" tcp sport 49160-49400 fib daddr type local tcp dport != 49160-49400 reject
+	}
+}
+NFT_EOF
+  chmod 600 /etc/hearth-region/relay-guard.nft
+  "$NFT" -f /etc/hearth-region/relay-guard.nft || die "nftables couldn't load the rule that keeps the relay away from this machine's own services, so the relay wasn't started."
+  install -d -m 755 /etc/systemd/system/coturn.service.d
+  printf '%s\n' "# Written by Hearth (scripts/setup-turn.sh --member): coturn runs as turnserver, and starts only once the rule that" \
+    "# keeps the relay away from this machine's own services is in place. sudo hearth-relay-uninstall removes it." \
+    '[Service]' 'User=turnserver' 'Group=turnserver' "ExecStartPre=+$NFT -f /etc/hearth-region/relay-guard.nft" > /etc/systemd/system/coturn.service.d/hearth-relay-guard.conf
+  systemctl daemon-reload
+fi
 systemctl enable coturn >/dev/null 2>&1 || true
 systemctl restart coturn
 sleep 1

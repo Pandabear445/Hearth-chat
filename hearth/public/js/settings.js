@@ -1817,7 +1817,7 @@ function hostTab(app) {
         h('li', null, 'Logins carry no names or user ids. Each person logs in to it under a made-up name that\u2019s different on every member\u2019s relay, so two relays can\u2019t tell they\u2019re seeing the same person. On yours, though, the same person always has the same one, and whoever sees when people join calls can often work out whose it is, and from then on knows their IP address whenever they use it.'),
         h('li', null, 'Your machine\u2019s IP address goes to everyone\u2019s app, since it\u2019s a relay address. Its name doesn\u2019t: only you and the owner see that, and everyone else\u2019s app just says \u201cMember relay\u201d.'),
         h('li', null, 'Backup copies, if it keeps them, are .hbk files locked with this server\u2019s backup key, which never leaves the server. You can\u2019t open them. Anyone who someday got that key could, so the owner decides whether your relay gets copies.'),
-        h('li', null, 'It can\u2019t be used to reach your own network: the relay refuses to pass anything on to private addresses or to your own public address, and it relays over IPv4 only, so the IPv6 addresses your router and the other computers at home may have are out of its reach too.'))),
+        h('li', null, 'It can\u2019t be used to reach your own network or this machine: the relay refuses to pass anything on to private addresses, to the machine itself (a firewall rule it sets up) or to your own public address, and it relays over IPv4 only, so the IPv6 addresses your router and the other computers at home may have are out of its reach too.'))),
     section('Your relays', list));
 
   const offer = () => {

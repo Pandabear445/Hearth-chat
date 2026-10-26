@@ -5386,8 +5386,8 @@ async function memberRelays(t) {
   check(token && token !== k, 'The installer should carry a check-in token of its own.');
   const checkIn = (ip = '198.51.100.77') => fetch(`${t.server.base}/api/regions/${id}/heartbeat`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Region-Token': token },
-    body: JSON.stringify({ ip, tx: 5000000, rx: 4000000, load: 0.2, cpus: 4, mem: 31, relay: true, uptime: 86400,
-      ssh: { port: 22, hostKey: '', ready: false, usedMb: 0, freeMb: 20000, files: 0 }, version: 4 }),
+    body: JSON.stringify({ ip, relayIp: ip, tx: 5000000, rx: 4000000, load: 0.2, cpus: 4, mem: 31, relay: true, uptime: 86400,
+      ssh: { port: 22, hostKey: '', ready: false, usedMb: 0, freeMb: 20000, files: 0 }, version: 5 }),
   });
   // It can't claim another machine's address: this server's own relay is at 203.0.113.7 (set in the step-up flow).
   if (String((t.server.rows("SELECT value FROM instance_settings WHERE key = 'turnUrls'")[0] || {}).value || '').includes('203.0.113.7')) {

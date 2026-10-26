@@ -5456,7 +5456,7 @@ if (process.env.TURN_USERNAME && !turnSecret()) log.warn('turn', 'static_passwor
 // Relays: this server's own (if set up) plus every linked region that's up (server/regions.js). Each is its own
 // entry with a region name, so the app can measure which answer fastest and use those.
 const REG = require('./regions')({ api, app, auth, db, fail, wrap, rateLimit, getSetting, setSetting, requireInstanceAdmin, newId, DATA_DIR, ROOT: path.join(__dirname, '..'), stepUp, auditLog,
-  sealSecret, openSecret, getIo: () => io, keyed: (s) => crypto.createHmac('sha256', atRestKey).update(String(s)).digest('hex'), mainTurnUrls: turnUrls });
+  sealSecret, openSecret, getIo: () => io, keyed: (s) => crypto.createHmac('sha256', atRestKey).update(String(s)).digest('hex'), mainTurnUrls: turnUrls, netOf });
 const TURN_STEP = 6 * 3600; // seconds
 // Member relays (Settings → Help host, server/regions.js) that the owner approved, that are up, and whose member can
 // still use this server. Each has a TURN secret of its own, so its logins are made here, relay by relay: a member's
@@ -5477,20 +5477,27 @@ function memberIceFor(uid, exp) {
   // Where these logins work, until they run out: someone who avoids member relays is told about every one of those
   // addresses, even after the relay is paused or removed (REG.memberHosts).
   REG.noteHosts(picked.flatMap((r) => r.ips), exp * 1000);
-  return picked.map((r) => {
+  const withLogins = picked.map((r) => {
     const login = `${exp}:${memberPseudonym(r.id, uid)}`;
     return { urls: r.urls, username: login, credential: crypto.createHmac('sha1', r.secret).update(login).digest('base64'), region: MEMBER_RELAY_LABEL, regionId: r.id, expiresAt: exp * 1000, community: true };
   });
+  // And where every other approved one is, with no login (the app never uses or measures those): a relay that's offline
+  // for a few minutes, or that's no longer among this person's 8, stays in the list, so the app can tell it from one that
+  // left calls, and only a call set up with one that left starts over (REG.memberListed).
+  const have = new Set(picked.map((r) => r.id));
+  return [...withLogins, ...REG.memberListed().filter((r) => !have.has(r.id)).map((r) => hostOnly(r.ip))];
 }
+// A member relay by its address only, with no login.
+const hostOnly = (ip) => {
+  const host = ip.includes(':') ? `[${ip}]` : ip;
+  return { urls: [`turn:${host}:3478?transport=udp`, `turn:${host}:3478?transport=tcp`], region: MEMBER_RELAY_LABEL, community: true };
+};
 // Someone who avoids member relays (Settings → Privacy & safety) gets no login for any of them. Their app still has to
 // know where every one is: the other person in a call may use any approved member relay, not only the 8 in someone's
 // list, and the avoider's app ignores the other side's addresses on these machines (relays.js memberRelayHosts). So
 // they get all of them, by address only: every one that's up, and every address any login still running out was
 // handed out for (a relay paused, removed or offline since still takes those).
-const memberHostsFor = () => REG.memberHosts().map((ip) => {
-  const host = ip.includes(':') ? `[${ip}]` : ip;
-  return { urls: [`turn:${host}:3478?transport=udp`, `turn:${host}:3478?transport=tcp`], region: MEMBER_RELAY_LABEL, community: true };
-});
+const memberHostsFor = () => REG.memberHosts().map(hostOnly);
 function iceServersFor(uid) {
   const list = [iceServers[0]];
   const urls = turnUrls();
