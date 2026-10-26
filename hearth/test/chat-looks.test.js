@@ -573,7 +573,7 @@ test('the log and the look files are read through their indexes', () => {
 
 test('upgrading a version 21 database adds the tables, the column and the index, after a backup copy', async () => {
   const CURRENT = Number(/const SCHEMA_VERSION = (\d+);/.exec(fs.readFileSync(path.join(__dirname, '..', 'server', 'db.js'), 'utf8'))[1]);
-  assert.equal(CURRENT, 22);
+  assert.ok(CURRENT >= 22);
   const s = await startServer();
   try {
     const host = await s.register(`uh${hex(3)}`);
@@ -592,9 +592,9 @@ test('upgrading a version 21 database adds the tables, the column and the index,
     assert.deepEqual(names, ['chat_looks', 'idx_blobs_look', 'idx_look_log_conv', 'look_log']);
     assert.equal(blob(file, s).look_conv, null);
     assert.equal(blob(file, s).message_id, sent.id, 'attachments are as they were');
-    assert.equal(fs.readdirSync(path.join(s.dir, 'backups')).filter((f) => /^hearth-before-v22-.*\.db$/.test(f)).length, 1, 'after a backup copy');
+    assert.equal(fs.readdirSync(path.join(s.dir, 'backups')).filter((f) => new RegExp(`^hearth-before-v${CURRENT}-.*\\.db$`).test(f)).length, 1, 'after a backup copy');
     const d2 = s.db();
-    try { assert.equal(d2.pragma('user_version', { simple: true }), 22); } finally { d2.close(); }
+    try { assert.equal(d2.pragma('user_version', { simple: true }), CURRENT); } finally { d2.close(); }
     const boot = ok(await as(a, 'GET', '/bootstrap', undefined, s));
     assert.equal(boot.dms.find((x) => x.id === d.id).look, null);
     assert.equal(boot.servers.find((x) => x.id === g.id).look, null);

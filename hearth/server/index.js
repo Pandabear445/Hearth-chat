@@ -812,8 +812,11 @@ const commentedIn = (sql, ...args) => db.prepare(sql).all(...args).filter((r) =>
 const isBlocked = (a, b) => !!db.prepare('SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)').get(a, b, b, a);
 // outsideImages: what your apps do with an image link to another site in a message (xss-8). Loading it shows that
 // site your IP address, so by default they ask first ('ask' | 'always' | 'never'). Only your own apps read it.
-const PRIVACY_DEFAULTS = { dms: 'everyone', friendRequests: 'everyone', outsideImages: 'ask' };
+// memberRelays: 'avoid' = your apps never use or measure a call relay run by a member (Settings → Help host), and drop
+// the other side's addresses on one, so your packets never reach one ('use' | 'avoid'). Only your own apps read it.
+const PRIVACY_DEFAULTS = { dms: 'everyone', friendRequests: 'everyone', outsideImages: 'ask', memberRelays: 'use' };
 const OUTSIDE_IMAGES = ['ask', 'always', 'never'];
+const MEMBER_RELAY_CHOICES = ['use', 'avoid'];
 const privacyOf = (row) => { try { return { ...PRIVACY_DEFAULTS, ...JSON.parse(row.privacy || '{}') }; } catch { return { ...PRIVACY_DEFAULTS }; } };
 function requireChannel(channelId, userId) {
   const c = db.prepare('SELECT * FROM channels WHERE id = ?').get(channelId);
@@ -2435,6 +2438,9 @@ function eraseAccount(row) {
     for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters',
       'saved_messages', 'read_states', 'mention_marks', 'notify_prefs', 'user_prefs', 'former_members']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(row.id);
     db.prepare('DELETE FROM profile_comments WHERE profile_id = ?').run(row.id); // the comments on their profile page go with it
+    // Call relays they offered (Settings → Help host) leave everyone's calls and backups; their machines are refused
+    // from the next check-in on and switch themselves off after a day.
+    db.prepare("DELETE FROM regions WHERE kind = 'member' AND owner_id = ?").run(row.id);
     db.prepare("UPDATE users SET rail_layout = '', study_enabled = 0, status_expires_at = NULL WHERE id = ?").run(row.id);
     if (bots.length) db.prepare('UPDATE bots SET disabled = 1 WHERE owner_id = ?').run(row.id);
     const roles = staffRoles();
@@ -4828,6 +4834,7 @@ api.patch('/me/privacy', auth, (req, res) => {
   if (['everyone', 'friends'].includes(b.dms)) p.dms = b.dms;
   if (['everyone', 'mutual', 'nobody'].includes(b.friendRequests)) p.friendRequests = b.friendRequests;
   if (OUTSIDE_IMAGES.includes(b.outsideImages)) p.outsideImages = b.outsideImages;
+  if (MEMBER_RELAY_CHOICES.includes(b.memberRelays)) p.memberRelays = b.memberRelays;
   db.prepare('UPDATE users SET privacy = ? WHERE id = ?').run(JSON.stringify(p), req.userId);
   // Your other devices follow right away (an image link they show switches to asking, or stops asking).
   io.to(`user:${req.userId}`).emit('user:update', selfUser(getUserRow(req.userId)));
@@ -5430,28 +5437,48 @@ if (process.env.MAIL_OUTBOX_DIR) log.warn('mail', 'outbox_removed', { msg: 'MAIL
 if (process.env.TURN_USERNAME && !turnSecret()) log.warn('turn', 'static_password', { msg: 'TURN_USERNAME/TURN_CREDENTIAL hand everyone the same relay password that never expires. Use TURN_SECRET instead (sudo bash scripts/setup-turn.sh sets it all up).' });
 // Relays: this server's own (if set up) plus every linked region that's up (server/regions.js). Each is its own
 // entry with a region name, so the app can measure which answer fastest and use those.
-const REG = require('./regions')({ api, app, auth, db, fail, wrap, rateLimit, getSetting, setSetting, requireInstanceAdmin, newId, DATA_DIR, ROOT: path.join(__dirname, '..'), stepUp, auditLog });
+const REG = require('./regions')({ api, app, auth, db, fail, wrap, rateLimit, getSetting, setSetting, requireInstanceAdmin, newId, DATA_DIR, ROOT: path.join(__dirname, '..'), stepUp, auditLog,
+  sealSecret, openSecret, getIo: () => io });
 const TURN_STEP = 6 * 3600; // seconds
+// Member relays (Settings → Help host, server/regions.js) that the owner approved, that are up, and whose member can
+// still use this server. Each has a TURN secret of its own, so its logins are made here, relay by relay: a member's
+// machine never holds the main secret and can't make a login that works anywhere else. The login names the person
+// by a pseudonym keyed with this server's own key and different on every member relay, so members comparing their
+// relays' logs can't tell they saw the same person (one relay can still link one person's logins over time), and
+// never by the user id or the access log's pseudonym. Each person gets at most 8, in an order keyed the same way:
+// steady per person (calls don't hop between relays), spread over the relays (which limits how many members see any
+// one person's address), and nobody can work out ahead of time whose list a relay lands in.
+const MEMBER_RELAYS_EACH = 8;
+const memberPseudonym = (relayId, uid) => crypto.createHmac('sha256', atRestKey).update(`member-relay|${relayId}|${uid}`).digest('base64url').slice(0, 22);
+function memberIceFor(uid, exp) {
+  const order = (id) => crypto.createHmac('sha256', atRestKey).update(`member-relay-order|${uid}|${id}`).digest('hex');
+  return REG.memberRelays().map((r) => ({ r, k: order(r.id) })).sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0)).slice(0, MEMBER_RELAYS_EACH).map(({ r }) => {
+    const login = `${exp}:${memberPseudonym(r.id, uid)}`;
+    return { urls: r.urls, username: login, credential: crypto.createHmac('sha1', r.secret).update(login).digest('base64'), region: r.name, regionId: r.id, expiresAt: exp * 1000, community: true };
+  });
+}
 function iceServersFor(uid) {
   const list = [iceServers[0]];
   const urls = turnUrls();
   const relays = [...(urls.length ? [{ id: 'main', region: 'Main server', urls }] : []), ...REG.liveRelays().map((r) => ({ id: r.id, region: r.name, urls: r.urls }))];
+  // Relay logins run out 12 to 18 hours from now, at a 6-hour boundary, so a person has at most three logins
+  // alive at once. (The relay's per-login limits then work per person, not per request.) expiresAt tells the
+  // app when to fetch new ones (GET /api/ice): an app left open for days keeps working calls.
+  const exp = (Math.floor(Date.now() / 1000 / TURN_STEP) + 3) * TURN_STEP;
   if (relays.length && turnSecret()) {
-    // Relay logins run out 12 to 18 hours from now, at a 6-hour boundary, so a person has at most three logins
-    // alive at once. (The relay's per-login limits then work per person, not per request.) expiresAt tells the
-    // app when to fetch new ones (GET /api/ice): an app left open for days keeps working calls.
     // Relays log every login, and a region may run on someone else's machine, so the login names the person by
     // the same keyed pseudonym the access log uses, never by their user id: steady per person, so the per-login
     // limits still work, and an admin can match relay logs to access logs, but the login alone doesn't tell a relay
     // who it is. (It never changes, though, so a relay can link one person's logins over time.)
     // The password is coturn's shared-secret scheme (HMAC-SHA1 of the login), which every relay checks.
-    const exp = (Math.floor(Date.now() / 1000 / TURN_STEP) + 3) * TURN_STEP;
     const login = `${exp}:${log.userHash(uid)}`;
     const credential = crypto.createHmac('sha1', turnSecret()).update(login).digest('base64');
     for (const r of relays) list.push({ urls: r.urls, username: login, credential, region: r.region, regionId: r.id, expiresAt: exp * 1000 });
   } else if (urls.length && process.env.TURN_USERNAME) {
     list.push({ urls, username: process.env.TURN_USERNAME, credential: process.env.TURN_CREDENTIAL || '' });
   }
+  // After the owner's relays, and even when this server has no relay of its own.
+  list.push(...memberIceFor(uid, exp));
   return list;
 }
 api.get('/ice', auth, (req, res) => {
@@ -5468,7 +5495,9 @@ api.post('/calls/region', auth, (req, res) => {
   const room = String(b.room || '');
   const want = b.region === null || b.region === 'auto' || b.region === undefined ? null : String(b.region);
   if (want !== null) {
-    const known = want === 'main' ? turnUrls().length > 0 : !!db.prepare('SELECT 1 FROM regions WHERE id = ?').get(want);
+    // Only the owner's relays: a member relay is never forced on everyone in a call (someone who avoids member relays
+    // couldn't connect, and it would hand that member everyone's address).
+    const known = want === 'main' ? turnUrls().length > 0 : !!db.prepare("SELECT 1 FROM regions WHERE id = ? AND kind = 'region'").get(want);
     if (!known) fail(400, 'No such region.');
   }
   const me = req.userId;
@@ -6891,7 +6920,7 @@ function makeEncryptedBackup() {
   return encBusy;
 }
 const backupInfo = () => ({ backups: listBackups(), encrypted: listEncBackups(), offsite: (process.env.BACKUP_RCLONE_REMOTE || '').trim() || null, keyFrom: process.env.BACKUP_KEY ? 'env' : 'file',
-  regionCopies: db.prepare('SELECT name, stats FROM regions').all().map((r) => { try { const b = JSON.parse(r.stats || '{}').backup; return b && b.ready ? r.name : null; } catch { return null; } }).filter(Boolean) });
+  regionCopies: REG.copyNames() }); // (member relays that may get copies as "<name> (member)")
 api.post('/admin/backups', auth, ownerOnly, wrap(async (req, res) => {
   rateLimit('backup:' + req.userId, 6, 3600000);
   let b;

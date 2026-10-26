@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 22;
+const SCHEMA_VERSION = 23;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1678,6 +1678,30 @@ CREATE TABLE IF NOT EXISTS look_log (
 CREATE INDEX IF NOT EXISTS idx_look_log_conv ON look_log(conv, created_at);
 CREATE INDEX IF NOT EXISTS idx_blobs_look ON blobs(look_conv) WHERE look_conv IS NOT NULL;
 `);
+
+// v23 (member relays): members can offer a machine of their own as a call relay (server/regions.js, Settings → Help
+// host). Nothing is used until the owner approves it in Admin → Regions. Rows from before are the owner's regions.
+//   regions.kind      'region' = the owner's own (Admin → Regions, as before); 'member' = offered by a member.
+//   regions.owner_id  the member who runs it (kind 'member'), else NULL. Deleting the account deletes their relays.
+//   regions.status    member relays: 'pending' until the owner approves it, then 'approved' or 'paused'. The owner's
+//                     regions are always 'approved'.
+//   regions.secret    a member relay's own TURN secret, sealed (sealSecret); NULL = the main one (the owner's regions).
+//                     A member's machine is someone else's: the main secret mints logins for the main relay and every
+//                     owner region, so it never goes there.
+//   regions.offer     what the member chose when offering it ({ capMbit, backups }), fixed from then on: the installer
+//                     is made from it, and must come out byte for byte the same each time it's downloaded.
+//   regions.backups   the owner lets it keep copies of the encrypted backups (1 for the owner's regions, as before;
+//                     a member relay starts at 0 and gets what the owner chooses when approving it).
+//   regions.approved_at, approved_by  when, and by which admin, a member relay was approved.
+addColumn('regions', 'kind', "TEXT NOT NULL DEFAULT 'region'");
+addColumn('regions', 'owner_id', 'TEXT');
+addColumn('regions', 'status', "TEXT NOT NULL DEFAULT 'approved'");
+addColumn('regions', 'secret', 'TEXT');
+addColumn('regions', 'offer', "TEXT NOT NULL DEFAULT '{}'");
+addColumn('regions', 'backups', 'INTEGER NOT NULL DEFAULT 1');
+addColumn('regions', 'approved_at', 'INTEGER');
+addColumn('regions', 'approved_by', 'TEXT');
+db.exec('CREATE INDEX IF NOT EXISTS idx_regions_owner ON regions(owner_id) WHERE owner_id IS NOT NULL');
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
 db.exec('COMMIT');
