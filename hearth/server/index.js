@@ -2182,7 +2182,12 @@ function knownNetwork(uid, ip) {
   return db.prepare("SELECT ip FROM user_ips WHERE user_id = ? AND ip LIKE '%:%' ORDER BY last_seen DESC LIMIT 1000").all(uid).some((r) => netOf(r.ip) === net);
 }
 api.post('/auth/login', wrap(async (req, res) => {
+  // Two limits per network. 'login' slows guessing: 20 every 10 minutes, and a right password gives its try back
+  // (below). 'loginall' counts every password check and gives nothing back, because each one is slow on purpose
+  // (bcrypt, on the main thread): one account signing in over and over with its right password can't keep the
+  // server busy. 100 still lets a school or an office in.
   limitNet(req, 'login', 20, 10 * 60 * 1000);
+  limitNet(req, 'loginall', 100, 10 * 60 * 1000);
   // The robot check comes before every shared limit: a request without a solved one is turned away here, so
   // junk can't use up the instance-wide limit or an account's own (which would lock real people out).
   verifyCaptcha((req.body || {}).captcha, 'login', req.ip);
@@ -2207,12 +2212,14 @@ api.post('/auth/login', wrap(async (req, res) => {
   const key = typeof authKey === 'string' ? authKey.slice(0, 128) : '';
   const ok = await bcrypt.compare(key, row ? row.auth_hash : DUMMY_HASH);
   if (!ok || !row || row.is_bot || row.deleted_at) { noteAuthFailure(req.ip); secEvent('failed_login', req.ip, name); fail(401, 'Wrong username or password.'); }
-  // The right password isn't a guess: it gives its try back to the network's limit, which is there to slow guessing.
-  // Otherwise a school, an office or a family behind one address is locked out once 20 people sign in within ten
-  // minutes. Wrong passwords from the network are still capped at 20 (the limit is checked before the password is).
-  refundNet(req, 'login');
   if (maintenance() && !isStaff(row.id)) fail(503, maintenance(), 'maintenance');
   if (stillSuspended(row)) fail(403, suspendedMsg(row), 'suspended');
+  // The right password of an account that may sign in isn't a guess: it gives its try back to the network's 'login'
+  // limit, which is there to slow guessing. Otherwise a school, an office or a family behind one address is locked
+  // out once 20 people sign in within ten minutes. Wrong passwords from the network are still capped at 20 (the limit
+  // is checked before the password is), and every check still counts toward 'loginall'. (Not for a suspended
+  // account, which would otherwise keep sending right passwords at no cost.)
+  refundNet(req, 'login');
   // Two-factor sign-in: the right password isn't enough on its own.
   ACCT.require2fa(row, req.body, req);
   const token = createSession(req, row.id, { mfa: !!row.totp_enabled });

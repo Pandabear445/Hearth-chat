@@ -296,6 +296,27 @@ read(); setInterval(read, 25).unref(); Date.now = () => real() + off;\n`);
     } finally { await setCaptcha('on'); }
   });
 
+  test('right passwords still count toward a cap per network (password checks are slow), and a suspended account gets no try back', async () => {
+    await setCaptcha('off');
+    try {
+      // Four accounts signing in over and over from one address with their right passwords: 100 password checks every
+      // 10 minutes, then that network waits, however right the passwords are.
+      const net = newIp();
+      const four = [];
+      for (let i = 0; i < 4; i++) four.push(await srv.register());
+      const st = [];
+      for (let i = 0; i < 101; i++) { const u = four[i % 4]; st.push((await login(net, u.authKey, {}, u)).status); }
+      assert.deepEqual(st, [...Array(100).fill(200), 429]);
+      // A suspended account's right password is turned away and gives nothing back: after 20, the network waits. (From
+      // the account's own network, whose limit for that account is 100 a day, so it's the network's that shows.)
+      const s = await srv.register();
+      assert.equal((await srv.api('POST', `/admin/users/${s.id}/suspend`, { token: srv.owner.token, ip: srv.owner.ip, body: { reason: 'flood' } })).status, 200);
+      const got = [];
+      for (let i = 0; i < 21; i++) got.push((await login(s.ip, s.authKey, {}, s)).status);
+      assert.deepEqual(got, [...Array(20).fill(403), 429]);
+    } finally { await setCaptcha('on'); }
+  });
+
   test('wrong passwords with solved checks are still limited per account from new networks', async () => {
     const u = await srv.register();
     const st = [];
