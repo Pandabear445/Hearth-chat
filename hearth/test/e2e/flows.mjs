@@ -4642,6 +4642,14 @@ async function photoNotes(t) {
   await alice.$('#members .mp-tile').first().waitFor({ state: 'detached' });
 }
 
+// ------------------------------------------------------------------ chat backgrounds
+async function chatBackgrounds(t) {
+}
+
+// ------------------------------------------------------------------ the side view
+async function sideView(t) {
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -4698,6 +4706,8 @@ export const FLOWS = [
   ['owner reset link: the owner makes a one-time link in Admin → Users for someone who can\u2019t sign in; they choose their own new password with it; the owner can\u2019t verify the keys it made', ownerResetLink],
   ['photos & videos: every picture and video in a DM, a group chat and a channel, newest first, opened in the viewer and jumped to', mediaPanel],
   ['photo comments and tags: a comment on one photo of several, tags added and removed, the panel filtered by a tag', photoNotes],
+  ['chat backgrounds: set in a DM and a group chat, seen live by the other side with a line in the chat, a picture, removed, and turned off on one device', chatBackgrounds],
+  ['the side view: a message and a picture pinned to the side stay beside the chat while you switch conversations, jump, unpin', sideView],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
 ];

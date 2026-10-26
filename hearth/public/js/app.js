@@ -45,6 +45,8 @@ import { label as disLabel, deadline, expired as isExpired, disappears, serverKe
 import { createScheduled } from './scheduled.js';
 import { createMediaPanel } from './media-panel.js';
 import { createPhotoNotes } from './photo-notes.js';
+import { createChatLook } from './chat-look.js';
+import { createSideView } from './side-view.js';
 import { bindNew, bindEdit, describe as describeBinding, createVersions, createCopies, createOriginals, noteMessage, bindingState } from './binding.js';
 import { trackViewport } from './viewport.js';
 import { isPhone, isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
@@ -6466,6 +6468,14 @@ const NOTES = createPhotoNotes({
   },
   // (Comments and tagged messages it loads that disappear: the timer counts them in, NOTES.messages.)
   armExpiry: () => armClientExpiry(),
+});
+
+// Chat backgrounds (chat-look.js): a background for a DM or group chat, set by someone in it.
+const LOOK = createChatLook({
+});
+
+// The side view (side-view.js): messages and pictures pinned to a panel that stays open while you chat.
+const SIDE = createSideView({
 });
 // Disappearing messages that went from wherever else they were loaded: their tags and comments go too.
 expiryListeners.add((ids) => NOTES.onDelete(null, ids));
