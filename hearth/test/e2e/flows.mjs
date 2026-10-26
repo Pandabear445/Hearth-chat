@@ -4647,7 +4647,8 @@ async function photoNotes(t) {
 // the app's backdrop, with a line in the chat; Bob turns chat backgrounds off on his device and his own comes back. Bob
 // sets a picture of his own, dimmed: it goes up encrypted, linked to the background, and both see it (as a blob: copy).
 // Alice removes it. A fresh page still has the lines (from history) and what's set (from the bootstrap). In Fruit Club,
-// a preset sealed and signed with the group's key (lkc1), which stays with that chat.
+// a preset sealed and signed with the group's key (lkc1), which stays with that chat; when Bob replaces the group's key,
+// an app seals it again with the new one, without a line.
 async function chatBackgrounds(t) {
   const { alice, bob } = t.people;
   // Colors from appearance.js BACKGROUNDS as the browser writes them in the backdrop's style.
@@ -4760,6 +4761,38 @@ async function chatBackgrounds(t) {
   await shows(alice, NEBULA);
   await shows(bob, NEBULA);
   await line(bob, 'changed the chat background').waitFor();
+
+  // ---- Bob replaces Fruit Club's key. Nebula was sealed with the old one, which nobody who joins from now on gets, so
+  // the first app that can seals the same background again with the new key: the next version, no new line, and both
+  // still see it.
+  const fruit = t.server.rows("SELECT id FROM servers WHERE kind = 'group' AND name = 'Fruit Club'")[0].id;
+  const stored = () => t.server.rows('SELECT c.epoch, c.version, s.key_epoch FROM chat_looks c JOIN servers s ON s.id = substr(c.conv, 3) WHERE c.conv = ?', 'g:' + fruit)[0];
+  const logged = () => t.server.rows('SELECT COUNT(*) AS n FROM look_log WHERE conv = ?', 'g:' + fruit)[0].n;
+  const was = stored();
+  const lines = logged();
+  check(was.epoch === was.key_epoch && was.version === 1, `Nebula should be sealed with the group’s key (got ${JSON.stringify(was)}).`);
+  // (A key made less than 10 minutes ago can't be replaced by hand yet: these are made older.)
+  t.server.sql('UPDATE server_epochs SET created_at = created_at - 3600000 WHERE server_id = ?', fruit);
+  // (The owner's announcement from an earlier flow is still up on Bob's screen, over the header: he dismisses it.)
+  if (await bob.$('#announce').count()) {
+    await bob.$('#announce button[aria-label="Dismiss"]').click();
+    await bob.$('#announce').waitFor({ state: 'detached' });
+  }
+  await bob.$('#main-head button.head-badge.e2ee').first().click();
+  const enc = await bob.dialog('End-to-end encryption');
+  await enc.locator('.modal-foot .btn', { hasText: 'Replace key now' }).click();
+  await bob.toast('New encryption key created and shared with every member.');
+  let now = stored();
+  for (const until = Date.now() + 30000; now.epoch === was.epoch; now = stored()) {
+    check(Date.now() < until, `Someone’s app should seal Nebula again with the new key (still ${JSON.stringify(now)}).`);
+    await bob.page.waitForTimeout(200);
+  }
+  check(now.epoch === now.key_epoch && now.key_epoch > was.key_epoch && now.version === 2, `Sealed again with the new key, as the next version (got ${JSON.stringify(now)}).`);
+  check(logged() === lines, 'Sealing it again shouldn’t add a line to the chat’s history.');
+  await shows(alice, NEBULA);
+  await shows(bob, NEBULA);
+  await bob.page.waitForTimeout(500);
+  check(await line(bob, 'changed the chat background').count() === 1 && await line(alice, 'changed the chat background').count() === 1, 'Nor a line in the chat.');
   // It stays with that chat: the DM has none now.
   await bob.dmRow('Alice Wonder').click();
   await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');

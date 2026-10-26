@@ -1690,7 +1690,8 @@ function shareChanged() {
   if (now === wasSharing) return;
   wasSharing = now;
   if (!now) shareAllowed.clear();
-  renderMain(); renderSidebar(); renderPanel();
+  // The chat background goes with the conversation it belongs to (applyServerTheme), and comes back with it.
+  applyServerTheme(); renderMain(); renderSidebar(); renderPanel();
   if (now && privateKey()) toast('You\u2019re sharing your screen, so this conversation is hidden from view.');
 }
 function shareCover(key) {
@@ -1701,7 +1702,7 @@ function shareCover(key) {
       h('h2', null, 'Hidden while you share your screen'),
       h('p', null, `Your conversation with ${who} stays private: anyone watching your screen sees this instead.`),
       h('div', { class: 'row gap center' },
-        h('button', { class: 'btn primary', onclick: () => { shareAllowed.add(key); renderMain(); renderSidebar(); renderPanel(); } }, 'Show while sharing'),
+        h('button', { class: 'btn primary', onclick: () => { shareAllowed.add(key); applyServerTheme(); renderMain(); renderSidebar(); renderPanel(); } }, 'Show while sharing'),
         h('button', { class: 'btn ghost', onclick: () => toggleScreen() }, 'Stop sharing')),
       h('p', { class: 'field-hint' }, 'Only for this conversation, until you stop sharing. You can turn this off in Settings \u2192 Chat.')));
 }
@@ -2193,8 +2194,10 @@ function stepChannel(dir) {
 function applyServerTheme() {
   const server = currentServer();
   // A DM or group chat shows the background someone there set (chat-look.js), while this device shows them (LOOK.themeFor
-  // is null otherwise). A server's own theme never passes for one: "Show server themes" is the switch for it.
-  setServerTheme(server && !isGroup(server) ? server.theme && { ...server.theme, chat: false } : LOOK.themeFor(S.view));
+  // is null otherwise). A server's own theme never passes for one: "Show server themes" is the switch for it. Not while
+  // the conversation is covered because you're sharing your screen: its background is the app's backdrop, which shows
+  // around and through the cover, so it's as private as the conversation.
+  setServerTheme(server && !isGroup(server) ? server.theme && { ...server.theme, chat: false } : hiddenWhileSharing(privateKey()) ? null : LOOK.themeFor(S.view));
 }
 function renderAll() {
   applyServerTheme();
@@ -6584,6 +6587,8 @@ const LOOK = createChatLook({
   encryptLook: (where, look) => sec.encryptLook(where, look),
   openLook: (look) => sec.openLook(look),
   withKeyRetry: (serverId, fn) => withKeyRetry(serverId, fn),
+  // The group key this device would seal with now, if it has it: a background sealed with an older one is sealed again.
+  currentEpoch: (serverId) => { const ck = sec.currentKey(serverId); return ck ? ck.epoch : null; },
   // A picture is made ready like a photo (at most 2560 px, re-encoded), and goes up the way attachments do.
   prepareImage: (file) => prepareImage(file, { compress: true }),
   upload: (bytes) => (bytes.byteLength > CHUNKED_ABOVE ? uploadResumable(bytes) : uploadSimple(bytes)),

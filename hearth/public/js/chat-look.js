@@ -21,11 +21,16 @@
 // the "changed the chat background" lines in the conversation, onKeys(serverId) and onTrust(userId) to open again what
 // was waiting for a key, reset(), and save / remove (what the dialog does).
 // Conversations are keyed as the server keys them: 'd:<dmId>' or 'g:<groupServerId>'.
+//
+// A group chat's background is sealed with the key the group had when it was set. Someone who joins after the key
+// changed is only ever handed the new one, so the first app here that opens a background sealed with an older key, and
+// holds the current one, seals the same background again with it (reseal, below); the server takes that quietly, with
+// no line in the conversation.
 import { h, icon, toast } from './util.js';
 import { modal, showError } from './ui.js';
 import { api } from './api.js';
 import { BACKGROUNDS } from './appearance.js';
-import { encryptFile, decryptFile } from './e2ee.js';
+import { encryptFile, decryptFile, lookEpoch } from './e2ee.js';
 import { cleanLook, LOOK_TYPES, LOOK_DIM_MAX } from './secure.js';
 import { sysLineParts } from './disappear.js';
 
@@ -36,6 +41,7 @@ export const DIM_DEFAULT = 0.35; // a picture's dim to start with
 const RETRY_FIRST = 15000; // a background whose author's keys couldn't be looked up: opened again after 15 s, 30 s, 60 s
 const RETRY_TIMES = 3;
 const PICTURE_RETRY = 30000; // a picture that couldn't be downloaded (not gone): tried again after this, when it's needed
+const RESEAL_SPREAD = 8000; // a group chat's background sealed with an older key: sealed again after a random wait up to this
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const UPLOAD = /^\/uploads\/[a-z0-9]{1,80}\.bin$/;
 // The presets a conversation can have: all but the plain one (no background does that).
@@ -99,7 +105,8 @@ const pct = (d) => `${Math.round(d * 100)}%`;
 
 export function createChatLook(deps) {
   // key -> { key, version, record, state ('none' | 'opening' | 'ok' | 'pending' | 'error'), look ({ bg, dim } or null),
-  //          img ({ url, k, blob?, blobUrl?, loading?, failed?, gone?, used } or null), token, tries, timer }
+  //          img ({ url, k, blob?, blobUrl?, loading?, failed?, gone?, used } or null), token, tries, timer,
+  //          resealed ('<version>|<epoch>' tried already), resealTimer }
   const convs = new Map();
   const made = new Set(); // blob: URLs made here and not revoked yet
   let gen = 0; // bumped by reset(): whatever was under way before is dropped
@@ -197,6 +204,7 @@ export function createChatLook(deps) {
     const e = convs.get(key);
     if (!e) return;
     clearTimeout(e.timer);
+    clearTimeout(e.resealTimer);
     convs.delete(key);
     e.token++;
     if (e.look) changed(key);
@@ -251,6 +259,7 @@ export function createChatLook(deps) {
     if (r && r.bg && fromInside(e.key, rec.authorId)) {
       e.state = 'ok';
       setLook(e, r);
+      maybeReseal(e);
       return;
     }
     e.state = r && r.pending ? 'pending' : 'error';
@@ -261,6 +270,48 @@ export function createChatLook(deps) {
       e.timer = setTimeout(() => { if (g === gen && convs.get(e.key) === e && e.record === rec) open(e); }, wait);
       if (e.timer && e.timer.unref) e.timer.unref();
     }
+  }
+
+  // ---------------------------------------------------------------- sealing again after a key change
+  // A group chat's background this device opened, sealed with an older key than the one the group uses now (which this
+  // device holds): sealed again with the current one, so whoever joined since can open it too. Every app here that can
+  // will try, each after a random wait so they don't all go at once; the first one's goes through and the others hear
+  // of it (group:look) before their turn, or are refused as stale (409 stale_look), which only means someone else did
+  // it. Tried once per background and key on this device. Sealed again, it's signed by (and counts as) whoever did it,
+  // as when someone saves it again by hand, so not one set by someone you blocked: it would show for you then.
+  function maybeReseal(e) {
+    if (!e.key.startsWith('g:') || e.state !== 'ok' || !e.look || !e.record || e.record.cleared || !deps.currentEpoch || deps.blocked(e.record.authorId)) return;
+    const serverId = e.key.slice(2);
+    const rec = e.record;
+    const was = lookEpoch(rec.ciphertext);
+    const epoch = deps.currentEpoch(serverId);
+    if (!Number.isInteger(was) || !Number.isInteger(epoch) || was >= epoch || e.resealed === `${rec.version}|${epoch}`) return;
+    e.resealed = `${rec.version}|${epoch}`;
+    clearTimeout(e.resealTimer);
+    const g = gen;
+    e.resealTimer = setTimeout(() => {
+      if (g === gen && convs.get(e.key) === e) reseal(e, rec, epoch).catch(() => { /* someone else's app can do it */ });
+    }, RESEAL_SPREAD * (deps.random || Math.random)());
+    if (e.resealTimer && e.resealTimer.unref) e.resealTimer.unref();
+  }
+  async function reseal(e, rec, epoch) {
+    const g = gen;
+    const serverId = e.key.slice(2);
+    // Not if it changed meanwhile (someone else sealed it again first, or set another), or the key moved on again.
+    const still = () => g === gen && convs.get(e.key) === e && e.record === rec && e.state === 'ok' && deps.currentEpoch(serverId) === epoch;
+    if (!still()) return;
+    const look = e.look;
+    const version = rec.version + 1;
+    const { ciphertext } = await deps.encryptLook({ serverId }, { version, payload: look });
+    if (!still() || lookEpoch(ciphertext) !== epoch) return;
+    let res;
+    // The same background: the same picture (the server checks the uploads are exactly the ones it already uses).
+    try { res = await api('PUT', pathOf(e.key), { version, ciphertext, files: look.bg.kind === 'image' ? [look.bg.url] : [], reseal: true }); } catch (err) {
+      const now = err && err.status === 409 && err.code === 'stale_look' && err.body && typeof err.body === 'object' ? err.body.look : undefined;
+      if (now !== undefined && g === gen) adopt(e.key, now);
+      return;
+    }
+    if (g === gen && res && res.look !== undefined) adopt(e.key, res.look);
   }
 
   // ---------------------------------------------------------------- writing
@@ -499,10 +550,12 @@ export function createChatLook(deps) {
       }
       for (const key of [...convs.keys()]) if (!seen.has(key)) forget(key);
     },
-    // A group key arrived: its chat's background may open now.
+    // A group key arrived: its chat's background may open now, or, if this device has it open already and the key is
+    // the group's new one, be sealed again with it.
     onKeys(serverId) {
       const e = convs.get('g:' + serverId);
       if (e && e.record && !e.record.cleared && e.state === 'pending') open(e);
+      else if (e && e.state === 'ok') maybeReseal(e);
     },
     // Someone's keys were verified (or changed): a background only their keys would open is tried again.
     onTrust(userId) {
@@ -520,7 +573,7 @@ export function createChatLook(deps) {
     reset() {
       gen++;
       if (dialog) dialog.close();
-      for (const e of convs.values()) { clearTimeout(e.timer); letGo(e.img); }
+      for (const e of convs.values()) { clearTimeout(e.timer); clearTimeout(e.resealTimer); letGo(e.img); }
       convs.clear();
       for (const u of made) URL.revokeObjectURL(u);
       made.clear();
