@@ -55,6 +55,7 @@ import { canShrink, startShrink, probe as probeVideo, plan as shrinkPlan, longes
 import { touchGestures } from './viewer-touch.js';
 import { backStack, edgeSwipes } from './phone-nav.js';
 import { initAway, CLEAR_AFTER, clearAfterMs, clearsLabel, onlyPresenceChanged } from './presence.js';
+import { createTyping, typingLine, typingPreview } from './typing.js';
 import { createWordFilter, filterLabel, previewLabel } from './wordfilter-app.js';
 import { inviteMessage, movingMessage, joinNote, signUpMode, canShare, nudgeWanted, nudgeDismissed, dismissNudge } from './invite-share.js';
 
@@ -88,7 +89,6 @@ const S = {
   notifyPrefs: {},      // 's:'|'c:'|'d:' key -> { level, muteUntil, suppressEveryone } (on the server)
   notifySettings: { dnd: { on: false }, previews: 'hidden' },
   savedIds: new Set(),  // saved messages (ids only; on the server)
-  typing: {},
   speaking: new Set(),
   clockOffset: 0,       // the server's clock minus this device's (disappearing messages go by the server's time)
 };
@@ -105,6 +105,8 @@ let hadController = false; // was a service worker already in charge when the pa
 let voice;
 let away = null; // automatic Away (presence.js)
 const sec = createSecure({ S, onKeysChanged, onKeyWarning });
+// Who's typing where (typing.js): drawn under the open conversation's box and in the conversation lists.
+const TYPING = createTyping({ onChange: (key) => typingChanged(key) });
 // Word filter (wordfilter-app.js): your own list and your servers' suggested ones, applied on this device only.
 const WF = createWordFilter({ S, vaultKey: () => myVaultKey(), serverOf: (m) => msgServer(m), onChange: () => wordFilterChanged() });
 const fetchingUsers = new Set();
@@ -961,12 +963,10 @@ function startApp() {
     const d = last !== undefined && S.dms.find((x) => x.id === dmId);
     if (d) { d.last = last; previewDm(d).then(() => { if (!S.view.serverId) later(renderSidebar); }); }
   });
+  // Kept for every conversation, open or not: the lists show it too, and it's there when you open one.
   socket.on('typing', (p) => {
-    const key = p.channelId ? 'c:' + p.channelId : 'd:' + p.dmId;
-    const t = (S.typing[key] ||= new Map());
-    clearTimeout(t.get(p.userId));
-    t.set(p.userId, setTimeout(() => { t.delete(p.userId); if (currentKey() === key) renderTyping(); }, 6000));
-    if (currentKey() === key) renderTyping();
+    if (!S.me || !p || p.userId === S.me.id) return; // (yourself on another device)
+    TYPING.start(p.channelId ? 'c:' + p.channelId : 'd:' + p.dmId, p.userId);
   });
   socket.on('poll:update', (st) => onPollUpdate(st));
   socket.on('events:update', (p) => onEventsUpdate(p));
@@ -2401,7 +2401,7 @@ function conversations() {
     const u = getUser(d.userId);
     return {
       key: 'd:' + d.id, fav: 'd:' + d.id, at: d.lastMessageAt, active: S.view.dmId === d.id,
-      title: displayName(u), avatar: avatarEl(u, 34, { status: true, meId: S.me.id }), preview: S.previews['d:' + d.id],
+      title: displayName(u), avatar: avatarEl(u, 34, { status: true, meId: S.me.id }),
       unreadKey: 'd:' + d.id, open: () => openDm(d.id), menu: dmMenuItems(d), userId: u.id,
     };
   });
@@ -2409,11 +2409,40 @@ function conversations() {
     const c = textChannel(g);
     out.push({
       key: 'g:' + g.id, fav: 'g:' + g.id, at: g.lastMessageAt || 0, active: S.view.serverId === g.id,
-      title: groupName(g), avatar: groupAvatar(g, 34), preview: S.previews['g:' + g.id] || `${g.memberIds.length} members`,
+      title: groupName(g), avatar: groupAvatar(g, 34),
       unreadKey: c ? 'c:' + c.id : '', open: () => openGroup(g.id), menu: groupMenuItems(g),
     });
   }
   return out.filter((c) => !c.userId || !S.blocked.has(c.userId) || c.active).sort((a, b) => (b.at || 0) - (a.at || 0));
+}
+// A conversation's last message as the lists show it ('d:<dm>' or 'g:<group>'): a group chat without one says how
+// many are in it.
+function convPreview(key) {
+  if (S.previews[key]) return S.previews[key];
+  const g = key.startsWith('g:') && S.servers.find((s) => s.id === key.slice(2));
+  return g ? `${g.memberIds.length} members` : '';
+}
+// The line under a conversation's name in the lists (the sidebar, Home's cards): its last message, or the dots and
+// "typing…" while someone is typing there, like Discord's (typingChanged keeps it up to date in place). Hidden for a
+// screen share, it stays hidden. empty: what it says before there's a message.
+function convLine(c, cls, empty) {
+  if (isSharing() && !shareAllowed.has(c.unreadKey)) return h('span', { class: cls }, 'Hidden while sharing');
+  // (unreadKey is the conversation's own key, the one typing events name: 'd:<dm>', or 'c:<the group's chat>'.)
+  const el = h('span', { class: `${cls} conv-line`, dataset: c.unreadKey ? { typingKey: c.unreadKey } : null });
+  el._text = () => convPreview(c.key) || empty;
+  return drawConvLine(el);
+}
+// Drawn again only when what it says changes, so the dots keep going while the same people go on typing.
+function drawConvLine(el) {
+  const key = el.dataset.typingKey;
+  const said = key ? typingPreview(typingNames(key), { group: key.startsWith('c:') }) : '';
+  const text = said || el._text();
+  if (el._shown === text && el._typing === !!said) return el;
+  el._shown = text; el._typing = !!said;
+  clear(el).classList.toggle('is-typing', !!said);
+  if (said) el.append(typingDots(), h('span', { class: 'conv-typing-text' }, said));
+  else el.append(text);
+  return el;
 }
 function groupName(g) {
   if (g.name) return g.name;
@@ -2434,7 +2463,7 @@ function convRow(c) {
   }, c.avatar,
   h('span', { class: 'dm-row-text' },
     h('span', { class: 'dm-row-top' }, h('span', { class: 'dm-row-name' }, c.title), c.at ? h('span', { class: 'dm-row-time' }, shortTime(c.at)) : null),
-    h('span', { class: 'dm-row-status' }, isSharing() && !shareAllowed.has(c.unreadKey) ? 'Hidden while sharing' : c.preview || '\u00a0')),
+    convLine(c, 'dm-row-status', '\u00a0')),
   mentions ? h('span', { class: 'badge', 'aria-label': `${mentions} unread` }, mentions) : unread ? h('span', { class: 'unread-dot', 'aria-label': 'Unread' }) : null);
 }
 function shortTime(ts) {
@@ -3332,7 +3361,7 @@ function onlineFriendsSection() {
 function convCard(c) {
   const unread = c.unreadKey && S.unread.has(c.unreadKey) && !isMuted(c.unreadKey);
   return h('button', { class: `conv-card${unread ? ' unread' : ''}`, onclick: c.open, oncontextmenu: (e) => contextMenu(e, c.menu) },
-    c.avatar, h('span', { class: 'conv-card-text' }, h('strong', null, c.title), h('span', null, isSharing() && !shareAllowed.has(c.unreadKey) ? 'Hidden while sharing' : c.preview || 'No messages yet')),
+    c.avatar, h('span', { class: 'conv-card-text' }, h('strong', null, c.title), convLine(c, 'conv-card-sub', 'No messages yet')),
     c.at ? h('span', { class: 'conv-card-time' }, shortTime(c.at)) : null);
 }
 
@@ -5548,8 +5577,7 @@ async function onNewMessage(key, m) {
   }
   // Now that it's in the conversation and the preview: the timer looks there for the soonest deadline.
   if (disappears(m)) armClientExpiry();
-  const t = S.typing[key];
-  if (t && t.has(m.authorId)) { clearTimeout(t.get(m.authorId)); t.delete(m.authorId); if (currentKey() === key) renderTyping(); }
+  TYPING.stop(key, m.authorId); // their message is here: they've stopped typing it
   const knewUpTo = S.lastIds[key];
   if (!m.threadId && !(S.lastIds[key] && S.lastIds[key] >= m.id)) S.lastIds[key] = m.id;
   // Your own message (from here or another device) means you've read the conversation up to it. Not one the server
@@ -5708,17 +5736,32 @@ function onDeleteMessage(key, id, { expired = false } = {}) {
   // over the threads, purgeExpired, no longer finds them.)
   if (expired) forgetCopies([...removed, ...threadCopies.filter((x) => !removed.includes(x))], gone, key);
 }
-function renderTyping() {
+// ---- "is typing…" (typing.js keeps who's typing where)
+// The names of who's typing in a conversation ('c:<channel>' or 'd:<dm>'), as that conversation shows them.
+function typingNames(key) {
+  if (!S.me || !key) return [];
+  const sv = key.startsWith('c:') ? serverOfChannel(key.slice(2)) : null;
+  return TYPING.who(key, S.me.id).map((id) => nameInServer(sv, getUser(id)));
+}
+function typingDots() { return h('span', { class: 'dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')); }
+// Someone started or stopped typing in a conversation: its line under the box and its line in the lists (the
+// sidebar's conversations, Home's), in place. Nothing else is drawn again: typing comes and goes all the time.
+function typingChanged(key) {
+  if (!S.me) return;
+  renderTyping(key);
+  $$('.conv-line[data-typing-key]').forEach((el) => { if (el.dataset.typingKey === key) drawConvLine(el); });
+}
+// The line under the message box (the main one and a thread's), for its conversation, or only those of `key`.
+// Drawn again only when what it says changes, so the dots keep going and screen readers (it's a polite live
+// region) hear it once rather than at every typing event.
+function renderTyping(key = null) {
   $$('.typing').forEach((el) => {
+    if (key && el.dataset.key !== key) return;
+    const text = typingLine(typingNames(el.dataset.key));
+    if (el._said === text) return;
+    el._said = text;
     clear(el);
-    const key = el.dataset.key;
-    const t = S.typing[key];
-    const ids = t ? [...t.keys()].filter((id) => id !== S.me.id) : [];
-    if (!ids.length) return;
-    const sv = key && key.startsWith('c:') ? serverOfChannel(key.slice(2)) : null;
-    const names = ids.map((id) => nameInServer(sv, getUser(id)));
-    const text = names.length === 1 ? `${names[0]} is typing\u2026` : names.length < 4 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} are typing\u2026` : 'Several people are typing\u2026';
-    el.append(h('span', { class: 'dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')), h('span', null, text));
+    if (text) el.append(typingDots(), h('span', null, text));
   });
 }
 
@@ -6707,7 +6750,12 @@ const SLASH = createSlash({
 });
 // What you were typing, per conversation (and thread): kept on this device across reloads (see usability.js).
 let drafts = createDrafts('signed-out');
-let lastTypingSent = 0;
+// When this app last said you're typing, per conversation: at most every 3 seconds while you type there (the
+// others' apps keep showing it for 6, typing.js). Typing somewhere else, or again after sending, says so at the next
+// key, but never within a second of the last time anywhere: the server would drop that one (it passes one person's
+// typing on at most once a second), and the next key tries again instead.
+const typingSent = new Map();
+let typingSentAny = 0;
 function createComposer({ id, key, threadId, placeholder }) {
   // link: the link preview being offered or built for the link in the box (see checkLink below).
   const state = { replyTo: null, pending: [], link: null };
@@ -7023,8 +7071,9 @@ function createComposer({ id, key, threadId, placeholder }) {
     autosize(); update(); checkSuggest(); renderCmdBar(); onTypeForLink();
     keepDraft();
     const kk = key();
-    if (ta.value && Date.now() - lastTypingSent > 3000 && !threadId()) {
-      lastTypingSent = Date.now();
+    const now = Date.now();
+    if (ta.value && kk && !threadId() && now - (typingSent.get(kk) || 0) > 3000 && now - typingSentAny > 1000) {
+      typingSent.set(kk, now); typingSentAny = now;
       socket.emit('typing', kk.startsWith('c:') ? { channelId: kk.slice(2) } : { dmId: kk.slice(2) });
     }
   });
@@ -7241,6 +7290,8 @@ function createComposer({ id, key, threadId, placeholder }) {
     // one), and only if its link is still in the text. GIFs, polls and voice messages never carry one.
     const linkState = overrideText == null ? state.link : null;
     const links = linkState && linkState.status === 'ready' && !poll && !extra.files && linkedUrls(text, { skipSpoilers: true }).includes(linkState.url) ? [linkState.entry] : null;
+    // A message going out ends your "typing…" on the others' screens as it arrives, so typing on says so again at once.
+    if (!tid && !sendAt) typingSent.delete(kk);
     if (overrideText == null) {
       ta.value = ''; synced = '';
       drafts.delete(kk + (tid || ''));

@@ -257,6 +257,27 @@ async function webhooks(t) {
 }
 
 // ------------------------------------------------------------------ 4. direct messages and blocking
+// "… is typing…": the line under the open conversation's box ('' once nobody is), with its three dots.
+const typingLineSays = (p, text) => p.page.waitForFunction((want) => {
+  const el = document.querySelector('.cw-main .typing');
+  return !!el && el.textContent === want && el.querySelectorAll('.dots i').length === (want ? 3 : 0);
+}, text);
+// Writing in the message box without sending. Someone's typing goes out at most once a second (the app holds back
+// what the server would drop), and a fill is a single keystroke, so it waits a second after the last one.
+async function typeOnly(p, text) {
+  await p.page.waitForTimeout(1100);
+  await p.$('#composer-input').fill(text);
+}
+// A conversation's line in the lists (its row in the sidebar, its card on Home) saying "typing…" with the dots in
+// place of the last message, and then the message once it has arrived.
+async function listLineTyping(line, said, what) {
+  await line.locator('.conv-typing-text', { hasText: exact(said) }).waitFor();
+  check(await line.locator('.dots[aria-hidden="true"] i').count() === 3, `${what} should show three dots while they type.`);
+}
+async function listLineSays(line, text, what) {
+  await line.filter({ hasText: text }).waitFor();
+  check(!(await line.locator('.dots, .conv-typing-text').count()), `${what} should stop saying “typing…” once the message is here.`);
+}
 async function directMessages(t) {
   const { alice, bob } = t.people;
   await alice.showMembers();
@@ -269,8 +290,14 @@ async function directMessages(t) {
   await bob.dmRow('alice').click();
   await bob.page.waitForSelector('#composer-input[placeholder="Message alice"]');
   await bob.message('Private hello to bob: kiwi').waitFor();
-  await bob.send('Hi alice, got your kiwi');
+  // While bob writes, alice (in the DM too) sees "bob is typing…" under her box, until his message arrives.
+  await typeOnly(bob, 'Hi alice, got your kiwi');
+  await typingLineSays(alice, 'bob is typing\u2026');
+  await listLineTyping(alice.dmRow('bob').locator('.dm-row-status'), 'typing\u2026', 'Bob’s row in alice’s sidebar');
+  await bob.$('#composer-input').press('Enter');
   await alice.message('got your kiwi').waitFor();
+  await typingLineSays(alice, '');
+  await listLineSays(alice.dmRow('bob').locator('.dm-row-status'), 'Hi alice, got your kiwi', 'Bob’s row in alice’s sidebar');
 
   // Bob blocks alice: her next message is refused and never reaches him.
   await bob.$('#main-head button[aria-label="More"]').click();
@@ -284,14 +311,43 @@ async function directMessages(t) {
   await alice.toast('You can’t message this person.');
   check(!(await bob.message('papaya').count()), 'A blocked message should never show up.');
 
-  // Unblocked: messages flow again.
+  // Unblocked: messages flow again, and so does "typing…" (the other way this time).
   await bob.$('#main .key-bar button', { hasText: 'Unblock' }).click();
   await bob.$('#main .key-bar', { hasText: 'You blocked' }).waitFor({ state: 'detached' });
-  await alice.send('Back again: guava');
+  await typeOnly(alice, 'Back again: guava');
+  await typingLineSays(bob, 'alice is typing\u2026');
+  await alice.$('#composer-input').press('Enter');
   await bob.message('Back again: guava').waitFor();
+  await typingLineSays(bob, '');
+
+  // Bob writes while alice is on Home: his row in her sidebar and his card in Recent conversations say "typing…"
+  // with the dots instead of his last message, drawn in place (the row stays the same element), until his message
+  // arrives.
+  await alice.railButton('Home');
+  const row = alice.dmRow('bob');
+  const rowLine = row.locator('.dm-row-status');
+  const cardLine = alice.$('#main .conv-card', { hasText: 'bob' }).locator('.conv-line');
+  await listLineSays(rowLine, 'Back again: guava', 'Bob’s row in alice’s sidebar');
+  await row.evaluate((el) => { el.dataset.e2eSame = '1'; });
+  await typeOnly(bob, 'Written while you were on Home: lychee');
+  await listLineTyping(rowLine, 'typing\u2026', 'Bob’s row in alice’s sidebar');
+  await listLineTyping(cardLine, 'typing\u2026', 'Bob’s card on alice’s Home');
+  check(await row.getAttribute('data-e2e-same') === '1', 'Typing should change bob’s row in place, not draw the sidebar again.');
+  // The dots move, and hold still with Reduce motion (the app's setting, or the system's).
+  const dotAnimation = () => rowLine.locator('.dots i').first().evaluate((i) => getComputedStyle(i).animationName);
+  check(await dotAnimation() !== 'none', 'The typing dots should move.');
+  await alice.page.evaluate(() => document.documentElement.classList.add('reduce-motion'));
+  check(await dotAnimation() === 'none', 'With Reduce motion on, the typing dots should hold still.');
+  await alice.page.evaluate(() => document.documentElement.classList.remove('reduce-motion'));
+  await alice.page.emulateMedia({ reducedMotion: 'reduce' });
+  check(await dotAnimation() === 'none', 'With the system’s reduced motion, the typing dots should hold still.');
+  await alice.page.emulateMedia({ reducedMotion: null });
+  await bob.$('#composer-input').press('Enter');
+  await bob.message('Written while you were on Home: lychee').waitFor();
+  await listLineSays(rowLine, 'Written while you were on Home: lychee', 'Bob’s row in alice’s sidebar');
+  await listLineSays(cardLine, 'Written while you were on Home: lychee', 'Bob’s card on alice’s Home');
 
   // Friends: a request from Friends → Add friend, accepted from Pending.
-  await alice.railButton('Home');
   await alice.page.locator('#sidebar-body .nav-row', { hasText: 'Friends' }).click();
   await alice.page.locator('#main-head .tab', { hasText: 'Add friend' }).click();
   await alice.$('.add-friend input').fill('bob');
@@ -1066,8 +1122,21 @@ async function groupChat(t) {
   await bob.dmRow('Fruit Club').click();
   await bob.message('Group hello: cherry').waitFor();
   check(!(await bob.$('#messages .msg-text.undecryptable').count()), 'Bob should read the group chat.');
-  await bob.send('Group reply: date');
+  // "… is typing…" both ways in a group chat: under the box, and with the name on the group's row in the sidebar.
+  await typeOnly(bob, 'Group reply: date');
+  await typingLineSays(alice, 'bob is typing\u2026');
+  await listLineTyping(alice.dmRow('Fruit Club').locator('.dm-row-status'), 'bob is typing\u2026', 'The group’s row in alice’s sidebar');
+  await bob.$('#composer-input').press('Enter');
   await alice.message('Group reply: date').waitFor();
+  await typingLineSays(alice, '');
+  await listLineSays(alice.dmRow('Fruit Club').locator('.dm-row-status'), 'bob: Group reply: date', 'The group’s row in alice’s sidebar');
+  await typeOnly(alice, 'Group typing back: elderberry');
+  await typingLineSays(bob, 'Alice Wonder is typing\u2026');
+  await listLineTyping(bob.dmRow('Fruit Club').locator('.dm-row-status'), 'Alice Wonder is typing\u2026', 'The group’s row in bob’s sidebar');
+  await alice.$('#composer-input').press('Enter');
+  await bob.message('Group typing back: elderberry').waitFor();
+  await typingLineSays(bob, '');
+  await listLineSays(bob.dmRow('Fruit Club').locator('.dm-row-status'), 'Alice Wonder: Group typing back: elderberry', 'The group’s row in bob’s sidebar');
   // The group's call rings the others.
   await bob.$('#main-head button', { hasText: exact('Call') }).click();
   await alice.$('.ring-card', { hasText: 'bob' }).waitFor();

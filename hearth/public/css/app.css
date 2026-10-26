@@ -588,6 +588,11 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 .conv-card-text span { font-size: 13px; color: var(--muted); }
 .conv-card.unread strong { color: var(--text); }
 .conv-card.unread .conv-card-text span { color: var(--text-2); }
+/* "typing…" in place of a conversation's last message (the sidebar's rows, Home's cards), with the chat's dots */
+.conv-line.is-typing { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-2); }
+.conv-line.is-typing .dots { flex: none; overflow: visible; }
+.conv-line.is-typing .dots i { width: 4px; height: 4px; background: currentColor; }
+.conv-line.is-typing .conv-typing-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
 .conv-card-time { font-size: 11.5px; color: var(--muted); flex: none; align-self: flex-start; }
 .friend-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .friend-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; border-radius: 999px; background: var(--hover); border: 1px solid var(--line); font-size: 13.5px; font-weight: 600; }
@@ -1785,9 +1790,11 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
 @media (prefers-reduced-motion: reduce) {
   *:not(.spinner), *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
   .pfx { display: none; }
+  .dots i { animation: none; opacity: .8; } /* "is typing…": three dots that hold still */
 }
 html.reduce-motion *:not(.spinner), html.reduce-motion *::before, html.reduce-motion *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 html.reduce-motion .pfx { display: none; }
+html.reduce-motion .dots i { animation: none; opacity: .8; }
 
 /* ------------------------------------------------------------------ encryption states */
 .key-bar {
