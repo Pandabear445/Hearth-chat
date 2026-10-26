@@ -3706,10 +3706,16 @@ const versions = createVersions({ getItem: (k) => localStorage.getItem(k), setIt
   () => (S.me && S.me.id ? 'hearth.msgv.' + S.me.id : ''));
 const copies = createCopies();
 // Called for every message as it's decrypted (binding.js noteMessage): a second id for the same message, or a newer
-// edit, redraws the other copies too, so each of them carries the flag.
+// edit, redraws the other copies too, so each of them carries the flag. The side view's too: it holds one of them, or
+// a copy of this very message it fetched itself (the older edit now), which none of the chat's lists have.
 function noteBinding(m) {
-  for (const id of noteMessage(m, keyOfMessage(m), { versions, copies })) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  const ids = noteMessage(m, keyOfMessage(m), { versions, copies });
+  for (const id of ids) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  if (SIDE.messages().some((x) => ids.includes(x.id) || (x.id === m.id && x !== m))) later(redrawSide);
 }
+// The side view drawn again (side-view.js refresh: only the cards whose flags changed are drawn anew), once a frame
+// however many ask.
+const redrawSide = () => SIDE.refresh();
 // A message loaded anywhere in this conversation: its list, a thread, a thread's first message.
 function loadedMessage(id) {
   for (const st of Object.values(S.msgs)) { const m = st && st.list && st.list.find((x) => x.id === id); if (m) return m; }
@@ -3733,10 +3739,13 @@ const originals = createOriginals(async (id) => {
     throw e;
   }
 });
-// The loaded replies to that message, drawn again (it turned out to be still there: they're flagged now).
+// The loaded replies to that message, drawn again (it turned out to be still there: they're flagged now), and the
+// side view's cards of replies to it (often copies it fetched itself, so in none of these lists).
 function redrawRepliesTo(id) {
   const all = [...Object.values(S.msgs).flatMap((st) => (st && st.list) || []), ...Object.values(S.threads).flatMap((th) => [th.root, ...(th.list || [])])];
-  for (const x of all) if (x && x.dec && x.dec.b && x.dec.b.r === id) later(() => replaceMessageEl(x));
+  const replies = (x) => !!x && !!x.dec && !!x.dec.b && x.dec.b.r === id;
+  for (const x of all) if (replies(x)) later(() => replaceMessageEl(x));
+  if (SIDE.messages().some(replies)) later(redrawSide);
 }
 // { issues, notes, … } for a message (binding.js bindingState), or null when it carries nothing to check. A reply
 // shown without its original, which isn't loaded here, says "no longer available" until the server is asked whether
@@ -3747,9 +3756,12 @@ function bindingOfMessage(m) {
   if (st && st.notes.includes('replyGone')) originals.ask(st.b.r, () => redrawRepliesTo(st.b.r));
   return st;
 }
-// Messages deleted or disappeared no longer count as copies of another: what's left of them is drawn again.
+// Messages deleted or disappeared no longer count as copies of another: what's left of them is drawn again, in the
+// side view too.
 function forgetBindings(key, gone) {
-  for (const id of copies.drop(key, gone)) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  const ids = copies.drop(key, gone);
+  for (const id of ids) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  if (SIDE.messages().some((x) => ids.includes(x.id))) later(redrawSide);
 }
 // The one small flag for a message the server may have moved, repeated or rolled back, naming what didn't match.
 function bindingFlag(m, st) {

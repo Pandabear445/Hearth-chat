@@ -554,6 +554,115 @@ test('what’s said about who wrote it is in a card’s signature: a binding iss
   assert.match(p.card('a').querySelector('.sv-flags').textContent, /\(repeated, older\)/);
 });
 
+// The signature only counts when the panel draws. What turns up a binding issue later is the app's (app.js
+// noteBinding, redrawRepliesTo, forgetBindings: they redraw the chat's rows by data-mid, which no card has), so they
+// must ask the side view to draw too: else a card the side view fetched itself keeps saying nothing until some other
+// redraw. Here they run as app.js has them, with binding.js, over copies the panel fetched itself.
+test('app.js: a binding issue found later draws the side view’s card anew (another copy in the chat, a reply’s original still there, a copy deleted, a newer edit)', async () => {
+  const BD = await import(pathToFileURL(path.join(ROOT, 'public', 'js', 'binding.js')).href);
+  const at = Date.UTC(2026, 9, 1);
+  const b = (u, r = null, v = 0) => ({ u: u.repeat(22), r, th: null, ts: at, v });
+  // Acorn was written as a reply to oak; the server serves it without one while oak is still there.
+  const p = panel({ msgs: [
+    sent('oak', { channelId: 'ch1' }, { t: 'oak', f: [], verified: true, b: b('A') }),
+    sent('acorn', { channelId: 'ch1' }, { t: 'acorn', f: [], verified: true, b: b('B', 'oak') }),
+  ] });
+  // app.js's own code, with what it uses: the chat (empty until it loads a page), and later() queued until flush.
+  const src = read('public', 'js', 'app.js');
+  const fnSrc = (name) => { const i = src.indexOf(`\nfunction ${name}(`); assert.ok(i > 0, name); return src.slice(i, src.indexOf('\n}\n', i) + 2); };
+  const side = /\nconst redrawSide = [^\n]*\n/.exec(src);
+  assert.ok(side, 'redrawSide');
+  const queued = new Set();
+  const flush = () => { const fns = [...queued]; queued.clear(); fns.forEach((f) => f()); };
+  const replaced = [];
+  const keyOf = (m) => (m.dmId ? 'd:' + m.dmId : 'c:' + m.channelId);
+  const versions = BD.createVersions(p.storage, () => 'hearth.msgv.me');
+  const copies = BD.createCopies();
+  const originals = BD.createOriginals(async (id) => {
+    try { await p.deps.get(`/messages/${encodeURIComponent(id)}/locate`); return true; } catch (e) { if (e.status === 404) return false; throw e; }
+  });
+  const app = new Function('noteMessage', 'bindingState', 'keyOfMessage', 'versions', 'copies', 'originals', 'loadedMessage', 'loadedAlive', 'replaceMessageEl', 'later', 'S', 'SIDE',
+    `${side[0]}${fnSrc('noteBinding')}${fnSrc('redrawRepliesTo')}${fnSrc('bindingOfMessage')}${fnSrc('forgetBindings')}\nreturn { noteBinding, redrawRepliesTo, bindingOfMessage, forgetBindings, redrawSide };`)(
+    BD.noteMessage, BD.bindingState, keyOf, versions, copies, originals,
+    (id) => p.chat.get(id) || null,
+    (key, id) => p.chat.has(id) && keyOf(p.chat.get(id)) === key,
+    (m) => replaced.push(m.id),
+    (fn) => queued.add(fn),
+    { msgs: {}, threads: {} },
+    p.S);
+  const asked = () => queued.has(app.redrawSide);
+  // As app.js decryptMessage (every message decrypted is noted) and messageTrust (the binding flag).
+  const open = p.deps.decrypt;
+  p.deps.decrypt = async (m) => { await open(m); app.noteBinding(m); };
+  p.deps.trust = (m) => {
+    const st = app.bindingOfMessage(m);
+    const issues = st ? st.issues : [];
+    return {
+      sig: issues.join(','),
+      flags: () => issues.map(() => { const el = document.createElement('div'); el.className = 'msg-flag warn'; el.append(`⚠ The server may have moved, repeated or rolled back this message (${issues.join(', ')})`); return el; }),
+    };
+  };
+  const flagOf = (id) => { const f = p.card(id).querySelector('.sv-flags'); return f ? f.textContent : ''; };
+
+  // Nothing open: nothing asked of it.
+  app.noteBinding({ id: 'x', channelId: 'ch1', authorId: 'u2', createdAt: at, dec: { verified: true, b: b('C') } });
+  p.S.refresh();
+  assert.equal(asked(), false);
+
+  // The reply, fetched by the side view (the chat doesn't have oak): at first only a note (oak may be gone), so no
+  // flag; the server, asked, finds oak, and the card is flagged without anything else drawing the panel.
+  p.S.pin({ key: 'c:ch1', messageId: 'acorn' });
+  p.S.draw(p.el);
+  await settle();
+  assert.ok(p.log.requests.includes('/messages/oak/locate'), 'the server is asked whether oak is still there');
+  assert.equal(flagOf('acorn'), '', 'nothing has drawn the panel since');
+  assert.ok(asked(), 'redrawRepliesTo asks the side view to draw');
+  flush();
+  assert.match(flagOf('acorn'), /\(reply\)/, 'flagged once oak turned out to be there');
+
+  // Oak pinned too, fetched by the side view as well: nothing to say about it yet.
+  p.S.pin({ key: 'c:ch1', messageId: 'oak' });
+  await settle();
+  flush();
+  assert.equal(flagOf('oak'), '');
+  const acornCard = p.card('acorn');
+
+  // The chat loads oak's page: its own copy of oak, and the same message again under another id. The chat's rows are
+  // redrawn by data-mid as before; the side view's own copy of oak gets the flag because the app asks it to draw.
+  replaced.length = 0;
+  for (const m of [p.server.get('oak'), { ...p.server.get('oak'), id: 'oak2' }].map(p.net)) { p.chat.set(m.id, m); await p.deps.decrypt(m); }
+  assert.equal(flagOf('oak'), '', '(not before the app’s queued redraw)');
+  assert.ok(asked());
+  flush();
+  assert.deepEqual(replaced, ['oak'], 'the chat’s row of oak');
+  assert.match(flagOf('oak'), /\(repeated\)/, 'the side view’s copy of oak is flagged as repeated');
+  assert.equal(p.card('acorn'), acornCard, 'the reply’s card is left as it was');
+
+  // The copy deleted: oak is no longer repeated, on its card either.
+  p.chat.delete('oak2');
+  app.forgetBindings('c:ch1', ['oak2']);
+  assert.ok(asked());
+  flush();
+  assert.equal(flagOf('oak'), '', 'no longer flagged once the copy went');
+
+  // A newer edit of oak loaded in the chat (under its own id): the side view's copy is the older one now.
+  const edited = p.net({ ...p.server.get('oak'), plain: { t: 'oak, edited', f: [], verified: true, b: b('A', null, 1) } });
+  p.chat.set('oak', edited);
+  await p.deps.decrypt(edited);
+  assert.ok(asked());
+  flush();
+  assert.match(flagOf('oak'), /\(older\)/, 'the side view’s copy from before the edit is flagged as older');
+  assert.equal(p.card('acorn'), acornCard);
+
+  // Closed: the app's calls ask nothing of it (the chat's rows are still redrawn).
+  p.S.reset();
+  replaced.length = 0;
+  await p.deps.decrypt({ ...p.net(p.server.get('oak')), id: 'oak3' });
+  assert.equal(asked(), false);
+  flush();
+  assert.deepEqual(replaced, ['oak']);
+});
+
 // SIDE.reset() on reconnect (app.js loadBootstrap) is how the panel catches up with what happened while it was offline:
 // the message just pinned, as the chat had it then, mustn't come before the server's copy once that's happened.
 test('the message just pinned is only handed to the next drawing: after a reconnect or a close, an edit or a delete missed meanwhile shows', async () => {

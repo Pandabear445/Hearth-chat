@@ -1945,6 +1945,9 @@ server, cleared on sign-out (`clearLocalCopies`).
 - Edits, deletes, disappearing messages and new keys update the cards. Back online after being away, or opened
   again, it starts over from the chat's copies and the server: the message just pinned is only handed over to the
   next drawing, so an edit or delete missed meanwhile shows.
+- A flag turning up later shows on the card too: the chat loading another copy of the message (or deleting it), or
+  the server saying a reply's original is still there, draws the panel again, and only the cards whose flags changed
+  are drawn anew.
 - A disappearing message goes with everything kept of it (its decrypted pictures too) whether a redraw or the timer
   finds it first.
 - Messages that are gone, or in a chat you can no longer open, say so.

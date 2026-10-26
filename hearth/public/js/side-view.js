@@ -13,9 +13,10 @@
 // asking the server nothing, and only a card whose message changed (an edit, a block, the word filter, sharing your
 // screen) is drawn anew. Closing the panel lets go of it all (reset); the list stays.
 //
-// It keeps up with what happens (the app calls onUpdate, onDelete, onKeys, expire): an edit shows, a deleted or
-// disappeared message says it's no longer available (its decrypted files go), and so does one in a conversation you're
-// no longer in. Items from DMs and group chats are covered while you share your screen.
+// It keeps up with what happens (the app calls onUpdate, onDelete, onKeys, expire, refresh): an edit shows, a deleted
+// or disappeared message says it's no longer available (its decrypted files go), and so does one in a conversation
+// you're no longer in, and a flag the chat's copies turn up shows on its card too. Items from DMs and group chats are
+// covered while you share your screen.
 import { h, icon, fmtSize } from './util.js';
 import { whenVisible } from './media.js';
 import { mediaEntries } from './media-panel.js';
@@ -297,8 +298,8 @@ export function createSideView(deps) {
     const wf = blocked ? null : deps.veiled(m);
     const ok = deps.readable(m);
     // What its row in the chat says about who could have written it, in the signature too: that can change while the
-    // message doesn't (a copy loaded elsewhere turns up a binding issue, a key arrives). One from someone you blocked
-    // shows nothing of the message, as in the chat.
+    // message doesn't (a copy loaded elsewhere turns up a binding issue, a key arrives; the app calls refresh or onKeys).
+    // One from someone you blocked shows nothing of the message, as in the chat.
     const trust = blocked ? null : deps.trust(m);
     return { kind: 'ok', m, place, blocked, wf, ok, trust, sig: ['ok', place.label, place.kind, blocked ? 1 : 0, wf ? wf.action : '', ok ? 1 : 0, trust ? trust.sig : ''].join('|') };
   }
@@ -670,8 +671,14 @@ export function createSideView(deps) {
       armIf(held.map((r) => r.m).filter(Boolean));
       render(s); // (readable now: their cards' signatures changed)
     },
-    // The messages it holds (the app's disappearing timer counts them in).
+    // The messages it holds (the app's disappearing timer counts them in, and it asks whether a binding issue it found
+    // touches one of them).
     messages() { return st ? [...st.msgs.values()].filter((r) => r.state === 'ok' && r.m).map((r) => r.m) : []; },
+    // What's said about who could have written a message it holds changed outside it (app.js noteBinding,
+    // redrawRepliesTo, forgetBindings: another copy of it loaded in the chat, or deleted; the original of a reply found
+    // still there). Nothing tells the side view otherwise: its cards are often copies it fetched itself, which none of
+    // the chat's lists have. Drawn again if it's open; only the cards whose signature changed are drawn anew.
+    refresh() { if (st) render(st); },
     // The disappearing timer went off: those whose time has come go, with everything the app kept of them.
     expire() {
       const s = st;

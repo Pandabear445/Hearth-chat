@@ -4783,8 +4783,10 @@ async function chatBackgrounds(t) {
 // ------------------------------------------------------------------ the side view
 // Bob pins a message (from its ⋯ menu) and a photo (from the viewer) in his DM with Alice. Both stay at the side while
 // he goes to the group chat, untouched; the photo opens in the viewer from there, and Jump takes him back to the
-// message. × takes one off; a pinned message Alice deletes says it's no longer available. On his phone, a long press
-// pins one, the panel covers the chat, Back closes it, and signing out clears the list from the phone.
+// message. × takes one off; a pinned message Alice deletes says it's no longer available. Cards the panel fetched
+// itself get the flags the chat's copies turn up later (a reply's original still there, a message repeated). On his
+// phone, a long press pins one, the panel covers the chat, Back closes it, and signing out clears the list from the
+// phone.
 async function sideView(t) {
   const { alice, bob } = t.people;
   const pic = (name, w, h) => ({ name, mimeType: 'image/png', buffer: makePng(w, h) });
@@ -4920,6 +4922,60 @@ async function sideView(t) {
   await bob.menuItem('Hide pinned to side').click();
   await bob.$('#members .sv-scroll').waitFor({ state: 'detached' });
   check(!(await headButton(bob).count()), 'Closed with nothing pinned, the header button should go.');
+
+  // ---- What turns up later about who could have written a message shows on its card, which the side view fetched
+  // itself. Bob pins a message in #general and his reply to it; the server's operator then posts the first again under
+  // a new id and serves the reply as one to nothing (as in the message binding flow). After a reload, in the group
+  // chat (where nothing else draws the panel), the side view fetches both: the reply's card is flagged once the server
+  // says its original is still there. Opening #general loads the copy into the chat, and the first message's card is
+  // flagged as repeated too.
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  const oak = 'Side view binding: oak';
+  const acorn = 'Side view binding: acorn';
+  await bob.send(oak);
+  await bob.message(oak).first().hover();
+  await bob.message(oak).first().locator('button[aria-label="Reply"]').click();
+  await bob.send(acorn);
+  await bob.message(acorn).first().locator('.msg-reply .reply-text', { hasText: oak }).waitFor();
+  const oakId = await bob.message(oak).first().getAttribute('data-mid');
+  const acornId = await bob.message(acorn).first().getAttribute('data-mid');
+  await bob.messageAction(oak, 'Pin to side');
+  await card(bob, oakId).locator('.sv-text').waitFor();
+  await bob.messageAction(acorn, 'Pin to side');
+  await card(bob, acornId).locator('.sv-text').waitFor();
+  check(!(await bob.$('#members .sv-card .msg-flag').count()), 'Nothing should be flagged before anything was tampered with.');
+  t.server.sql('UPDATE messages SET reply_to = NULL WHERE id = ?', acornId);
+  const oakCopy = Date.now().toString(36).padStart(9, '0') + crypto.randomBytes(5).toString('hex');
+  t.server.sql(`INSERT INTO messages (id, channel_id, author_id, body, ciphertext, epoch, reply_to, created_at, thread_id)
+    SELECT ?, channel_id, author_id, body, ciphertext, epoch, reply_to, created_at, thread_id FROM messages WHERE id = ?`, oakCopy, oakId);
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  await bob.page.reload();
+  await bob.waitApp();
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  if (!(await card(bob, oakId).count())) await headButton(bob).click();
+  await card(bob, oakId).locator('.sv-text').waitFor();
+  await card(bob, acornId).locator('.sv-text').waitFor();
+  const flagTip = async (sid) => (await card(bob, sid).locator('.msg-flag.warn').getAttribute('data-tip')) || '';
+  await card(bob, acornId).locator('.msg-flag.warn').waitFor({ timeout: 15000 }).catch(() => check(false, 'The reply’s card should be flagged once its original turns out to be still there.'));
+  check(/shown without one while the original is still there/.test(await flagTip(acornId)), `The reply’s flag should say why (“${await flagTip(acornId)}”).`);
+  check(!(await card(bob, oakId).locator('.msg-flag').count()), 'The first message’s card has nothing to say yet.');
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await bob.page.waitForFunction((n) => [...document.querySelectorAll('#messages .msg[data-mid] .msg-text')].filter((e) => e.textContent.includes(n)).length === 2, oak);
+  await card(bob, oakId).locator('.msg-flag.warn').waitFor({ timeout: 15000 }).catch(() => check(false, 'The first message’s card should be flagged once the chat loads its copy.'));
+  check(/appears here twice/.test(await flagTip(oakId)), `Its flag should say it was repeated (“${await flagTip(oakId)}”).`);
+  for (const sid of [oakId, acornId]) {
+    await card(bob, sid).locator('.sv-x').click();
+    await card(bob, sid).waitFor({ state: 'detached' });
+  }
+  await bob.$('#main-head button[aria-label="More"]').click();
+  await bob.menuItem('Hide pinned to side').click();
+  await bob.$('#members .sv-scroll').waitFor({ state: 'detached' });
 
   // ---- A phone: a long press pins it, the panel covers the chat, Back closes it; signing out clears the list.
   const phone = await t.open('bob-side', PHONE);
