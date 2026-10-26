@@ -15,7 +15,7 @@ import { englishHere } from './spelling.js';
 import { underWay } from './auto-update.js';
 import { OUTSIDE_MODES, OUTSIDE_LABELS, outsideMode } from './outside.js';
 import { pickGame, gameImg, openActivityPicker, startDesktopDetection } from './activity.js';
-import { usableIce, avoidsMemberRelays } from './relays.js';
+import { usableIce, avoidsMemberRelays, isMemberRelay } from './relays.js';
 import { getKeybinds, saveKeybinds, comboLabel, recordCombo, DEFAULT_KEYBINDS } from './keybinds.js';
 import { clearsLabel } from './presence.js';
 import { showCommand, relayStatus, relayBackupText } from './admin.js';
@@ -55,8 +55,9 @@ function colorInput(value, onChange, label) {
   return h('div', { class: 'color-row' }, swatch, text);
 }
 
+// onChange(checked, input): the input too, for a switch that goes back when saving fails.
 function toggle(label, checked, onChange, hint) {
-  const input = h('input', { type: 'checkbox', checked, onchange: (e) => onChange(e.target.checked) });
+  const input = h('input', { type: 'checkbox', checked, onchange: (e) => onChange(e.target.checked, e.target) });
   return h('label', { class: 'toggle-row' },
     h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, label), hint ? h('span', { class: 'field-hint' }, hint) : null),
     h('span', { class: 'switch' }, input, h('span', { class: 'switch-track' })));
@@ -1609,12 +1610,15 @@ function sessionsTab(app) {
 // ------------------------------------------------------------------ privacy tab
 function privacyTab(app) {
   const p = { dms: 'everyone', friendRequests: 'everyone', ...(app.S.me.privacy || {}) };
+  // True once it's saved.
   const save = async (k, v) => {
     try {
       const out = await api('PATCH', '/me/privacy', { [k]: v });
       app.S.me.privacy = out; toast('Saved.');
       if (k === 'outsideImages') app.redrawImageLinks(); // image links already on screen follow the new choice
-    } catch (e) { toast(e.message, 'error'); }
+      if (k === 'memberRelays' && app.followRelayChoice) app.followRelayChoice(); // new call relays, a call in progress too
+      return true;
+    } catch (e) { toast(e.message, 'error'); return false; }
   };
   const outside = chips(OUTSIDE_MODES.map((m) => [m, m === 'ask' ? `${OUTSIDE_LABELS[m]} (default)` : OUTSIDE_LABELS[m]]), outsideMode(p), (v) => save('outsideImages', v));
   outside.setAttribute('aria-label', 'Outside images');
@@ -1642,11 +1646,13 @@ function privacyTab(app) {
     section('Outside images',
       h('p', { class: 'set-sub' }, 'A picture linked from another site loads from that site, which then sees your IP address. Files people send, link preview pictures and GIFs this server passes through for you always show. This choice follows you to all your devices.'),
       outside),
-    // Member relays (Settings → Help host): with this on, the app never measures or uses one, and drops the other
-    // side's addresses that are on one, so none of this person's call packets reach a member's machine.
+    // Member relays (Settings → Help host): with this on, the app never uses, measures or connects through one, ignores
+    // the other side's addresses on one, and tells the others in a call, whose apps then leave member relays out of
+    // their connection with this person (voice.js). An app that doesn't (a modified one) is the limit. A switch that
+    // couldn't be saved goes back, so it never shows a choice that isn't in effect.
     section('Call relays run by members',
-      toggle('Avoid relays run by members', p.memberRelays === 'avoid', (v) => save('memberRelays', v ? 'avoid' : 'use'),
-        'Members can run call relays for this server, which the owner approves. A relay sees your IP address when your call goes through it, never what’s said or shown. On: your calls only use the owner’s relays, which can make calls on some networks take longer to connect or fail.')),
+      toggle('Avoid relays run by members', p.memberRelays === 'avoid', (v, input) => save('memberRelays', v ? 'avoid' : 'use').then((ok) => { if (!ok) input.checked = !v; }),
+        'Members can run call relays for this server, which the owner approves. A relay sees your IP address when your call goes through it, never what’s said or shown. On: your app never uses, measures or connects through a member’s relay, and ignores the other person’s addresses on one. The others in a call are told you avoid them, so their apps leave members’ relays out of their connection with you too. Calls on some networks can then take longer to connect, or fail. Only someone running a modified app could still put a member’s relay between you.')),
     section('Blocked people',
       h('p', { class: 'set-sub' }, 'Blocked people can\u2019t DM you or send friend requests. Their messages in shared servers are hidden behind a click. They aren\u2019t notified.'),
       blockedHost),
@@ -1808,26 +1814,26 @@ function hostTab(app) {
       h('ul', { class: 'perk-list' },
         h('li', null, 'It sees the IP address of everyone whose call goes through it, when, and how much they send. Also the IP address of everyone whose app measures it: apps measure relays to pick the nearest.'),
         h('li', null, 'It never sees what\u2019s said or shown. Call audio, video and screen shares are encrypted between the people in the call (DTLS-SRTP, with fingerprints Hearth signs, so a relay can\u2019t step in the middle). Your relay only passes the packets along.'),
-        h('li', null, 'It doesn\u2019t see who\u2019s who on Hearth. Each person logs in to it under a made-up name that\u2019s different on every member\u2019s relay, so two relays can\u2019t tell they\u2019re seeing the same person. Yours can tell when the same person uses it again.'),
-        h('li', null, 'Your machine\u2019s IP address goes to everyone\u2019s app, since it\u2019s a relay address.'),
+        h('li', null, 'Logins carry no names or user ids. Each person logs in to it under a made-up name that\u2019s different on every member\u2019s relay, so two relays can\u2019t tell they\u2019re seeing the same person. On yours, though, the same person always has the same one, and whoever sees when people join calls can often work out whose it is, and from then on knows their IP address whenever they use it.'),
+        h('li', null, 'Your machine\u2019s IP address goes to everyone\u2019s app, since it\u2019s a relay address. Its name doesn\u2019t: only you and the owner see that, and everyone else\u2019s app just says \u201cMember relay\u201d.'),
         h('li', null, 'Backup copies, if it keeps them, are .hbk files locked with this server\u2019s backup key, which never leaves the server. You can\u2019t open them. Anyone who someday got that key could, so the owner decides whether your relay gets copies.'),
-        h('li', null, 'It can\u2019t be used to reach your own network: the relay refuses to pass anything on to private addresses, like your router or the other computers at home.'))),
+        h('li', null, 'It can\u2019t be used to reach your own network: the relay refuses to pass anything on to private addresses or to your own public address, and it relays over IPv4 only, so the IPv6 addresses your router and the other computers at home may have are out of its reach too.'))),
     section('Your relays', list));
 
   const offer = () => {
     let cap = 25; let backups = false;
-    const name = h('input', { class: 'input', maxlength: '40', placeholder: 'e.g. Maya\u2019s Pi, Chicago' });
+    const name = h('input', { class: 'input', maxlength: '40', placeholder: 'e.g. Spare Pi' });
     const caps = chips(RELAY_CAPS, cap, (v) => { cap = v; });
     caps.setAttribute('aria-label', 'Bandwidth limit');
     modal({ title: 'Offer a machine', size: 'md',
       body: h('div', { class: 'stack' },
-        field('Name', name, 'Shown to the owner, and to people in calls that use it, in call diagnostics.'),
+        field('Name', name, 'Only you and the owner see it. Everyone else\u2019s app just says \u201cMember relay\u201d.'),
         h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Bandwidth limit'), caps,
           h('span', { class: 'field-hint' }, 'The most your relay passes along at once. One person in a relayed video call takes about 1\u20132 Mbit/s. At home, keep it well under your upload speed.')),
         toggle('Also keep encrypted backup copies', false, (v) => { backups = v; }, 'Needs SSH on this machine reachable from the internet. Copies take a few GB.'),
         h('p', { class: 'field-hint' }, 'You need sudo on the machine, and it should stay on: calls skip it while it\u2019s off. At home, forward UDP and TCP 3478 and UDP 49160\u201349400 to it in your router; on a VPS, open them in the provider\u2019s firewall.')),
       actions: [{ label: 'Cancel' }, { label: 'Get install command', kind: 'primary', action: async () => {
-        if (!name.value.trim()) throw new Error('Give it a name, like \u201cMaya\u2019s Pi, Chicago\u201d.');
+        if (!name.value.trim()) throw new Error('Give it a name, like \u201cSpare Pi\u201d.');
         const r = await api('POST', '/me/relays', { name: name.value.trim(), capMbit: cap, backups, origin: location.origin });
         load();
         setTimeout(() => relayCommand(`Set up ${r.relay.name}`, r.command), 150);
@@ -1844,20 +1850,36 @@ function hostTab(app) {
     } catch (e) { toast(e.message, 'error'); }
     load();
   };
+  const uninstall = (name, command) => showCommand(`Uninstall ${name}`, command || 'sudo hearth-relay-uninstall', {
+    steps: ['On the machine, run:'],
+    notes: [
+      'It stops and removes the relay and its check-in, the backup account with any copies on it, and the firewall rules the installer added. coturn itself is uninstalled only if Hearth installed it. It lists what it removed, and running it twice does no harm.',
+      'If you don\u2019t run it, the relay switches itself off about a day after this server starts telling it it\u2019s gone. The backup account, any copies and the firewall rules stay until you do.',
+    ],
+  });
   const remove = async (r) => {
     if (!(await confirmDialog({ title: `Remove ${r.name}?`, danger: true, confirm: 'Remove',
       text: 'Calls stop using it right away. Next you get the command that takes it off the machine.' }))) return;
     let x;
     try { x = await api('DELETE', `/me/relays/${encodeURIComponent(r.id)}`); } catch (e) { toast(e.message, 'error'); return; }
     load();
-    showCommand(`Uninstall ${r.name}`, x.uninstall || 'sudo hearth-relay-uninstall', {
-      steps: ['On the machine, run:'],
-      notes: [
-        'It stops and removes the relay and its check-in, the backup account with any copies on it, and the firewall rules the installer added. coturn itself is uninstalled only if Hearth installed it. It lists what it removed, and running it twice does no harm.',
-        'If you don\u2019t run it, the relay switches itself off about a day after this server starts refusing its check-ins.',
-      ],
-    });
+    uninstall(r.name, x.uninstall);
   };
+  // A relay the owner removed (or that went after a week offline while it waited for approval): its machine still has
+  // it all, so this says so until the member has seen it, with the way to take it off.
+  const dismiss = async (g) => {
+    try { await api('DELETE', `/me/relays/${encodeURIComponent(g.id)}`); } catch (e) { toast(e.message, 'error'); }
+    load();
+  };
+  const goneRow = (g) => h('div', { class: 'relay-row', 'data-relay': g.id },
+    h('div', { class: 'relay-text' },
+      h('strong', null, g.name, h('span', { class: 'rpill bad' }, g.by === 'sweep' ? 'Removed' : 'Removed by the owner')),
+      h('span', { class: 'field-hint' }, g.by === 'sweep'
+        ? 'It waited for approval and hadn\u2019t checked in for a week, so it was taken off the list. Take it off the machine, or offer it again.'
+        : 'The owner took it out of calls. Take it off the machine too: the relay switches itself off in about a day, but the rest stays until you uninstall it.')),
+    h('div', { class: 'row gap tight' },
+      h('button', { class: 'btn ghost sm', 'data-focus': `un:${g.id}`, onclick: () => uninstall(g.name) }, 'How to uninstall'),
+      h('button', { class: 'btn ghost sm', 'data-focus': `ok:${g.id}`, onclick: () => dismiss(g) }, 'Dismiss')));
   const relayRow = (r) => {
     const st = relayStatus(r, { member: true });
     const note = relayNote(r);
@@ -1878,6 +1900,7 @@ function hostTab(app) {
     const had = list.contains(document.activeElement) ? document.activeElement.dataset.focus : null;
     clear(list).append(...[
       d.enabled ? null : h('p', { class: 'muted-p' }, 'The owner has turned off member relays.'),
+      ...(d.removed || []).map(goneRow),
       ...mine.map(relayRow),
       d.enabled && !mine.length ? h('p', { class: 'field-hint' }, 'You haven\u2019t offered a machine yet.') : null,
       d.enabled ? h('div', { class: 'row gap' },
@@ -2261,12 +2284,13 @@ function soundsSection() {
   return section('Sounds', wrap);
 }
 
-// Checks from this browser that the relay hands out working relay addresses. (Not through member relays when this
-// person avoids them: the test would show them this device's IP address.)
+// Checks from this browser that this server's own relay (the addresses and secret saved here) hands out working relay
+// addresses. Only that one: a region or a member's relay answering wouldn't say anything about these settings (a
+// member's relay checks logins with a secret of its own), and testing a member's relay shows it this device's address.
 async function testRelay(out, app) {
   clear(out).append(h('span', { class: 'spinner' }), ' Testing the relay\u2026');
   try {
-    const ice = usableIce(await api('GET', '/ice'), avoidsMemberRelays(app && app.S && app.S.me));
+    const ice = usableIce(await api('GET', '/ice'), avoidsMemberRelays(app && app.S && app.S.me)).filter((x) => x.regionId === 'main' || (!x.regionId && !isMemberRelay(x)));
     if (!ice.some((x) => String(x.urls).includes('turn:'))) throw new Error('No relay is configured yet.');
     const pc = new RTCPeerConnection({ iceServers: ice, iceTransportPolicy: 'relay' });
     pc.createDataChannel('t');

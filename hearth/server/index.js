@@ -826,8 +826,10 @@ const commentedIn = (sql, ...args) => db.prepare(sql).all(...args).filter((r) =>
 const isBlocked = (a, b) => !!db.prepare('SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)').get(a, b, b, a);
 // outsideImages: what your apps do with an image link to another site in a message (xss-8). Loading it shows that
 // site your IP address, so by default they ask first ('ask' | 'always' | 'never'). Only your own apps read it.
-// memberRelays: 'avoid' = your apps never use or measure a call relay run by a member (Settings → Help host), and drop
-// the other side's addresses on one, so your packets never reach one ('use' | 'avoid'). Only your own apps read it.
+// memberRelays: 'avoid' = your apps never use, measure or connect through a call relay run by a member (Settings →
+// Help host), and ignore the other side's addresses on one ('use' | 'avoid'); GET /ice then gives you no login for one,
+// only where they all are. The others in a call are told (voice:join marks you, and so do your offers and answers),
+// so their apps leave member relays out of their connection with you too.
 const PRIVACY_DEFAULTS = { dms: 'everyone', friendRequests: 'everyone', outsideImages: 'ask', memberRelays: 'use' };
 const OUTSIDE_IMAGES = ['ask', 'always', 'never'];
 const MEMBER_RELAY_CHOICES = ['use', 'avoid'];
@@ -2452,9 +2454,11 @@ function eraseAccount(row) {
     for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters',
       'saved_messages', 'read_states', 'mention_marks', 'notify_prefs', 'user_prefs', 'former_members']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(row.id);
     db.prepare('DELETE FROM profile_comments WHERE profile_id = ?').run(row.id); // the comments on their profile page go with it
-    // Call relays they offered (Settings → Help host) leave everyone's calls and backups; their machines are refused
-    // from the next check-in on and switch themselves off after a day.
-    db.prepare("DELETE FROM regions WHERE kind = 'member' AND owner_id = ?").run(row.id);
+    // Call relays they offered (Settings → Help host) leave everyone's calls and backups (everyone's apps are told to
+    // fetch their relay list again); their machines are told they're gone from the next check-in on and switch
+    // themselves off after a day.
+    REG.memberChanged(row.id);
+    REG.removeMemberRelaysOf(row.id);
     db.prepare("UPDATE users SET rail_layout = '', study_enabled = 0, status_expires_at = NULL WHERE id = ?").run(row.id);
     if (bots.length) db.prepare('UPDATE bots SET disabled = 1 WHERE owner_id = ?').run(row.id);
     const roles = staffRoles();
@@ -5452,7 +5456,7 @@ if (process.env.TURN_USERNAME && !turnSecret()) log.warn('turn', 'static_passwor
 // Relays: this server's own (if set up) plus every linked region that's up (server/regions.js). Each is its own
 // entry with a region name, so the app can measure which answer fastest and use those.
 const REG = require('./regions')({ api, app, auth, db, fail, wrap, rateLimit, getSetting, setSetting, requireInstanceAdmin, newId, DATA_DIR, ROOT: path.join(__dirname, '..'), stepUp, auditLog,
-  sealSecret, openSecret, getIo: () => io });
+  sealSecret, openSecret, getIo: () => io, keyed: (s) => crypto.createHmac('sha256', atRestKey).update(String(s)).digest('hex'), mainTurnUrls: turnUrls });
 const TURN_STEP = 6 * 3600; // seconds
 // Member relays (Settings → Help host, server/regions.js) that the owner approved, that are up, and whose member can
 // still use this server. Each has a TURN secret of its own, so its logins are made here, relay by relay: a member's
@@ -5462,15 +5466,31 @@ const TURN_STEP = 6 * 3600; // seconds
 // never by the user id or the access log's pseudonym. Each person gets at most 8, in an order keyed the same way:
 // steady per person (calls don't hop between relays), spread over the relays (which limits how many members see any
 // one person's address), and nobody can work out ahead of time whose list a relay lands in.
+// The name a member gave their relay ("Maya's Pi, Chicago") stays with the owner and that member: next to the relay's
+// address it could say whose home it is, so apps get "Member relay".
 const MEMBER_RELAYS_EACH = 8;
+const MEMBER_RELAY_LABEL = 'Member relay';
 const memberPseudonym = (relayId, uid) => crypto.createHmac('sha256', atRestKey).update(`member-relay|${relayId}|${uid}`).digest('base64url').slice(0, 22);
 function memberIceFor(uid, exp) {
   const order = (id) => crypto.createHmac('sha256', atRestKey).update(`member-relay-order|${uid}|${id}`).digest('hex');
-  return REG.memberRelays().map((r) => ({ r, k: order(r.id) })).sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0)).slice(0, MEMBER_RELAYS_EACH).map(({ r }) => {
+  const picked = REG.memberRelays().map((r) => ({ r, k: order(r.id) })).sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0)).slice(0, MEMBER_RELAYS_EACH).map(({ r }) => r);
+  // Where these logins work, until they run out: someone who avoids member relays is told about every one of those
+  // addresses, even after the relay is paused or removed (REG.memberHosts).
+  REG.noteHosts(picked.flatMap((r) => r.ips), exp * 1000);
+  return picked.map((r) => {
     const login = `${exp}:${memberPseudonym(r.id, uid)}`;
-    return { urls: r.urls, username: login, credential: crypto.createHmac('sha1', r.secret).update(login).digest('base64'), region: r.name, regionId: r.id, expiresAt: exp * 1000, community: true };
+    return { urls: r.urls, username: login, credential: crypto.createHmac('sha1', r.secret).update(login).digest('base64'), region: MEMBER_RELAY_LABEL, regionId: r.id, expiresAt: exp * 1000, community: true };
   });
 }
+// Someone who avoids member relays (Settings → Privacy & safety) gets no login for any of them. Their app still has to
+// know where every one is: the other person in a call may use any approved member relay, not only the 8 in someone's
+// list, and the avoider's app ignores the other side's addresses on these machines (relays.js memberRelayHosts). So
+// they get all of them, by address only: every one that's up, and every address any login still running out was
+// handed out for (a relay paused, removed or offline since still takes those).
+const memberHostsFor = () => REG.memberHosts().map((ip) => {
+  const host = ip.includes(':') ? `[${ip}]` : ip;
+  return { urls: [`turn:${host}:3478?transport=udp`, `turn:${host}:3478?transport=tcp`], region: MEMBER_RELAY_LABEL, community: true };
+});
 function iceServersFor(uid) {
   const list = [iceServers[0]];
   const urls = turnUrls();
@@ -5492,11 +5512,14 @@ function iceServersFor(uid) {
     list.push({ urls, username: process.env.TURN_USERNAME, credential: process.env.TURN_CREDENTIAL || '' });
   }
   // After the owner's relays, and even when this server has no relay of its own.
-  list.push(...memberIceFor(uid, exp));
+  const row = getUserRow(uid);
+  const avoid = !!row && privacyOf(row).memberRelays === 'avoid';
+  list.push(...(avoid ? memberHostsFor() : memberIceFor(uid, exp)));
   return list;
 }
 api.get('/ice', auth, (req, res) => {
-  rateLimit('ice:' + req.userId, 60, 3600000);
+  // (Apps fetch it again when a member relay comes or goes, ice:changed, and every 10 minutes while they hold one.)
+  rateLimit('ice:' + req.userId, 120, 3600000);
   res.json(iceServersFor(req.userId));
 });
 
@@ -5693,6 +5716,7 @@ function suspendUser(uid, reason, hours = 0) {
   db.prepare('UPDATE users SET suspended_at = ?, suspend_reason = ?, suspended_until = ? WHERE id = ?').run(now(), String(reason || '').slice(0, 300), until, uid);
   revokeSessions(uid, { reason: 'suspended' });
   closeWindows(uid, 'suspended');
+  REG.memberChanged(uid); // call relays they run leave everyone's calls
 }
 const ipsOf = (uid) => db.prepare('SELECT ip, first_seen AS firstSeen, last_seen AS lastSeen FROM user_ips WHERE user_id = ? ORDER BY last_seen DESC LIMIT 20').all(uid);
 // Placeholder until the Support account exists (phase 2): every new account will get it as a friend.
@@ -5895,6 +5919,7 @@ api.post('/admin/users/:id/unsuspend', auth, staffOnly, (req, res) => {
   requireOutranks(req, req.params.id);
   db.prepare('UPDATE users SET suspended_at = NULL, suspend_reason = NULL, suspended_until = NULL WHERE id = ?').run(req.params.id);
   adminLog(req, 'unsuspend', req.params.id);
+  REG.memberChanged(req.params.id); // call relays they run come back
   res.json({ ok: true });
 });
 // Private notes about an account, shared between staff ("warned on 3 May about spam").
@@ -7377,6 +7402,9 @@ function setupSockets(server) {
       }
     }));
 
+    // Who in the call avoids member relays (Settings → Privacy & safety): the app joining builds its connection with
+    // them without member relays (voice.js), so a member relay of its own is never told their address.
+    const avoidFlag = (id) => { const row = getUserRow(id); return row && privacyOf(row).memberRelays === 'avoid' ? { avoid: true } : {}; };
     socket.on('voice:join', guard((p = {}) => {
       const roomId = String(p.channelId || '');
       let room; let vp = PM.CONNECT | PM.SPEAK; let serverMuted = false;
@@ -7423,7 +7451,7 @@ function setupSockets(server) {
         Object.assign(prev, { socketId: socket.id, reconnecting: false, grace: null, speak, serverMuted, muted: !!p.muted || !speak, deafened: !!p.deafened, video: !!p.video, screen: !!p.screen });
         socket.join(`voice:${room}`);
         const m = voiceChannels.get(room);
-        const peers = [...m.entries()].filter(([userId]) => userId !== uid).map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting }));
+        const peers = [...m.entries()].filter(([userId]) => userId !== uid).map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId) }));
         // Everyone else points their connection to this person at the new socket (and renegotiates if needed).
         socket.to(`voice:${room}`).emit('voice:peer-joined', { userId: uid, socketId: socket.id, resumed: true });
         emitVoiceState(room);
@@ -7436,7 +7464,7 @@ function setupSockets(server) {
       }
       if (!voiceChannels.has(c.id)) voiceChannels.set(c.id, new Map());
       const m = voiceChannels.get(c.id);
-      const peers = [...m.entries()].map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting }));
+      const peers = [...m.entries()].map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId) }));
       // speak: whether they may talk here (the app keeps the mic off without it; recheckVoice keeps it current).
       const speak = !!(vp & PM.SPEAK);
       m.set(uid, { socketId: socket.id, sid: socket.data.sid, muted: !!p.muted || !speak, deafened: !!p.deafened, video: false, screen: false, speak, serverMuted, reconnecting: false, grace: null });

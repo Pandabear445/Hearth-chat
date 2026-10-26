@@ -22,7 +22,7 @@ import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, profileCard, 
 import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
 import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice, voicePlaying } from './features.js';
-import { rankRelays, chooseIce, relayTime, iceStale, usableIce, memberRelayHosts, avoidsMemberRelays, isMemberRelay } from './relays.js';
+import { rankRelays, chooseIce, relayTime, iceStale, usableIce, memberRelayHosts, avoidsMemberRelays, isMemberRelay, isRelay } from './relays.js';
 import { watchConnection } from './conn.js';
 import { unseenNotes, markNotesSeen } from './whatsnew.js';
 import { autocorrect, correctSending, isCommand, englishHere, lastWordPasted } from './spelling.js';
@@ -175,6 +175,7 @@ export const app = {
   logout,
   rerender: () => { lsCache.clear(); renderAll(); }, // settings.js writes some preferences straight to localStorage
   redrawImageLinks: () => redrawImageLinks(),
+  followRelayChoice: () => followRelayChoice(), // after "Avoid relays run by members" changes
   openProfile: (id) => openProfileModal(id),
   install: () => installApp(),
   get canInstall() { return !!installPrompt; },
@@ -568,7 +569,8 @@ function startApp() {
     isPeerMuted: (userId) => { const st = voice && (S.voice[voice.channelId] || []).find((x) => x.userId === userId); return !!(st && (st.muted || st.deafened)); },
     socket,
     // automatic: the call's region relay didn't answer, so this app falls back to the nearest relays (voice.js).
-    getIceServers: ({ automatic = false } = {}) => {
+    // avoid: the connection is with someone who avoids member relays, so it's built without them too.
+    getIceServers: ({ automatic = false, avoid = false } = {}) => {
       const room = voice && voice.channelId;
       const pinned = room && !automatic ? callRegion(room) : null;
       // Pinned to a region that's offline right now: automatic relays are used instead. Say so, once per call.
@@ -576,10 +578,12 @@ function startApp() {
         S.regionWarned.add(room);
         setTimeout(() => toast(`This call\u2019s region (${regionName(pinned)}) is offline, so your connection uses automatic relays.`), 0);
       }
-      return chooseIce(S.iceServers || S.config.iceServers || [], S.relayRanks, pinned, { avoid: avoidsMemberRelays(S.me) });
+      return chooseIce(S.iceServers || S.config.iceServers || [], S.relayRanks, pinned, { avoid: avoidsMemberRelays(S.me) || avoid });
     },
-    // Avoiding member relays (Settings → Privacy & safety): the other side's candidates on their machines are dropped.
+    // Avoiding member relays (Settings → Privacy & safety): the other side's candidates on their machines are dropped,
+    // and the others in the call are told, so their connections with us leave member relays out too.
     avoidHosts: () => (avoidsMemberRelays(S.me) ? memberRelayHosts(S.iceServers || S.config.iceServers || []) : new Set()),
+    avoids: () => avoidsMemberRelays(S.me),
     myId: () => S.me && S.me.id,
     onNotice: (text, kind) => toast(text, kind),
     onRegion: (room, region, version) => applyCallRegion({ room, region, version }),
@@ -590,7 +594,7 @@ function startApp() {
       toast(`A moderator moved you to ${c.name}.`);
       joinVoice(c, srv, { stay: S.view.type !== 'voice' });
     },
-    ensureIce: () => freshIce(),
+    ensureIce: () => iceBeforeCall(),
     signSdp: (toUserId, desc) => sec.signSdp(voice.channelId, toUserId, desc),
     verifySdp: (fromUserId, desc, sig) => sec.checkSdp(voice.channelId, fromUserId, desc, sig),
     onSecurityWarning: (userId, why) => callWarning(userId, why),
@@ -694,6 +698,8 @@ function startApp() {
     later(redrawPeople);
     if (S.view.type === 'people' && S.view.tab !== 'add') later(renderMain);
   });
+  // A member's call relay came into calls or left them (server/regions.js iceChanged).
+  socket.on('ice:changed', () => iceChanged());
   socket.on('user:update', (u) => {
     if (!S.me) return;
     // Only your own Away for being inactive (or back): just the dots and the line under your name. Nothing is
@@ -709,6 +715,8 @@ function startApp() {
     if (keysNow() !== keysBefore) { NOTES.onTrust(u.id); LOOK.onTrust(u.id); } // photo tags and backgrounds that didn't open with the keys known before
     // Outside images changed on another device: the image links on screen follow the new choice.
     if (u.id === S.me.id && outsideMode(S.me.privacy) !== outsideBefore) later(redrawImageLinks);
+    // So do call relays, when avoiding member relays was turned on or off.
+    if (u.id === S.me.id) followRelayChoice();
     // Verified after a reset without their recovery key (crypto-2): their servers' keys can go to them now.
     if (wasWaiting && !sec.awaitingVerify(S.users[u.id])) {
       S.servers.filter((s) => s.memberIds.includes(u.id)).forEach((s) => sec.maintain(s.id));
@@ -1035,14 +1043,68 @@ function startApp() {
 // Relay logins run out 12 to 18 hours after they're handed out, and an app can stay open for days without
 // reconnecting. So new ones are fetched before a call when they're about to run out, and checked every
 // 10 minutes in the background (calls in progress switch to them too).
-async function freshIce() {
-  if (!iceStale(S.iceServers)) return;
+// { force }: fetch now, however new they are. { maxAge }: also when the list is older than that (in ms).
+// { remeasure }: measure the relays again afterwards, even the ones measured before.
+let iceAt = 0; // when S.iceServers came from the server
+let iceFor = null; // and for which choice: avoidsMemberRelays(S.me) then (the list depends on it, see followRelayChoice)
+let iceAsked = 0; // the latest fetch: an older one that answers after it is stale (the choice may have changed since)
+// The relays in a list this app may use (with a login), as one string to compare.
+const relaySet = (list) => usableIce(list, avoidsMemberRelays(S.me)).filter(isRelay).map((e) => [].concat(e.urls).join(',')).sort().join(' ');
+async function freshIce({ force = false, maxAge = Infinity, remeasure = false } = {}) {
+  if (!force && iceFor === avoidsMemberRelays(S.me) && !iceStale(S.iceServers) && Date.now() - iceAt < maxAge) return;
+  const n = ++iceAsked;
+  const avoid = avoidsMemberRelays(S.me);
   try {
-    S.iceServers = await api('GET', '/ice');
-    if (voice) voice.updateIceServers();
+    const list = await api('GET', '/ice');
+    if (n !== iceAsked) return;
+    const before = S.iceServers;
+    S.iceServers = list; iceAt = Date.now(); iceFor = avoid;
+    if (voice) {
+      voice.updateIceServers();
+      // Member relays this app had a login for and now hasn't (the owner paused or removed one, its member was
+      // suspended, or this person started avoiding them): a connection set up with one starts over without it.
+      const still = memberRelayHosts(usableIce(list, false));
+      const gone = new Set([...memberRelayHosts(usableIce(before, false))].filter((x) => !still.has(x)));
+      if (gone.size) voice.relaysGone(gone);
+    }
+    // Relays not measured yet (approved since, say) are measured now. Unmeasured, every relay in the list would go
+    // into each call, so every member relay among them would see this device's address.
+    if (remeasure || !S.relayRanks || relaySet(list) !== relaySet(before)) rankNearest({ force: remeasure });
   } catch { /* keep the old ones: the next check is soon */ }
 }
-setInterval(() => { if (S.me) freshIce(); }, 10 * 60000);
+// The background check. A list with member relays in it is also fetched again once it's 10 minutes old: one the owner
+// paused or removed meanwhile (the server says so at once, ice:changed, but this app may have missed it) isn't used
+// for long, and an avoider learns about relays approved since.
+setInterval(() => { if (S.me) freshIce((S.iceServers || []).some(isMemberRelay) ? { maxAge: 10 * 60000 } : {}); }, 10 * 60000);
+// Before a call. Someone who avoids member relays drops the other side's addresses on any of them, so their list
+// (where every member relay is, without logins) is fetched again when it's more than 10 minutes old, to know the
+// relays approved since.
+const iceBeforeCall = () => freshIce(avoidsMemberRelays(S.me) ? { maxAge: 10 * 60000 } : {});
+// A member relay came into calls or left them: the list is fetched again now (a moment apart on each device, so
+// everyone's apps don't ask at the same instant).
+let iceChangeTimer = null;
+function iceChanged() {
+  clearTimeout(iceChangeTimer);
+  iceChangeTimer = setTimeout(() => { if (S.me) freshIce({ force: true }); }, Math.floor(Math.random() * 3000));
+}
+// With relays in several regions, find the nearest ones in the background (cached for 6 hours; force: measure again
+// now). Someone who avoids member relays never measures one (measuring shows the relay this device's IP address).
+function rankNearest({ force = false } = {}) {
+  const usable = usableIce(S.iceServers, avoidsMemberRelays(S.me));
+  if (usable.filter(isRelay).length > 2) rankRelays(usable, { force }).then((r) => { S.relayRanks = r; }).catch(() => {});
+}
+// Avoiding member relays turned on or off (Settings → Privacy & safety, on this device or another: user:update). The
+// relay list depends on it (logins for member relays, or only where they are), so it's fetched again right away and
+// the relays are measured again. Turned on during a call, every connection that may use a member relay starts over
+// without them (voice.avoidChanged), and tells the others in the call to leave them out too.
+// (A fetch that fails is tried again by the next check, or before the next call: freshIce compares iceFor.)
+let relayChoice = null; // the choice last followed
+function followRelayChoice() {
+  const avoid = avoidsMemberRelays(S.me);
+  if (relayChoice === avoid) return;
+  relayChoice = avoid;
+  freshIce({ force: true, remeasure: true }).then(() => { if (avoid && voice) voice.avoidChanged(); });
+}
 // When this server switched on end-to-end encryption: plaintext channel messages dated later can only have come
 // from the server, so they aren't shown (secure.js). Remembered on this device, and the earliest time it was
 // ever told wins, so the server can't move it later.
@@ -1077,13 +1139,8 @@ async function loadBootstrap() {
   S.me = b.me;
   drafts = createDrafts(S.me.id);
   S.mediaToken = b.mediaToken;
-  S.iceServers = b.iceServers;
-  // With relays in several regions, find the nearest ones in the background (cached for 6 hours). Someone who avoids
-  // member relays never measures one (measuring shows the relay this device's IP address).
-  setTimeout(() => {
-    const usable = usableIce(b.iceServers, avoidsMemberRelays(S.me));
-    if (usable.filter((e) => [].concat(e.urls || []).some((u) => /^turns?:/.test(u))).length > 2) rankRelays(usable).then((r) => { S.relayRanks = r; }).catch(() => {});
-  }, 4000);
+  S.iceServers = b.iceServers; iceAt = Date.now(); iceAsked++; iceFor = relayChoice = avoidsMemberRelays(S.me);
+  setTimeout(() => rankNearest(), 4000);
   S.e2eeSince = rememberE2eeSince(b.e2eeSince);
   S.users = b.users;
   S.servers = b.servers;

@@ -18,13 +18,18 @@
 # Bandwidth: each relayed connection is capped at TURN_MAX_MBIT megabits a second each way (default 6: enough
 # for a camera plus a shared screen). TURN_CAPACITY_MBIT caps all calls together (default 0 = no cap; set it to
 # what your VPS plan includes), e.g.  TURN_CAPACITY_MBIT=200 bash scripts/setup-turn.sh
+#
+# --member (a member's relay, Settings → Help host: often a PC or a Pi on someone's home network): it relays over IPv4
+# only and never to this machine's own public address. Private addresses are refused anyway, but at home the router
+# and every other device usually have global IPv6 addresses too, and traffic from the relay starts inside the network,
+# past the router's firewall.
 set -Eeuo pipefail
 c_y=$'\033[1;33m'; c_g=$'\033[1;32m'; c_r=$'\033[1;31m'; c_0=$'\033[0m'
 step() { printf '%s▸%s %s\n' "$c_y" "$c_0" "$*"; }
 ok()   { printf '%s✓%s %s\n' "$c_g" "$c_0" "$*"; }
 die()  { printf '%s✗ %s%s\n' "$c_r" "$*" "$c_0" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "Run this as root (or with sudo)."
-RELAY_ONLY=no; SECRET=""; SECRET_FILE=""; NEW_SECRET=no; MANAGED=no
+RELAY_ONLY=no; SECRET=""; SECRET_FILE=""; NEW_SECRET=no; MANAGED=no; MEMBER=no
 while [ $# -gt 0 ]; do
   case "$1" in
     --relay-only) RELAY_ONLY=yes ;;
@@ -32,6 +37,7 @@ while [ $# -gt 0 ]; do
     --secret-file) SECRET_FILE="${2:-}"; [ -n "$SECRET_FILE" ] || die "--secret-file needs a file name."; shift ;;
     --new-secret) NEW_SECRET=yes ;;
     --managed) MANAGED=yes ;; # installed from Admin → Regions: that install links the relay by itself
+    --member) MEMBER=yes ;; # a member's relay (Settings → Help host): see above
     *) die "Unknown option: $1" ;;
   esac
   shift
@@ -81,11 +87,20 @@ fi
 step "Installing coturn (the standard TURN relay)…"
 { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq coturn curl openssl; } >/dev/null 2>&1 || die "Couldn't install coturn."
 
-PUBLIC_IP="$(curl -fsS --max-time 8 https://api.ipify.org || curl -fsS --max-time 8 https://ifconfig.me || true)"
+FAM=""; [ "$MEMBER" = yes ] && FAM="-4" # (a member's relay is IPv4 only, so its address is the IPv4 one)
+PUBLIC_IP="$(curl -fsS $FAM --max-time 8 https://api.ipify.org || curl -fsS $FAM --max-time 8 https://ifconfig.me || true)"
 [ -n "$PUBLIC_IP" ] || die "Couldn't detect this server's public IP address."
 PRIVATE_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") print $(i + 1)}' | head -1)"
 EXTERNAL="$PUBLIC_IP"
 [ -n "$PRIVATE_IP" ] && [ "$PRIVATE_IP" != "$PUBLIC_IP" ] && EXTERNAL="$PUBLIC_IP/$PRIVATE_IP"
+MEMBER_CONF=""
+if [ "$MEMBER" = yes ]; then
+  [[ "$PUBLIC_IP" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && [ -n "$PRIVATE_IP" ] || die "A member relay needs an IPv4 internet connection (this machine has none)."
+  # relay-ip: relayed addresses only ever on this IPv4 address, so nothing is relayed to anyone's IPv6 address. And
+  # never to this machine's own public address (at home, the router's).
+  MEMBER_CONF="$(printf '%s\n' "# A member's relay: IPv4 only, and never to this machine's own public address (at home, the router's)." \
+    "relay-ip=$PRIVATE_IP" "denied-peer-ip=$PUBLIC_IP")"
+fi
 [ -n "$SECRET" ] || SECRET="$(openssl rand -hex 32)"
 
 step "Writing /etc/turnserver.conf…"
@@ -133,6 +148,7 @@ denied-peer-ip=198.18.0.0-198.19.255.255
 denied-peer-ip=::1
 denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+$MEMBER_CONF
 simple-log
 CONF
 # coturn reads it as its own user (Debian and Ubuntu: turnserver): root and that group only.
