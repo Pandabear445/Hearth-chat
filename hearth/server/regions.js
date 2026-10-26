@@ -22,9 +22,10 @@ const crypto = require('crypto');
 const net = require('net');
 const dns = require('dns');
 const { execFile, execFileSync } = require('child_process');
+const { probeTurn } = require('./turnprobe');
 
 module.exports = function setupRegions(ctx) {
-  const { api, app, auth, db, fail, wrap, rateLimit, getSetting, setSetting, requireInstanceAdmin, newId, DATA_DIR, ROOT, stepUp, auditLog, sealSecret, openSecret, getIo, keyed, mainTurnUrls } = ctx;
+  const { api, app, auth, db, fail, wrap, rateLimit, getSetting, setSetting, requireInstanceAdmin, newId, DATA_DIR, ROOT, stepUp, auditLog, sealSecret, openSecret, getIo, keyed, mainTurnUrls, netOf } = ctx;
   const now = () => Date.now();
   const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
   const ALIVE_MS = 3 * 60000;
@@ -47,9 +48,18 @@ module.exports = function setupRegions(ctx) {
   const MEMBER_MAX = 2; // each member
   const MEMBER_TOTAL = 40; // approved or paused, on this server
   // Waiting for approval, on this server: counted apart, so offers that are never approved (a few accounts offering
-  // machines that don't exist, say) can't use up the places of relays the owner approved.
+  // machines that don't exist, say) can't use up the places of relays the owner approved. An offer takes one of these
+  // places only once its machine checks in, which takes a public address of its own (see the check-ins below): offers
+  // made for no machine at all, however often they're renewed, hold none.
   const MEMBER_PENDING = 20;
   const PENDING_STALE_MS = 7 * 86400000; // an offer still waiting that hasn't checked in for this long goes
+  // A member relay's address. Each change goes to the audit log and to everyone's apps, which fetch their relay list
+  // again, and stays in the list of addresses avoiders leave out until the logins handed out for it run out (up to 18
+  // hours). So a relay may change it only so often: MOVES_MAX times in MOVES_MS (a home connection's address changes
+  // once a day or so); a check-in from a further new address is turned away until the oldest change is 18 hours old.
+  const MOVES_MAX = 4;
+  const MOVES_MS = 18 * 3600000;
+  const VERIFIED_MS = 6 * 3600000; // an address a relay proved it answers at is taken that long without asking again
   const GONE_KEEP_MS = 30 * 86400000; // how long a removed member relay is remembered (member_relays_gone)
   const MEMBER_KEEP = 3; // backup copies a member relay keeps (it's someone's own disk)
   const CAPS = [10, 25, 50, 100, 0]; // the bandwidth limits a member can pick, in Mbit/s (0 = no limit)
@@ -71,6 +81,13 @@ module.exports = function setupRegions(ctx) {
   const memberRelays = () => db.prepare(`SELECT r.id, r.name, r.ip, r.turn_urls, r.secret FROM regions r LEFT JOIN users u ON u.id = r.owner_id
     WHERE r.kind = 'member' AND r.status = 'approved' AND r.last_seen > ? AND ${ACTIVE_MEMBER} ORDER BY r.created_at`).all(now() - ALIVE_MS, now())
     .map((r) => ({ id: r.id, name: r.name, urls: parse(r.turn_urls, []), secret: openSecret(r.secret), ips: r.ip ? [r.ip] : [] })).filter((r) => r.urls.length && r.secret);
+  // Every approved member relay whose member can use this server, up or not, by the address it last checked in from:
+  // [{ id, ip }]. An app given logins for some of them is told where all of them are (without logins), so it can tell a
+  // relay that left calls (paused, removed, its member suspended: gone from this list) from one that's only offline for
+  // a few minutes, or that isn't among this person's 8 any more (still here). Only a connection set up with one that left
+  // starts over (voice.js followMemberRelays).
+  const memberListed = () => db.prepare(`SELECT r.id, r.ip FROM regions r LEFT JOIN users u ON u.id = r.owner_id
+    WHERE r.kind = 'member' AND r.status = 'approved' AND r.ip IS NOT NULL AND ${ACTIVE_MEMBER} ORDER BY r.created_at`).all(now()).map((r) => ({ id: r.id, ip: r.ip }));
   // A removed member relay is remembered for a while (member_relays_gone): its machine is then told it's gone, and
   // switches itself off a day later (see the agent), and its member is told when it was the owner who removed it.
   const bury = (r, by) => db.prepare(`INSERT INTO member_relays_gone (id, owner_id, name, by, notice, at) VALUES (?, ?, ?, ?, ?, ?)
@@ -265,9 +282,11 @@ module.exports = function setupRegions(ctx) {
     return r;
   };
   const memberLabel = (r) => `${r.name} by ${r.owner_name || r.owner_id}${r.ip ? ` (${r.ip})` : ''}`;
-  // Member relays the owner approved (paused ones keep their place), and offers waiting for approval.
+  // Member relays the owner approved (paused ones keep their place), and offers waiting for approval whose machine has
+  // checked in (an offer takes a waiting place only then: see MEMBER_PENDING).
   const placesTaken = () => db.prepare("SELECT COUNT(*) AS n FROM regions WHERE kind = 'member' AND status != 'pending'").get().n;
-  const waitingCount = () => db.prepare("SELECT COUNT(*) AS n FROM regions WHERE kind = 'member' AND status = 'pending'").get().n;
+  const waitingCount = () => db.prepare("SELECT COUNT(*) AS n FROM regions WHERE kind = 'member' AND status = 'pending' AND last_seen IS NOT NULL").get().n;
+  const WAITING_FULL = `${MEMBER_PENDING} relays are already waiting for the owner’s approval`;
   // Approving puts a member's machine in everyone's calls (and, if chosen, among the places every backup goes), so it
   // needs the password again, like adding a region. Backup copies only if the member offered the space and the owner
   // says yes here: they're locked with the backup key, but whoever someday got that key could open one.
@@ -359,7 +378,7 @@ module.exports = function setupRegions(ctx) {
     sweepMembers();
     if (db.prepare("SELECT COUNT(*) AS n FROM regions WHERE kind = 'member' AND owner_id = ?").get(req.userId).n >= MEMBER_MAX) fail(400, `You can offer up to ${MEMBER_MAX} relays. Remove one first.`);
     if (placesTaken() >= MEMBER_TOTAL) fail(400, `This server already has ${MEMBER_TOTAL} member relays, as many as it takes.`);
-    if (waitingCount() >= MEMBER_PENDING) fail(400, `${MEMBER_PENDING} relays are already waiting for the owner\u2019s approval. Try again once the owner has gone through them.`);
+    if (waitingCount() >= MEMBER_PENDING) fail(400, `${WAITING_FULL}. Try again once the owner has gone through them.`);
     const id = newId(); const k = newLink(id);
     db.prepare(`INSERT INTO regions (id, name, token_hash, install_hash, setup_until, stats, created_at, kind, owner_id, status, secret, offer, backups)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'member', ?, 'pending', ?, ?, 0)`)
@@ -528,22 +547,29 @@ if [ -z "$IP" ] || [ "$(( $(date +%s) - $(stat -c %Y /etc/hearth-region/ip 2>/de
   NEW="$(curl -fsS $FAM --max-time 8 https://api.ipify.org || curl -fsS $FAM --max-time 8 https://ifconfig.me || true)"
   [ -n "$NEW" ] && { IP="$NEW"; echo "$IP" > /etc/hearth-region/ip; }
 fi
-# The address coturn hands out relay addresses on (external-ip). Someone who avoids member relays drops the other side's
-# addresses on this machine by the address it checks in with, so a member relay's two must be the same: Hearth refuses a
-# check-in where they differ. A home connection's address changes now and then, so coturn moves along with it.
+# coturn's addresses: the one it hands out (external-ip: the public one, then this machine's own on its network after a
+# slash when they differ) and the one it relays from (relay-ip: this machine's own). Someone who avoids member relays
+# drops the other side's addresses on this machine by the address it checks in with, so a member relay's two must be the
+# same: Hearth refuses a check-in where they differ. A home connection's public address changes now and then, and so can
+# this machine's own on its network (the router's DHCP, a VPS provider), so coturn moves along with both: with a relay-ip
+# the machine no longer has, coturn would keep running but fail every call.
 RELAY_IP=""
 if [ "$KIND" = member ] && head -1 /etc/turnserver.conf 2>/dev/null | grep -q 'written by scripts/setup-turn.sh'; then
-  EXT="$(sed -n 's|^external-ip=\\([^/]*\\).*|\\1|p' /etc/turnserver.conf | head -1)"
+  EXT="$(sed -n 's|^external-ip=||p' /etc/turnserver.conf | head -1)"
+  RIP="$(sed -n 's|^relay-ip=||p' /etc/turnserver.conf | head -1)"
+  SRC="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") print $(i + 1)}' | head -1)"
+  case "$SRC" in *[!0-9.]*|'') SRC="$RIP" ;; esac
   case "$IP" in *[!0-9.]*|'') ;; *)
-    if [ -n "$EXT" ] && [ "$EXT" != "$IP" ]; then
-      E="\${EXT//./\\\\.}"
-      sed -i "s|^external-ip=$E\\(/.*\\)\\{0,1\\}$|external-ip=$IP\\1|; s|^denied-peer-ip=$E$|denied-peer-ip=$IP|" /etc/turnserver.conf
+    WANT="$IP"; [ -n "$SRC" ] && [ "$SRC" != "$IP" ] && WANT="$IP/$SRC"
+    if [ -n "$EXT" ] && { [ "$EXT" != "$WANT" ] || [ "$RIP" != "$SRC" ]; }; then
+      sed -i "s|^external-ip=.*|external-ip=$WANT|" /etc/turnserver.conf
+      [ -n "$SRC" ] && sed -i "s|^relay-ip=.*|relay-ip=$SRC|" /etc/turnserver.conf
       systemctl restart coturn >/dev/null 2>&1 || true
-      logger -t hearth-relay "This machine's address changed from $EXT to $IP, so the relay now hands out the new one." 2>/dev/null || true
-      EXT="$IP"
+      logger -t hearth-relay "This machine's address changed (the relay handed out $EXT and relayed from \${RIP:-it}; now $WANT, from $SRC), so the relay follows it." 2>/dev/null || true
+      EXT="$WANT"
     fi ;;
   esac
-  RELAY_IP="$EXT"
+  RELAY_IP="\${EXT%%/*}"
 fi
 IFACE="$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") print $(i + 1)}' | head -1)"
 TX=0; RX=0
@@ -566,9 +592,17 @@ BUSED="$(du -sm $BDIR 2>/dev/null | cut -f1)"; BFREE="$(df -Pm /var/lib 2>/dev/n
 # The answer's status code tells a refusal (403) from trouble on the way (000: no connection), which changes nothing here.
 # The check-in token goes to curl in its config on standard input (printf is the shell's own), never on its command
 # line: every account on this machine can read those (ps), and the token is all it takes to check in as this relay.
-CODE="$(printf 'header = "X-Region-Token: %s"\\n' "$TOKEN" | curl -K - -sS \${PIN:+-k --pinnedpubkey "$PIN"} --max-time 15 -X POST -H 'Content-Type: application/json' \\
-  -d "{\\"ip\\":\\"$IP\\",\\"relayIp\\":\\"$RELAY_IP\\",\\"tx\\":$TX,\\"rx\\":$RX,\\"load\\":$LOAD,\\"cpus\\":$CPUS,\\"mem\\":$MEM,\\"relay\\":$RELAY,\\"uptime\\":$UP,\\"ssh\\":{\\"port\\":$SSH_PORT,\\"hostKey\\":\\"$HOSTKEY\\",\\"ready\\":$BREADY,\\"usedMb\\":\${BUSED:-0},\\"freeMb\\":\${BFREE:-0},\\"files\\":\${BFILES:-0}},\\"version\\":4}" \\
-  -w '%{http_code}' -o "$STATE.new" "$MAIN/api/regions/$REGION/heartbeat")" || true
+BODY="{\\"ip\\":\\"$IP\\",\\"relayIp\\":\\"$RELAY_IP\\",\\"tx\\":$TX,\\"rx\\":$RX,\\"load\\":$LOAD,\\"cpus\\":$CPUS,\\"mem\\":$MEM,\\"relay\\":$RELAY,\\"uptime\\":$UP,\\"ssh\\":{\\"port\\":$SSH_PORT,\\"hostKey\\":\\"$HOSTKEY\\",\\"ready\\":$BREADY,\\"usedMb\\":\${BUSED:-0},\\"freeMb\\":\${BFREE:-0},\\"files\\":\${BFILES:-0}},\\"version\\":5}"
+checkin() {
+  printf 'header = "X-Region-Token: %s"\\n' "$TOKEN" | curl -K - -sS "$@" \${PIN:+-k --pinnedpubkey "$PIN"} --max-time 15 -X POST -H 'Content-Type: application/json' \\
+    -d "$BODY" -w '%{http_code}' -o "$STATE.new" "$MAIN/api/regions/$REGION/heartbeat"
+}
+# A member relay checks in over IPv4, so Hearth sees it come from the address it says it's at (where both work, curl
+# would go over IPv6, and Hearth would have to check the address another way). A Hearth without an IPv4 address is
+# reached any way that works.
+CODE=""
+[ "$KIND" = member ] && { CODE="$(checkin -4)" || true; }
+[ -n "$CODE" ] && [ "$CODE" != 000 ] || { CODE="$(checkin)" || true; }
 if [ "$CODE" = 200 ]; then
   mv -f "$STATE.new" "$STATE"; rm -f /etc/hearth-region/last-error /etc/hearth-region/refused-since
 else
@@ -672,6 +706,17 @@ fi
 if systemctl is-enabled --quiet coturn 2>/dev/null || systemctl is-active --quiet coturn 2>/dev/null; then
   systemctl disable --now coturn >/dev/null 2>&1 || true
   gone "the call relay (coturn): stopped and switched off"
+fi
+# A member relay's firewall rule that kept it away from this machine's own services (setup-turn.sh --member), and what
+# loaded it each time coturn started: a coturn that stays here starts again without it.
+if [ -e /etc/systemd/system/coturn.service.d/hearth-relay-guard.conf ]; then
+  rm -f /etc/systemd/system/coturn.service.d/hearth-relay-guard.conf
+  rmdir /etc/systemd/system/coturn.service.d 2>/dev/null || true
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  gone "what loaded the relay's firewall rule when coturn started (coturn.service.d/hearth-relay-guard.conf)"
+fi
+if command -v nft >/dev/null 2>&1 && nft list table inet hearth_relay >/dev/null 2>&1; then
+  nft delete table inet hearth_relay >/dev/null 2>&1 && gone "the relay's firewall rule (the hearth_relay table in nftables)"
 fi
 OLD=""
 while IFS= read -r f; do
@@ -805,29 +850,62 @@ echo "To remove it from this machine later: sudo hearth-relay-uninstall"
   const num = (v, lo = 0, hi = 1e15) => { const x = Number(v); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : lo; };
   const HOST_KEY_RE = /^ssh-ed25519 [A-Za-z0-9+/]+={0,3}$/;
   // Member relays check in the same way, whatever their status: the owner sees the address and load before approving.
+  const refuseToken = (id, r) => {
+    // A member relay that's gone for good (removed, or its link replaced by a new install command) is told so: that's
+    // what makes its machine switch itself off after a day (see the agent). A relay this server doesn't know at all
+    // (a rebuilt server, before its backup is restored) is only refused.
+    const gone = r ? isMemberRow(r) : !!db.prepare('SELECT 1 FROM member_relays_gone WHERE id = ?').get(String(id));
+    fail(403, gone ? (r ? 'A new install command replaced this relay’s link.' : 'This relay was removed in Hearth.') : 'Unknown region or token.', gone ? 'relay_gone' : undefined);
+  };
   api.post('/regions/:id/heartbeat', wrap(async (req, res) => {
-    rateLimit('regionbeat:' + req.ip, 30, 60000);
-    const r = db.prepare('SELECT * FROM regions WHERE id = ?').get(String(req.params.id));
-    if (!checkToken(r, String(req.get('x-region-token') || ''))) {
-      // A member relay that's gone for good (removed, or its link replaced by a new install command) is told so: that's
-      // what makes its machine switch itself off after a day (see the agent). A relay this server doesn't know at all
-      // (a rebuilt server, before its backup is restored) is only refused.
-      const gone = r ? isMemberRow(r) : !!db.prepare('SELECT 1 FROM member_relays_gone WHERE id = ?').get(String(req.params.id));
-      fail(403, gone ? (r ? 'A new install command replaced this relay’s link.' : 'This relay was removed in Hearth.') : 'Unknown region or token.', gone ? 'relay_gone' : undefined);
-    }
+    // Per network (an IPv6 /64 counts as one address, so moving around inside one changes nothing)…
+    rateLimit('regionbeat:' + netOf(req.ip), 30, 60000);
+    const token = String(req.get('x-region-token') || '');
+    let r = db.prepare('SELECT * FROM regions WHERE id = ?').get(String(req.params.id));
+    if (!checkToken(r, token)) refuseToken(req.params.id, r);
+    // …and per relay, once its token checked out (apps are given relays' ids: otherwise anyone could use up a relay's
+    // check-ins).
+    rateLimit('regionbeat:relay:' + r.id, 30, 60000);
     const b = req.body || {};
     const ip = String(b.ip || '').trim();
     if (!publicIp(ip)) fail(400, 'No public IP address.');
     const member = isMemberRow(r);
+    let proof = null; // { ip, at }: the relay just proved it answers at this address (see below)
     if (member) {
-      // A member's machine says where it is. It has to be where it checks in from (when that's a public address of the
-      // same kind), the address its relay hands out (agent version 4+: coturn's external-ip), and nobody else's.
-      const from = sameIp(req.ip);
-      if (publicIp(from, { strict: true }) && net.isIPv4(from) === net.isIPv4(ip) && from !== sameIp(ip)) fail(400, `This relay checks in from ${from} but says its address is ${ip}. A member relay's address has to be the one it checks in from.`);
+      // A member's machine says where it is. That address goes to everyone's app, and someone who avoids member relays
+      // leaves out the other side's addresses there, so it has to be this relay's own: an IPv4 address (a member relay
+      // relays over IPv4 only), the one its coturn hands out (agent version 4+: external-ip), nobody else's, changed only
+      // so often (MOVES_MAX), and either the one it checks in from or one where it proves it answers.
+      if (!net.isIPv4(ip)) fail(400, `A member relay relays over IPv4 only, so its address is an IPv4 one, not ${ip.slice(0, 45)}. Run the install command again on it.`);
       const handsOut = String(b.relayIp || '').trim();
-      if (handsOut && sameIp(handsOut) !== sameIp(ip)) fail(400, `The relay hands out ${handsOut.slice(0, 45)} but checks in as ${ip}. Run the install command again on it.`);
+      if (!handsOut) fail(400, 'This relay doesn’t say which address it hands out (its check-in comes from an older install). Run the install command again on it.');
+      if (sameIp(handsOut) !== sameIp(ip)) fail(400, `The relay hands out ${handsOut.slice(0, 45)} but checks in as ${ip}. Run the install command again on it.`);
+      tooManyMoves(r, ip);
       const why = await claimedBy(ip, r);
       if (why) fail(409, `This relay can't use ${ip}: ${why}.`);
+      // Where it checks in from. A check-in that crossed the internet from another address (through a proxy in front of
+      // this server, such as Cloudflare's, or over IPv6) proves the address instead: the relay there has to answer a login
+      // made with this relay's own secret, which only it holds (turnprobe.js). A proved address is taken for VERIFIED_MS.
+      // A check-in from a private address (a proxy on this server's own network that passes on no address, or this
+      // machine itself) can't be told apart, and is taken at its word.
+      const from = sameIp(req.ip);
+      const was = parse(r.stats, {}).verified;
+      const proved = !!was && was.ip === sameIp(ip) && now() - was.at < VERIFIED_MS;
+      if (publicIp(from, { strict: true }) && from !== sameIp(ip) && !proved) {
+        rateLimit('regionprobe:' + r.id, 10, 3600000);
+        if (!(await probeTurn({ host: sameIp(ip), port: 3478, secret: openSecret(r.secret) }))) {
+          fail(400, `This relay checks in from ${from} but says its address is ${ip}, and the relay at ${ip} didn’t answer as this one (UDP port 3478). A member relay’s address has to be the one it checks in from, or one where it answers.`);
+        }
+        proof = { ip: sameIp(ip), at: now() };
+      }
+      // (Read again after waiting on the checks above: another check-in may have been taken meanwhile, and the rules below
+      // must count it. Nothing from here on waits, so nothing else can come in between.)
+      r = db.prepare('SELECT * FROM regions WHERE id = ?').get(r.id);
+      if (!checkToken(r, token)) refuseToken(req.params.id, r);
+      tooManyMoves(r, ip);
+      // An offer takes one of the waiting places when its machine first checks in (MEMBER_PENDING); until a place is free
+      // its check-ins are turned away (it tries again every minute).
+      if (r.status === 'pending' && !r.last_seen && waitingCount() >= MEMBER_PENDING) fail(409, `${WAITING_FULL}. This relay keeps checking in, and gets a place once the owner has gone through them.`);
     }
     const host = ip.includes(':') ? `[${ip}]` : ip;
     const urls = [`turn:${host}:3478?transport=udp`, `turn:${host}:3478?transport=tcp`];
@@ -856,21 +934,34 @@ echo "To remove it from this machine later: sudo hearth-relay-uninstall"
         port, hostKey, files: Math.floor(num(sh.files)), usedMb: Math.floor(num(sh.usedMb)), freeMb: Math.floor(num(sh.freeMb)),
       };
     }
-    // A member relay that moves to another address: written down for the owner (Admin → Regions and the audit log), and
-    // everyone's apps fetch their relay list again (theirs has the old address).
+    // A member relay that moves to another address: shown to the owner (Admin → Regions), written to the audit log once
+    // the owner has approved it (one still waiting is in nobody's calls, and the owner sees its address before approving
+    // it), and everyone's apps fetch their relay list again (theirs has the old address). Each change counts (MOVES_MAX).
     const moved = member && r.ip && sameIp(r.ip) !== sameIp(ip);
-    if (moved) { st.prevIp = r.ip; st.ipChangedAt = t; }
+    if (member) st.moves = movesOf(st, t);
+    if (moved) { st.prevIp = r.ip; st.ipChangedAt = t; st.moves.push(t); }
+    if (proof) st.verified = proof;
     db.prepare('UPDATE regions SET ip = ?, turn_urls = ?, last_seen = ?, stats = ?, setup_until = NULL, install_hash = NULL WHERE id = ?').run(ip, JSON.stringify(st.relay ? urls : []), t, JSON.stringify(st), r.id);
-    if (moved) {
-      auditLog(req, 'member_relay_address_changed', r.id, `${r.name}: ${r.ip} → ${ip}`, r.owner_id);
-      if (r.status === 'approved') iceChanged();
-    }
+    if (moved && r.status !== 'pending') auditLog(req, 'member_relay_address_changed', r.id, `${r.name}: ${r.ip} → ${ip}`, r.owner_id);
+    if (moved && r.status === 'approved') iceChanged();
     // This server's backup key goes only to a relay that may get copies: an answer without it makes the agent (version
     // 3+) take the key away, so a paused member relay, or one whose copies were turned off, stops taking uploads.
     const key = mayGetCopies(r) ? backupPublicKey() : null;
     if (member && !isAlive(r)) tell(r.owner_id); // installed, or back after being offline: the member's page moves on
     res.json({ ok: true, name: r.name, ...(member ? { status: r.status } : {}), ...(key ? { backupKey: key, keep: member ? MEMBER_KEEP : KEEP_COPIES } : {}) });
   }));
+  // The times a member relay's address changed within the last MOVES_MS, and the rule on them: once it has changed
+  // MOVES_MAX times in that long, a check-in from yet another address is turned away (429) until the oldest of those
+  // changes is that old. (The relay stays at its address meanwhile, and drops out of calls after 3 minutes without a
+  // check-in from there.)
+  const movesOf = (st, t = now()) => (Array.isArray(st.moves) ? st.moves : []).filter((x) => Number.isFinite(x) && x > t - MOVES_MS && x <= t).slice(-MOVES_MAX);
+  function tooManyMoves(r, ip) {
+    if (!r.ip || sameIp(r.ip) === sameIp(ip)) return;
+    const moves = movesOf(parse(r.stats, {}));
+    if (moves.length < MOVES_MAX) return;
+    const until = new Date(moves[0] + MOVES_MS).toISOString().slice(0, 16).replace('T', ' ');
+    fail(429, `This relay’s address has changed ${MOVES_MAX} times in 18 hours, as often as Hearth takes, so it stays at ${r.ip} until ${until} UTC: check-ins from ${ip.slice(0, 45)} are turned away until then.`);
+  }
 
   // ------------------------------------------------------------------ off-site backups on the regions
   // Each region that has backup space (installed or reinstalled with Hearth 1.25+) keeps copies of this server's
@@ -942,5 +1033,5 @@ echo "To remove it from this machine later: sudo hearth-relay-uninstall"
     return out;
   }
 
-  return { liveRelays, memberRelays, noteHosts, memberHosts, memberChanged, removeMemberRelaysOf, copyBackup, copyNames, backupPublicKey, isAlive };
+  return { liveRelays, memberRelays, memberListed, noteHosts, memberHosts, memberChanged, removeMemberRelaysOf, copyBackup, copyNames, backupPublicKey, isAlive };
 };

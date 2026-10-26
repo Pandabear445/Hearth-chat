@@ -240,28 +240,30 @@ test('a member relay without a login (what an avoider is given) never reaches We
   assert.match(read('public', 'js', 'admin.js'), /const ice = usableIce\(await api\('GET', '\/ice'\), avoidsMemberRelays\(me\(\)\)\);\n {6}const ranks = await rankRelays\(ice, \{ force: true \}\);/);
 });
 
-// The relay list as app.js keeps it (freshIce, iceBeforeCall, iceChanged, followRelayChoice and the bootstrap line), run
-// on its own with a fake api, call, clock and timers.
+// The relay list as app.js keeps it (freshIce, bootIce, iceBeforeCall, iceChanged, followRelayChoice), run on its own with
+// a fake api, call, clock and timers. voice: a call engine (a stand-in, or a real Voice on a fake WebRTC).
 function appIce({ S, api, voice, rankRelays }) {
   const src = read('public', 'js', 'app.js');
   const start = src.indexOf('// Relay logins run out 12 to 18 hours');
   const end = src.indexOf('\n// When this server switched on end-to-end encryption', start);
   assert.ok(start > 0 && end > start, 'the relay list block');
-  const boot = /\n {2}(S\.iceServers = b\.iceServers;[^\n]*)\n {2}setTimeout\(\(\) => rankNearest\(\), 4000\);\n/.exec(src);
-  assert.ok(boot, 'the bootstrap takes the list, notes when and for which choice, and measures in the background');
+  assert.match(src, /\n {2}const asked = Date\.now\(\);\n {2}const b = await api\('GET', '\/bootstrap'\);\n/);
+  assert.match(src, /\n {2}bootIce\(b\.iceServers, asked\);\n {2}setTimeout\(\(\) => rankNearest\(\), 4000\);\n/, 'the bootstrap takes the list like any other, and measures in the background');
   const clock = { t: 1.7e12 };
   const timers = []; const later = [];
   const out = new Function('S', 'api', 'voice', 'iceStale', 'avoidsMemberRelays', 'usableIce', 'rankRelays', 'isRelay', 'isMemberRelay', 'memberRelayHosts', 'setInterval', 'setTimeout', 'Date',
-    `${src.slice(start, end)}\nreturn { freshIce, iceBeforeCall, iceChanged, followRelayChoice, boot: (b) => { ${boot[1]} } };`)(
+    `${src.slice(start, end)}\nreturn { freshIce, iceBeforeCall, iceChanged, followRelayChoice, bootIce };`)(
     S, api, voice, R.iceStale, R.avoidsMemberRelays, R.usableIce, rankRelays, R.isRelay, R.isMemberRelay, R.memberRelayHosts,
     (fn, ms) => timers.push({ fn, ms }), (fn, ms) => { later.push({ fn, ms }); return later.length; }, { now: () => clock.t });
-  return { ...out, clock, timers, later };
+  // The bootstrap: the list, asked for now.
+  return { ...out, boot: (b) => out.bootIce(b.iceServers, clock.t), clock, timers, later };
 }
 // A call engine stand-in that writes down what it's asked.
 const fakeVoice = (S) => {
-  const v = { updates: [], gone: [], avoided: 0 };
-  return Object.assign(v, { updateIceServers: () => v.updates.push(S.iceServers), relaysGone: (hosts) => v.gone.push([...hosts].sort()), avoidChanged: () => { v.avoided++; } });
+  const v = { updates: [], followed: [], avoided: 0 };
+  return Object.assign(v, { updateIceServers: () => v.updates.push(S.iceServers), followMemberRelays: (listed) => v.followed.push([...listed].sort()), avoidChanged: () => { v.avoided++; } });
 };
+const hostsOf = (list) => [...R.memberRelayHosts(list)].sort();
 
 test('app.js: turning avoiding on or off fetches the relay list at once, a call starts over without member relays, and the relays are measured again', async () => {
   const S = { me: { id: 'me', privacy: { memberRelays: 'use' } } };
@@ -274,7 +276,9 @@ test('app.js: turning avoiding on or off fetches the relay list at once, a call 
   });
   A.boot({ iceServers: ALL });
   assert.equal(A.timers.length, 1);
-  assert.equal(A.timers[0].ms, 10 * 60000, 'the background check');
+  assert.equal(A.timers[0].ms, 60000, 'the background check, every minute');
+  assert.equal(voice.avoided, 0, 'the first list starts nothing over');
+  voice.updates.length = 0; voice.followed.length = 0;
   await A.freshIce(); await A.iceBeforeCall(); A.followRelayChoice();
   assert.deepEqual(fetched, [], 'nothing to fetch: the list is new, and for this choice');
   // Turned on, here (Settings) or on another device (user:update): fetched right away, once.
@@ -285,8 +289,8 @@ test('app.js: turning avoiding on or off fetches the relay list at once, a call 
   assert.deepEqual(fetched, ['GET /ice']);
   assert.equal(S.iceServers, AVOIDING);
   assert.deepEqual(voice.updates, [AVOIDING], 'a call in progress gets it');
-  assert.deepEqual(voice.gone, [['192.0.2.44', '2001:db8:0:0:0:0:0:7', '203.0.113.7']], 'connections set up with a member relay start over (they had logins for these)');
-  assert.equal(voice.avoided, 1, 'and every connection that may use one starts over, telling the others');
+  assert.deepEqual(voice.followed, [hostsOf(AVOIDING)], 'and the member relays in it, to follow');
+  assert.equal(voice.avoided, 1, 'every connection that may use one starts over, telling the others');
   assert.equal(ranked.length, 1);
   assert.deepEqual(ranked[0].opts, { force: true }, 'measured again now');
   assert.deepEqual(ranked[0].list, [STUN, MAIN, FRA, NYC], 'and never a member relay');
@@ -300,7 +304,7 @@ test('app.js: turning avoiding on or off fetches the relay list at once, a call 
   assert.deepEqual(fetched, ['GET /ice']);
   // Switched back to using them, and the fetch fails: the list in hand has no login for a member relay, so none is
   // used meanwhile; the next check fetches it again even though it isn't running out.
-  fetched.length = 0; voice.updates.length = 0; voice.gone.length = 0;
+  fetched.length = 0; voice.updates.length = 0; voice.followed.length = 0;
   S.me.privacy = { memberRelays: 'use' };
   answer = () => Promise.reject(new Error('offline'));
   A.followRelayChoice();
@@ -314,7 +318,7 @@ test('app.js: turning avoiding on or off fetches the relay list at once, a call 
   assert.deepEqual(fetched, ['GET /ice', 'GET /ice']);
   assert.equal(S.iceServers, ALL);
   assert.deepEqual(voice.updates, [ALL]);
-  assert.deepEqual(voice.gone, [], 'nothing left the list');
+  assert.deepEqual(voice.followed, [hostsOf(ALL)]);
   assert.equal(voice.avoided, 1, 'nothing starts over for using them again');
   // A list with member relays in it is fetched again every 10 minutes (one may have been paused or removed meanwhile),
   // but not before a call: only when its logins run out.
@@ -349,29 +353,78 @@ test('app.js: told a member relay came or went (ice:changed), the list is fetche
   const A = appIce({ S, api: (method, p) => { fetched.push(`${method} ${p}`); return answer(); }, voice, rankRelays: async (list, opts) => { ranked.push({ list, opts }); return { measured: 1 }; } });
   // The first list had only this server's relay, so nothing was measured: S.relayRanks stays unset.
   A.boot({ iceServers: [STUN, MAIN] });
-  // The owner approves member relays: every app is told, and asks again within 3 seconds (a moment apart each).
+  // The owner approves member relays: every app is told, and asks again within 3 seconds (a moment apart each). Told
+  // again before it has asked: that one fetch will bring it.
   A.iceChanged(); A.iceChanged();
-  assert.equal(A.later.length, 2);
-  assert.ok(A.later.every((x) => x.ms >= 0 && x.ms < 3000));
-  A.later[1].fn(); await sleep(5);
-  assert.deepEqual(fetched, ['GET /ice'], 'once (the first was replaced by the second)');
+  assert.equal(A.later.length, 1);
+  assert.ok(A.later[0].ms >= 0 && A.later[0].ms < 3000);
+  A.later[0].fn(); await sleep(5);
+  assert.deepEqual(fetched, ['GET /ice'], 'once');
   assert.equal(S.iceServers, ALL);
   // The new relays are measured now (unmeasured, every relay in the list would go into each call).
   assert.equal(ranked.length, 1);
   assert.deepEqual(ranked[0].opts, { force: false });
   assert.deepEqual(ranked[0].list, ALL);
   assert.deepEqual(S.relayRanks, { measured: 1 });
-  // The same relays again (new logins): nothing to measure.
+  // The same relays again (new logins), a minute later: nothing to measure.
   answer = () => Promise.resolve(ALL.map((e) => ({ ...e })));
-  A.iceChanged(); A.later[2].fn(); await sleep(5);
+  A.clock.t += 60000;
+  A.iceChanged(); A.later[1].fn(); await sleep(5);
   assert.equal(ranked.length, 1);
-  // A member relay paused: it leaves the list, and a call set up with it starts over without it.
+  // A member relay paused: it leaves the list, and the call engine follows the member relays still in it.
   answer = () => Promise.resolve([STUN, MAIN, FRA, NYC, PI, PC]);
-  A.iceChanged(); A.later[3].fn(); await sleep(5);
-  assert.deepEqual(voice.gone.at(-1), ['2001:db8:0:0:0:0:0:7']);
+  A.clock.t += 60000;
+  A.iceChanged(); A.later[2].fn(); await sleep(5);
+  assert.deepEqual(voice.followed.at(-1), hostsOf([PI, PC]));
   assert.equal(ranked.length, 2, 'the set changed: measured (from the cache when it can)');
   // ice:changed is followed.
   assert.match(read('public', 'js', 'app.js'), /\n {2}socket\.on\('ice:changed', \(\) => iceChanged\(\)\);\n/);
+});
+
+test('app.js: told over and over (a relay whose address keeps changing, say), the list is fetched a few times at once, then at most once a minute, and never put off for good', async () => {
+  const S = { me: { id: 'me', privacy: { memberRelays: 'use' } } };
+  const fetched = [];
+  const A = appIce({ S, api: () => { fetched.push(A.clock.t); return Promise.resolve(ALL); }, voice: fakeVoice(S), rankRelays: async () => ({}) });
+  A.boot({ iceServers: ALL });
+  const t0 = A.clock.t;
+  // Told every 2 seconds for 10 minutes; each fetch goes out when its timer fires.
+  const due = [];
+  for (let s = 0; s <= 600; s += 2) {
+    A.clock.t = t0 + s * 1000;
+    while (due.length && due[0].at <= A.clock.t) { const d = due.shift(); A.clock.t = d.at; d.fn(); A.clock.t = t0 + s * 1000; }
+    const n = A.later.length;
+    A.iceChanged();
+    if (A.later.length > n) due.push({ at: A.clock.t + A.later.at(-1).ms, fn: A.later.at(-1).fn });
+    await sleep(0);
+  }
+  const gaps = fetched.slice(1).map((t, i) => t - fetched[i]);
+  assert.ok(fetched[0] - t0 < 3000, 'the first one within 3 seconds');
+  assert.ok(fetched[4] - t0 < 20000, `five in a row at once (${fetched.slice(0, 5).map((t) => t - t0)})`);
+  assert.ok(gaps.slice(5).every((g) => g >= 55000 && g < 66000), `then about a minute apart (${gaps})`);
+  assert.ok(fetched.length >= 13 && fetched.length <= 16, `about 15 in 10 minutes, not 300 (${fetched.length}): well inside the 120 an hour the server allows`);
+  // Quiet for a while (the one still due goes out), the allowance comes back: a change then is fetched at once again.
+  for (const d of due) { A.clock.t = d.at; d.fn(); await sleep(0); }
+  const before = fetched.length;
+  A.clock.t += 6 * 60000;
+  A.iceChanged(); A.later.at(-1).fn(); await sleep(0);
+  assert.equal(fetched.length, before + 1);
+  assert.ok(A.later.at(-1).ms < 3000);
+});
+
+test('app.js: the background check fetches a list with member relays in it every 10 minutes, however long each fetch takes', async () => {
+  const S = { me: { id: 'me', privacy: { memberRelays: 'use' } } };
+  const fetched = [];
+  let A;
+  A = appIce({ S, api: async () => { fetched.push(A.clock.t); A.clock.t += 1500; return ALL; }, voice: fakeVoice(S), rankRelays: async () => ({}) });
+  A.boot({ iceServers: ALL });
+  const t0 = A.clock.t;
+  for (let k = 1; k <= 60; k++) { A.clock.t = t0 + k * 60000 + 3; A.timers[0].fn(); await sleep(0); }
+  assert.deepEqual(fetched.map((t) => Math.round((t - t0) / 60000)), [10, 20, 30, 40, 50, 60]);
+  // One fetched in between (told of a change) counts: the next is at the first check 10 minutes after that one.
+  fetched.length = 0;
+  A.clock.t = t0 + 64.25 * 60000; await A.freshIce({ force: true });
+  for (let k = 65; k <= 80; k++) { A.clock.t = t0 + k * 60000 + 3; A.timers[0].fn(); await sleep(0); }
+  assert.deepEqual(fetched.map((t) => t - t0), [64.25 * 60000, 75 * 60000 + 3]);
 });
 
 test('app.js and settings.js: the choice is followed wherever it changes, and calls ask for a fresh list first', () => {
@@ -381,6 +434,7 @@ test('app.js and settings.js: the choice is followed wherever it changes, and ca
   assert.match(onUpdate, /\n {4}if \(u\.id === S\.me\.id\) followRelayChoice\(\);\n/, 'your own user:update (PATCH /me/privacy here or on another device)');
   assert.match(app, /\n {2}followRelayChoice: \(\) => followRelayChoice\(\),/, 'settings.js can ask too');
   assert.match(app, /\n {4}ensureIce: \(\) => iceBeforeCall\(\),\n/);
+  assert.match(app, /\n {4}memberRelayHosts: \(\) => memberRelayHosts\(S\.iceServers \|\| S\.config\.iceServers \|\| \[\]\),\n/, 'the call engine knows which relays are members’');
   assert.match(read('public', 'js', 'settings.js'), /\n {6}if \(k === 'memberRelays' && app\.followRelayChoice\) app\.followRelayChoice\(\);/);
 });
 
@@ -629,23 +683,89 @@ test('voice: avoiding turned on during a call starts every connection that may u
   assert.deepEqual([...v.peers.values()], now);
 });
 
-test('voice: a member relay leaving the list (paused or removed by the owner) starts the connections set up with it over', async () => {
+test('voice: a member relay that left calls (paused or removed by the owner) starts the connections set up with it over; one that’s only offline, or no longer among the 8, doesn’t', async () => {
   useFakeWebRtc();
   const socket = fakeSocket();
   let list = ALL;
-  const v = voice({ socket, getIceServers: () => R.chooseIce(list, null), avoids: () => false, signSdp: async () => 'sig', verifySdp: async () => true });
+  const v = voice({ socket, getIceServers: () => R.chooseIce(list, null), memberRelayHosts: () => R.memberRelayHosts(list), avoids: () => false, signSdp: async () => 'sig', verifySdp: async () => true });
   v.channelId = 'room';
   const a = await v.createPeer('A', 'ua', true);
-  list = ALL.filter((e) => e !== PI);
+  assert.deepEqual([...a.memberHosts].sort(), hostsOf(ALL), 'it knows which of its relays are members’ (the owner’s aren’t)');
+  // PI is offline for a few minutes (or no longer among this person's 8): the server lists it by address only. The
+  // connection gets settings without it, and keeps going.
+  list = ALL.map((e) => (e === PI ? bare(PI) : e));
   v.updateIceServers();
-  v.relaysGone(new Set(['198.51.100.99']));
-  assert.equal(v.peers.get('A'), a, 'not for a relay it wasn’t set up with');
-  v.relaysGone(R.memberRelayHosts([PI]));
+  assert.ok(!a.pc.config.iceServers.some((e) => [].concat(e.urls).includes(first(PI))));
+  v.followMemberRelays(R.memberRelayHosts(list));
+  assert.equal(v.peers.get('A'), a, 'nothing starts over for a relay that’s still listed');
+  // An owner's region going offline isn't a member relay leaving.
+  list = list.filter((e) => e !== FRA);
+  v.updateIceServers();
+  v.followMemberRelays(R.memberRelayHosts(list));
+  assert.equal(v.peers.get('A'), a);
+  // Then the owner pauses PI: it's gone from the list. The connection was set up with it (and its settings had it
+  // since), so it may be going through it: it starts over, without it.
+  list = list.filter((e) => !(e.community && first(e) === first(PI)));
+  v.updateIceServers();
+  v.followMemberRelays(R.memberRelayHosts(list));
   await sleep(5);
   const p = v.peers.get('A');
   assert.notEqual(p, a);
   assert.ok(a.closed);
   assert.ok(!p.pc.config.iceServers.some((e) => [].concat(e.urls).includes(first(PI))));
+  assert.ok(!p.memberHosts.has('203.0.113.7'));
+  // A connection set up without member relays never starts over for one leaving.
+  list = [STUN, MAIN, NYC];
+  const b = await v.createPeer('B', 'ub', true);
+  assert.equal(b.memberHosts.size, 0);
+  v.followMemberRelays(new Set());
+  assert.equal(v.peers.get('B'), b);
+});
+
+test('app.js and voice: a list taken after a reconnect is followed too: a relay paused meanwhile starts its calls over, and avoiding turned on meanwhile starts every call that may use one over', async () => {
+  useFakeWebRtc();
+  const S = { me: { id: 'me', privacy: { memberRelays: 'use' } } };
+  const socket = fakeSocket();
+  const avoids = () => R.avoidsMemberRelays(S.me);
+  const v = voice({ socket, getIceServers: ({ avoid } = {}) => R.chooseIce(S.iceServers, null, null, { avoid: avoids() || avoid }), memberRelayHosts: () => R.memberRelayHosts(S.iceServers), avoids,
+    signSdp: async () => 'sig', verifySdp: async () => true });
+  const avoided = []; const orig = v.avoidChanged.bind(v); v.avoidChanged = () => { avoided.push(1); return orig(); };
+  let answer = [STUN, MAIN, FRA, PI];
+  const A = appIce({ S, api: async () => answer, voice: v, rankRelays: async () => ({}) });
+  A.boot({ iceServers: [STUN, MAIN, FRA, PI] });
+  v.channelId = 'room';
+  const a = await v.createPeer('A', 'ua', true);
+  assert.ok(a.memberHosts.has('203.0.113.7'));
+  // The owner pauses PI while this device's connection to the server is down (ice:changed missed). Back, the bootstrap's
+  // list doesn't have it: the call set up with it starts over without it.
+  A.boot({ iceServers: [STUN, MAIN, FRA] });
+  await sleep(5);
+  const b = v.peers.get('A');
+  assert.notEqual(b, a, 'started over');
+  assert.ok(!b.memberHosts.size && !b.pc.config.iceServers.some((e) => [].concat(e.urls).includes(first(PI))));
+  // And a later fetch with the same list changes nothing.
+  answer = [STUN, MAIN, FRA];
+  await A.freshIce({ force: true });
+  assert.equal(v.peers.get('A'), b);
+  // PI back. Avoiding is turned on on another device while this one is away: the bootstrap brings the choice and the
+  // avoider's list. Every connection that may use a member relay starts over without them, telling the other side.
+  A.boot({ iceServers: [STUN, MAIN, FRA, PI] });
+  await v.reconnectPeer('A');
+  const c = v.peers.get('A');
+  assert.ok(c.memberHosts.has('203.0.113.7') && !c.noMember);
+  S.me = { id: 'me', privacy: { memberRelays: 'avoid' } };
+  A.boot({ iceServers: [STUN, MAIN, FRA, bare(PI)] });
+  await sleep(5);
+  assert.equal(avoided.length, 1);
+  const d = v.peers.get('A');
+  assert.notEqual(d, c);
+  assert.ok(d.noMember && !d.pc.config.iceServers.some((e) => [].concat(e.urls).includes(first(PI))));
+  // The user:update that may come after it changes nothing more; nor does another reconnect.
+  A.followRelayChoice();
+  A.boot({ iceServers: [STUN, MAIN, FRA, bare(PI)] });
+  await sleep(5);
+  assert.equal(avoided.length, 1);
+  assert.equal(v.peers.get('A'), d);
 });
 
 test('Settings → Calls "Test relay" tests this server’s own relay only (a member’s relay answering says nothing about these settings)', () => {

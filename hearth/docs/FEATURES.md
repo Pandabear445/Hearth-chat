@@ -2035,16 +2035,32 @@ connection that may use a member relay starts over (`voice.avoidChanged`). Befor
 again when it's more than 10 minutes old. What it can't stop: someone running a modified app.
 
 **Keeping relay lists current**: the server emits `ice:changed` when a member relay comes into calls or leaves them,
-and every app fetches `/api/ice` again within 3 seconds (`iceChanged` in `app.js`); a list with member relays in it is
-also fetched again every 10 minutes. Member relays that leave the list start the connections set up with them over
-(`voice.relaysGone`), and relays not measured yet are measured (otherwise every relay in the list would go into each
-call). Settings → Calls → Test relay tests this server's own relay only.
+and every app fetches `/api/ice` again within 3 seconds (`iceChanged` in `app.js`): five in a row at once, then at most
+once a minute however often it's told; a list with member relays in it is also fetched again once it's 10 minutes old (checked every minute). Next to
+its 8 with logins, an app that uses member relays is told where every other approved one is (no login: never used or
+measured), so a member relay that's no longer in the list at all left calls (paused, removed, its member suspended) and
+the connections set up with it start over (`voice.followMemberRelays`), while one that's only offline, or no longer
+among the person's 8, leaves calls alone. A list taken after a reconnect (the bootstrap's) is followed the same way, and
+so is an avoid choice made on another device meanwhile. Relays not measured yet are measured (otherwise every relay in
+the list would go into each call). Settings → Calls → Test relay tests this server's own relay only.
+
+**A member relay's address** (`POST /api/regions/:id/heartbeat`): an IPv4 address, the one its coturn hands out
+(`relayIp`), nobody else's relay's, and either the one the check-in comes from or one where the relay proves it is this
+relay: the server asks it for a relayed address under a login made with its own secret, and only a signed answer counts
+(`server/turnprobe.js`; for Hearth behind a proxy such as Cloudflare's, or a check-in over IPv6). It may change 4 times in
+18 hours (then 429 until the oldest change is 18 hours old); changes of an approved relay go to the audit log. Check-ins
+are limited to 30 a minute per network (an IPv6 /64 as one) and per relay. An offer takes one of the 20 waiting places
+only once its machine checks in. The agent (version 5) checks in over IPv4 (any way that works when Hearth has no IPv4
+address), and follows a new address on the machine's own network as well as a new public one (`relay-ip` and
+`external-ip`). On the machine, an nftables rule (`/etc/hearth-region/relay-guard.nft`, loaded by a drop-in each time
+coturn starts) keeps the relay from passing anything on to the machine itself, except to its own relay ports: coturn
+relays to its own addresses whatever `denied-peer-ip` says.
 
 The rest of the server side (per-relay pseudonyms, at most 8 member relays per person, the uninstall script, the
 agent switching itself off after a day of refusals): README → Member relays, and SECURITY.md.
 
 Tests:
-- `test/member-relays.test.js` (server);
-- `test/relays-client.test.js` (choosing relays, dropping candidates);
+- `test/member-relays.test.js` (server, the agent, the installer and uninstaller, the address check against coturn);
+- `test/relays-client.test.js` (choosing relays, dropping candidates, following the list);
 - `test/member-relays-ui.test.js` (the pages' words and wiring);
 - the e2e flow "member relays".

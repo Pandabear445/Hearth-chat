@@ -584,6 +584,8 @@ function startApp() {
     // and the others in the call are told, so their connections with us leave member relays out too.
     avoidHosts: () => (avoidsMemberRelays(S.me) ? memberRelayHosts(S.iceServers || S.config.iceServers || []) : new Set()),
     avoids: () => avoidsMemberRelays(S.me),
+    // Where the member relays in this app's list are (so it knows which relays a connection is set up with are members').
+    memberRelayHosts: () => memberRelayHosts(S.iceServers || S.config.iceServers || []),
     myId: () => S.me && S.me.id,
     onNotice: (text, kind) => toast(text, kind),
     onRegion: (room, region, version) => applyCallRegion({ room, region, version }),
@@ -1042,50 +1044,79 @@ function startApp() {
 
 // Relay logins run out 12 to 18 hours after they're handed out, and an app can stay open for days without
 // reconnecting. So new ones are fetched before a call when they're about to run out, and checked every
-// 10 minutes in the background (calls in progress switch to them too).
+// minute in the background (calls in progress switch to them too).
 // { force }: fetch now, however new they are. { maxAge }: also when the list is older than that (in ms).
 // { remeasure }: measure the relays again afterwards, even the ones measured before.
-let iceAt = 0; // when S.iceServers came from the server
+let iceAt = 0; // when S.iceServers was asked for (its age counts from then)
 let iceFor = null; // and for which choice: avoidsMemberRelays(S.me) then (the list depends on it, see followRelayChoice)
 let iceAsked = 0; // the latest fetch: an older one that answers after it is stale (the choice may have changed since)
+const ICE_CHECK = 10 * 60000; // how old a list with member relays in it gets before it's fetched again
 // The relays in a list this app may use (with a login), as one string to compare.
 const relaySet = (list) => usableIce(list, avoidsMemberRelays(S.me)).filter(isRelay).map((e) => [].concat(e.urls).join(',')).sort().join(' ');
+// A new relay list, from GET /api/ice or the bootstrap. A call in progress follows it: new relay logins from its next
+// network change on, and a connection set up with a member relay that isn't in the list at all any more (the owner paused
+// or removed it, or its member was suspended) starts over without it (voice.js followMemberRelays). A member relay
+// that's only offline for a few minutes, or that's no longer among this person's 8, is still in the list (by address,
+// without a login), so the calls set up with it are left alone. Returns the list it replaced.
+function takeIce(list, avoid, at) {
+  const before = S.iceServers;
+  S.iceServers = list; iceAt = at; iceFor = avoid;
+  if (voice) {
+    voice.updateIceServers();
+    voice.followMemberRelays(memberRelayHosts(list));
+  }
+  return before;
+}
 async function freshIce({ force = false, maxAge = Infinity, remeasure = false } = {}) {
   if (!force && iceFor === avoidsMemberRelays(S.me) && !iceStale(S.iceServers) && Date.now() - iceAt < maxAge) return;
   const n = ++iceAsked;
   const avoid = avoidsMemberRelays(S.me);
+  const asked = Date.now();
   try {
     const list = await api('GET', '/ice');
     if (n !== iceAsked) return;
-    const before = S.iceServers;
-    S.iceServers = list; iceAt = Date.now(); iceFor = avoid;
-    if (voice) {
-      voice.updateIceServers();
-      // Member relays this app had a login for and now hasn't (the owner paused or removed one, its member was
-      // suspended, or this person started avoiding them): a connection set up with one starts over without it.
-      const still = memberRelayHosts(usableIce(list, false));
-      const gone = new Set([...memberRelayHosts(usableIce(before, false))].filter((x) => !still.has(x)));
-      if (gone.size) voice.relaysGone(gone);
-    }
+    const before = takeIce(list, avoid, asked);
     // Relays not measured yet (approved since, say) are measured now. Unmeasured, every relay in the list would go
     // into each call, so every member relay among them would see this device's address.
     if (remeasure || !S.relayRanks || relaySet(list) !== relaySet(before)) rankNearest({ force: remeasure });
   } catch { /* keep the old ones: the next check is soon */ }
 }
-// The background check. A list with member relays in it is also fetched again once it's 10 minutes old: one the owner
-// paused or removed meanwhile (the server says so at once, ice:changed, but this app may have missed it) isn't used
-// for long, and an avoider learns about relays approved since.
-setInterval(() => { if (S.me) freshIce((S.iceServers || []).some(isMemberRelay) ? { maxAge: 10 * 60000 } : {}); }, 10 * 60000);
+// The bootstrap's list (at the start, and after every reconnect), taken like any other. A choice made on another device
+// while this one was away (its user:update missed) is followed as followRelayChoice would have: turned on, every
+// connection in a call that may use a member relay starts over without them.
+function bootIce(list, at) {
+  const was = relayChoice;
+  iceAsked++; // (a fetch still on its way is older than this list)
+  takeIce(list, avoidsMemberRelays(S.me), at);
+  relayChoice = iceFor;
+  if (relayChoice && was === false && voice) voice.avoidChanged();
+}
+// The background check, every minute: a list whose logins are about to run out is fetched again, and so is a list with
+// member relays in it once it's 10 minutes old (counted from when it was asked for, so it really is every 10 minutes):
+// one the owner paused or removed meanwhile (the server says so at once, ice:changed, but this app may have missed it)
+// isn't used for long, and an avoider learns about relays approved since.
+setInterval(() => { if (S.me) freshIce((S.iceServers || []).some(isMemberRelay) ? { maxAge: ICE_CHECK } : {}); }, 60000);
 // Before a call. Someone who avoids member relays drops the other side's addresses on any of them, so their list
 // (where every member relay is, without logins) is fetched again when it's more than 10 minutes old, to know the
 // relays approved since.
-const iceBeforeCall = () => freshIce(avoidsMemberRelays(S.me) ? { maxAge: 10 * 60000 } : {});
-// A member relay came into calls or left them: the list is fetched again now (a moment apart on each device, so
-// everyone's apps don't ask at the same instant).
+const iceBeforeCall = () => freshIce(avoidsMemberRelays(S.me) ? { maxAge: ICE_CHECK } : {});
+// A member relay came into calls or left them: the list is fetched again a moment later (a moment apart on each device,
+// so everyone's apps don't ask at the same instant). A few changes in a row are each fetched at once (an owner approving
+// a relay and pausing it again); past that, once a minute however often this comes, and whatever changed meanwhile comes
+// with that fetch. (The server lets each person fetch it 120 times an hour.)
+const ICE_CHANGED_BURST = 5;
+const ICE_CHANGED_EVERY = 60000;
 let iceChangeTimer = null;
+let iceChangeTokens = ICE_CHANGED_BURST; // fetches that may go out at once, one more every ICE_CHANGED_EVERY
+let iceChangeTokensAt = null;
 function iceChanged() {
-  clearTimeout(iceChangeTimer);
-  iceChangeTimer = setTimeout(() => { if (S.me) freshIce({ force: true }); }, Math.floor(Math.random() * 3000));
+  if (iceChangeTimer) return; // one is coming: it brings this change too
+  const t = Date.now();
+  if (iceChangeTokensAt !== null) iceChangeTokens = Math.min(ICE_CHANGED_BURST, iceChangeTokens + (t - iceChangeTokensAt) / ICE_CHANGED_EVERY);
+  iceChangeTokensAt = t;
+  const wait = (iceChangeTokens >= 1 ? 0 : (1 - iceChangeTokens) * ICE_CHANGED_EVERY) + Math.floor(Math.random() * 3000);
+  iceChangeTokens -= 1;
+  iceChangeTimer = setTimeout(() => { iceChangeTimer = null; if (S.me) freshIce({ force: true }); }, wait);
 }
 // With relays in several regions, find the nearest ones in the background (cached for 6 hours; force: measure again
 // now). Someone who avoids member relays never measures one (measuring shows the relay this device's IP address).
@@ -1139,7 +1170,7 @@ async function loadBootstrap() {
   S.me = b.me;
   drafts = createDrafts(S.me.id);
   S.mediaToken = b.mediaToken;
-  S.iceServers = b.iceServers; iceAt = Date.now(); iceAsked++; iceFor = relayChoice = avoidsMemberRelays(S.me);
+  bootIce(b.iceServers, asked);
   setTimeout(() => rankNearest(), 4000);
   S.e2eeSince = rememberE2eeSince(b.e2eeSince);
   S.users = b.users;
