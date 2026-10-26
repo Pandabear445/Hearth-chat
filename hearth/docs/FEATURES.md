@@ -1945,6 +1945,11 @@ shown.
 - Ways in: a header button with the count, and the ⋯ menus.
 - Each card shows:
   - who wrote it, when, and where it is;
+  - what its row in the chat says about who could have written it, from the same code (`messageTrust`): BOT and a
+    webhook's own name and picture, an older message nothing proves the author of, a key or signature that doesn't
+    check out, the server having moved, repeated or rolled it back. A card the word filter hides keeps the warnings,
+    as the chat's row does. A card is often a copy the panel fetched by itself, so a server could serve a message
+    there instead of in the chat: it never says less;
   - the text, through the word filter, with blocked authors behind Show;
   - the pinned picture as wide as the panel, or the message's pictures as thumbnails that open the viewer;
   - Jump, and × to unpin.
@@ -1955,7 +1960,14 @@ server, cleared on sign-out (`clearLocalCopies`).
 **Loading and live updates.**
 - A message the chat hasn't loaded comes from `GET /messages/:id/locate`, then that conversation's `?around=`
   page, at most 2 at a time.
-- Edits, deletes, disappearing messages and new keys update the cards.
+- Edits, deletes, disappearing messages and new keys update the cards. Back online after being away, or opened
+  again, it starts over from the chat's copies and the server: the message just pinned is only handed over to the
+  next drawing, so an edit or delete missed meanwhile shows.
+- A flag turning up later shows on the card too: the chat loading another copy of the message (or deleting it), or
+  the server saying a reply's original is still there, draws the panel again, and only the cards whose flags changed
+  are drawn anew.
+- A disappearing message goes with everything kept of it (its decrypted pictures too) whether a redraw or the timer
+  finds it first.
 - Messages that are gone, or in a chat you can no longer open, say so.
 - Cards from DMs and group chats are hidden while you share your screen.
 

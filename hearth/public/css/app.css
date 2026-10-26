@@ -3469,6 +3469,11 @@ textarea.pn-box { flex: 1; min-height: 38px; max-height: 140px; padding: 8px 11p
 .sv-text { font-size: 14px; color: var(--msg-text); overflow-wrap: anywhere; max-height: 50vh; overflow-y: auto; }
 .sv-veil { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0; font-size: 13.5px; color: var(--muted); }
 .sv-veil .ic { width: 15px; height: 15px; }
+/* Its flags, as on its row in the chat (a bot's, an older message, a key or signature that doesn't check out, the
+   server having moved it): each as wide as its words, not the card. */
+.sv-flags { display: flex; flex-wrap: wrap; gap: 4px; }
+.sv-flags .msg-flag { margin-top: 0; }
+.sv-meta .bot-tag { flex: none; }
 /* A card with nothing in it but a line (loading, gone, hidden while sharing your screen): the × in its corner. */
 .sv-note { display: flex; align-items: center; gap: 8px; min-height: 26px; padding-right: 30px; font-size: 13.5px; color: var(--muted); }
 .sv-note .ic { width: 16px; height: 16px; flex: none; }

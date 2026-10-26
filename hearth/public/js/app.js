@@ -3877,10 +3877,16 @@ const versions = createVersions({ getItem: (k) => localStorage.getItem(k), setIt
   () => (S.me && S.me.id ? 'hearth.msgv.' + S.me.id : ''));
 const copies = createCopies();
 // Called for every message as it's decrypted (binding.js noteMessage): a second id for the same message, or a newer
-// edit, redraws the other copies too, so each of them carries the flag.
+// edit, redraws the other copies too, so each of them carries the flag. The side view's too: it holds one of them, or
+// a copy of this very message it fetched itself (the older edit now), which none of the chat's lists have.
 function noteBinding(m) {
-  for (const id of noteMessage(m, keyOfMessage(m), { versions, copies })) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  const ids = noteMessage(m, keyOfMessage(m), { versions, copies });
+  for (const id of ids) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  if (SIDE.messages().some((x) => ids.includes(x.id) || (x.id === m.id && x !== m))) later(redrawSide);
 }
+// The side view drawn again (side-view.js refresh: only the cards whose flags changed are drawn anew), once a frame
+// however many ask.
+const redrawSide = () => SIDE.refresh();
 // A message loaded anywhere in this conversation: its list, a thread, a thread's first message.
 function loadedMessage(id) {
   for (const st of Object.values(S.msgs)) { const m = st && st.list && st.list.find((x) => x.id === id); if (m) return m; }
@@ -3904,10 +3910,13 @@ const originals = createOriginals(async (id) => {
     throw e;
   }
 });
-// The loaded replies to that message, drawn again (it turned out to be still there: they're flagged now).
+// The loaded replies to that message, drawn again (it turned out to be still there: they're flagged now), and the
+// side view's cards of replies to it (often copies it fetched itself, so in none of these lists).
 function redrawRepliesTo(id) {
   const all = [...Object.values(S.msgs).flatMap((st) => (st && st.list) || []), ...Object.values(S.threads).flatMap((th) => [th.root, ...(th.list || [])])];
-  for (const x of all) if (x && x.dec && x.dec.b && x.dec.b.r === id) later(() => replaceMessageEl(x));
+  const replies = (x) => !!x && !!x.dec && !!x.dec.b && x.dec.b.r === id;
+  for (const x of all) if (replies(x)) later(() => replaceMessageEl(x));
+  if (SIDE.messages().some(replies)) later(redrawSide);
 }
 // { issues, notes, … } for a message (binding.js bindingState), or null when it carries nothing to check. A reply
 // shown without its original, which isn't loaded here, says "no longer available" until the server is asked whether
@@ -3918,9 +3927,12 @@ function bindingOfMessage(m) {
   if (st && st.notes.includes('replyGone')) originals.ask(st.b.r, () => redrawRepliesTo(st.b.r));
   return st;
 }
-// Messages deleted or disappeared no longer count as copies of another: what's left of them is drawn again.
+// Messages deleted or disappeared no longer count as copies of another: what's left of them is drawn again, in the
+// side view too.
 function forgetBindings(key, gone) {
-  for (const id of copies.drop(key, gone)) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  const ids = copies.drop(key, gone);
+  for (const id of ids) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  if (SIDE.messages().some((x) => ids.includes(x.id))) later(redrawSide);
 }
 // The one small flag for a message the server may have moved, repeated or rolled back, naming what didn't match.
 function bindingFlag(m, st) {
@@ -4387,6 +4399,38 @@ function postFlag(m, author) {
   if (d.legacy) return { label: 'Older message \u2014 not end-to-end encrypted, sender not verified', tip: 'Sent before end-to-end encryption was turned on. Protected by the server\u2019s encryption only, and nothing proves who wrote it: the server could have.' };
   return null;
 }
+// What a message's row says about who wrote it, besides the words: the name and picture it goes by (a webhook post's
+// own, hookFace), the BOT tag, and its flags (a bot's or an older message's, postFlag; a key that isn't the person's
+// current trusted one; a signature that doesn't match; the server having moved, repeated or rolled it back,
+// bindingFlag). The chat's rows (fillMessage) and the side view's cards both take it from here, so a message never
+// shows anywhere with less said about it than in the chat: else a server could serve it there instead, under its
+// author's name with nothing to say it may not be theirs.
+//   flags({ warnings: true }): only the warnings, which stay on a row even when the word filter hides it (filteredEl).
+//   sig: all of it in one string, so something drawn from it is drawn again when it changes (a copy of the message
+//   loaded elsewhere can turn up a binding issue, say).
+// bind: bindingOfMessage(m), when the caller has it already.
+function messageTrust(m, author, bind = bindingOfMessage(m)) {
+  const d = m.dec;
+  const notes = [];
+  const flag = postFlag(m, author);
+  if (flag) notes.push({ label: flag.label, tip: flag.tip });
+  // Opened or signed with a key that isn't the person's current, trusted one (secure.js keysOf).
+  else if (d && d.keyNote === 'listed') notes.push({ warn: true, label: '\u26a0 Older key \u2014 not verified', tip: 'Written with a key the server says this person had before they reset their password. This device never saw that key as theirs and it can\u2019t be checked with safety numbers, so the server could have written this.' });
+  else if (d && d.keyNote === 'new') notes.push({ warn: true, label: '\u26a0 New key \u2014 not verified yet', tip: 'This person\u2019s security key changed and you haven\u2019t verified the new one yet. Compare safety numbers from their profile.' });
+  else if (d && d.keyNote === 'pinned') notes.push({ label: 'Written with an older key', tip: 'Written with a key this person had before they changed keys. This device trusted that key back then.' });
+  else if (d && d.verified === false && !m.dmId) notes.push({ warn: true, label: '\u26a0 Sender could not be verified', tip: 'The signature on this message does not match the sender\u2019s key.' });
+  if (bind && bind.issues.length) notes.push({ warn: true, bind });
+  // The first DM format bound nothing in (not even who wrote it): say so, quietly.
+  else if (m.dmId && d && d.legacyFormat) notes.push({ label: 'Older encryption format', tip: 'Encrypted by an early version of Hearth that didn\u2019t bind the conversation or the sender into the message, so the server could show it as written by either of you.' });
+  const bot = isBotPost(author, m);
+  return {
+    face: hookFace(author, m),
+    bot,
+    sig: [bot ? 'bot' : '', ...notes.map((n) => (n.bind ? `bind:${n.bind.issues.join(',')}:${n.bind.copies}:${n.bind.top}` : n.label))].join('|'),
+    flags: ({ warnings = false } = {}) => notes.filter((n) => n.warn || !warnings)
+      .map((n) => (n.bind ? bindingFlag(m, n.bind) : h('div', { class: `msg-flag${n.warn ? ' bad' : ''}`, 'data-tip': n.tip }, n.label))),
+  };
+}
 function messageElRevealed(m, prev, ctx) {
   const el = h('div', { class: 'msg', dataset: { mid: m.id, ctx }, tabindex: '-1' });
   return fillMessage(el, m, prev, ctx, { author: getUser(m.authorId), mine: false, isGrouped: false, text: textOf(m) });
@@ -4442,6 +4486,7 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
   // In a server, people go by their nicknames there (none in DMs and group chats).
   const server = msgServer(m);
   const bind = bindingOfMessage(m);
+  const trust = messageTrust(m, author, bind);
   if (m.reply) {
     const ru = getUser(m.reply.authorId);
     // A quote the server left out for its size (big: the owner's, with many files): the original says what it was,
@@ -4472,13 +4517,13 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
   }
   const gutter = h('div', { class: 'msg-gutter', dataset: { time: fmtTime(m.createdAt) } });
   if (isGrouped) gutter.append(h('time', { class: 'msg-hover-time', datetime: new Date(m.createdAt).toISOString() }, fmtTime(m.createdAt)));
-  else gutter.append(h('button', { class: 'msg-av', 'data-pop-anchor': '', 'aria-label': `View ${nameInServer(server, author)}'s profile`, onclick: (e) => openProfilePop(e.currentTarget, author.id, 'right') }, avatarEl(hookFace(author, m), 40)));
+  else gutter.append(h('button', { class: 'msg-av', 'data-pop-anchor': '', 'aria-label': `View ${nameInServer(server, author)}'s profile`, onclick: (e) => openProfilePop(e.currentTarget, author.id, 'right') }, avatarEl(trust.face, 40)));
   const body = h('div', { class: 'msg-body' });
   if (!isGrouped) {
     const rs = roleStyle(server, author.id);
     body.append(h('div', { class: 'msg-head' },
-      h('button', { class: 'msg-name', 'data-pop-anchor': '', onclick: (e) => openProfilePop(e.currentTarget, author.id, 'right') }, nameEl(hookFace(author, m), { roleColor: rs.color, server })),
-      isBotPost(author, m) ? h('span', { class: 'bot-tag' }, 'BOT') : null,
+      h('button', { class: 'msg-name', 'data-pop-anchor': '', onclick: (e) => openProfilePop(e.currentTarget, author.id, 'right') }, nameEl(trust.face, { roleColor: rs.color, server })),
+      trust.bot ? h('span', { class: 'bot-tag' }, 'BOT') : null,
       rs.iconRole ? h('span', { class: 'role-icon', 'data-tip': rs.iconRole.name }, rs.iconRole.icon) : null,
       rs.owner ? h('span', { class: 'role-icon', 'data-tip': 'Server owner' }, '\uD83D\uDC51') : null,
       h('time', { class: 'msg-time', datetime: new Date(m.createdAt).toISOString(), title: new Date(m.createdAt).toLocaleString() }, fmtStamp(m.createdAt)),
@@ -4525,16 +4570,7 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
       body.append(h('div', { class: 'wf-blur', onclick: () => revealFiltered(m) }, out,
         h('button', { class: 'wf-blur-show', type: 'button' }, icon('eyeOff'), h('span', null, `${filterLabel(blur)} · Show`))));
     }
-    const flag = postFlag(m, author);
-    if (flag) body.append(h('div', { class: 'msg-flag', 'data-tip': flag.tip }, flag.label));
-    // Opened or signed with a key that isn't the person's current, trusted one (secure.js keysOf).
-    else if (m.dec && m.dec.keyNote === 'listed') body.append(h('div', { class: 'msg-flag bad', 'data-tip': 'Written with a key the server says this person had before they reset their password. This device never saw that key as theirs and it can\u2019t be checked with safety numbers, so the server could have written this.' }, '\u26a0 Older key \u2014 not verified'));
-    else if (m.dec && m.dec.keyNote === 'new') body.append(h('div', { class: 'msg-flag bad', 'data-tip': 'This person\u2019s security key changed and you haven\u2019t verified the new one yet. Compare safety numbers from their profile.' }, '\u26a0 New key \u2014 not verified yet'));
-    else if (m.dec && m.dec.keyNote === 'pinned') body.append(h('div', { class: 'msg-flag', 'data-tip': 'Written with a key this person had before they changed keys. This device trusted that key back then.' }, 'Written with an older key'));
-    else if (m.dec && m.dec.verified === false && !m.dmId) body.append(h('div', { class: 'msg-flag bad', 'data-tip': 'The signature on this message does not match the sender\u2019s key.' }, '\u26a0 Sender could not be verified'));
-    if (bind && bind.issues.length) body.append(bindingFlag(m, bind));
-    // The first DM format bound nothing in (not even who wrote it): say so, quietly.
-    else if (m.dmId && m.dec && m.dec.legacyFormat) body.append(h('div', { class: 'msg-flag', 'data-tip': 'Encrypted by an early version of Hearth that didn\u2019t bind the conversation or the sender into the message, so the server could show it as written by either of you.' }, 'Older encryption format'));
+    body.append(...trust.flags());
   }
   if (m.reactions && m.reactions.length) {
     body.append(h('div', { class: 'reactions' }, m.reactions.map((r) => {
@@ -5414,6 +5450,11 @@ function openViewer(fromImg, { name, download, items: given = null, index = 0, s
   // A tile of Photos & videos that opened it: which one, should it have been drawn anew meanwhile (an edit).
   const openerTile = opener && opener.closest ? opener.closest('.mp-tile') : null;
   const openerGid = openerTile ? openerTile.dataset.gid : null;
+  // A card of the side view that opened it: which one, and which of its pictures (drawn anew meanwhile: an edit, the
+  // word filter, a key that came, or unpinned and pinned again from this viewer's bar).
+  const openerCard = opener && opener.closest ? opener.closest('.sv-card') : null;
+  const openerSid = openerCard ? openerCard.dataset.sid : null;
+  const openerAt = openerCard ? [...openerCard.querySelectorAll('.sv-open')].indexOf(opener) : -1;
   let items;
   let idx;
   if (Array.isArray(given) && given.length) {
@@ -5583,9 +5624,17 @@ function openViewer(fromImg, { name, download, items: given = null, index = 0, s
     above.disconnect();
     if ((morePop && morePop.isConnected) || $('#layer > .popover.over-viewer')) closePopover();
     // Back to whatever opened it (the picture in the chat), like other dialogs: for a tile of Photos & videos drawn anew
-    // while it was open, the same photo's tile.
-    const tile = opener && !opener.isConnected && openerGid ? $$('#members .mp-tile').find((x) => x.dataset.gid === openerGid) : null;
-    const back = tile ? tile.querySelector('.mp-cover') || tile.querySelector('.mp-open') : opener;
+    // while it was open, the same photo's tile; for a side view card, the same picture on that card drawn anew. Gone
+    // from the panel (unpinned from here, or Pin to side swapped Photos & videos for the side view): the panel's first
+    // card, else its own buttons, rather than nowhere (the page).
+    const back = (() => {
+      if (!opener || opener.isConnected || (!openerGid && !openerSid)) return opener;
+      const tile = openerGid ? $$('#members .mp-tile').find((x) => x.dataset.gid === openerGid) : null;
+      if (tile) return tile.querySelector('.mp-cover') || tile.querySelector('.mp-open');
+      const card = openerSid ? $$('#members .sv-card').find((x) => x.dataset.sid === openerSid) : null;
+      if (card) return card.querySelectorAll('.sv-open')[openerAt] || card.querySelector('.sv-open, .sv-x');
+      return $('#members .sv-card button') || $('#members button') || $('#main');
+    })();
     if (back && back.isConnected && back !== document.body) back.focus({ preventScroll: true });
   };
   const keys = (e) => {
@@ -6860,13 +6909,19 @@ const SIDE = createSideView({
   place: (key) => sidePlace(key),
   // DMs and group chats while you share your screen, unless you chose to show that one (Show while sharing).
   hidden: (key) => { const p = sidePlace(key); return !!p && p.private && hiddenWhileSharing(key); },
-  author: (m) => { const u = getUser(m.authorId); return [avatarEl(u, 20), nameEl(u, { server: msgServer(m) })]; },
+  // Who wrote it, and what's said about that, as on its row in the chat (messageTrust): a webhook post's own name and
+  // picture with BOT, and the flags for a bot's or an older message, a key or signature that doesn't check out, or the
+  // server having moved, repeated or rolled it back. A card is often a copy the side view fetched by itself, so a
+  // server could serve it there instead of in the chat: it must say no less.
+  author: (m) => { const t = messageTrust(m, getUser(m.authorId)); return [avatarEl(t.face, 20), nameEl(t.face, { server: msgServer(m) }), t.bot ? h('span', { class: 'bot-tag' }, 'BOT') : null]; },
+  trust: (m) => messageTrust(m, getUser(m.authorId)),
   stamp: (ts) => fmtStamp(ts),
-  // Its words as the chat draws them (Markdown, mentions, spoilers a click shows), or a poll's question.
+  // Its words as the chat draws them (Markdown unless that's off, mentions, @everyone only from someone allowed to use
+  // it, spoilers a click shows), or a poll's question.
   textEl: (m) => {
     const t = textOf(m);
     if (t) {
-      return h('div', { class: 'sv-text md', html: md(t, { mentionName: S.me.username }),
+      return h('div', { class: 'sv-text md', html: P.chat.markdown ? md(t, { mentionName: S.me.username, everyone: senderMayPingEveryone(m) }) : escapeText(t),
         onclick: (e) => { const sp = e.target.closest('.md-spoiler'); if (sp) sp.classList.add('revealed'); } });
     }
     return m.dec && m.dec.p ? h('div', { class: 'sv-text' }, h('em', null, `Poll: ${m.dec.p.q}`)) : null;

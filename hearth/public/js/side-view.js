@@ -13,9 +13,10 @@
 // asking the server nothing, and only a card whose message changed (an edit, a block, the word filter, sharing your
 // screen) is drawn anew. Closing the panel lets go of it all (reset); the list stays.
 //
-// It keeps up with what happens (the app calls onUpdate, onDelete, onKeys, expire): an edit shows, a deleted or
-// disappeared message says it's no longer available (its decrypted files go), and so does one in a conversation you're
-// no longer in. Items from DMs and group chats are covered while you share your screen.
+// It keeps up with what happens (the app calls onUpdate, onDelete, onKeys, expire, refresh): an edit shows, a deleted
+// or disappeared message says it's no longer available (its decrypted files go), and so does one in a conversation
+// you're no longer in, and a flag the chat's copies turn up shows on its card too. Items from DMs and group chats are
+// covered while you share your screen.
 import { h, icon, fmtSize } from './util.js';
 import { whenVisible } from './media.js';
 import { mediaEntries } from './media-panel.js';
@@ -125,8 +126,10 @@ export function fileUrlsOf(msgs, files) {
 //   keyOf(m): its conversation; files(m), readable(m), expired(m), disappears(m); blocked(userId); veiled(m): what the
 //   word filter does to it (null, or { action }); filterLabel(wf); reveal(m) ("Show" on one the filter hides);
 //   place(key): { label, kind: 'dm'|'group'|'channel', private } for a conversation you're in, else null;
-//   hidden(key): is it covered now (sharing your screen); author(m): its author's avatar and name; stamp(ts);
-//   textEl(m): its words as the chat draws them, or null;
+//   hidden(key): is it covered now (sharing your screen); author(m): its author's avatar and name, as its row in the
+//   chat shows them; trust(m): what that row says about who could have written it and where the server put it,
+//   { sig, flags({ warnings }) } (app.js messageTrust: flags are elements, warnings the ones a hidden row keeps too,
+//   sig all of it as a string); stamp(ts); textEl(m): its words as the chat draws them, or null;
 //   thumb(m, f) and full(m, f): Promises of something to show; queue(fn, { front }): the app's download queue;
 //   autoloadMax: a picture pinned on its own loads in full by itself up to this size; thumbMax: a message's pictures
 //   without a thumbnail load by themselves up to this size; open(from, { items, index }): the viewer; download(m, f);
@@ -138,7 +141,10 @@ export function createSideView(deps) {
   let items = null; // this account's list (read when first needed)
   let owner = null; // whose list that is
   let st = null; // the open panel's state, or null
-  let seed = null; // the message just pinned, as the app had it: the panel takes it rather than asking for it again
+  // The message just pinned, as the app had it: the panel's next drawing takes it rather than asking for it again. Only
+  // that once (render lets go of it): kept any longer, it would come before fresher copies after a reconnect or the
+  // panel closing, so an edit or a delete missed meanwhile would never show.
+  let seed = null;
   // Messages deleted or disappeared (onDelete), with the thread replies that went with their thread's first message: a
   // copy of one still held somewhere is never shown again. Kept while the panel is closed too (an id is never reused).
   const deleted = new Set();
@@ -276,32 +282,50 @@ export function createSideView(deps) {
     s.parts = { head: deps.panelHead('Pinned to side', 'Only on this device'), scroll, listEl, empty };
   }
 
-  // How a card shows now, and the signature of that: the card is drawn again only when it changes.
+  // How a card shows now, and the signature of that: the card is drawn again only when it changes. It only looks:
+  // whatever has to change first (a message whose time came, one in a conversation you left) render has done.
   // (Spoilers uncovered aren't in it: a cover goes from the card itself, and a card drawn anew asks s.revealed.)
   function viewOf(s, it) {
     if (deps.hidden(it.key)) return { kind: 'hidden', sig: 'hidden' };
     const place = deps.place(it.key);
-    // A conversation you're no longer in (you left the group or the server, or the DM went): nothing of it shows, and
-    // the copy held goes (should you be back in it, it's asked for again).
-    if (!place) { s.msgs.delete(it.messageId); return { kind: 'gone', sig: 'gone' }; }
+    if (!place) return { kind: 'gone', sig: 'gone' };
     const rec = s.msgs.get(it.messageId);
     if (!rec || rec.state === 'loading') return { kind: 'loading', sig: 'loading' };
     if (rec.state === 'error') return { kind: 'error', sig: `error|${rec.error}`, error: rec.error };
     const m = rec.m;
-    if (rec.state !== 'ok' || !m || deps.expired(m) || isDeleted(m)) {
-      if (rec.state === 'ok') { rec.state = 'gone'; rec.m = null; }
-      return { kind: 'gone', sig: `gone|${place.label}`, place };
-    }
+    if (rec.state !== 'ok' || !m || deps.expired(m) || isDeleted(m)) return { kind: 'gone', sig: `gone|${place.label}`, place };
     const blocked = deps.blocked(m.authorId) && !s.shown.has(m.id);
     const wf = blocked ? null : deps.veiled(m);
     const ok = deps.readable(m);
-    return { kind: 'ok', m, place, blocked, wf, ok, sig: ['ok', place.label, place.kind, blocked ? 1 : 0, wf ? wf.action : '', ok ? 1 : 0].join('|') };
+    // What its row in the chat says about who could have written it, in the signature too: that can change while the
+    // message doesn't (a copy loaded elsewhere turns up a binding issue, a key arrives; the app calls refresh or onKeys).
+    // One from someone you blocked shows nothing of the message, as in the chat.
+    const trust = blocked ? null : deps.trust(m);
+    return { kind: 'ok', m, place, blocked, wf, ok, trust, sig: ['ok', place.label, place.kind, blocked ? 1 : 0, wf ? wf.action : '', ok ? 1 : 0, trust ? trust.sig : ''].join('|') };
+  }
+
+  // Messages held whose time has come: gone, with everything the app kept of them (deps.forget). Before any drawing as
+  // well as on the timer's pass (expire), whichever comes first: a drawing that only said they're gone would leave
+  // their decrypted files behind, the timer then finding nothing to forget (a background tab's timers run late).
+  function expireDue(s) {
+    const gone = [];
+    for (const rec of s.msgs.values()) if (rec.state === 'ok' && rec.m && deps.expired(rec.m)) { gone.push(rec.m); rec.state = 'gone'; rec.m = null; }
+    if (!gone.length) return false;
+    remember(gone.map((m) => m.id));
+    deps.forget(gone, new Set(gone.map((m) => m.id)), null);
+    return true;
   }
 
   function render(s) {
     if (s !== st || !s.parts) return;
     const all = list();
-    for (const it of all) if (deps.place(it.key)) want(s, it);
+    expireDue(s);
+    for (const it of all) {
+      // A conversation you're no longer in (you left the group or the server, or the DM went): nothing of it shows, and
+      // the copy held goes (should you be back in it, it's asked for again).
+      if (deps.place(it.key)) want(s, it); else s.msgs.delete(it.messageId);
+    }
+    seed = null; // (taken, or not wanted: either way its one drawing is done)
     const { listEl, empty } = s.parts;
     const keep = new Map();
     const els = [];
@@ -388,6 +412,11 @@ export function createSideView(deps) {
       }
       if (!body.firstChild) body.append(h('p', { class: 'sv-veil' }, h('em', null, 'No words or pictures in this message.')));
     }
+    // Its flags, as on its row in the chat: all of them with the message; only the warnings when the word filter hides
+    // it (as filteredEl does: else a server could keep its tampering out of sight with a word on its suggested list);
+    // none when it can't be read here or is from someone you blocked (nothing of it shows).
+    const flags = v.trust && v.ok ? v.trust.flags({ warnings: !!v.wf }) : [];
+    if (flags.length) body.append(h('div', { class: 'sv-flags' }, flags));
     const jump = h('button', { class: 'btn ghost sm', type: 'button', onclick: () => deps.jump(it, m) }, icon('arrowUp'), 'Jump');
     card.append(head, where, body, h('div', { class: 'sv-actions' }, jump, x));
     return card;
@@ -524,9 +553,11 @@ export function createSideView(deps) {
   }
 
   // Closed, signed out (all: the list read from storage, and what was deleted, go too), or back online after missing
-  // whatever happened meanwhile (app.js loadBootstrap): the open panel lets go of what it loaded.
+  // whatever happened meanwhile (app.js loadBootstrap): the open panel lets go of what it loaded, and of the message
+  // just pinned (from before whatever was missed).
   function reset({ all = false } = {}) {
-    if (all === true) { items = null; owner = null; seed = null; deleted.clear(); }
+    seed = null;
+    if (all === true) { items = null; owner = null; deleted.clear(); }
     const s = st;
     if (!s) return;
     st = null;
@@ -640,18 +671,18 @@ export function createSideView(deps) {
       armIf(held.map((r) => r.m).filter(Boolean));
       render(s); // (readable now: their cards' signatures changed)
     },
-    // The messages it holds (the app's disappearing timer counts them in).
+    // The messages it holds (the app's disappearing timer counts them in, and it asks whether a binding issue it found
+    // touches one of them).
     messages() { return st ? [...st.msgs.values()].filter((r) => r.state === 'ok' && r.m).map((r) => r.m) : []; },
+    // What's said about who could have written a message it holds changed outside it (app.js noteBinding,
+    // redrawRepliesTo, forgetBindings: another copy of it loaded in the chat, or deleted; the original of a reply found
+    // still there). Nothing tells the side view otherwise: its cards are often copies it fetched itself, which none of
+    // the chat's lists have. Drawn again if it's open; only the cards whose signature changed are drawn anew.
+    refresh() { if (st) render(st); },
     // The disappearing timer went off: those whose time has come go, with everything the app kept of them.
     expire() {
       const s = st;
-      if (!s) return;
-      const gone = [];
-      for (const rec of s.msgs.values()) if (rec.state === 'ok' && rec.m && deps.expired(rec.m)) { gone.push(rec.m); rec.state = 'gone'; rec.m = null; }
-      if (!gone.length) return;
-      remember(gone.map((m) => m.id));
-      deps.forget(gone, new Set(gone.map((m) => m.id)), null);
-      render(s);
+      if (s && expireDue(s)) render(s);
     },
     reset,
   };

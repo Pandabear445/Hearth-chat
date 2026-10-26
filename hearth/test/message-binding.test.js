@@ -751,7 +751,8 @@ test('static: both openers hand the binding over, every send and edit carries it
   assert.match(edit, /bindEdit\(m\.dec\.b\)/);
   assert.match(app, /async function decryptMessage\(m\) \{\n[^}]*noteBinding\(m\);\n\}/, 'every decrypted message is noted');
   const fill = app.slice(app.indexOf('function fillMessage('), app.indexOf('\n}\n', app.indexOf('function fillMessage(')));
-  assert.match(fill, /bindingFlag\(m, bind\)/);
+  assert.match(fill, /const trust = messageTrust\(m, author, bind\);/);
+  assert.match(app.slice(app.indexOf('function messageTrust('), app.indexOf('\n}\n', app.indexOf('function messageTrust('))), /bindingFlag\(m, n\.bind\)/);
   assert.doesNotMatch(app.slice(app.indexOf('function bindingFlag('), app.indexOf('\n}\n', app.indexOf('function bindingFlag('))), /html:/, 'the details are text only');
   const sched = read('public', 'js', 'scheduled.js');
   assert.match(sched, /withFresh\(cur, \{ at: clock\(\) \}, async \(body\) => api\('POST', `\/scheduled-messages\/\$\{cur\.id\}\/send`, body\)\)/);
@@ -774,11 +775,16 @@ test('static: a message the word filter hides keeps its tampering flag and its k
   const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
   const fn = (name) => app.slice(app.indexOf(`function ${name}(`), app.indexOf('\n}\n', app.indexOf(`function ${name}(`)));
   const fill = fn('fillMessage');
-  // In the copy, every warning is a .msg-flag.bad or .msg-flag.warn straight on the message's body, outside any blur.
-  assert.match(fill, /body\.append\(bindingFlag\(m, bind\)\)/);
+  const trust = fn('messageTrust');
+  // In the copy, every warning is a .msg-flag.bad or .msg-flag.warn straight on the message's body, outside any blur
+  // (messageTrust makes them, for the chat and the side view's cards alike).
+  assert.match(fill, /const trust = messageTrust\(m, author, bind\);/);
+  assert.match(fill, /\n {4}body\.append\(\.\.\.trust\.flags\(\)\);\n/);
+  assert.match(trust, /if \(bind && bind\.issues\.length\) notes\.push\(\{ warn: true, bind \}\);/);
+  assert.match(trust, /\(n\.bind \? bindingFlag\(m, n\.bind\) : h\('div', \{ class: `msg-flag\$\{n\.warn \? ' bad' : ''\}`/);
   assert.match(fn('bindingFlag'), /class: 'msg-flag warn'/);
   for (const what of ['Older key', 'New key', 'Sender could not be verified']) {
-    assert.match(fill, new RegExp(`body\\.append\\(h\\('div', \\{ class: 'msg-flag bad'[^\\n]*${what}`), what);
+    assert.match(trust, new RegExp(`notes\\.push\\(\\{ warn: true, label: '[^']*${what}`), what);
   }
   // The folded row takes them over from the copy, as they are (the flag's button keeps its details dialog).
   const folded = fn('filteredEl');
