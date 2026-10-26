@@ -10,11 +10,18 @@ const sig = (e) => `${e.region || ''}|${[].concat(e.urls).join(',')}`;
 // The server marks their entries `community: true`. A relay sees the IP address of everyone whose call goes through
 // it (never what's said or shown), so people can choose to avoid them (Settings → Privacy & safety,
 // `memberRelays: 'avoid'`): then this app never measures one, never gets an address on one, and drops the other
-// side's network candidates on the member relays in its own list (memberRelayHosts), so it doesn't send to them.
+// side's network candidates on any member relay (memberRelayHosts), so it never connects through one. That's as far
+// as it goes: the browser answers the connection checks that reach it, so when the other side's call goes through a
+// member relay, that relay can still learn this device's address.
 export const isMemberRelay = (e) => !!e && e.community === true;
 export const avoidsMemberRelays = (me) => !!(me && me.privacy && me.privacy.memberRelays === 'avoid');
-// The relay list without member relays when they're avoided (what a call uses, and what gets measured).
-export const usableIce = (list, avoid) => (list || []).filter((e) => !(avoid && isMemberRelay(e)));
+// Someone who avoids them gets every member relay from the server by address only, with no login (so this app knows
+// whose candidates to drop). Such an entry is never handed to WebRTC or measured, even after they switch back to
+// using member relays and before new logins come.
+const hostsOnly = (e) => isMemberRelay(e) && !(e.username && e.credential);
+// The relay list without member relays when they're avoided, and never one without a login (what a call uses, and what
+// gets measured).
+export const usableIce = (list, avoid) => (list || []).filter((e) => !(isMemberRelay(e) && (avoid || hostsOnly(e))));
 
 // Addresses are compared the way they're written in candidates: lower case, IPv6 without brackets or a zone, and
 // with every group spelled out (so "2001:db8::1" and "2001:0db8:0:0:0:0:0:1" are the same machine).
@@ -55,9 +62,10 @@ const candidateAddress = (line) => {
   return m ? normHost(m[1]) : null;
 };
 // Leaves out the other side's network candidates whose address is one of `hosts` (memberRelayHosts), so this app
-// never sends anything there. Takes a candidate ({ candidate, sdpMid, … }: null when dropped), an offer or answer
-// ({ type, sdp }) or its SDP text. In SDP only the a=candidate lines that are dropped go; everything else stays byte
-// for byte. A signed offer or answer is checked first, on exactly what arrived, and only then passed through this.
+// never connects through one. (The browser still answers a connection check that comes from one.) Takes a candidate
+// ({ candidate, sdpMid, … }: null when dropped), an offer or answer ({ type, sdp }) or its SDP text. In SDP only the
+// a=candidate lines that are dropped go; everything else stays byte for byte. A signed offer or answer is checked
+// first, on exactly what arrived, and only then passed through this.
 export function dropAvoidedCandidates(x, hosts) {
   if (x == null || !hosts || !hosts.size) return x;
   const avoid = new Set([...hosts].map(normHost));
@@ -70,6 +78,7 @@ export function dropAvoidedCandidates(x, hosts) {
 
 export function measureRelay(entry, timeout = 4000) {
   return new Promise((resolve) => {
+    if (!entry || hostsOnly(entry)) { resolve(null); return; } // no login for it: never contacted
     let pc;
     const t0 = performance.now();
     const done = (v) => { clearTimeout(timer); try { pc && pc.close(); } catch { /* closed */ } resolve(v); };
@@ -88,8 +97,9 @@ export function measureRelay(entry, timeout = 4000) {
 
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; } };
 // { "<region|urls>": ms or null }
+// Callers pass usableIce(list, avoid); a member relay without a login is left out here as well.
 export async function rankRelays(list, { force = false } = {}) {
-  const relays = (list || []).filter(isRelay);
+  const relays = usableIce(list, false).filter(isRelay);
   const saved = load();
   if (!force && saved.at && Date.now() - saved.at < TTL && relays.every((e) => sig(e) in (saved.ms || {}))) return saved.ms;
   if (typeof RTCPeerConnection === 'undefined' || !relays.length) return {};

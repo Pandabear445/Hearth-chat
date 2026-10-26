@@ -5195,11 +5195,12 @@ async function memberRelays(t) {
 
   // The machine checks in, as its agent does every minute. A relay waiting for approval gets no backup key.
   const [, id, token] = link;
-  const beat = await fetch(`${t.server.base}/api/regions/${id}/heartbeat`, {
+  const checkIn = () => fetch(`${t.server.base}/api/regions/${id}/heartbeat`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Region-Token': token },
     body: JSON.stringify({ ip: '203.0.113.7', tx: 5000000, rx: 4000000, load: 0.2, cpus: 4, mem: 31, relay: true, uptime: 86400,
       ssh: { port: 22, hostKey: '', ready: false, usedMb: 0, freeMb: 20000, files: 0 }, version: 3 }),
   });
+  const beat = await checkIn();
   const said = await beat.json().catch(() => ({}));
   check(beat.ok && said.ok, `The relay’s check-in should be taken (${beat.status} ${JSON.stringify(said)}).`);
   check(!said.backupKey, 'A relay waiting for approval should get no backup key.');
@@ -5241,9 +5242,16 @@ async function memberRelays(t) {
   await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Privacy & safety') }).click();
   const avoid = alice.$('.set-content .toggle-row', { hasText: 'Avoid relays run by members' });
   check(!(await avoid.locator('input').isChecked()), 'Avoiding members’ relays should be off to begin with.');
+  check((await checkIn()).ok, 'The relay checks in again (it’s up).');
+  // Her app fetches its relay list again at once: the member's relay is in it only as where it is, with no login.
+  const refetched = alice.page.waitForResponse((r) => r.url().endsWith('/api/ice') && r.request().method() === 'GET', { timeout: 15000 });
   await avoid.locator('.switch').click();
   await alice.toast('Saved.');
   check(JSON.parse(t.server.rows('SELECT privacy FROM users WHERE id = ?', aliceId)[0].privacy).memberRelays === 'avoid', 'The choice should be saved on her account.');
+  const avoiding = await (await refetched).json();
+  const where = avoiding.find((e) => e.community === true);
+  check(where && [].concat(where.urls).some((u) => u.includes('203.0.113.7')) && !('username' in where) && !('credential' in where),
+    `After avoiding, her app should fetch the relay list again, with the member’s relay and no login for it (got ${JSON.stringify(avoiding)}).`);
 
   // She removes her relay, and is shown how to take it off the machine.
   await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Help host') }).click();

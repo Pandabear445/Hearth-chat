@@ -677,6 +677,57 @@ test('privacy: memberRelays is "use" by default and takes only "use" or "avoid"'
   assert.equal((await as(u, 'PATCH', '/me/privacy', { memberRelays: 'avoid' })).json.outsideImages, 'ask');
 });
 
+// Someone who avoids member relays drops the other side's addresses on any of them, and the other person may use any
+// approved one (not just the 8 in someone's list). So they're told where every one is, and get a login for none.
+test('an avoider gets every member relay that\'s up by address only, and a login for none; back to using them, logins again', async () => {
+  fresh();
+  const viewer = await srv.register();
+  const live = [];
+  for (let i = 0; i < 6; i++) { const m = await srv.register(); live.push(await liveRelay(m), await liveRelay(m)); }
+  // Not these: one waiting for approval (it checks in), one paused, one that stopped checking in.
+  const pending = await offer(await srv.register());
+  assert.equal((await beat(pending.id, pending.token)).status, 200);
+  const paused = live.pop();
+  assert.equal((await as(srv.owner, 'POST', `/admin/regions/${paused.id}/pause`, {})).status, 200);
+  const offline = live.pop();
+  srv.sql('UPDATE regions SET last_seen = ? WHERE id = ?', Date.now() - 4 * 60000, offline.id);
+  assert.equal(live.length, 10);
+  // Using them: 8, with logins.
+  assert.equal(community(await ice(viewer)).length, 8);
+  assert.equal((await as(viewer, 'PATCH', '/me/privacy', { memberRelays: 'avoid' })).status, 200);
+  for (const list of [await ice(viewer), (await as(viewer, 'GET', '/bootstrap')).json.iceServers]) {
+    const hosts = community(list);
+    assert.deepEqual(hosts.map((e) => e.regionId).sort(), live.map((r) => r.id).sort(), 'every approved one that is up, more than 8, and no other');
+    for (const e of hosts) {
+      assert.deepEqual(Object.keys(e).sort(), ['community', 'region', 'regionId', 'urls'], 'where it is, and no login');
+      assert.deepEqual(e.urls, ['turn:203.0.113.7:3478?transport=udp', 'turn:203.0.113.7:3478?transport=tcp']);
+    }
+    const main = list.find((e) => e.regionId === 'main');
+    assert.equal(main.credential, crypto.createHmac('sha1', MAIN_SECRET).update(main.username).digest('base64'), 'the owner\'s relays as before');
+  }
+  // Even when this server has no relay of its own.
+  srv.sql("DELETE FROM instance_settings WHERE key IN ('turnSecret', 'turnUrls')");
+  try {
+    const bare = await ice(viewer);
+    assert.equal(community(bare).length, 10);
+    assert.ok(bare.every((e) => !('username' in e) && !('credential' in e)));
+  } finally {
+    srv.sql("INSERT OR REPLACE INTO instance_settings (key, value) VALUES ('turnSecret', ?)", MAIN_SECRET);
+    srv.sql("INSERT OR REPLACE INTO instance_settings (key, value) VALUES ('turnUrls', 'turn:relay.example.test:3478?transport=udp')");
+  }
+  // Another person who uses them is unaffected.
+  const other = await srv.register();
+  assert.ok(community(await ice(other)).every((e) => e.username && e.credential));
+  // Back to using them: 8 again, with logins that work.
+  assert.equal((await as(viewer, 'PATCH', '/me/privacy', { memberRelays: 'use' })).status, 200);
+  const back = community(await ice(viewer));
+  assert.equal(back.length, 8);
+  for (const e of back) {
+    const r = live.find((x) => x.id === e.regionId);
+    assert.equal(e.credential, crypto.createHmac('sha1', r.secret).update(e.username).digest('base64'));
+  }
+});
+
 // ------------------------------------------------------------------ the upgrade
 test('upgrading a version 22 database keeps the owner\'s regions as they were; the doctor counts member relays apart', async () => {
   fresh();

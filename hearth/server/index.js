@@ -812,8 +812,10 @@ const commentedIn = (sql, ...args) => db.prepare(sql).all(...args).filter((r) =>
 const isBlocked = (a, b) => !!db.prepare('SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)').get(a, b, b, a);
 // outsideImages: what your apps do with an image link to another site in a message (xss-8). Loading it shows that
 // site your IP address, so by default they ask first ('ask' | 'always' | 'never'). Only your own apps read it.
-// memberRelays: 'avoid' = your apps never use or measure a call relay run by a member (Settings → Help host), and drop
-// the other side's addresses on one, so your packets never reach one ('use' | 'avoid'). Only your own apps read it.
+// memberRelays: 'avoid' = your apps never use, measure or connect through a call relay run by a member (Settings →
+// Help host), and ignore the other side's addresses on one ('use' | 'avoid'); GET /ice then gives you no login for one,
+// only where they all are. (It can't promise more: when the other side's call goes through a member relay, that relay
+// can still learn your address, since the browser answers the connection checks that reach it.)
 const PRIVACY_DEFAULTS = { dms: 'everyone', friendRequests: 'everyone', outsideImages: 'ask', memberRelays: 'use' };
 const OUTSIDE_IMAGES = ['ask', 'always', 'never'];
 const MEMBER_RELAY_CHOICES = ['use', 'avoid'];
@@ -5457,6 +5459,11 @@ function memberIceFor(uid, exp) {
     return { urls: r.urls, username: login, credential: crypto.createHmac('sha1', r.secret).update(login).digest('base64'), region: r.name, regionId: r.id, expiresAt: exp * 1000, community: true };
   });
 }
+// Someone who avoids member relays (Settings → Privacy & safety) gets no login for any of them. Their app still has to
+// know where every one is: the other person in a call may use any approved member relay, not only the 8 in someone's
+// list, and the avoider's app ignores the other side's addresses on these machines (relays.js memberRelayHosts). So
+// they get all of them, by address only.
+const memberHostsFor = () => REG.memberRelays().map((r) => ({ urls: r.urls, region: r.name, regionId: r.id, community: true }));
 function iceServersFor(uid) {
   const list = [iceServers[0]];
   const urls = turnUrls();
@@ -5478,7 +5485,9 @@ function iceServersFor(uid) {
     list.push({ urls, username: process.env.TURN_USERNAME, credential: process.env.TURN_CREDENTIAL || '' });
   }
   // After the owner's relays, and even when this server has no relay of its own.
-  list.push(...memberIceFor(uid, exp));
+  const row = getUserRow(uid);
+  const avoid = !!row && privacyOf(row).memberRelays === 'avoid';
+  list.push(...(avoid ? memberHostsFor() : memberIceFor(uid, exp)));
   return list;
 }
 api.get('/ice', auth, (req, res) => {

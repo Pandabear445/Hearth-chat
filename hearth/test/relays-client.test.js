@@ -8,8 +8,11 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
+const fs = require('node:fs');
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const clientModule = (name) => import(pathToFileURL(path.join(__dirname, '..', 'public', 'js', name)).href);
+const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
 const store = new Map();
 globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
 
@@ -30,6 +33,9 @@ const PI = member('pi', '203.0.113.7');
 const VPS = member('vps', '[2001:DB8::7]');
 const PC = member('pc', '192.0.2.44');
 const ALL = [STUN, MAIN, FRA, NYC, PI, VPS, PC];
+// What someone who avoids member relays is given instead: every one that's up, where it is and no login.
+const bare = (e) => { const { username: _u, credential: _c, expiresAt: _x, ...rest } = e; return rest; };
+const AVOIDING = [STUN, MAIN, FRA, NYC, bare(PI), bare(VPS), bare(PC), bare(member('new', '203.0.113.90'))];
 // Ranks as rankRelays stores them ("<region|urls>": ms, or null for no answer).
 const rank = (pairs) => Object.fromEntries(pairs.map(([e, ms]) => [`${e.region || ''}|${[].concat(e.urls).join(',')}`, ms]));
 const relaysIn = (ice) => (Array.isArray(ice) ? ice : ice.iceServers).filter((e) => [].concat(e.urls).some((u) => /^turns?:/.test(u)));
@@ -200,6 +206,129 @@ test('an avoider never measures a member relay: what the app passes rankRelays i
   asked.length = 0;
   await R.rankRelays(R.usableIce(ALL, false), { force: true });
   assert.ok(memberUrls.every((u) => asked.includes(u)));
+});
+
+test('a member relay without a login (what an avoider is given) never reaches WebRTC and is never measured, even after switching back', async () => {
+  // Still known as a member relay's machine, so the other side's addresses there are dropped.
+  const hosts = R.memberRelayHosts(AVOIDING);
+  assert.equal(hosts.size, 4);
+  for (const addr of ['203.0.113.90', '203.0.113.7', '2001:db8::7']) assert.equal(R.dropAvoidedCandidates(candAt(addr), hosts), null, addr);
+  // Left out whichever way the choice is now (it can be back to using them before new logins come).
+  for (const avoid of [true, false]) assert.deepEqual(R.usableIce(AVOIDING, avoid), [STUN, MAIN, FRA, NYC], `avoid: ${avoid}`);
+  assert.deepEqual(R.usableIce([{ ...PI, credential: '' }, { ...PC, username: undefined }], false), [], 'half a login is no login');
+  assert.deepEqual(R.usableIce([PI, bare(PC)], false), [PI], 'a member relay with a login is still used by someone who uses them');
+  const memberUrls = new Set(AVOIDING.filter(R.isMemberRelay).flatMap((e) => e.urls));
+  const fast = rank([[PI, 1], [VPS, 2], [PC, 3], [FRA, 20], [NYC, 30], [MAIN, 40]].map(([e, ms]) => [R.isMemberRelay(e) ? bare(e) : e, ms]));
+  for (const avoid of [true, false]) {
+    for (const ice of [R.chooseIce(AVOIDING, fast, null, { avoid }), R.chooseIce(AVOIDING, null, null, { avoid }), R.chooseIce(AVOIDING, fast, 'pi', { avoid })]) {
+      const list = Array.isArray(ice) ? ice : ice.iceServers;
+      assert.ok(!list.some((e) => [].concat(e.urls).some((u) => memberUrls.has(u))), `avoid: ${avoid}`);
+      assert.ok(list.every((e) => !/^turns?:/.test([].concat(e.urls)[0]) || (e.username && e.credential)), 'every relay handed over has a login');
+    }
+  }
+  // Measuring: rankRelays leaves them out even when it's handed the whole list, and measureRelay never contacts one.
+  globalThis.RTCPeerConnection = ProbePC;
+  asked.length = 0;
+  const ranks = await R.rankRelays(AVOIDING, { force: true });
+  assert.deepEqual([...new Set(asked)], [MAIN, FRA, NYC].flatMap((e) => e.urls));
+  assert.equal(Object.keys(ranks).length, 3);
+  asked.length = 0;
+  assert.equal(await R.measureRelay(bare(PI)), null);
+  assert.deepEqual(asked, [], 'no connection made for it');
+  // Settings → Calls "Test the relay" and Admin → Regions "Measure from this device" go through usableIce too.
+  assert.match(read('public', 'js', 'settings.js'), /async function testRelay\(out, app\) \{\n[^\n]*\n  try \{\n    const ice = usableIce\(await api\('GET', '\/ice'\), avoidsMemberRelays\(app && app\.S && app\.S\.me\)\);\n/);
+  assert.match(read('public', 'js', 'admin.js'), /const ice = usableIce\(await api\('GET', '\/ice'\), avoidsMemberRelays\(me\(\)\)\);\n {6}const ranks = await rankRelays\(ice, \{ force: true \}\);/);
+});
+
+// The relay list as app.js keeps it (freshIce, iceBeforeCall, followRelayChoice and the bootstrap line), run on its
+// own with a fake api, call and clock.
+function appIce({ S, api, voice, rankRelays }) {
+  const src = read('public', 'js', 'app.js');
+  const start = src.indexOf('// Relay logins run out 12 to 18 hours');
+  const end = src.indexOf('\n// When this server switched on end-to-end encryption', start);
+  assert.ok(start > 0 && end > start, 'the relay list block');
+  const boot = /\n {2}(S\.iceServers = b\.iceServers;[^\n]*)\n {2}setTimeout\(\(\) => rankNearest\(\), 4000\);\n/.exec(src);
+  assert.ok(boot, 'the bootstrap takes the list, notes when and for which choice, and measures in the background');
+  const clock = { t: 1.7e12 };
+  const timers = [];
+  const out = new Function('S', 'api', 'voice', 'iceStale', 'avoidsMemberRelays', 'usableIce', 'rankRelays', 'setInterval', 'Date',
+    `${src.slice(start, end)}\nreturn { freshIce, iceBeforeCall, followRelayChoice, boot: (b) => { ${boot[1]} } };`)(
+    S, api, voice, R.iceStale, R.avoidsMemberRelays, R.usableIce, rankRelays, (fn, ms) => timers.push({ fn, ms }), { now: () => clock.t });
+  return { ...out, clock, timers };
+}
+
+test('app.js: turning avoiding on or off fetches the relay list at once, a call switches to it, and the relays are measured again', async () => {
+  const S = { me: { id: 'me', privacy: { memberRelays: 'use' } } };
+  const fetched = []; const updates = []; const ranked = [];
+  let answer = () => Promise.resolve(ALL);
+  const A = appIce({
+    S, api: (method, p) => { fetched.push(`${method} ${p}`); return answer(); },
+    voice: { updateIceServers: () => updates.push(S.iceServers) },
+    rankRelays: async (list, opts) => { ranked.push({ list, opts }); return {}; },
+  });
+  A.boot({ iceServers: ALL });
+  assert.equal(A.timers.length, 1);
+  assert.equal(A.timers[0].ms, 10 * 60000, 'the background check');
+  await A.freshIce(); await A.iceBeforeCall(); A.followRelayChoice();
+  assert.deepEqual(fetched, [], 'nothing to fetch: the list is new, and for this choice');
+  // Turned on, here (Settings) or on another device (user:update): fetched right away, once.
+  S.me.privacy = { memberRelays: 'avoid' };
+  answer = () => Promise.resolve(AVOIDING);
+  A.followRelayChoice(); A.followRelayChoice();
+  await sleep(5);
+  assert.deepEqual(fetched, ['GET /ice']);
+  assert.equal(S.iceServers, AVOIDING);
+  assert.deepEqual(updates, [AVOIDING], 'the call in progress switches to it');
+  assert.equal(ranked.length, 1);
+  assert.deepEqual(ranked[0].opts, { force: true }, 'measured again now');
+  assert.deepEqual(ranked[0].list, [STUN, MAIN, FRA, NYC], 'and never a member relay');
+  // Before a call, an avoider's list is fetched again once it's over 10 minutes old (relays approved since).
+  fetched.length = 0;
+  A.clock.t += 9 * 60000;
+  await A.iceBeforeCall();
+  assert.deepEqual(fetched, []);
+  A.clock.t += 2 * 60000;
+  await A.iceBeforeCall();
+  assert.deepEqual(fetched, ['GET /ice']);
+  // Switched back to using them, and the fetch fails: the list in hand has no login for a member relay, so none is
+  // used meanwhile; the next check fetches it again even though it isn't running out.
+  fetched.length = 0; updates.length = 0;
+  S.me.privacy = { memberRelays: 'use' };
+  answer = () => Promise.reject(new Error('offline'));
+  A.followRelayChoice();
+  await sleep(5);
+  assert.deepEqual(fetched, ['GET /ice']);
+  assert.equal(S.iceServers, AVOIDING, 'kept');
+  assert.ok(!relaysIn(R.chooseIce(S.iceServers, null)).some(R.isMemberRelay));
+  answer = () => Promise.resolve(ALL);
+  A.timers[0].fn();
+  await sleep(5);
+  assert.deepEqual(fetched, ['GET /ice', 'GET /ice']);
+  assert.equal(S.iceServers, ALL);
+  assert.deepEqual(updates, [ALL]);
+  // Now it's for this choice: someone who uses them isn't fetched again by age, only when the logins run out.
+  fetched.length = 0;
+  A.clock.t += 3 * 3600000;
+  await A.iceBeforeCall(); A.timers[0].fn(); await sleep(5);
+  assert.deepEqual(fetched, []);
+  // An answer that comes after a newer one is dropped (it may be for the other choice).
+  let slow; answer = () => new Promise((r) => { slow = r; });
+  const older = A.freshIce({ force: true });
+  const NEWER = [STUN, MAIN, PI];
+  answer = () => Promise.resolve(NEWER);
+  await A.freshIce({ force: true });
+  slow(AVOIDING); await older;
+  assert.equal(S.iceServers, NEWER);
+});
+
+test('app.js and settings.js: the choice is followed wherever it changes, and calls ask for a fresh list first', () => {
+  const app = read('public', 'js', 'app.js');
+  const at = app.indexOf("socket.on('user:update', (u) => {");
+  const onUpdate = app.slice(at, app.indexOf('\n  });\n', at));
+  assert.match(onUpdate, /\n {4}if \(u\.id === S\.me\.id\) followRelayChoice\(\);\n/, 'your own user:update (PATCH /me/privacy here or on another device)');
+  assert.match(app, /\n {2}followRelayChoice: \(\) => followRelayChoice\(\),/, 'settings.js can ask too');
+  assert.match(app, /\n {4}ensureIce: \(\) => iceBeforeCall\(\),\n/);
+  assert.match(read('public', 'js', 'settings.js'), /\n {6}if \(k === 'memberRelays' && app\.followRelayChoice\) app\.followRelayChoice\(\);/);
 });
 
 // ------------------------------------------------------------------ the call engine (voice.js), on a fake WebRTC

@@ -92,7 +92,13 @@ test('Settings → Help host: in the Servers group, on the member routes, live w
 test('Settings → Privacy & safety: avoiding members’ relays is the memberRelays choice on the account', () => {
   const privacy = fnSource(read('public', 'js', 'settings.js'), 'privacyTab');
   assert.match(privacy, /section\('Call relays run by members',\n\s+toggle\('Avoid relays run by members', p\.memberRelays === 'avoid', \(v\) => save\('memberRelays', v \? 'avoid' : 'use'\),/);
-  assert.ok(privacy.includes('A relay sees your IP address when your call goes through it, never what’s said or shown. On: your calls only use the owner’s relays'));
+  assert.ok(privacy.includes('A relay sees your IP address when your call goes through it, never what’s said or shown. On: your app never uses, measures or connects through a member’s relay, and ignores the other person’s addresses on one'));
+  // It says what it can't do: a member's relay the other person uses can still see the address (the browser answers
+  // the connection checks that reach it), and it doesn't promise otherwise.
+  assert.ok(privacy.includes('If the other person’s call goes through a member’s relay, that relay can still see your IP address when your network lets its connection checks in'));
+  assert.doesNotMatch(privacy, /only use the owner’s relays|never reach|keeps your calls off/);
+  // Saving it follows at once: a new relay list, for a call in progress too (app.js followRelayChoice).
+  assert.match(privacy, /if \(k === 'memberRelays' && app\.followRelayChoice\) app\.followRelayChoice\(\);/);
 });
 
 test('Admin → Regions → Member relays: the password again where someone else’s machine joins everyone’s calls or the backups', () => {

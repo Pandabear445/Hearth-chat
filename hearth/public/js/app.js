@@ -175,6 +175,7 @@ export const app = {
   logout,
   rerender: () => { lsCache.clear(); renderAll(); }, // settings.js writes some preferences straight to localStorage
   redrawImageLinks: () => redrawImageLinks(),
+  followRelayChoice: () => followRelayChoice(), // after "Avoid relays run by members" changes
   openProfile: (id) => openProfileModal(id),
   install: () => installApp(),
   get canInstall() { return !!installPrompt; },
@@ -590,7 +591,7 @@ function startApp() {
       toast(`A moderator moved you to ${c.name}.`);
       joinVoice(c, srv, { stay: S.view.type !== 'voice' });
     },
-    ensureIce: () => freshIce(),
+    ensureIce: () => iceBeforeCall(),
     signSdp: (toUserId, desc) => sec.signSdp(voice.channelId, toUserId, desc),
     verifySdp: (fromUserId, desc, sig) => sec.checkSdp(voice.channelId, fromUserId, desc, sig),
     onSecurityWarning: (userId, why) => callWarning(userId, why),
@@ -709,6 +710,8 @@ function startApp() {
     if (keysNow() !== keysBefore) { NOTES.onTrust(u.id); LOOK.onTrust(u.id); } // photo tags and backgrounds that didn't open with the keys known before
     // Outside images changed on another device: the image links on screen follow the new choice.
     if (u.id === S.me.id && outsideMode(S.me.privacy) !== outsideBefore) later(redrawImageLinks);
+    // So do call relays, when avoiding member relays was turned on or off.
+    if (u.id === S.me.id) followRelayChoice();
     // Verified after a reset without their recovery key (crypto-2): their servers' keys can go to them now.
     if (wasWaiting && !sec.awaitingVerify(S.users[u.id])) {
       S.servers.filter((s) => s.memberIds.includes(u.id)).forEach((s) => sec.maintain(s.id));
@@ -1029,14 +1032,43 @@ function startApp() {
 // Relay logins run out 12 to 18 hours after they're handed out, and an app can stay open for days without
 // reconnecting. So new ones are fetched before a call when they're about to run out, and checked every
 // 10 minutes in the background (calls in progress switch to them too).
-async function freshIce() {
-  if (!iceStale(S.iceServers)) return;
+// { force }: fetch now, however new they are. { maxAge }: also when the list is older than that (in ms).
+let iceAt = 0; // when S.iceServers came from the server
+let iceFor = null; // and for which choice: avoidsMemberRelays(S.me) then (the list depends on it, see followRelayChoice)
+let iceAsked = 0; // the latest fetch: an older one that answers after it is stale (the choice may have changed since)
+async function freshIce({ force = false, maxAge = Infinity } = {}) {
+  if (!force && iceFor === avoidsMemberRelays(S.me) && !iceStale(S.iceServers) && Date.now() - iceAt < maxAge) return;
+  const n = ++iceAsked;
+  const avoid = avoidsMemberRelays(S.me);
   try {
-    S.iceServers = await api('GET', '/ice');
+    const list = await api('GET', '/ice');
+    if (n !== iceAsked) return;
+    S.iceServers = list; iceAt = Date.now(); iceFor = avoid;
     if (voice) voice.updateIceServers();
   } catch { /* keep the old ones: the next check is soon */ }
 }
 setInterval(() => { if (S.me) freshIce(); }, 10 * 60000);
+// Before a call. Someone who avoids member relays drops the other side's addresses on any of them, so their list
+// (where every member relay is, without logins) is fetched again when it's more than 10 minutes old, to know the
+// relays approved since.
+const iceBeforeCall = () => freshIce(avoidsMemberRelays(S.me) ? { maxAge: 10 * 60000 } : {});
+// With relays in several regions, find the nearest ones in the background (cached for 6 hours; force: measure again
+// now). Someone who avoids member relays never measures one (measuring shows the relay this device's IP address).
+function rankNearest({ force = false } = {}) {
+  const usable = usableIce(S.iceServers, avoidsMemberRelays(S.me));
+  if (usable.filter((e) => [].concat(e.urls || []).some((u) => /^turns?:/.test(u))).length > 2) rankRelays(usable, { force }).then((r) => { S.relayRanks = r; }).catch(() => {});
+}
+// Avoiding member relays turned on or off (Settings → Privacy & safety, on this device or another: user:update). The
+// relay list depends on it (logins for member relays, or only where they are), so it's fetched again right away, a
+// call in progress switches to it, and the relays are measured again.
+// (A fetch that fails is tried again by the next check, or before the next call: freshIce compares iceFor.)
+let relayChoice = null; // the choice last followed
+function followRelayChoice() {
+  const avoid = avoidsMemberRelays(S.me);
+  if (relayChoice === avoid) return;
+  relayChoice = avoid;
+  freshIce({ force: true }).then(() => rankNearest({ force: true }));
+}
 // When this server switched on end-to-end encryption: plaintext channel messages dated later can only have come
 // from the server, so they aren't shown (secure.js). Remembered on this device, and the earliest time it was
 // ever told wins, so the server can't move it later.
@@ -1071,13 +1103,8 @@ async function loadBootstrap() {
   S.me = b.me;
   drafts = createDrafts(S.me.id);
   S.mediaToken = b.mediaToken;
-  S.iceServers = b.iceServers;
-  // With relays in several regions, find the nearest ones in the background (cached for 6 hours). Someone who avoids
-  // member relays never measures one (measuring shows the relay this device's IP address).
-  setTimeout(() => {
-    const usable = usableIce(b.iceServers, avoidsMemberRelays(S.me));
-    if (usable.filter((e) => [].concat(e.urls || []).some((u) => /^turns?:/.test(u))).length > 2) rankRelays(usable).then((r) => { S.relayRanks = r; }).catch(() => {});
-  }, 4000);
+  S.iceServers = b.iceServers; iceAt = Date.now(); iceAsked++; iceFor = relayChoice = avoidsMemberRelays(S.me);
+  setTimeout(() => rankNearest(), 4000);
   S.e2eeSince = rememberE2eeSince(b.e2eeSince);
   S.users = b.users;
   S.servers = b.servers;

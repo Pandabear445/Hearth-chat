@@ -56,7 +56,8 @@ export class Voice {
     this.getIceServers = getIceServers;
     this.ensureIce = ensureIce; // fetches new relay logins first when the ones we have are about to run out
     // The machines of relays this person avoids (member relays, when they chose to: relays.js), asked each time since
-    // the choice can change. The other side's network candidates there are dropped, so nothing is sent to them.
+    // the choice can change. The other side's network candidates there are dropped, so this app never connects to
+    // them (the browser still answers a connection check that comes from one).
     this.avoidHosts = avoidHosts || (() => null);
     this.onChange = onChange || (() => {});
     this.onSpeaking = onSpeaking || (() => {});

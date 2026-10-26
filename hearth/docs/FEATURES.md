@@ -1989,7 +1989,13 @@ The page lists what a relay sees and can't (the same list as README → Member r
 - "Let members offer relays" is `PATCH /api/admin/member-relays`.
 
 **Privacy & safety**: "Avoid relays run by members" sets `memberRelays: 'avoid'` (`PATCH /api/me/privacy`). The app
-then never measures or uses a member's relay, and drops the other side's candidates on one (`relays.js`, `voice.js`).
+then never uses, measures or connects through a member's relay, and drops the other side's candidates on one
+(`relays.js`, `voice.js`). `/api/ice` gives it no login for any member relay, only where every approved one is
+(`community: true`, no username or credential), and the app never hands such an entry to WebRTC or measures it.
+Changing the choice fetches `/api/ice` again at once on every device (`user:update`), a call in progress switches to
+the new list and the relays are measured again; before a call, an avoider's list is fetched again when it's more than
+10 minutes old. What it can't do: the browser answers the connection checks that reach it, so a member relay the other
+person's call goes through can still learn the avoider's address when their network lets those checks in.
 
 The rest of the server side (per-relay pseudonyms, at most 8 member relays per person, the uninstall script, the
 agent switching itself off after a day of refusals): README → Member relays, and SECURITY.md.

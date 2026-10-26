@@ -1614,6 +1614,7 @@ function privacyTab(app) {
       const out = await api('PATCH', '/me/privacy', { [k]: v });
       app.S.me.privacy = out; toast('Saved.');
       if (k === 'outsideImages') app.redrawImageLinks(); // image links already on screen follow the new choice
+      if (k === 'memberRelays' && app.followRelayChoice) app.followRelayChoice(); // new call relays, a call in progress too
     } catch (e) { toast(e.message, 'error'); }
   };
   const outside = chips(OUTSIDE_MODES.map((m) => [m, m === 'ask' ? `${OUTSIDE_LABELS[m]} (default)` : OUTSIDE_LABELS[m]]), outsideMode(p), (v) => save('outsideImages', v));
@@ -1642,11 +1643,12 @@ function privacyTab(app) {
     section('Outside images',
       h('p', { class: 'set-sub' }, 'A picture linked from another site loads from that site, which then sees your IP address. Files people send, link preview pictures and GIFs this server passes through for you always show. This choice follows you to all your devices.'),
       outside),
-    // Member relays (Settings → Help host): with this on, the app never measures or uses one, and drops the other
-    // side's addresses that are on one, so none of this person's call packets reach a member's machine.
+    // Member relays (Settings → Help host): with this on, the app never uses, measures or connects through one, and
+    // ignores the other side's addresses on one. It can't promise more: the browser answers the connection checks that
+    // reach it, so a member relay the other person's call goes through can still learn this person's address.
     section('Call relays run by members',
       toggle('Avoid relays run by members', p.memberRelays === 'avoid', (v) => save('memberRelays', v ? 'avoid' : 'use'),
-        'Members can run call relays for this server, which the owner approves. A relay sees your IP address when your call goes through it, never what’s said or shown. On: your calls only use the owner’s relays, which can make calls on some networks take longer to connect or fail.')),
+        'Members can run call relays for this server, which the owner approves. A relay sees your IP address when your call goes through it, never what’s said or shown. On: your app never uses, measures or connects through a member’s relay, and ignores the other person’s addresses on one, which can make calls on some networks take longer to connect or fail. If the other person’s call goes through a member’s relay, that relay can still see your IP address when your network lets its connection checks in (a public IP address, some routers).')),
     section('Blocked people',
       h('p', { class: 'set-sub' }, 'Blocked people can\u2019t DM you or send friend requests. Their messages in shared servers are hidden behind a click. They aren\u2019t notified.'),
       blockedHost),
@@ -2262,7 +2264,7 @@ function soundsSection() {
 }
 
 // Checks from this browser that the relay hands out working relay addresses. (Not through member relays when this
-// person avoids them: the test would show them this device's IP address.)
+// person avoids them: the test would show them this device's IP address. Nor through one listed without a login.)
 async function testRelay(out, app) {
   clear(out).append(h('span', { class: 'spinner' }), ' Testing the relay\u2026');
   try {
