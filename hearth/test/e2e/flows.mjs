@@ -4822,6 +4822,7 @@ async function sideView(t) {
   check((await bob.$('#members .panel-head h2').textContent()) === 'Pinned to side', 'The panel should be called Pinned to side.');
   check(/DM with Alice Wonder/.test(await card(bob, recipeId).locator('.sv-where').textContent()), 'A card should say where it’s from.');
   check((await card(bob, recipeId).locator('.sv-text').textContent()).includes('two cups of flour'), 'A card should show the message’s words.');
+  check(!(await card(bob, recipeId).locator('.msg-flag, .bot-tag').count()), 'A card should say nothing more about who wrote it than the chat does (nothing here).');
   check((await headButton(bob).getAttribute('aria-label')) === 'Hide pinned to side (1)', `The header button should count it (got ${await headButton(bob).getAttribute('aria-label')}).`);
   const box = await bob.$('#members').boundingBox();
   check(box && box.width >= 380, `The panel should be as wide as a thread (got ${box && box.width}).`);
@@ -4857,20 +4858,50 @@ async function sideView(t) {
   check(await bob.page.$eval(`#members .sv-card[data-sid="${plumId}:0"] .sv-pic img`, (i) => i.__kept === true), 'The picture should stay as it was, not be drawn again.');
   check((await headButton(bob).getAttribute('aria-label')) === 'Hide pinned to side (2)', 'The group chat’s header should have the button too.');
 
-  // The picture opens in the viewer from the side.
-  await card(bob, `${plumId}:0`).locator('.sv-open').click();
+  // The picture opens in the viewer from the side (from the keyboard here).
+  const focusedOn = (sel) => bob.page.evaluate((x) => !!document.activeElement && document.activeElement.matches(x), sel);
+  const focused = () => bob.page.evaluate(() => (document.activeElement ? document.activeElement.outerHTML.slice(0, 100) : 'nothing'));
+  await card(bob, `${plumId}:0`).locator('.sv-open').focus();
+  await bob.page.keyboard.press('Enter');
   await bob.$('.viewer').waitFor();
   check((await bob.$('.viewer-name').textContent()) === 'side-plum.png', 'The viewer should open on the pinned picture.');
   await bob.$('.viewer-bar button[aria-label="Unpin from side"]').waitFor();
   await bob.page.waitForFunction(() => { const i = document.querySelector('.viewer-img'); return !!i && i.src.startsWith('blob:') && i.naturalWidth === 240; });
+  // Unpinned and pinned again from the viewer's bar while it's open: its card is drawn anew, and Esc gives the focus
+  // back to the picture on the new card (not to the page).
+  await bob.$('.viewer-bar button[aria-label="Unpin from side"]').click();
+  await card(bob, `${plumId}:0`).waitFor({ state: 'detached' });
+  await bob.$('.viewer-bar button[aria-label="Pin to side"]').click();
+  await card(bob, `${plumId}:0`).locator('.sv-open').waitFor();
   await bob.page.keyboard.press('Escape');
   await bob.$('.viewer').waitFor({ state: 'detached' });
+  check(await focusedOn(`#members .sv-card[data-sid="${plumId}:0"] .sv-open`), `Closing the viewer should give the focus back to the picture on its card, drawn anew (got ${await focused()}).`);
+  check(JSON.stringify(await sids(bob)) === JSON.stringify([`${plumId}:0`, recipeId]), 'Pinned again, it should be back on top.');
 
   // ---- Jump: back to the DM, at the message; beside the chat, the panel stays.
   await card(bob, recipeId).locator('.sv-actions .btn', { hasText: 'Jump' }).click();
   await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
   await bob.page.waitForFunction(shown, recipe);
   check((await sids(bob)).length === 2, 'On a desktop the panel should stay open after a jump.');
+
+  // ---- Unpinned from the viewer it was opened from, its card goes: Esc puts the focus on the panel's next card
+  // rather than nowhere. (Then pinned again, from the chat's picture.)
+  await card(bob, `${plumId}:0`).locator('.sv-open').focus();
+  await bob.page.keyboard.press('Enter');
+  await bob.$('.viewer').waitFor();
+  await bob.$('.viewer-bar button[aria-label="Unpin from side"]').click();
+  await card(bob, `${plumId}:0`).waitFor({ state: 'detached' });
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  check(await focusedOn(`#members .sv-card[data-sid="${recipeId}"] button`), `With its card gone, closing the viewer should put the focus on the panel’s next card (got ${await focused()}).`);
+  await bob.page.waitForFunction((id) => { const i = document.querySelector(`#messages .msg[data-mid="${id}"] .att-img`); return !!i && i.src.startsWith('blob:'); }, plumId, { timeout: 30000 });
+  await plum.locator('.att-img').click({ position: { x: 24, y: 80 } });
+  await bob.$('.viewer').waitFor();
+  await bob.$('.viewer-bar button[aria-label="Pin to side"]').click();
+  await bob.$('.viewer-bar button[aria-label="Unpin from side"]').waitFor();
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  await bob.page.waitForFunction((want) => JSON.stringify([...document.querySelectorAll('#members .sv-card')].map((e) => e.dataset.sid)) === want, JSON.stringify([`${plumId}:0`, recipeId]));
 
   // ---- × takes one off.
   await card(bob, recipeId).locator('.sv-x').click();

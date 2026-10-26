@@ -225,7 +225,9 @@ function panel({ msgs = [], places = { 'd:dm1': { kind: 'dm', private: true, lab
   const server = new Map(msgs.map((m) => [m.id, m]));
   const storage = memStore();
   const log = { requests: [], decrypted: [], loads: [], opened: [], dropped: [], forgot: [], toasts: [], shown: 0, changed: 0, jumps: [] };
-  const state = { me: 'me', sharing: false, blocked: new Set(), now: Date.UTC(2026, 9, 2), places: { ...places } };
+  // bind: message id -> the binding issues the app finds for it (bindingOfMessage), which can change while the message
+  // doesn't (another copy of it loaded somewhere).
+  const state = { me: 'me', sharing: false, blocked: new Set(), now: Date.UTC(2026, 9, 2), places: { ...places }, bind: new Map() };
   const chat = new Map();
   const net = (m) => { const { plain, ...rest } = m; return { ...rest, ciphertext: JSON.stringify(plain) }; };
   const keyOf = (m) => (m.dmId ? 'd:' + m.dmId : 'c:' + m.channelId);
@@ -261,6 +263,27 @@ function panel({ msgs = [], places = { 'd:dm1': { kind: 'dm', private: true, lab
     place: (key) => state.places[key] || null,
     hidden: (key) => { const p = state.places[key]; return !!p && p.private && state.sharing; },
     author: (m) => { const el = document.createElement('span'); el.className = 'author'; el.append(m.authorId); return el; },
+    // What the chat's row says about who could have written it, as app.js messageTrust does: one flag for a bot's or an
+    // older message, else for a key or signature (a warning); and a warning for binding issues.
+    trust: (m) => {
+      const d = m.dec || {};
+      const notes = [];
+      if (d.bot) notes.push({ label: 'Bot · not end-to-end encrypted' });
+      else if (d.legacy) notes.push({ label: 'Older message — not end-to-end encrypted, sender not verified' });
+      else if (d.keyNote === 'listed') notes.push({ warn: true, label: '⚠ Older key — not verified' });
+      else if (d.verified === false) notes.push({ warn: true, label: '⚠ Sender could not be verified' });
+      const issues = state.bind.get(m.id) || [];
+      if (issues.length) notes.push({ warn: true, label: `⚠ The server may have moved, repeated or rolled back this message (${issues.join(', ')})` });
+      return {
+        sig: notes.map((n) => n.label).join('|'),
+        flags: ({ warnings = false } = {}) => notes.filter((n) => n.warn || !warnings).map((n) => {
+          const el = document.createElement('div');
+          el.className = `msg-flag${n.warn ? ' bad' : ''}`;
+          el.append(n.label);
+          return el;
+        }),
+      };
+    },
     stamp: (ts) => `at ${ts}`,
     textEl: (m) => { if (!m.dec.t) return null; const el = document.createElement('div'); el.className = 'sv-text'; el.append(m.dec.t); return el; },
     thumb: (m, f) => { log.loads.push(`${m.id}:${f.name}:thumb`); return Promise.resolve(`blob:${f.name}:thumb`); },
@@ -459,6 +482,167 @@ test('an edit shows; the word filter, blocks and sharing your screen cover what 
   assert.match(p.card('a').textContent, /after the edit/);
 });
 
+// A card is often a copy the side view fetched by itself (locate, then ?around=), so a server could serve a message
+// there rather than in the chat: under its author's name, with words it chose. Whatever the chat's row would say about
+// that (an older message nothing proves the author of, a key that isn't theirs, the server having moved or rolled it
+// back, a bot's post) the card says too.
+test('a card says what the chat’s row says about who could have written it: all of it, the warnings under the word filter, nothing for someone blocked', async () => {
+  const p = panel({ msgs: [
+    sent('old', { channelId: 'ch1' }, { t: 'words the server chose', f: [], legacy: true, verified: false }),
+    sent('key', { dmId: 'dm1' }, { t: 'under a key the server lists', f: [], keyNote: 'listed', verified: false }),
+    sent('sig', { channelId: 'ch1' }, { t: 'a signature that doesn’t match', f: [], verified: false }),
+    sent('hid', { channelId: 'ch1' }, { t: 'a secret, rolled back', f: [], legacy: true }),
+    sent('blk', { channelId: 'ch1' }, { t: 'from a troll', f: [], keyNote: 'listed' }, { authorId: 'troll' }),
+    sent('fine', { channelId: 'ch1' }, { t: 'nothing to say about this one', f: [] }),
+  ] });
+  p.state.bind.set('hid', ['older']);
+  for (const [key, id] of [['c:ch1', 'old'], ['d:dm1', 'key'], ['c:ch1', 'sig'], ['c:ch1', 'hid'], ['c:ch1', 'blk'], ['c:ch1', 'fine']]) p.S.pin({ key, messageId: id });
+  p.S.draw(p.el);
+  await settle();
+  const flags = (id) => p.card(id).querySelectorAll('.sv-flags .msg-flag').map((f) => [f.textContent, f.classList.contains('bad')]);
+  assert.deepEqual(flags('old'), [['Older message — not end-to-end encrypted, sender not verified', false]]);
+  assert.match(p.card('old').textContent, /words the server chose/);
+  assert.deepEqual(flags('key'), [['⚠ Older key — not verified', true]]);
+  assert.deepEqual(flags('sig'), [['⚠ Sender could not be verified', true]]);
+  assert.deepEqual(flags('fine'), []);
+  assert.equal(p.card('fine').querySelector('.sv-flags'), null, 'nothing to say: nothing there');
+  // Hidden by the word filter: the words go, its warnings stay (as on the chat's row, filteredEl), the rest goes with
+  // the words.
+  assert.match(p.card('hid').textContent, /Hidden by your word filter/);
+  assert.doesNotMatch(p.card('hid').textContent, /a secret|Older message/);
+  assert.deepEqual(flags('hid'), [['⚠ The server may have moved, repeated or rolled back this message (older)', true]]);
+  // From someone you blocked: nothing of the message, as in the chat; Show shows it, flag and all.
+  assert.deepEqual(flags('blk'), [['⚠ Older key — not verified', true]]);
+  p.state.blocked.add('troll');
+  p.S.draw(p.el);
+  assert.deepEqual(flags('blk'), []);
+  assert.doesNotMatch(p.card('blk').textContent, /troll|Older key/);
+  p.card('blk').querySelector('.link-btn').click();
+  assert.deepEqual(flags('blk'), [['⚠ Older key — not verified', true]]);
+  // Unreadable here: nothing shows of it, flags included (the chat's row has none either).
+  const q = panel({ msgs: [sent('wait', { channelId: 'ch1' }, { pending: true, legacy: true })] });
+  q.S.pin({ key: 'c:ch1', messageId: 'wait' });
+  q.S.draw(q.el);
+  await settle();
+  assert.match(q.card('wait').textContent, /Waiting for this message’s key/);
+  assert.equal(q.card('wait').querySelector('.msg-flag'), null);
+});
+
+test('what’s said about who wrote it is in a card’s signature: a binding issue turning up later draws that card anew, and only that one', async () => {
+  const p = panel({ msgs: [
+    sent('a', { channelId: 'ch1' }, { t: 'first', f: [] }),
+    sent('b', { channelId: 'ch1' }, { t: 'second', f: [] }),
+  ] });
+  p.S.pin({ key: 'c:ch1', messageId: 'a' });
+  p.S.pin({ key: 'c:ch1', messageId: 'b' });
+  p.S.draw(p.el);
+  await settle();
+  const a = p.card('a');
+  const b = p.card('b');
+  for (let i = 0; i < 3; i++) p.S.draw(p.el);
+  assert.equal(p.card('a'), a, 'nothing changed: the same card');
+  // The same message, the same copy of it: another copy loaded elsewhere shows the server repeated it.
+  p.state.bind.set('a', ['repeated']);
+  p.S.draw(p.el);
+  assert.notEqual(p.card('a'), a, 'drawn anew');
+  assert.match(p.card('a').querySelector('.sv-flags').textContent, /rolled back this message \(repeated\)/);
+  assert.equal(p.card('b'), b, 'the other card is left as it was');
+  const again = p.card('a');
+  p.state.bind.set('a', ['repeated', 'older']);
+  p.S.draw(p.el);
+  assert.notEqual(p.card('a'), again);
+  assert.match(p.card('a').querySelector('.sv-flags').textContent, /\(repeated, older\)/);
+});
+
+// SIDE.reset() on reconnect (app.js loadBootstrap) is how the panel catches up with what happened while it was offline:
+// the message just pinned, as the chat had it then, mustn't come before the server's copy once that's happened.
+test('the message just pinned is only handed to the next drawing: after a reconnect or a close, an edit or a delete missed meanwhile shows', async () => {
+  const p = panel({ msgs: [
+    sent('m1', { dmId: 'dm1' }, { t: 'original words', f: [] }),
+    sent('m2', { dmId: 'dm1' }, { t: 'second, as first loaded', f: [] }),
+  ] });
+  // Pinned from the chat, which has it: the panel takes the chat's copy, asking the server nothing.
+  const chatCopy = (m) => ({ ...p.net(m), dec: { ...m.plain } });
+  const c1 = chatCopy(p.server.get('m1'));
+  p.chat.set('m1', c1);
+  p.S.menuItemFor(c1).action();
+  p.S.draw(p.el);
+  await settle();
+  assert.deepEqual(p.log.requests, []);
+  assert.match(p.card('m1').textContent, /original words/);
+  // Offline meanwhile, and edited. Back online the chat starts again with nothing loaded and the panel lets go
+  // (loadBootstrap): the server's copy, edited, is asked for.
+  p.chat.clear();
+  p.server.set('m1', sent('m1', { dmId: 'dm1' }, { t: 'edited while you were away', f: [] }, { editedAt: 5 }));
+  p.S.reset();
+  p.S.draw(p.el);
+  await settle();
+  assert.match(p.card('m1').textContent, /edited while you were away/);
+  assert.doesNotMatch(p.card('m1').textContent, /original words/);
+  assert.deepEqual(p.log.requests, ['/messages/m1/locate', '/dms/dm1/messages?around=m1']);
+  // Deleted for everyone while away: no longer available, not the copy from before.
+  p.server.delete('m1');
+  p.S.reset();
+  p.S.draw(p.el);
+  await settle();
+  assert.ok(p.card('m1').classList.contains('gone'));
+  assert.doesNotMatch(p.card('m1').textContent, /edited while you were away|original words/);
+  assert.deepEqual(p.S.messages().map((m) => m.id), []);
+  // Pinned while the panel is open, then closed: the copy the chat holds by the time it opens again is the one shown
+  // (it loaded the edit meanwhile), not the one pinned.
+  const c2 = chatCopy(p.server.get('m2'));
+  p.chat.set('m2', c2);
+  p.S.menuItemFor(c2).action();
+  assert.match(p.card('m2').textContent, /second, as first loaded/);
+  p.S.reset();
+  p.chat.set('m2', { ...c2, editedAt: 7, dec: { t: 'second, edited since', f: [] } });
+  const asked = p.log.requests.length;
+  p.S.draw(p.el);
+  await settle();
+  assert.match(p.card('m2').textContent, /second, edited since/);
+  assert.deepEqual(p.log.requests.slice(asked), ['/messages/m1/locate'], 'm2 is the chat’s copy, so nothing is asked for it (m1, deleted, is asked for again)');
+});
+
+// A disappearing message held only here (pinned from another conversation): a drawing can reach it after its time and
+// before the timer's pass (a background tab's timers run late; the chat deleting another expired message draws the
+// panel first). It goes the same way either way: with everything the app kept of it, its decrypted pictures too.
+test('a disappearing message a drawing finds past its time goes with everything kept of it, before the timer’s pass gets to it', async () => {
+  const until = Date.UTC(2026, 9, 3);
+  const pic = file('v.png', 'image/png', { th: { url: '/uploads/vth.bin', k: 'k' } });
+  const p = panel({ msgs: [
+    sent('d1', { dmId: 'dm1' }, { t: 'a vanishing picture', f: [pic] }, { expiresAt: until }),
+    sent('d2', { dmId: 'dm1' }, { t: 'the chat’s, gone first', f: [] }, { expiresAt: until }),
+  ] });
+  p.S.pin({ key: 'd:dm1', messageId: 'd1' });
+  p.S.pin({ key: 'd:dm1', messageId: 'd2' });
+  p.S.draw(p.el);
+  await settle();
+  assert.deepEqual(p.S.messages().map((m) => m.id).sort(), ['d1', 'd2']);
+  const gone = (id) => p.card(id).classList.contains('gone') && /This message is no longer available/.test(p.card(id).textContent);
+  // Their time comes. The app's timer deletes the chat's own expired message first (purgeExpired → onDeleteMessage →
+  // SIDE.onDelete), which draws the panel before SIDE.expire() is reached.
+  p.state.now = Date.UTC(2026, 9, 4);
+  p.S.onDelete('d:dm1', ['d2']);
+  assert.ok(gone('d1') && gone('d2'));
+  assert.deepEqual(p.log.forgot, [['d1']], 'everything the app kept of d1 goes (deps.forget: its decrypted files, the viewer, notifications…)');
+  assert.deepEqual(p.S.messages(), []);
+  // The timer's pass, and later drawings, have nothing left to do.
+  p.S.expire();
+  p.S.draw(p.el);
+  assert.deepEqual(p.log.forgot, [['d1']]);
+  // Just a drawing (someone came online): the same.
+  const q = panel({ msgs: [sent('d3', { channelId: 'ch1' }, { t: 'another', f: [pic] }, { expiresAt: until })] });
+  q.S.pin({ key: 'c:ch1', messageId: 'd3' });
+  q.S.draw(q.el);
+  await settle();
+  q.state.now = Date.UTC(2026, 9, 4);
+  q.S.draw(q.el);
+  assert.ok(q.card('d3').classList.contains('gone'));
+  assert.deepEqual(q.log.forgot, [['d3']]);
+  q.S.expire();
+  assert.deepEqual(q.log.forgot, [['d3']]);
+});
+
 test('the 26th pinned takes the oldest off, with a toast; closing lets go of what was loaded, signing out of the list', async () => {
   const p = panel();
   for (let i = 0; i < 25; i++) p.S.pin({ key: 'd:dm1', messageId: `m${i}` });
@@ -535,6 +719,48 @@ test('app.js: the side panel stays open across conversations, is as wide as a th
   const deps = app.slice(app.indexOf('const SIDE = createSideView({'), app.indexOf('\n});\n', app.indexOf('const SIDE = createSideView({')));
   assert.match(deps, /hidden: \(key\) => \{ const p = sidePlace\(key\); return !!p && p\.private && hiddenWhileSharing\(key\); \}/);
   assert.match(deps, /if \(isPhoneLayout\(\) && panelMode\(\)\) closePanel\(\);/);
+});
+
+test('app.js: a card says who wrote it as the chat does, from the same code (messageTrust), and the viewer gives the focus back to it', () => {
+  const app = read('public', 'js', 'app.js');
+  const fn = (name) => { const a = app.indexOf(`function ${name}(`); assert.ok(a >= 0, name); return app.slice(a, app.indexOf('\n}\n', a)); };
+  const trust = fn('messageTrust');
+  // One place says it all: postFlag, the key and signature notes, the binding flag, the BOT tag and a webhook's face.
+  for (const part of [/const flag = postFlag\(m, author\);/, /d\.keyNote === 'listed'/, /d\.keyNote === 'new'/, /d\.keyNote === 'pinned'/,
+    /d\.verified === false && !m\.dmId/, /bindingFlag\(m, n\.bind\)/, /d\.legacyFormat/, /const bot = isBotPost\(author, m\);/, /face: hookFace\(author, m\),/]) {
+    assert.match(trust, part);
+  }
+  // The chat's rows draw from it (filteredEl takes the warnings from the row it draws out of sight), and nothing else
+  // says any of it again on its own.
+  const fill = fn('fillMessage');
+  assert.match(fill, /const trust = messageTrust\(m, author, bind\);/);
+  assert.match(fill, /avatarEl\(trust\.face, 40\)/);
+  assert.match(fill, /nameEl\(trust\.face, \{ roleColor: rs\.color, server \}\)/);
+  assert.match(fill, /trust\.bot \? h\('span', \{ class: 'bot-tag' \}, 'BOT'\) : null,/);
+  assert.doesNotMatch(fill, /postFlag|keyNote|bindingFlag|legacyFormat|hookFace|isBotPost/);
+  for (const once of ["keyNote === 'listed'", "keyNote === 'new'", 'Sender could not be verified', 'Older encryption format']) {
+    assert.equal(app.split(once).length - 1, 1, once);
+  }
+  // The side view's deps: the author as the chat shows them, its flags, and the words as the chat draws them
+  // (@everyone only from someone allowed to use it; Markdown only when it's on).
+  const deps = app.slice(app.indexOf('const SIDE = createSideView({'), app.indexOf('\n});\n', app.indexOf('const SIDE = createSideView({')));
+  assert.match(deps, /author: \(m\) => \{ const t = messageTrust\(m, getUser\(m\.authorId\)\); return \[avatarEl\(t\.face, 20\), nameEl\(t\.face, \{ server: msgServer\(m\) \}\), t\.bot \? h\('span', \{ class: 'bot-tag' \}, 'BOT'\) : null\]; \},/);
+  assert.match(deps, /trust: \(m\) => messageTrust\(m, getUser\(m\.authorId\)\),/);
+  assert.match(deps, /html: P\.chat\.markdown \? md\(t, \{ mentionName: S\.me\.username, everyone: senderMayPingEveryone\(m\) \}\) : escapeText\(t\),/);
+  assert.doesNotMatch(deps, /getUser\(m\.authorId\); return \[avatarEl\(u/);
+  // The viewer opened from a card: on close, back to that card's picture, drawn anew or not; with the card gone
+  // (unpinned from the viewer), or Photos & videos swapped for the side view, to the panel, else the main view, never
+  // nowhere.
+  const v = app.slice(app.indexOf('function openViewer('), app.indexOf('\nasync function toPng('));
+  assert.match(v, /const openerCard = opener && opener\.closest \? opener\.closest\('\.sv-card'\) : null;/);
+  assert.match(v, /const openerSid = openerCard \? openerCard\.dataset\.sid : null;/);
+  assert.match(v, /const openerAt = openerCard \? \[\.\.\.openerCard\.querySelectorAll\('\.sv-open'\)\]\.indexOf\(opener\) : -1;/);
+  const close = v.slice(v.indexOf('  const close = () => {'), v.indexOf('\n  };\n', v.indexOf('  const close = () => {')));
+  assert.match(close, /if \(!opener \|\| opener\.isConnected \|\| \(!openerGid && !openerSid\)\) return opener;/);
+  assert.match(close, /const card = openerSid \? \$\$\('#members \.sv-card'\)\.find\(\(x\) => x\.dataset\.sid === openerSid\) : null;/);
+  assert.match(close, /if \(card\) return card\.querySelectorAll\('\.sv-open'\)\[openerAt\] \|\| card\.querySelector\('\.sv-open, \.sv-x'\);/);
+  assert.match(close, /return \$\('#members \.sv-card button'\) \|\| \$\('#members button'\) \|\| \$\('#main'\);/);
+  assert.match(close, /if \(back && back\.isConnected && back !== document\.body\) back\.focus\(\{ preventScroll: true \}\);/);
 });
 
 test('app.css: its rules are in its own section, as wide as a thread, and the header button is hidden on phones', () => {
