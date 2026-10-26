@@ -2,12 +2,14 @@
 // which the apps decrypt and show. The server sends it with the DM or group, and again with every delete that can
 // change it, to everyone in the conversation on every device they have open; an edit carries the message's new
 // ciphertext, which the apps put in its place. The apps' side (public/js/app.js, run here from its own source) keeps
-// the line right whichever order decryption finishes in, whether or not the conversation is loaded.
+// the line right whichever order decryption finishes in, whether or not the conversation is loaded, and while
+// someone is typing there the line keeps saying so until they stop.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { startServer, hex, sleep } = require('./helpers');
 
 const cipher = () => 'v2:' + crypto.randomBytes(48).toString('base64');
@@ -38,7 +40,9 @@ const report = async (by, id) => {
   assert.equal(r.status, 200, r.text);
 };
 
+let TY; // public/js/typing.js
 before(async () => {
+  TY = await import(pathToFileURL(path.join(__dirname, '..', 'public', 'js', 'typing.js')).href);
   srv = await startServer();
   alice = await srv.register(`alice${hex(3)}`); bob = await srv.register(`bob${hex(3)}`); carol = await srv.register(`carol${hex(3)}`);
   outsider = await srv.register(`out${hex(3)}`);
@@ -178,7 +182,9 @@ test('group chat edit: the update carries the new ciphertext of the newest messa
 
 // ------------------------------------------------------------------ the apps' side
 // The conversation-list section of app.js (previewDm, previewGroup, setLast, lastEdited…) with onNewMessage,
-// onUpdateMessage and onDeleteMessage, run with a stand-in for decryption whose timing each test controls.
+// onUpdateMessage and onDeleteMessage, run with a stand-in for decryption whose timing each test controls. With
+// lists: true the sidebar and Home draw each conversation's line as app.js does (convLine, drawConvLine), and
+// typing.js's tracker says who's typing (typingChanged redraws those lines in place).
 const appSrc = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
 const section = (() => {
   const i = appSrc.indexOf('// ======================================================================= conversation previews');
@@ -187,7 +193,19 @@ const section = (() => {
 })();
 const fnSrc = (name) => { const i = appSrc.search(new RegExp(`\\n(async )?function ${name}\\(`)); assert.ok(i > 0, name); return appSrc.slice(i, appSrc.indexOf('\n}\n', i) + 2); };
 
-function app({ me = 'me', dms = [], servers = [], view = { type: 'home' } } = {}) {
+// The few DOM bits a line uses (h, clear): an element is its classes, its data and what's in it.
+function node(tag, attrs, ...kids) {
+  const el = {
+    tag, className: (attrs && attrs.class) || '', dataset: { ...((attrs && attrs.dataset) || {}) }, kids: [],
+    classList: { toggle: (c, on) => { el.className = [...el.className.split(' ').filter((x) => x && x !== c), ...(on ? [c] : [])].join(' '); } },
+    append: (...xs) => { el.kids.push(...xs.flat().filter((x) => x != null)); },
+    get textContent() { return el.kids.map((k) => (typeof k === 'string' ? k : k.textContent)).join(''); },
+  };
+  el.append(...kids);
+  return el;
+}
+
+function app({ me = 'me', dms = [], servers = [], view = { type: 'home' }, lists = false } = {}) {
   const S = { me: { id: me }, dms, servers, view, previews: {}, msgs: {}, typing: {}, lastIds: {}, lastRead: {}, unread: new Set(), mentions: new Map(), editing: null,
     thread: null, threads: {}, select: null };
   // Decryption by hand: "words" decrypts to words, once its gate (if any) opens.
@@ -197,28 +215,43 @@ function app({ me = 'me', dms = [], servers = [], view = { type: 'home' } } = {}
   const drawn = { sidebar: 0, main: 0 };
   // What a delete lets go of: notifications closed, unread counts asked for again, a disappearing message's copies.
   const letGo = { closed: [], refresh: 0, copies: [] };
+  // The lines the sidebar and Home show now (drawn afresh with them, as renderSidebar and renderMain do).
+  const shown = { sidebar: [], home: [] };
+  const convs = () => [...S.dms.map((d) => ({ key: 'd:' + d.id, unreadKey: 'd:' + d.id })),
+    ...S.servers.filter((s) => s.kind === 'group').map((g) => ({ key: 'g:' + g.id, unreadKey: 'c:' + g.channels[0].id }))];
+  let fns = null;
   const env = {
     S, sec: { decryptDmMessage: decrypt, decryptChannelMessage: decrypt }, decryptMessage: decrypt,
     isExpired: () => false, nowServer: () => Date.now(), disappears: () => false, armClientExpiry() {}, dropPendingSend() {},
     isGroup: (s) => !!s && s.kind === 'group', serverById: (id) => S.servers.find((s) => s.id === id) || null,
     serverOfChannel: (cid) => S.servers.find((s) => s.channels.some((c) => c.id === cid)),
     currentServer: () => S.servers.find((s) => s.id === S.view.serverId),
-    later: (fn) => fn(), renderSidebar: () => { drawn.sidebar++; }, renderMain: () => { drawn.main++; }, renderRail() {},
+    later: (fn) => fn(), renderRail() {},
+    renderSidebar: () => { drawn.sidebar++; if (lists) shown.sidebar = convs().map((c) => fns.convLine(c, 'dm-row-status', '\u00a0')); },
+    renderMain: () => { drawn.main++; if (lists && S.view.type === 'home') shown.home = convs().map((c) => fns.convLine(c, 'conv-card-sub', 'No messages yet')); },
     WF: { check: () => null }, previewLabel: (x) => x, readableText: (t) => t, displayName: (u) => u.name, getUser: (id) => ({ name: id }),
     replaceMessageEl() {},
     // Photos & videos, photo tags, the side view and who's typing: not what's tested here.
     MEDIA: { onNew() {}, onUpdate() {}, onDelete() {}, repliesTo: () => [] }, NOTES: { onDelete() {}, repliesTo: () => [] },
-    SIDE: { onUpdate() {}, onDelete() {} }, TYPING: { stop() {} },
+    SIDE: { onUpdate() {}, onDelete() {} },
+    // Who's typing: typing.js's own tracker, whose typing lapses only when a test says (stop).
+    TYPING: TY.createTyping({ onChange: (key) => fns.typingChanged(key), timers: { set: () => 0, clear() {} } }), typingPreview: TY.typingPreview,
+    h: node, clear: (el) => { el.kids = []; return el; }, isSharing: () => false, shareAllowed: new Set(), nameInServer: (sv, u) => u.name,
+    renderTyping() {}, $$: (sel) => (sel === '.conv-line[data-typing-key]' ? [...shown.sidebar, ...shown.home] : []),
     forgetBindings() {}, forgetThreads() {}, closeThread() {}, renderSelectBar() {}, renderMessages() {}, currentKey: () => null, $: () => null,
     closeNotificationFor: (ids) => { letGo.closed.push([...ids]); }, refreshUnreadSoon: () => { letGo.refresh++; },
     forgetCopies: (msgs, ids, key) => { letGo.copies.push([[...ids], key]); },
   };
   const names = Object.keys(env);
-  const body = `${section}\n${['onNewMessage', 'onUpdateMessage', 'onDeleteMessage', 'forgetUnread'].map(fnSrc).join('\n')}
-return { previewDm, previewGroup, setLast, groupLastIs, lastEdited, onNewMessage, onUpdateMessage, onDeleteMessage };`;
+  const body = `${section}\n${['onNewMessage', 'onUpdateMessage', 'onDeleteMessage', 'forgetUnread',
+    'convPreview', 'convLine', 'drawConvLine', 'typingNames', 'typingDots', 'typingChanged'].map(fnSrc).join('\n')}
+return { previewDm, previewGroup, setLast, groupLastIs, lastEdited, onNewMessage, onUpdateMessage, onDeleteMessage, convLine, typingChanged };`;
   // eslint-disable-next-line no-new-func
-  const fns = new Function(...names, body)(...names.map((n) => env[n]));
-  return { S, hold, drawn, letGo, ...fns };
+  fns = new Function(...names, body)(...names.map((n) => env[n]));
+  // What a conversation's lines say now: its row in the sidebar and (on Home) its card.
+  const says = (key) => [...shown.sidebar, ...shown.home].filter((el) => el.dataset.typingKey === key).map((el) => el.textContent);
+  const draw = () => { env.renderSidebar(); env.renderMain(); };
+  return { S, hold, drawn, letGo, shown, says, draw, TYPING: env.TYPING, ...fns };
 }
 const tick = () => new Promise((r) => setImmediate(r));
 const dmMsg = (id, words, authorId = 'me') => ({ id, dmId: 'd1', authorId, ciphertext: words, createdAt: Date.now() });
@@ -373,4 +406,50 @@ test('app: a message deleted before it was read takes its notification with it a
   a.onDeleteMessage('d:d1', 'm3', { expired: true });
   assert.deepEqual(a.letGo.copies, [[['m3'], 'd:d1']]);
   assert.equal(a.letGo.refresh, 2);
+});
+
+test('app: while someone types, an edit or a delete of the newest message leaves “typing…” on the line; the new words show once they stop', async () => {
+  // A DM, on Home: bob's row in the sidebar and his card.
+  const a = app({ dms: [{ id: 'd1', last: dmMsg('m2', 'old words', 'bob') }], lists: true });
+  await a.previewDm(a.S.dms[0]);
+  a.draw();
+  assert.deepEqual(a.says('d:d1'), ['old words', 'old words']);
+  a.TYPING.start('d:d1', 'bob');
+  const row = a.shown.sidebar[0];
+  assert.deepEqual(a.says('d:d1'), ['typing…', 'typing…']);
+  // His newest message is edited (from his other device) while he types: the line is worked out again and the lists
+  // drawn again, still saying he's typing.
+  await a.onUpdateMessage('d:d1', { ...dmMsg('m2', 'new words', 'bob'), editedAt: 2 });
+  await tick();
+  assert.equal(a.S.previews['d:d1'], 'new words');
+  assert.notEqual(a.shown.sidebar[0], row, 'the sidebar was drawn again');
+  assert.deepEqual(a.says('d:d1'), ['typing…', 'typing…']);
+  // He stops: the edited words, in place.
+  const now = a.shown.sidebar[0];
+  a.TYPING.stop('d:d1', 'bob');
+  assert.equal(a.shown.sidebar[0], now);
+  assert.deepEqual(a.says('d:d1'), ['new words', 'new words']);
+  // Deleted while he types again: the same, with the message before it.
+  a.TYPING.start('d:d1', 'bob');
+  await a.setLast(a.S.dms[0], dmMsg('m1', 'the one before', 'bob'));
+  assert.deepEqual(a.says('d:d1'), ['typing…', 'typing…']);
+  a.TYPING.stop('d:d1', 'bob');
+  assert.deepEqual(a.says('d:d1'), ['the one before', 'the one before']);
+  // A group chat open on screen (its row in the sidebar), with two people typing through a delete that moves it down.
+  const g = app({ servers: [{ id: 'g1', kind: 'group', channels: [{ id: 'gc' }], last: { ...groupMsg('x2', 'second'), createdAt: 20 }, lastMessageAt: 20 }],
+    view: { type: 'channel', serverId: 'g1' }, lists: true });
+  await g.previewGroup(g.S.servers[0]);
+  g.draw();
+  assert.deepEqual(g.says('c:gc'), ['bob: second']);
+  g.TYPING.start('c:gc', 'bob'); g.TYPING.start('c:gc', 'carol');
+  assert.deepEqual(g.says('c:gc'), ['2 people are typing…']);
+  g.groupLastIs('gc', { ...groupMsg('x1', 'first', 'me'), createdAt: 10 }, 10);
+  await tick(); await tick();
+  assert.equal(g.S.previews['g:g1'], 'You: first');
+  assert.equal(g.S.servers[0].lastMessageAt, 10);
+  assert.deepEqual(g.says('c:gc'), ['2 people are typing…']);
+  g.TYPING.stop('c:gc', 'bob');
+  assert.deepEqual(g.says('c:gc'), ['carol is typing…']);
+  g.TYPING.stop('c:gc', 'carol');
+  assert.deepEqual(g.says('c:gc'), ['You: first']);
 });
