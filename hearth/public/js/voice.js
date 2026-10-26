@@ -10,6 +10,8 @@
 // The call itself is a small state machine (see TRANSITIONS); `state` is the one place the UI reads from. The
 // signaling connection can drop without ending the call: the media keeps flowing peer to peer while the app
 // reconnects, and the server keeps our place for a short while (see docs/VOICE.md).
+import { dropAvoidedCandidates } from './relays.js';
+
 const LANE = { mic: 0, cam: 1, screen: 2, screenAudio: 3 };
 
 // Which state may follow which. Anything else is a bug and is refused (and logged), never applied.
@@ -42,7 +44,7 @@ const hasWindow = typeof window !== 'undefined';
 const md = () => (typeof navigator !== 'undefined' && navigator.mediaDevices) || null;
 
 export class Voice {
-  constructor({ socket, getIceServers, ensureIce, onChange, onSpeaking, signSdp, verifySdp, onSecurityWarning, isPeerMuted, onNotice, onRegion, onMoved, myId }) {
+  constructor({ socket, getIceServers, ensureIce, avoidHosts, onChange, onSpeaking, signSdp, verifySdp, onSecurityWarning, isPeerMuted, onNotice, onRegion, onMoved, myId }) {
     this.socket = socket;
     this.isPeerMuted = isPeerMuted;
     // Offers/answers are signed with the sender's signing key and checked before use. The DTLS
@@ -53,6 +55,9 @@ export class Voice {
     this.onSecurityWarning = onSecurityWarning || (() => {});
     this.getIceServers = getIceServers;
     this.ensureIce = ensureIce; // fetches new relay logins first when the ones we have are about to run out
+    // The machines of relays this person avoids (member relays, when they chose to: relays.js), asked each time since
+    // the choice can change. The other side's network candidates there are dropped, so nothing is sent to them.
+    this.avoidHosts = avoidHosts || (() => null);
     this.onChange = onChange || (() => {});
     this.onSpeaking = onSpeaking || (() => {});
     this.onNotice = onNotice || (() => {}); // something the person should be told (a device went away, say)
@@ -922,6 +927,8 @@ export class Voice {
         return;
       }
       if (!this.channelId) return;
+      // Checked above on exactly what arrived; only now are their candidates on an avoided relay left out.
+      const remote = dropAvoidedCandidates(data.sdp, this.avoidHosts());
       peer = this.peers.get(from) || (userId && this.peerByUser(userId)) || null;
       if (peer && peer.socketId !== from) this.rekey(peer, from);
       if (data.sdp.type === 'offer') {
@@ -940,19 +947,19 @@ export class Voice {
           }
         } finally { this.swapping--; }
         if (data.pc) peer.remotePc = data.pc;
-        await this.op(peer, peer.pc.setRemoteDescription(data.sdp));
+        await this.op(peer, peer.pc.setRemoteDescription(remote));
         await this.setupLanes(peer);
         await this.flush(peer);
         await this.sendLocal(from, peer, await this.op(peer, peer.pc.createAnswer()));
       } else if (data.sdp.type === 'answer' && peer) {
         if (data.pc && !peer.remotePc) peer.remotePc = data.pc;
-        if (peer.pc.signalingState === 'have-local-offer') await this.op(peer, peer.pc.setRemoteDescription(data.sdp));
+        if (peer.pc.signalingState === 'have-local-offer') await this.op(peer, peer.pc.setRemoteDescription(remote));
         await this.flush(peer);
         this.restartDone(from, peer);
       }
     } else if (data.candidate && peer) {
       if (!peer.pc.remoteDescription) peer.pending.push(data.candidate);
-      else await this.op(peer, peer.pc.addIceCandidate(data.candidate)).catch(() => {});
+      else await this.addRemoteCandidate(peer, data.candidate);
     } else if (data.candidate) {
       // Their connection doesn't exist here yet (its offer is on the way): keep the candidate for it.
       const list = this.early.get(from) || [];
@@ -961,9 +968,15 @@ export class Voice {
     }
   }
 
+  // Candidates that waited (for their offer, or for a connection: `early` moves into `pending`) go in here too, so
+  // one on an avoided relay is dropped whichever way it came, by the choice as it is when it's used.
   async flush(peer) {
     const list = peer.pending.splice(0);
-    for (const c of list) await this.op(peer, peer.pc.addIceCandidate(c)).catch(() => {});
+    for (const c of list) await this.addRemoteCandidate(peer, c);
+  }
+  async addRemoteCandidate(peer, candidate) {
+    const c = dropAvoidedCandidates(candidate, this.avoidHosts());
+    if (c) await this.op(peer, peer.pc.addIceCandidate(c)).catch(() => {});
   }
 
   closePeer(socketId, why = 'closed') {
