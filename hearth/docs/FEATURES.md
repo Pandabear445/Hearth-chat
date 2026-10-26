@@ -1862,3 +1862,87 @@ Tests:
 - `test/media-panel-client.test.js`;
 - `test/photo-notes-client.test.js` (sealing, binding, tampering, labels);
 - the e2e flows "photos & videos" and "photo comments and tags".
+
+## Chat backgrounds and Pin to side
+
+What people asked for: backgrounds "for DMs with friends and stuff", and to "pin messages on the side so people can
+look at messages and pictures at the same time".
+
+### Chat backgrounds (DMs and group chats)
+`public/js/chat-look.js` (`createChatLook`), with the server side in `server/looks.js` (schema v22).
+
+**Setting one.** The DM's and the group chat's ⋯ menus (`dmMenuItems`, `groupMenuItems`) have **Chat background…**.
+It opens a dialog with:
+- a live preview;
+- the app's presets (`BACKGROUNDS`);
+- "Your own picture", resized like a photo, encrypted, and uploaded as a blob;
+- Dim (0–0.8);
+- Remove.
+
+It's saved for everyone in the chat:
+- `PUT /api/dms/:id/look` or `PUT /api/groups/:id/look`, with `{ version, ciphertext, files }`;
+- `DELETE …/look`, with `{ version }`.
+
+`version` must be the stored one plus one; otherwise the answer is 409 `stale_look` with the current look, and the
+app takes it in and tries once more.
+
+**Who may set it.**
+- In a DM: either person, but not after a block either way, and not to a deleted account.
+- In a group chat: any member.
+
+**Encryption.**
+- Formats: `lkd1:` (DM) and `lkc1:` (group, signed, using the group's current key epoch), in `e2ee.js`. Each has
+  its own key derivation.
+- The additional data binds the conversation, the version, the author and (groups) the epoch, so the server can't
+  move a background to another chat, replay an older one, or claim someone else set it.
+- The payload is `{ bg, dim }`, padded to exactly 512 bytes, so a preset and a picture are the same size.
+  `cleanLook` (`secure.js`) lets through only a preset id, or a picture on this server: its address, its 32-byte
+  key, a whitelisted image type (no SVG), its width and height, and `dim`.
+- `openLook` only counts a background a key this device trusts for its author opened, the same rule as photo tags.
+- The picture is decrypted into a `blob:` URL this module made. Only such URLs reach CSS `url()`, and old ones are
+  revoked.
+
+**Showing it.** While a DM or group chat is open, the app shows its background as the backdrop. This uses the same
+place a server's theme background goes (`setServerTheme` in `renderAll`, `appearance.js`).
+- Settings → Appearance → **Show backgrounds people set for chats** (`chatLooks`, per device) turns it off.
+- Server themes and chat backgrounds each have their own switch.
+- Every change adds a line to the chat ("maya changed the chat background"). The lines come from `look_log` and
+  arrive as `lookEvents` with history pages, and live with `dm:look` / `group:look`.
+
+**On the server.**
+- `chat_looks` holds one row per conversation; `look_log` keeps the newest 50 entries.
+- A picture is linked with `blobs.look_conv`. The sweeps keep it while it's in use and remove it when it's replaced
+  or its chat is gone.
+
+### Pin to side
+`public/js/side-view.js` (`createSideView`).
+
+**Pinning.** "Pin to side" is in every message's menu (the hover toolbar's ⋯ and the phone's long-press sheet,
+`messageMenuItems`). The picture viewer has it too: the bar button, and More on a phone, for the picture or video
+shown.
+
+**The panel** is "Pinned to side" (`S.panel = 'side'`), as wide as a thread and resizable.
+- It stays open as you go from one conversation to another (on phones, where it covers the chat, going to another
+  chat closes it).
+- Ways in: a header button with the count, and the ⋯ menus.
+- Each card shows:
+  - who wrote it, when, and where it is;
+  - the text, through the word filter, with blocked authors behind Show;
+  - the pinned picture as wide as the panel, or the message's pictures as thumbnails that open the viewer;
+  - Jump, and × to unpin.
+
+**What it keeps.** It's personal: `localStorage` `hearth.sideview.<userId>`, at most 25 items, never sent to the
+server, cleared on sign-out (`clearLocalCopies`).
+
+**Loading and live updates.**
+- A message the chat hasn't loaded comes from `GET /messages/:id/locate`, then that conversation's `?around=`
+  page, at most 2 at a time.
+- Edits, deletes, disappearing messages and new keys update the cards.
+- Messages that are gone, or in a chat you can no longer open, say so.
+- Cards from DMs and group chats are hidden while you share your screen.
+
+Tests:
+- `test/chat-looks.test.js` (server);
+- `test/chat-look-client.test.js` (formats, tampering, trust, the version rule, blob URLs, the switch);
+- `test/side-view-client.test.js`;
+- the e2e flows "chat backgrounds" and "the side view".
