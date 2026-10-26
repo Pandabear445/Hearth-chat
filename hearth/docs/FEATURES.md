@@ -70,6 +70,10 @@ is encrypted or assembled on the device.
   - a **"New messages"** divider above the first unread message;
   - an unread bar ("3 new messages since 7:46 PM · **Jump to first unread** · **Mark as read**"). Jump loads the
     page around the marker if it isn't loaded yet;
+  - where a conversation opens: a DM or group chat at its newest message (the divider and the bar above it), a server
+    channel at the divider when it's more than a screen up. `app.js` `keepPlace` keeps that place while GIFs, videos
+    and picture links (whose size only comes with the picture) load, and keeps a message jumped to (pins, replies,
+    search, Photos & videos, the side view, notifications) in the middle until they're in or you scroll;
   - **Jump to latest**, which already existed;
   - **Mark as read** and **Mark unread** on messages, channels, DMs and group chats, and **Mark server as read**
     (`POST /servers/:id/read`).
