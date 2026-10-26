@@ -382,6 +382,9 @@ async function directMessages(t) {
   await box.fill('I am the worst');
   await box.press('Enter');
   await everywhere('I am the worst');
+  // Bob hasn't read it on either device: the line is unread, with a badge (a DM counts every message).
+  const unread = (p) => p.page.locator('#sidebar-body .dm-row.unread').filter({ has: p.page.locator('.dm-row-name', { hasText: exact('alice') }) });
+  for (const p of [bob, laptop]) await unread(p).locator('.badge').waitFor();
   // Deleted: the line goes back to the message before it (bob's, written while alice was on Home).
   await alice.messageAction('I am the worst', 'Delete message');
   await alice.modal('Delete message?').locator('.modal-foot .btn.danger').click();
@@ -390,6 +393,9 @@ async function directMessages(t) {
   await card(`You: ${before}`).waitFor();
   await line(alice, 'bob', exact(before)).waitFor();
   check(!(await line(bob, 'alice', 'I am the').count()) && !(await card('I am the').count()), 'The deleted message should be gone from bob’s conversation lists.');
+  // And it no longer counts as unread (the app asks the server again, at most every 30 seconds).
+  for (const p of [bob, laptop]) await unread(p).waitFor({ state: 'detached', timeout: 40000 });
+  await laptop.$('.home-view .conv-card.unread').filter({ has: laptop.$('.conv-card-text strong', { hasText: exact('alice') }) }).waitFor({ state: 'detached' });
   await laptop.logout();
   await laptop.close();
   delete t.people['bob-laptop'];

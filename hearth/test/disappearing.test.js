@@ -674,6 +674,7 @@ test('sweep: deletes expired messages with their files, reactions, poll votes, m
     const all = sweptBulk.flatMap((x) => x.messages.map((y) => y.id));
     for (const id of [m.id, root.id, reply.id, replyOfKeep.id]) assert.ok(all.includes(id), `message:delete-bulk has ${id}`);
     assert.ok(sweptBulk.every((x) => x.expired === true && x.channelId === g.id));
+    assert.ok(sweptBulk.every((x) => !('last' in x) && !('lastMessageAt' in x)), 'a server’s channel has no line in the conversation list');
     assert.deepEqual(dmDel.map((x) => [x.id, x.dmId, x.expired]), [[dmsg.id, d.id, true]]);
     assert.equal(dmDel[0].last.id, dmKeep.id, 'with the DM’s new newest message');
     assert.deepEqual(savedEv.slice(saved0), [{ messageId: m.id, saved: false }]);
@@ -693,6 +694,7 @@ test('sweep: deletes expired messages with their files, reactions, poll votes, m
     const ev = bulk[bulk.length - 1];
     assert.deepEqual(ev.messages.map((x) => x.id), [goes.id]);
     assert.equal(ev.last.id, before0.id);
+    assert.equal(ev.lastMessageAt, before0.createdAt, 'and its time, which places it in the list');
     assert.deepEqual(s.sql("SELECT action FROM server_audit WHERE action IN ('message_delete', 'message_bulk_delete')"), [], 'anywhere');
   } finally { await s.stop(); }
 });

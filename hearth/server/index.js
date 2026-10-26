@@ -414,8 +414,14 @@ function groupLastRow(channels) {
 const groupLastOut = (m) => (m ? { id: m.id, authorId: m.author_id, channelId: m.channel_id, ciphertext: m.ciphertext, createdAt: m.created_at, expiresAt: m.expires_at || null } : null);
 const groupLast = (s) => groupLastOut(groupLastRow(db.prepare('SELECT * FROM channels WHERE server_id = ?').all(s.id)));
 // What a delete event in a group chat carries besides the message: the group's newest message now, which the apps
-// show (decrypted) as its line in the conversation list. Nothing for a server's channels, which have no such line.
-const lastIfGroup = (s) => (s && s.kind === 'group' ? { last: groupLast(s) } : {});
+// show (decrypted) as its line in the conversation list, and the time the list places and dates it by (lastMessageAt,
+// as serverCommon has it: the group's own start when no message is left). Nothing for a server's channels, which
+// have no such line.
+const lastIfGroup = (s) => {
+  if (!s || s.kind !== 'group') return {};
+  const last = groupLast(s);
+  return { last, lastMessageAt: last ? last.createdAt : s.created_at };
+};
 // What one member sees of a server: channels they can view (with their permissions), roles, emoji, theme.
 // ev: permissions already worked out for many members at once (perms.forServer), when there is one.
 function serializeServer(s, uid, common = serverCommon(s), ev = null) {
@@ -6729,7 +6735,7 @@ USE = require('./usability')({ api, auth, db, fail, wrap, rateLimit, stepUp, aud
 // passed (it runs once right here, before anyone can connect).
 DIS = require('./disappear')({ api, auth, db, fail, rateLimit, newId, now, requireChannel, requireDm, requireManageableChannel, serverOf, isBlocked, getUserRow,
   // (io is declared further down: during the start-up sweep it doesn't exist yet, and there's nobody to tell.)
-  toChannel: (c) => toChannel(c), getIo: () => { try { return io || null; } catch { return null; } }, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), removeUpload, unseal, threadInfo, groupLast, dmLast,
+  toChannel: (c) => toChannel(c), getIo: () => { try { return io || null; } catch { return null; } }, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), removeUpload, unseal, threadInfo, lastIfGroup, dmLast,
   bots: () => BOTS, serverAudit, chanRef,
   // "New members can't read messages from before they joined" (server/joinhistory.js): thread counts of a thread from
   // before someone joined don't reach them, nor do timer changes from before.

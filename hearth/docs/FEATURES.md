@@ -258,10 +258,10 @@ Before this, a thread reply counted nowhere: not as unread, not as a mention, an
     messages). Manage Messages in the channel; messages older than 14 days can't be picked; messages by people at
     or above your highest role are kept (the answer says how many). One transaction, one
     `message:delete-bulk { channelId, messages: [{ id, threadId }] }` event per channel (in a group chat also `last`,
-    its newest message now, as every delete there carries for the conversation list), one audit log entry
-    (`messages_bulk_deleted`). Like a single delete, thread replies, files, reactions and poll votes go too, and bots
-    get `message.deleted` for each message (written in one transaction per channel, `BOTS.events`). Refused while
-    you're timed out.
+    its newest message now, and `lastMessageAt`, as every delete there carries for the conversation list), one audit
+    log entry (`messages_bulk_deleted`). Like a single delete, thread replies, files, reactions and poll votes go too,
+    and bots get `message.deleted` for each message (written in one transaction per channel, `BOTS.events`). Refused
+    while you're timed out.
 - **Server audit log and report inbox** (v19, `server/serveraudit.js`):
   - A new permission, **View Audit Log** (`1 << 19`), server-wide; owners and Administrators always have it. It
     counts as a moderator power, so it can't be on a role sold as a membership or one members pick themselves.

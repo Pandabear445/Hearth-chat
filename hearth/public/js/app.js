@@ -913,13 +913,14 @@ function startApp() {
 
   socket.on('message:new', (m) => { if (!S.me) return; if (m.threadId) onThreadMessage(m); else onNewMessage('c:' + m.channelId, m); });
   socket.on('message:update', (m) => { if (m.threadId) onThreadUpdate(m); else onUpdateMessage('c:' + m.channelId, m); });
-  // Deletes in a group chat carry its newest message now (last), for its line in the conversation list.
-  socket.on('message:delete', ({ id, channelId, threadId, last }) => { onDeleteChannelMessages(channelId, [{ id, threadId }]); groupLastIs(channelId, last); });
+  // Deletes in a group chat carry its newest message now (last) and its time (lastMessageAt), for its line in the
+  // conversation list.
+  socket.on('message:delete', ({ id, channelId, threadId, last, lastMessageAt }) => { onDeleteChannelMessages(channelId, [{ id, threadId }]); groupLastIs(channelId, last, lastMessageAt); });
   // Bulk delete and a ban's cleanup: many at once, one redraw. Disappearing messages that reached their time come
   // the same way (expired: true).
-  socket.on('message:delete-bulk', ({ channelId, messages, expired, last } = {}) => {
+  socket.on('message:delete-bulk', ({ channelId, messages, expired, last, lastMessageAt } = {}) => {
     if (Array.isArray(messages)) onDeleteChannelMessages(channelId, messages, { expired: !!expired });
-    groupLastIs(channelId, last);
+    groupLastIs(channelId, last, lastMessageAt);
   });
   socket.on('disappear:update', (p) => onDisappearUpdate(p));
   // Chat backgrounds (chat-look.js): a DM's or group chat's background changed, with its line in the conversation.
@@ -1302,15 +1303,19 @@ function convOf(key) {
   return isGroup(s) ? s : null;
 }
 // A conversation's newest message changed (a delete, an edit, one disappearing): its line is worked out again and
-// drawn where it shows.
-function setLast(conv, last) {
+// drawn where it shows. A group chat is also placed in the list and dated by its newest message, as the server does
+// it (serverCommon's lastMessageAt), so a delete can move it down; with none left that's the group's own start, which
+// only the server knows (at). A DM keeps its time: the server doesn't go back on a delete either.
+function setLast(conv, last, at = null) {
   conv.last = last;
+  const t = last ? last.createdAt : at;
+  if (isGroup(conv) && t != null) conv.lastMessageAt = t;
   return (isGroup(conv) ? previewGroup(conv) : previewDm(conv)).then(redrawConvList);
 }
-// Deletes in a group chat come with its newest message now (server/index.js lastIfGroup).
-function groupLastIs(channelId, last) {
+// Deletes in a group chat come with its newest message now, and its time (server/index.js lastIfGroup).
+function groupLastIs(channelId, last, at) {
   const s = last !== undefined && serverOfChannel(channelId);
-  if (isGroup(s)) setLast(s, last);
+  if (isGroup(s)) setLast(s, last, at);
 }
 // An edit to a conversation's newest message changes its line too, whether or not the conversation is loaded here:
 // the newest message takes the new words (still encrypted, as the server keeps it) and is decrypted again.
@@ -1618,8 +1623,8 @@ function forgetCopies(msgs, ids, key = null) {
   if (key ? S.unread.has(key) || S.mentions.has(key) || S.threadMentions.has(key) : S.unread.size || S.mentions.size || S.threadMentions.size) refreshUnreadSoon();
   armClientExpiry();
 }
-// Unread and mention counts still include messages that have since disappeared: ask the server again, a moment after
-// its sweep, and at most every 30 seconds.
+// Unread and mention counts still include messages that have since disappeared or were deleted: ask the server again,
+// a moment after its sweep, and at most every 30 seconds.
 let unreadTimer = 0;
 let unreadAsked = 0;
 function refreshUnreadSoon() {
@@ -1631,6 +1636,8 @@ function refreshUnreadSoon() {
       applyUserState([await api('GET', '/me/unread'), null, null]);
       later(renderRail);
       later(renderSidebar);
+      // (Home's recent conversations show what's unread too.)
+      if (S.view.type === 'home') later(renderMain);
     } catch { /* the next change asks again */ }
   }, Math.max(1500, 30000 - (Date.now() - unreadAsked)));
 }
@@ -5824,7 +5831,8 @@ async function onNewMessage(key, m) {
   if (isExpired(m, nowServer())) { const cur = convOf(key); if (cur && cur.last === m) cur.last = before; return; }
   MEDIA.onNew(key, m); // its pictures and videos go on top in Photos & videos, if that's open here
   // Kept decrypted as the newest message, the preview also goes at its time by the timer inside it (the server's copy
-  // can't be decrypted there).
+  // can't be decrypted there). When the server's copy of it took its place meanwhile (sent with a delete or an edit),
+  // setLast already wrote the line and the group's time from that.
   const cur = convOf(key);
   if (cur && cur.last === m) {
     const group = isGroup(cur);
@@ -6017,6 +6025,15 @@ function onDeleteMessage(key, id, { expired = false } = {}) {
   // (With what was loaded of their threads: a reply never outlives its thread's first message, and the timer's pass
   // over the threads, purgeExpired, no longer finds them.)
   if (expired) forgetCopies([...removed, ...threadCopies.filter((x) => !removed.includes(x))], gone, key);
+  else forgetUnread(key, gone);
+}
+// Deleted by someone before it was read here: a notification still showing it (with its words) closes, and the
+// conversation's unread and mention counts, which may include it, are asked for again (the server counts the
+// messages still there). One older than the read marker never counted.
+function forgetUnread(key, ids) {
+  closeNotificationFor(ids);
+  const read = S.lastRead[key];
+  if ((S.unread.has(key) || S.mentions.has(key)) && [...ids].some((id) => !read || id > read)) refreshUnreadSoon();
 }
 // ---- "is typing…" (typing.js keeps who's typing where)
 // The names of who's typing in a conversation ('c:<channel>' or 'd:<dm>'), as that conversation shows them.

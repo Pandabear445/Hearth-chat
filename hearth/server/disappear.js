@@ -57,7 +57,7 @@ const arm = (at) => { if (current && at != null) current.arm(at); };
 
 module.exports = function setupDisappear(ctx) {
   const { api, auth, db, fail, rateLimit, newId, now, requireChannel, requireDm, requireManageableChannel, serverOf, isBlocked, getUserRow,
-    toChannel, getIo, emitTo, removeUpload, unseal, threadInfo, groupLast, dmLast, bots, serverAudit = () => {}, chanRef = () => null,
+    toChannel, getIo, emitTo, removeUpload, unseal, threadInfo, lastIfGroup, dmLast, bots, serverAudit = () => {}, chanRef = () => null,
     toChannelAbout = (c) => toChannel(c), visibilityOf = () => null, historyStart = () => null, emitFileReplies = () => {} } = ctx;
 
   // ---------------------------------------------------------------- the timer
@@ -205,9 +205,8 @@ module.exports = function setupDisappear(ctx) {
         const gone = new Set(list.map((r) => r.id));
         if (io) {
           const room = toChannel(c);
-          const srv = serverOf(c);
           room.emit('message:delete-bulk', { channelId: c.id, messages: list.map((r) => ({ id: r.id, threadId: r.thread_id || null })), expired: true,
-            ...(srv && srv.kind === 'group' ? { last: groupLast(srv) } : {}) });
+            ...lastIfGroup(serverOf(c)) });
           // Not to members the thread is from before (server/joinhistory.js): they never got it.
           for (const rootId of new Set(list.filter((r) => r.thread_id && !gone.has(r.thread_id)).map((r) => r.thread_id))) {
             toChannelAbout(c, visibilityOf(rootId)).emit('thread:update', { rootId, channelId: c.id, threadCount: 0, ...threadInfo({ id: rootId }) });

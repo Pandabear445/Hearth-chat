@@ -117,11 +117,13 @@ test('group chat: every kind of delete carries the group’s newest message to i
   assert.equal(single[0].id, g3.id); assert.equal(single[0].channelId, ch.id);
   assert.deepEqual(brief(single[0].last), lastOf(g2));
   assert.equal(single[0].last.channelId, ch.id, 'with where it is, to decrypt it');
+  assert.equal(single[0].lastMessageAt, g2.createdAt, 'and the time the list places and dates the group by');
   assert.deepEqual(carolSingle[0], single[0], 'the one who deleted it hears the same');
   // Someone else's, by the group's owner.
   assert.equal((await as(alice, 'DELETE', `/messages/${g2.id}`)).status, 200);
   assert.ok(await until(() => single.length === 2));
   assert.deepEqual(brief(single[1].last), lastOf(g1));
+  assert.equal(single[1].lastMessageAt, g1.createdAt);
   // Several at once.
   const g4 = await sendC(bob, ch.id); const g5 = await sendC(carol, ch.id);
   const r = await as(alice, 'POST', `/channels/${ch.id}/messages/bulk-delete`, { ids: [g4.id, g5.id] });
@@ -130,6 +132,7 @@ test('group chat: every kind of delete carries the group’s newest message to i
   assert.ok(await until(() => bulk.length === 1));
   assert.deepEqual(bulk[0].messages.map((x) => x.id).sort(), [g4.id, g5.id].sort());
   assert.deepEqual(brief(bulk[0].last), lastOf(g1));
+  assert.equal(bulk[0].lastMessageAt, g1.createdAt);
   // Staff removing a reported one.
   const g6 = await sendC(bob, ch.id);
   await report(carol, g6.id);
@@ -137,11 +140,15 @@ test('group chat: every kind of delete carries the group’s newest message to i
   assert.ok(await until(() => single.length === 3));
   assert.equal(single[2].id, g6.id);
   assert.deepEqual(brief(single[2].last), lastOf(g1));
+  assert.equal(single[2].lastMessageAt, g1.createdAt);
   // The first one, the last left: nothing.
   assert.equal((await as(alice, 'DELETE', `/messages/${g1.id}`)).status, 200);
   assert.ok(await until(() => single.length === 4));
   assert.equal(single[3].last, null);
-  assert.equal((await as(bob, 'GET', '/bootstrap')).json.servers.find((x) => x.id === g.id).last, null, 'the same as the group itself says now');
+  const now = (await as(bob, 'GET', '/bootstrap')).json.servers.find((x) => x.id === g.id);
+  assert.equal(now.last, null, 'the same as the group itself says now');
+  assert.equal(single[3].lastMessageAt, now.lastMessageAt, 'its time with none left too (when the group was made)');
+  assert.ok(now.lastMessageAt <= g1.createdAt);
   await sleep(200);
   assert.deepEqual(leaked, [], 'nothing reaches someone outside the group');
   // A server's channel has no line in the conversation list: its deletes don't carry one.
@@ -152,8 +159,7 @@ test('group chat: every kind of delete carries the group’s newest message to i
   assert.equal((await as(bob, 'DELETE', `/messages/${x3.id}`)).status, 200);
   assert.equal((await as(alice, 'POST', `/channels/${general.id}/messages/bulk-delete`, { ids: [x1.id] })).status, 200);
   assert.ok(await until(() => sSingle.length === 1 && sBulk.length === 1));
-  assert.equal('last' in sSingle[0], false);
-  assert.equal('last' in sBulk[0], false);
+  for (const ev of [sSingle[0], sBulk[0]]) { assert.equal('last' in ev, false); assert.equal('lastMessageAt' in ev, false); }
 });
 
 test('group chat edit: the update carries the new ciphertext of the newest message', async () => {
@@ -171,8 +177,8 @@ test('group chat edit: the update carries the new ciphertext of the newest messa
 });
 
 // ------------------------------------------------------------------ the apps' side
-// The conversation-list section of app.js (previewDm, previewGroup, setLast, lastEdited…) with onNewMessage and
-// onUpdateMessage, run with a stand-in for decryption whose timing each test controls.
+// The conversation-list section of app.js (previewDm, previewGroup, setLast, lastEdited…) with onNewMessage,
+// onUpdateMessage and onDeleteMessage, run with a stand-in for decryption whose timing each test controls.
 const appSrc = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
 const section = (() => {
   const i = appSrc.indexOf('// ======================================================================= conversation previews');
@@ -182,12 +188,15 @@ const section = (() => {
 const fnSrc = (name) => { const i = appSrc.search(new RegExp(`\\n(async )?function ${name}\\(`)); assert.ok(i > 0, name); return appSrc.slice(i, appSrc.indexOf('\n}\n', i) + 2); };
 
 function app({ me = 'me', dms = [], servers = [], view = { type: 'home' } } = {}) {
-  const S = { me: { id: me }, dms, servers, view, previews: {}, msgs: {}, typing: {}, lastIds: {}, lastRead: {}, unread: new Set(), mentions: new Map(), editing: null };
+  const S = { me: { id: me }, dms, servers, view, previews: {}, msgs: {}, typing: {}, lastIds: {}, lastRead: {}, unread: new Set(), mentions: new Map(), editing: null,
+    thread: null, threads: {}, select: null };
   // Decryption by hand: "words" decrypts to words, once its gate (if any) opens.
   const gates = new Map();
   const hold = (ciphertext) => { let open; gates.set(ciphertext, new Promise((r) => { open = r; })); return () => open(); };
   const decrypt = async (m) => { if (m.dec && !m.dec.pending) return; const g = gates.get(m.ciphertext); if (g) await g; m.dec = { t: m.ciphertext }; };
   const drawn = { sidebar: 0, main: 0 };
+  // What a delete lets go of: notifications closed, unread counts asked for again, a disappearing message's copies.
+  const letGo = { closed: [], refresh: 0, copies: [] };
   const env = {
     S, sec: { decryptDmMessage: decrypt, decryptChannelMessage: decrypt }, decryptMessage: decrypt,
     isExpired: () => false, nowServer: () => Date.now(), disappears: () => false, armClientExpiry() {}, dropPendingSend() {},
@@ -197,14 +206,19 @@ function app({ me = 'me', dms = [], servers = [], view = { type: 'home' } } = {}
     later: (fn) => fn(), renderSidebar: () => { drawn.sidebar++; }, renderMain: () => { drawn.main++; }, renderRail() {},
     WF: { check: () => null }, previewLabel: (x) => x, readableText: (t) => t, displayName: (u) => u.name, getUser: (id) => ({ name: id }),
     replaceMessageEl() {},
-    // Photos & videos, the side view and who's typing: not what's tested here.
-    MEDIA: { onNew() {}, onUpdate() {} }, SIDE: { onUpdate() {} }, TYPING: { stop() {} },
+    // Photos & videos, photo tags, the side view and who's typing: not what's tested here.
+    MEDIA: { onNew() {}, onUpdate() {}, onDelete() {}, repliesTo: () => [] }, NOTES: { onDelete() {}, repliesTo: () => [] },
+    SIDE: { onUpdate() {}, onDelete() {} }, TYPING: { stop() {} },
+    forgetBindings() {}, forgetThreads() {}, closeThread() {}, renderSelectBar() {}, renderMessages() {}, currentKey: () => null, $: () => null,
+    closeNotificationFor: (ids) => { letGo.closed.push([...ids]); }, refreshUnreadSoon: () => { letGo.refresh++; },
+    forgetCopies: (msgs, ids, key) => { letGo.copies.push([[...ids], key]); },
   };
   const names = Object.keys(env);
-  const body = `${section}\n${fnSrc('onNewMessage')}\n${fnSrc('onUpdateMessage')}\nreturn { previewDm, previewGroup, setLast, groupLastIs, lastEdited, onNewMessage, onUpdateMessage };`;
+  const body = `${section}\n${['onNewMessage', 'onUpdateMessage', 'onDeleteMessage', 'forgetUnread'].map(fnSrc).join('\n')}
+return { previewDm, previewGroup, setLast, groupLastIs, lastEdited, onNewMessage, onUpdateMessage, onDeleteMessage };`;
   // eslint-disable-next-line no-new-func
   const fns = new Function(...names, body)(...names.map((n) => env[n]));
-  return { S, hold, drawn, ...fns };
+  return { S, hold, drawn, letGo, ...fns };
 }
 const tick = () => new Promise((r) => setImmediate(r));
 const dmMsg = (id, words, authorId = 'me') => ({ id, dmId: 'd1', authorId, ciphertext: words, createdAt: Date.now() });
@@ -289,4 +303,74 @@ test('app: a slower decryption never puts back an older line (a delete, then a n
   await e.setLast(e.S.dms[0], dmMsg('m1', 'before it', 'bob'));
   openEdit(); await tick(); await tick();
   assert.equal(e.S.previews['d:d1'], 'before it');
+});
+
+test('app: a delete places a group chat by its newest message’s time, as the server does; a DM keeps its time', async () => {
+  // 'A' at 9:00 and 'B' at 10:05; a DM's newest at 10:00. B is deleted: the group goes back to 9:00, below the DM.
+  const at = (h, m) => new Date(2026, 9, 26, h, m).getTime();
+  const g = app({ servers: [{ id: 'g1', kind: 'group', channels: [{ id: 'gc' }], last: { ...groupMsg('x2', 'B'), createdAt: at(10, 5) }, lastMessageAt: at(10, 5) }],
+    dms: [{ id: 'd1', last: { ...dmMsg('m1', 'hi', 'bob'), createdAt: at(10, 0) }, lastMessageAt: at(10, 0) }] });
+  g.groupLastIs('gc', { ...groupMsg('x1', 'A', 'me'), createdAt: at(9, 0) }, at(9, 0));
+  await tick(); await tick();
+  assert.equal(g.S.previews['g:g1'], 'You: A');
+  assert.equal(g.S.servers[0].lastMessageAt, at(9, 0), 'the deleted message’s time goes with it');
+  assert.ok(g.S.servers[0].lastMessageAt < g.S.dms[0].lastMessageAt, 'so it sorts below the DM, as after a reload');
+  // One that disappeared here first (purgeExpired): the one before it, from what's loaded.
+  await g.setLast(g.S.servers[0], { ...groupMsg('x0', 'earlier'), createdAt: at(8, 0) });
+  assert.equal(g.S.servers[0].lastMessageAt, at(8, 0));
+  // None left: the server's time for it (when the group was made).
+  g.groupLastIs('gc', null, at(7, 0));
+  await tick(); await tick();
+  assert.equal(g.S.servers[0].lastMessageAt, at(7, 0));
+  // Nothing about it (a thread reply's delete), or none left with no time given (this app's own timer): kept.
+  g.groupLastIs('gc', undefined);
+  await g.setLast(g.S.servers[0], null);
+  assert.equal(g.S.servers[0].lastMessageAt, at(7, 0));
+  // A DM's time stays where it was, like the server's.
+  await g.setLast(g.S.dms[0], { ...dmMsg('m0', 'older'), createdAt: at(6, 0) });
+  assert.equal(g.S.dms[0].lastMessageAt, at(10, 0));
+});
+
+test('app: a new message in a group chat moves it up even when a delete’s copy of it lands while it decrypts', async () => {
+  // x2 is posted (here from another device of ours) and right away an older message or a thread reply is deleted:
+  // that delete says x2 is the newest, and it gets here before x2 is decrypted.
+  const g = app({ servers: [{ id: 'g1', kind: 'group', channels: [{ id: 'gc' }], last: { ...groupMsg('x1', 'old'), createdAt: 1 }, lastMessageAt: 1 }] });
+  const open = g.hold('new');
+  const x2 = { ...groupMsg('x2', 'new', 'me'), createdAt: 100 };
+  const arriving = g.onNewMessage('c:gc', x2);
+  g.groupLastIs('gc', { id: x2.id, authorId: x2.authorId, channelId: 'gc', ciphertext: x2.ciphertext, createdAt: 100, expiresAt: null }, 100);
+  open(); await arriving; await tick(); await tick();
+  assert.equal(g.S.previews['g:g1'], 'You: new');
+  assert.equal(g.S.servers[0].lastMessageAt, 100);
+  // The same with an edit of x2 that lands while x2 decrypts: its new words, at x2's time.
+  const h = app({ servers: [{ id: 'g1', kind: 'group', channels: [{ id: 'gc' }], last: { ...groupMsg('x1', 'old'), createdAt: 1 }, lastMessageAt: 1 }] });
+  const openTypo = h.hold('tpyo');
+  const sent = h.onNewMessage('c:gc', { ...groupMsg('x2', 'tpyo', 'me'), createdAt: 100 });
+  await h.onUpdateMessage('c:gc', { ...groupMsg('x2', 'typo', 'me'), createdAt: 100, editedAt: 101 });
+  openTypo(); await sent; await tick(); await tick();
+  assert.equal(h.S.previews['g:g1'], 'You: typo');
+  assert.equal(h.S.servers[0].lastMessageAt, 100);
+});
+
+test('app: a message deleted before it was read takes its notification with it and has the unread counts asked for again', () => {
+  const a = app();
+  // Unread, newer than the read marker: both.
+  a.S.unread.add('d:d1'); a.S.mentions.set('d:d1', 1); a.S.lastRead['d:d1'] = 'm1';
+  a.onDeleteMessage('d:d1', 'm2');
+  assert.deepEqual(a.letGo.closed, [['m2']]);
+  assert.equal(a.letGo.refresh, 1);
+  // Older than the read marker: it never counted. A conversation with nothing unread: nothing to ask.
+  a.onDeleteMessage('d:d1', 'm0');
+  a.onDeleteMessage('d:d2', 'm9');
+  assert.equal(a.letGo.refresh, 1);
+  assert.equal(a.letGo.closed.length, 3, 'a notification of it closes either way');
+  // No read marker here yet: it may count.
+  a.S.unread.add('c:gc');
+  a.onDeleteMessage('c:gc', ['x1', 'x2']);
+  assert.equal(a.letGo.refresh, 2);
+  assert.deepEqual(a.letGo.closed.at(-1), ['x1', 'x2']);
+  // A disappearing one's time came: forgetCopies does all of it (and more), as before.
+  a.onDeleteMessage('d:d1', 'm3', { expired: true });
+  assert.deepEqual(a.letGo.copies, [[['m3'], 'd:d1']]);
+  assert.equal(a.letGo.refresh, 2);
 });
