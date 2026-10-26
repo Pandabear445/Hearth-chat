@@ -42,6 +42,8 @@ test("an outsider can't read, post to, or look into a server they aren't in", as
     ['GET', `/channels/${textChannel.id}/media`], ['GET', `/channels/${textChannel.id}/media?ids=${aliceMsg}`], ['GET', `/channels/${textChannel.id}/tags`],
     ['GET', `/messages/${aliceMsg}/comments`], ['POST', `/messages/${aliceMsg}/tags`, { id: 'A'.repeat(22), fileIdx: 0, ciphertext: cipher() }],
     ['DELETE', `/messages/${aliceMsg}/tags/${'A'.repeat(22)}`],
+    // Chat backgrounds (server/looks.js): a server isn't a group chat, and an outsider doesn't get to learn that.
+    ['PUT', `/groups/${server.id}/look`, { version: 1, ciphertext: cipher() }], ['DELETE', `/groups/${server.id}/look`, { version: 1 }],
   ]) {
     const r = await as(eve, m, p, b);
     assert.ok(DENIED.includes(r.status), `${m} ${p} → ${r.status}`);
@@ -56,6 +58,8 @@ test("an outsider can't read or touch someone else's DMs", async () => {
     // Photos & videos (server/photos.js).
     ['GET', `/dms/${dm.id}/media`], ['GET', `/dms/${dm.id}/media?ids=${aliceDmMsg}`], ['GET', `/dms/${dm.id}/tags`], ['GET', `/dm-messages/${aliceDmMsg}/comments`],
     ['POST', `/dm-messages/${aliceDmMsg}/tags`, { id: 'A'.repeat(22), fileIdx: 0, ciphertext: cipher() }], ['DELETE', `/dm-messages/${aliceDmMsg}/tags/${'A'.repeat(22)}`],
+    // Chat backgrounds (server/looks.js).
+    ['PUT', `/dms/${dm.id}/look`, { version: 1, ciphertext: cipher() }], ['DELETE', `/dms/${dm.id}/look`, { version: 1 }],
   ]) {
     const r = await as(eve, m, p, b);
     assert.ok(DENIED.includes(r.status), `${m} ${p} → ${r.status}`);

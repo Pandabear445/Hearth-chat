@@ -394,6 +394,8 @@ function serverCommon(s) {
     const last = groupLastRow(channels);
     out.last = groupLastOut(last);
     out.lastMessageAt = last ? last.created_at : s.created_at;
+    // Its chat background (server/looks.js), sealed, or null.
+    out.look = LOOKS ? LOOKS.lookOf('g:' + s.id) : null;
   }
   return out;
 }
@@ -437,7 +439,7 @@ function serializeServer(s, uid, common = serverCommon(s), ev = null) {
   if (out.kind !== 'group') out.hideHistory = !!s.hide_history;
   // Whether invite link previews show this server's name and member count (server/invitepreview.js).
   if (out.kind !== 'group') out.invitePreview = !!s.invite_preview;
-  if (out.kind === 'group') { out.last = common.last; out.lastMessageAt = common.lastMessageAt; }
+  if (out.kind === 'group') { out.last = common.last; out.lastMessageAt = common.lastMessageAt; out.look = common.look ?? null; }
   const to = USE && out.kind !== 'group' ? USE.timeoutOf(s.id, uid) : null;
   if (to) out.timeout = { until: to.until, reason: to.reason };
   // People a moderator server-muted, for those who can lift it (the member menu offers "Remove server mute" even
@@ -677,12 +679,14 @@ function serializeDmMessage(row, extras) {
 }
 
 // disappear: the conversation's timer in seconds (0 = off). last: the newest message that hasn't disappeared.
+// look: its chat background (server/looks.js), sealed, or null.
 function serializeDm(row, userId) {
   const last = db.prepare(`SELECT id, author_id, ciphertext, created_at, expires_at FROM dm_messages WHERE dm_id = ? AND ${LIVE} ORDER BY id DESC LIMIT 1`).get(row.id, now());
   return {
     id: row.id, userId: row.user_a === userId ? row.user_b : row.user_a, lastMessageAt: row.last_message_at, region: row.rtc_region || null, regionVersion: row.rtc_region_v || 0,
     disappear: row.disappear_secs || 0,
     last: last ? { id: last.id, authorId: last.author_id, ciphertext: last.ciphertext, createdAt: last.created_at, expiresAt: last.expires_at || null } : null,
+    look: LOOKS ? LOOKS.lookOf('d:' + row.id) : null,
   };
 }
 
@@ -1159,9 +1163,11 @@ function requireUnlocked(uid) {
 // Encrypted attachments are opaque blobs. The sender lists the blob URLs (not their contents) when
 // posting, so only the uploader can attach a blob and deleting a message removes its files.
 // expiresAt: the message's deadline (disappearing messages), copied so /uploads/ can check a file on its own.
+// Never a chat background's picture (v22, look_conv: server/looks.js): deleting the message would delete the
+// background's file, and changing the background the message's.
 function attachBlobs(files, userId, messageId, expiresAt = null) {
   if (!Array.isArray(files)) return;
-  const stmt = db.prepare('UPDATE blobs SET message_id = ?, expires_at = ? WHERE name = ? AND uploader_id = ? AND message_id IS NULL');
+  const stmt = db.prepare('UPDATE blobs SET message_id = ?, expires_at = ? WHERE name = ? AND uploader_id = ? AND message_id IS NULL AND look_conv IS NULL');
   [...new Set(files)].slice(0, 2 * maxFilesOf(userId)).forEach((u) => { // each attachment may have a thumbnail
     if (typeof u === 'string' && /^\/uploads\/[a-z0-9]+\.bin$/.test(u)) stmt.run(messageId, expiresAt, path.basename(u), userId);
   });
@@ -1204,9 +1210,11 @@ function forgetMessages(messageIds) {
   }
 }
 // Before a server or group is deleted: its messages' files, reactions and votes, and its own pictures (icon,
-// banner, background, emoji). The database cascade removes the rows, but not files or quota bookkeeping.
+// banner, background, emoji), and a group chat's chat background with its picture and log (server/looks.js). The
+// database cascade removes the rows, but not files or quota bookkeeping.
 function purgeServerContent(s) {
   forgetMessages(db.prepare('SELECT m.id FROM messages m JOIN channels c ON c.id = m.channel_id WHERE c.server_id = ?').all(s.id).map((r) => r.id));
+  if (s.kind === 'group' && LOOKS) LOOKS.forget('g:' + s.id);
   const th = themeOf(s);
   [s.icon, th.banner, th.background && th.background.image, ...db.prepare('SELECT url FROM emojis WHERE server_id = ?').all(s.id).map((e) => e.url)]
     .forEach((u) => { if (typeof u === 'string') removeUpload(u); });
@@ -1345,12 +1353,17 @@ async function purgeRecentBy(s, userId, since, actorId) {
   }
   return out;
 }
-// Blobs uploaded but never attached to a message (abandoned sends) are removed after a day.
-jobs.every('uploads.unlinked_cleanup', 3600 * 1000, () => {
-  const old = db.prepare('SELECT name FROM blobs WHERE message_id IS NULL AND created_at < ?').all(Date.now() - 24 * 3600 * 1000);
+// Blobs uploaded but never attached to a message (abandoned sends) are removed after a day. A chat background's
+// picture (v22, look_conv: server/looks.js) isn't attached to a message either, and stays while it's the background.
+// Hourly (the first run UNLINKED_SWEEP_DELAY_MS after start, an hour by default).
+function sweepUnlinked() {
+  const cutoff = Date.now() - 24 * 3600 * 1000;
+  const old = db.prepare('SELECT name FROM blobs WHERE message_id IS NULL AND look_conv IS NULL AND created_at < ?').all(cutoff);
   old.forEach((b) => removeUpload('/uploads/' + b.name));
-  if (old.length) db.prepare('DELETE FROM blobs WHERE message_id IS NULL AND created_at < ?').run(Date.now() - 24 * 3600 * 1000);
-});
+  if (old.length) db.prepare('DELETE FROM blobs WHERE message_id IS NULL AND look_conv IS NULL AND created_at < ?').run(cutoff);
+  return old.length;
+}
+jobs.every('uploads.unlinked_cleanup', 3600 * 1000, sweepUnlinked, { firstDelay: +(process.env.UNLINKED_SWEEP_DELAY_MS || 3600 * 1000) });
 // Leftovers whose message is gone: from before the cleanup above existed (groups that emptied out, for example).
 // Once shortly after start, then daily.
 function sweepOrphans() {
@@ -1361,6 +1374,8 @@ function sweepOrphans() {
   blobs.forEach((b) => removeUpload('/uploads/' + b.name));
   if (blobs.length) db.prepare(`DELETE FROM blobs WHERE ${gone('blobs')}`).run();
   for (const t of MESSAGE_SIDE_TABLES) db.prepare(`DELETE FROM ${t} WHERE ${gone(t)}`).run();
+  // Chat backgrounds (server/looks.js) whose conversation is gone, with their pictures and logs.
+  if (LOOKS) LOOKS.sweep();
   return blobs.length;
 }
 jobs.every('uploads.orphan_sweep', 24 * 3600 * 1000, sweepOrphans, { firstDelay: +(process.env.ORPHAN_SWEEP_DELAY_MS || 2 * 60 * 1000) });
@@ -1930,6 +1945,7 @@ let PRES = null; // server/presence.js
 let SCHED = null; // server/scheduled.js
 let NICK = null; // server/nicknames.js
 let WFILTER = null; // server/wordfilter.js
+let LOOKS = null; // server/looks.js: chat backgrounds
 // What someone is called in a server's notifications: their nickname there, else their display name.
 const nameIn = (serverId, uid) => (NICK && NICK.nicknameOf(serverId, uid)) || nameOf(uid);
 function pushTo(userIds, payload, what = { kind: 'other' }) {
@@ -3688,8 +3704,12 @@ function pageRows(table, col, containerId, q, extra = '', since = null) {
 // The timer changes inside a history page (the apps draw them between the messages). A ?before= page ends where the
 // page after it began, and an ?after= page begins where the page before it ended, so no change falls between two.
 // since: the reader's history start in the server (server/joinhistory.js): no change from before it.
-const timerEvents = (conv, page, q, since = null) => DIS.eventsBetween(conv, page.rows, { hasMore: page.hasMore, hasNewer: page.hasNewer,
+const pageSpan = (page, q, since) => ({ hasMore: page.hasMore, hasNewer: page.hasNewer,
   before: q.before && !q.around && !q.after ? String(q.before) : null, afterAt: !q.around && q.after ? page.afterAt : null, from: since ? since.at : null });
+const timerEvents = (conv, page, q, since = null) => DIS.eventsBetween(conv, page.rows, pageSpan(page, q, since));
+// v22 (chat backgrounds): the changes to a DM's or group chat's background inside a history page, by the same rules
+// (server/looks.js). conv: 'd:<dm>' or 'g:<group>'.
+const lookEvents = (conv, page, q, since = null) => (LOOKS ? LOOKS.eventsBetween(conv, page.rows, pageSpan(page, q, since)) : []);
 
 api.get('/channels/:id/messages', auth, (req, res) => {
   const c = requireChannel(req.params.id, req.userId);
@@ -3705,7 +3725,10 @@ api.get('/channels/:id/messages', auth, (req, res) => {
   // Your own unread and ping counts for the threads these messages start ("2 new replies" on each).
   const threads = USE ? USE.threadStates(req.userId, c, messages.filter((m) => m.threadCount).map((m) => m.id)) : {};
   const hidden = !!since && !hasMore && !req.query.after && hiddenBefore(c, since, rows[0]);
-  res.json({ messages, hasMore, hasNewer, threads, timerEvents: timerEvents('c:' + c.id, page, req.query, since), ...(hidden ? { hidden: true } : {}) });
+  // A group chat's chat also has the changes to its background (v22, server/looks.js).
+  const srv = c.type === 'text' ? serverOf(c) : null;
+  const looks = srv && srv.kind === 'group' ? { lookEvents: lookEvents('g:' + srv.id, page, req.query, since) } : {};
+  res.json({ messages, hasMore, hasNewer, threads, timerEvents: timerEvents('c:' + c.id, page, req.query, since), ...looks, ...(hidden ? { hidden: true } : {}) });
 });
 // Whether a channel has top-level messages this reader doesn't get (server/joinhistory.js) before the first one they
 // do (or at all): one step in the channel index for those from before they joined, and a look through the few written
@@ -4150,7 +4173,8 @@ api.get('/dms/:id/messages', auth, (req, res) => {
   const page = pageRows('dm_messages', 'dm_id', d.id, req.query);
   const { rows, hasMore, hasNewer } = page;
   const extras = extrasFor(rows.map((r) => r.id), 'dm_messages');
-  res.json({ messages: rows.map((r) => serializeDmMessage(r, extras)), hasMore, hasNewer, timerEvents: timerEvents('d:' + d.id, page, req.query) });
+  res.json({ messages: rows.map((r) => serializeDmMessage(r, extras)), hasMore, hasNewer, timerEvents: timerEvents('d:' + d.id, page, req.query),
+    lookEvents: lookEvents('d:' + d.id, page, req.query) });
 });
 
 api.post('/dms/:id/messages', auth, (req, res) => {
@@ -6645,6 +6669,10 @@ require('./search')({ api, auth, db, fail, rateLimit, canIn, PM, requireServer, 
 // (sealed on the device; the server never sees their words).
 require('./photos')({ api, auth, db, fail, rateLimit, now, perms, PM, isMember, serverOf, requireChannel, requireDm, isBlocked, getUserRow, history: HIST, alive, LIVE,
   serializeMessage, serializeDmMessage, extrasFor, tagsFor, tagOut, toChannelAbout, getIo: () => io, requireCurrentEpoch, b64Len });
+// Chat backgrounds (server/looks.js, v22): a DM's or group chat's background, sealed on the device; the server never
+// sees which one.
+LOOKS = require('./looks')({ api, auth, db, fail, rateLimit, newId, now, requireDm, requireServer, isBlocked, getUserRow, requireCurrentEpoch, removeUpload,
+  getIo: () => io, b64Len });
 // Bots and integrations (server/bots.js): installs, scopes, the bot API, signed webhooks, slash commands.
 BOTS = require('./bots')({ api, express, db, fail, HttpError, wrap, rateLimit, newId, seal, unseal, sealSecret, openSecret, auth, stepUp, auditLog, serverAudit, checkWords,
   perms, PM, getUserRow, publicUser, requireServer, requireChannel, serializeMessage, toChannel, toChannelAbout, emitChannelMessage, reactionsFor, deleteMessageTree, emitServer: (id) => emitServer(id),

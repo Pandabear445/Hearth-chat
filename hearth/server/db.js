@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 21;
+const SCHEMA_VERSION = 22;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1641,6 +1641,42 @@ CREATE TABLE IF NOT EXISTS media_tags (
 );
 CREATE INDEX IF NOT EXISTS idx_media_tags_message ON media_tags(message_id, file_idx);
 CREATE INDEX IF NOT EXISTS idx_media_tags_conv ON media_tags(conv, created_at);
+`);
+
+// v22 (chat backgrounds): a background for a DM or a group chat, chosen by the people in it (server/looks.js).
+//   chat_looks  one row per conversation that has ever had one: conv is 'd:<dm>' or 'g:<group server>'; ciphertext
+//               is the look sealed on the device with the conversation's key (lkd1: in DMs, lkc1: signed in groups,
+//               padded so every look is the same size), bound to the conversation, its version and its author; epoch
+//               is the group key epoch it was sealed with (read from inside the ciphertext; NULL in DMs). version
+//               counts every change, 1, 2, 3…, and a change must name the next one, so two people changing it at once
+//               can't silently undo each other and a look sealed for an older version can never come back. Removing
+//               a background keeps the row (ciphertext '', files '[]') so the count carries on. files lists the
+//               upload addresses its picture uses (at most 2), the same ones whose blobs say look_conv.
+//   look_log    who changed or removed it and when (the line in the conversation's history), the newest 50 per
+//               conversation.
+//   blobs.look_conv  the conversation whose background a blob is (NULL for everything else): the sweeps that remove
+//               uploads never attached to a message leave these alone, and a message can't take one.
+// The server sees that a conversation has a background, how big its picture is, who changed it and when; never which.
+addColumn('blobs', 'look_conv', 'TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS chat_looks (
+  conv TEXT PRIMARY KEY,
+  ciphertext TEXT NOT NULL,
+  epoch INTEGER,
+  author_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  files TEXT NOT NULL DEFAULT '[]',
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS look_log (
+  id TEXT PRIMARY KEY,
+  conv TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_look_log_conv ON look_log(conv, created_at);
+CREATE INDEX IF NOT EXISTS idx_blobs_look ON blobs(look_conv) WHERE look_conv IS NOT NULL;
 `);
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
