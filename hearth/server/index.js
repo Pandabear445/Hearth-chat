@@ -2207,6 +2207,10 @@ api.post('/auth/login', wrap(async (req, res) => {
   const key = typeof authKey === 'string' ? authKey.slice(0, 128) : '';
   const ok = await bcrypt.compare(key, row ? row.auth_hash : DUMMY_HASH);
   if (!ok || !row || row.is_bot || row.deleted_at) { noteAuthFailure(req.ip); secEvent('failed_login', req.ip, name); fail(401, 'Wrong username or password.'); }
+  // The right password isn't a guess: it gives its try back to the network's limit, which is there to slow guessing.
+  // Otherwise a school, an office or a family behind one address is locked out once 20 people sign in within ten
+  // minutes. Wrong passwords from the network are still capped at 20 (the limit is checked before the password is).
+  refundNet(req, 'login');
   if (maintenance() && !isStaff(row.id)) fail(503, maintenance(), 'maintenance');
   if (stillSuspended(row)) fail(403, suspendedMsg(row), 'suspended');
   // Two-factor sign-in: the right password isn't enough on its own.
