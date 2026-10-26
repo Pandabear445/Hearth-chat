@@ -826,6 +826,11 @@ The server never receives the words, phrases or `has:`/`is:` filters. It sees th
 - **Unread badges and a "New messages" line** that follow you across devices, **Jump to first unread**, Mark as
   read/unread, and **drafts** that survive reloads (kept only on your device). Signing out removes drafts, the inbox
   and reminders from the browser.
+- **Right where you expect:** a DM or group chat always opens at its newest message, with the "New messages" line and
+  Jump to first unread above it to go back up; a server channel with more than a screenful unread opens at the line.
+  While you're at the newest message it stays in view as GIFs, videos and pictures load. Jumping to a message (a pin, a
+  reply, a search result, Photos & videos, a notification) lands on it in the middle of the chat and keeps it there
+  while the pictures around it load; on a phone, the pinned messages close so you can see it.
 - **Threads you won't miss:** a message that starts a thread shows how many replies are new to you ("3 replies · 2
   new", red with @ when one pings you), and a "New replies" line marks where you stopped. The **Threads** button in
   a channel's header lists its threads, the most recent reply first, with what's new in each; it carries a count when

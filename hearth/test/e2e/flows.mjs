@@ -2,7 +2,7 @@
 // Everything goes through the real UI; the only shortcuts are reading state the UI already shows.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { exact, makePng, totp, newPassword, Person, PHONE } from './harness.mjs';
+import { exact, makeGif, makePng, totp, newPassword, Person, PHONE } from './harness.mjs';
 
 export function check(ok, message) { if (!ok) throw new Error(message); }
 const SERVER = 'E2E Hall';
@@ -4998,6 +4998,168 @@ async function sideView(t) {
   delete t.people['bob-side'];
 }
 
+// ------------------------------------------------------------------ where the chat puts you
+// Two reports from an owner. Reopening a DM put you "in a random part" of it: GIFs (and videos), whose size the chat
+// only learns once they've loaded, came in after the list was put at the bottom and pushed the newest messages down
+// out of sight. And Jump on a pinned message went "way past" it: the list glided there while the pictures on the way
+// and above it came in, and those above pushed it on down out of view. Now a DM opens at its newest message and stays
+// there as they load, with the "New messages" line and Jump to first unread still there to go up to; a jump (from the
+// pins, a search result…) lands on the message and keeps it in the middle while they load; and on a phone the pins
+// panel, which covers the chat, closes on Jump (app.js keepPlace).
+async function keepYourPlace(t) {
+  const { alice, bob } = t.people;
+  const gif = (name) => ({ name, mimeType: 'image/gif', buffer: makeGif(300, 300) });
+  // (Several lines each, like mediaPanel's fillers, so a few of them are more than a screen.)
+  const say = async (text, files) => {
+    if (files) await alice.$('.cw-main input[type=file]').setInputFiles(files);
+    await alice.$('#composer-input').fill(text);
+    await alice.$('#composer-input').press('Enter');
+    await alice.message(text.split('\n')[0]).first().waitFor({ timeout: 60000 });
+    await alice.page.waitForTimeout(450); // (under the server's limit on messages in a row)
+  };
+  // The message with these words against the chat's own box: where it is, how far from the middle, whether it's all in
+  // view, how far the list is from its bottom, and whether it's the newest drawn (null: not drawn).
+  const where = (p, words) => p.page.evaluate((w) => {
+    const sc = document.querySelector('#messages');
+    const el = sc && [...sc.querySelectorAll('.msg[data-mid]')].find((m) => m.textContent.includes(w));
+    if (!el) return null;
+    const r = el.getBoundingClientRect(); const box = sc.getBoundingClientRect();
+    return { top: Math.round(r.top - box.top), bottom: Math.round(r.bottom - box.top), box: Math.round(box.height),
+      middle: Math.round((r.top + r.bottom) / 2 - (box.top + box.bottom) / 2), inside: r.top >= box.top - 1 && r.bottom <= box.bottom + 1,
+      fromBottom: Math.round(sc.scrollHeight - sc.scrollTop - sc.clientHeight), last: el === [...sc.querySelectorAll('.msg[data-mid]')].pop() };
+  }, words);
+  const inside = (p, words) => p.page.waitForFunction((w) => {
+    const sc = document.querySelector('#messages');
+    const el = sc && [...sc.querySelectorAll('.msg[data-mid]')].find((m) => m.textContent.includes(w));
+    if (!el) return false;
+    const r = el.getBoundingClientRect(); const box = sc.getBoundingClientRect();
+    return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+  }, words, { timeout: 30000 });
+  // Every picture on screen is in (they load as they come into the chat's view), and nothing has moved for a moment.
+  const settled = async (p) => {
+    await p.page.waitForFunction(() => {
+      const sc = document.querySelector('#messages');
+      if (!sc || sc.querySelector('.att-media.loading, .msg-skeleton')) return false;
+      const box = sc.getBoundingClientRect();
+      const shown = (el) => { const r = el.getBoundingClientRect(); return r.bottom > box.top && r.top < box.bottom; };
+      if ([...sc.querySelectorAll('.att-media.locked:not(.failed):not(.gone)')].some(shown)) return false;
+      return [...sc.querySelectorAll('.att-img[src]')].filter(shown).every((i) => i.complete);
+    }, null, { timeout: 30000 });
+    await p.page.waitForTimeout(800);
+  };
+  const scrollUp = async (p, by) => {
+    const b = await p.$('#messages').boundingBox();
+    await p.page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await p.page.mouse.wheel(0, -by);
+    await p.page.waitForTimeout(500);
+  };
+
+  // ---- In the DM: four GIFs, the message that gets pinned, more GIFs, then enough to scroll it all away.
+  await alice.railButton('Direct messages');
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  for (let i = 1; i <= 4; i++) await say(`Before the pin ${i}: a GIF`, [gif(`before-${i}.gif`)]);
+  const target = 'Pinned for later: walnut';
+  await say(target);
+  for (let i = 1; i <= 3; i++) await say(`After the pin ${i}: a GIF`, [gif(`after-${i}.gif`)]);
+  for (let i = 1; i <= 8; i++) await say(`Scroll filler ${i}:\nso the pin\nscrolls well\nout of view`);
+  await alice.messageAction(target, 'Pin message');
+  await alice.toast('Message pinned.');
+  await bob.message('Scroll filler 8:').first().waitFor({ timeout: 60000 });
+  await settled(bob);
+  let at = await where(bob, 'Scroll filler 8:');
+  check(at && at.last && at.inside && at.fromBottom < 8, `Bob should be at the newest message (got ${JSON.stringify(at)}).`);
+
+  // ---- Reopening it after scrolling up, with more than a screenful of new messages and GIFs among them: it opens at
+  // the newest, which stays in view as the GIFs load; the "New messages" line is above, and Jump to first unread goes up.
+  await scrollUp(bob, 2500);
+  at = await where(bob, 'Scroll filler 8:');
+  check(at && at.fromBottom > 500, `Bob should have scrolled up (got ${JSON.stringify(at)}).`);
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  for (let i = 1; i <= 6; i++) await say(`While you were away ${i}:\none\ntwo\nthree`, i % 3 === 2 ? [gif(`away-${i}.gif`)] : null);
+  const newest = 'Newest of all: hazelnut';
+  await say(newest);
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await bob.message(newest).first().waitFor();
+  await settled(bob);
+  at = await where(bob, newest);
+  check(at && at.last && at.inside && at.fromBottom < 8, `Reopening the DM should show the newest message at the bottom (got ${JSON.stringify(at)}).`);
+  const line = await bob.page.evaluate(() => { const d = document.querySelector('#messages #new-div'); return d && d.getBoundingClientRect().bottom - document.querySelector('#messages').getBoundingClientRect().top; });
+  check(line !== null && line < 0, `The "New messages" line should be there, above what's on screen (got ${line}).`);
+  await bob.$('#unread-bar .unread-jump', { hasText: 'Jump to first unread' }).click();
+  await settled(bob);
+  check(await bob.page.evaluate(() => {
+    const d = document.querySelector('#messages #new-div'); const box = document.querySelector('#messages').getBoundingClientRect();
+    const r = d && d.getBoundingClientRect();
+    return !!r && r.top >= box.top && r.bottom <= box.bottom && d.nextElementSibling.textContent.includes('While you were away 1');
+  }), 'Jump to first unread should show the "New messages" line, above the first new message.');
+
+  // ---- Jump from Pinned messages: on the message, in the middle, and still there once the GIFs above it are in.
+  await bob.$('#main-head button[aria-label="More"]').click();
+  await bob.menuItem('Pinned messages').click();
+  await bob.$('#members .pin-card', { hasText: 'walnut' }).locator('button', { hasText: 'Jump' }).click();
+  await bob.$('#messages .msg.flash', { hasText: 'walnut' }).waitFor();
+  await inside(bob, target);
+  await settled(bob);
+  at = await where(bob, target);
+  check(at && at.inside && Math.abs(at.middle) <= 40, `After Jump the pinned message should be in the middle of the chat (got ${JSON.stringify(at)}).`);
+  check(await bob.page.evaluate(() => [...document.querySelectorAll('#messages .msg[data-mid]')].filter((m) => /Before the pin \d/.test(m.textContent)).some((m) => m.querySelector('.att-img[src]'))),
+    'The GIFs above the pinned message should have loaded.');
+  await bob.$('#members button[aria-label="Close panel"]').click();
+
+  // ---- From another conversation, a search result: its page loads around it, and it lands the same way.
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  await bob.page.keyboard.press('Control+k');
+  await bob.$('.search-modal input.search-main').fill('walnut');
+  await bob.$('.search-modal .search-msg', { hasText: 'walnut' }).first().click();
+  await bob.page.waitForSelector('.search-modal', { state: 'detached' });
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await inside(bob, target);
+  await settled(bob);
+  at = await where(bob, target);
+  check(at && at.inside && Math.abs(at.middle) <= 40, `A search result should land in the middle of the chat (got ${JSON.stringify(at)}).`);
+  // Scrolling yourself afterwards isn't undone: the list doesn't go back to the message.
+  await scrollUp(bob, 600);
+  await settled(bob);
+  at = await where(bob, target);
+  check(at && at.middle > 300, `Once you scroll, the list shouldn't be pulled back to the message (got ${JSON.stringify(at)}).`);
+
+  // ---- A phone: the pinned messages cover the chat, so Jump closes them and the message is in view.
+  const phone = await t.open('bob-place', PHONE);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  const openNav = async () => {
+    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
+  };
+  await openNav();
+  await page.locator('#rail button[aria-label="Direct messages"]').tap();
+  await openNav();
+  await phone.dmRow('Alice Wonder').tap();
+  await page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  await phone.message(newest).first().waitFor({ timeout: 30000 });
+  // (The instance owner's announcement, from an earlier flow, sits over the top of a phone's menu: put away first.)
+  const announce = page.locator('#announce button[aria-label="Dismiss"]');
+  if (await announce.count()) { await announce.tap(); await phone.$('#announce').waitFor({ state: 'detached' }); }
+  await page.locator('#main-head button[aria-label="More"]').tap();
+  await phone.menuItem('Pinned messages').tap();
+  const jumpBtn = page.locator('#members .pin-card', { hasText: 'walnut' }).locator('button', { hasText: 'Jump' });
+  await jumpBtn.waitFor();
+  await jumpBtn.tap();
+  await phone.$('#members .pin-card').first().waitFor({ state: 'detached' });
+  await inside(phone, target);
+  await settled(phone);
+  check((await where(phone, target) || {}).inside, 'On a phone, Jump should close the pinned messages and show the message.');
+  await phone.close();
+  delete t.people['bob-place'];
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -5056,6 +5218,7 @@ export const FLOWS = [
   ['photo comments and tags: a comment on one photo of several, tags added and removed, the panel filtered by a tag', photoNotes],
   ['chat backgrounds: set in a DM and a group chat, seen live by the other side with a line in the chat, a picture, removed, and turned off on one device', chatBackgrounds],
   ['the side view: a message and a picture pinned to the side stay beside the chat while you switch conversations, jump, unpin', sideView],
+  ['where the chat puts you: a DM reopens at its newest message as GIFs load, the "New messages" line above; Jump on a pin or a search result lands on the message and keeps it there; on a phone the pins close on Jump', keepYourPlace],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
 ];

@@ -382,3 +382,24 @@ export function makePng(w = 64, h = 48) {
   const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
+
+// A small real GIF (a checkerboard of 128 colours). GIFs are sent as they are, so a message doesn't carry their size
+// the way it does a photo's: the chat only learns it once the picture has loaded. Its picture data is 8-bit codes
+// with a clear code every 120 pixels, so the code table never grows (uncompressed, but any size works).
+export function makeGif(w = 64, h = 48) {
+  const u16 = (n) => [n & 255, (n >> 8) & 255];
+  const head = [...Buffer.from('GIF89a'), ...u16(w), ...u16(h), 0xf6, 0, 0]; // a global table of 128 colours
+  for (let i = 0; i < 128; i++) head.push((i * 2) & 255, (255 - i * 2) & 255, 120);
+  head.push(0x2c, ...u16(0), ...u16(0), ...u16(w), ...u16(h), 0, 7); // the image, then its minimum code size
+  const codes = [];
+  for (let y = 0, n = 0; y < h; y++) {
+    for (let x = 0; x < w; x++, n++) {
+      if (n % 120 === 0) codes.push(128);
+      codes.push(((x >> 4) + (y >> 4)) & 127);
+    }
+  }
+  codes.push(129);
+  const blocks = [];
+  for (let i = 0; i < codes.length; i += 255) { const part = codes.slice(i, i + 255); blocks.push(part.length, ...part); }
+  return Buffer.from([...head, ...blocks, 0, 0x3b]);
+}

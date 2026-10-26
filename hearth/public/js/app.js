@@ -3530,19 +3530,142 @@ function editSavedNote(it) {
 }
 
 // ======================================================================= conversation view
+// ---- keeping your place in the message list
+// The list has overflow-anchor: none (app.css): the app decides where it sits. Putting it there once isn't enough. A
+// GIF, a video or a picture link only gets its size once it has loaded (a photo's size comes with it), a page of older
+// or newer messages comes in, the message box or the window changes height: each of these moved what you were looking
+// at after it was put on screen. Reopening a conversation left you somewhere above the newest message, and a jump (a
+// pin, a search result, a reply…) left the message pushed down out of sight by the pictures loading above it. So the
+// list keeps one of two places through such changes:
+//  - the newest message at the bottom, as long as you're there (opening a conversation and sending put you there);
+//  - a message it was sent to, until the pictures on screen are in and nothing has moved for a moment, or until you
+//    scroll yourself.
+const PLACE_QUIET = 1200; // a message's place is let go once nothing has moved for this long (ms)…
+const PLACE_MAX = 10000; // …or after this long at most
+const NEAR_NEWEST = 8; // px from the bottom that still counts as being at the newest message
+const MARKER_GAP = 80; // the "New messages" line goes this far below the top (clear of the unread bar over the list)
+const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+function keepPlace(sc) {
+  let stuck = true; // at the newest message: stays there
+  let held = null; // { find: () => element, block: 'center' | 'start', offset, found, quiet, max }
+  let lastTop = 0;
+  let shown = false;
+  let ro = null;
+  let mo = null;
+  const fromBottom = () => sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+  const release = () => {
+    if (!held) return;
+    clearTimeout(held.quiet); clearTimeout(held.max);
+    held = null;
+    stuck = sc.isConnected && fromBottom() < NEAR_NEWEST;
+  };
+  const place = () => {
+    // Gone with its conversation: nothing more to keep.
+    if (!sc.isConnected) { if (shown) { release(); if (ro) ro.disconnect(); if (mo) mo.disconnect(); } return; }
+    shown = true;
+    if (held) {
+      const el = held.find();
+      if (!el || !el.isConnected) return;
+      held.found = true;
+      const box = sc.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      // In the middle (its top at the top when it's taller than the list), or a set distance below the top.
+      const want = held.block === 'start' ? box.top + held.offset : box.top + Math.max(0, (box.height - r.height) / 2);
+      if (Math.abs(r.top - want) >= 1) sc.scrollTop += r.top - want;
+    } else if (stuck && fromBottom() > 1) sc.scrollTop = sc.scrollHeight;
+    lastTop = sc.scrollTop;
+  };
+  // A message's place is let go once it's on screen and has settled: nothing moved for a moment, and no picture still
+  // loading. (Not drawn yet, its page still on the way: it's waited for, up to PLACE_MAX.)
+  const settle = () => {
+    const now = held;
+    if (!now || !now.found) return;
+    clearTimeout(now.quiet);
+    now.quiet = setTimeout(() => { if (held === now) { if (sc.querySelector('.att-media.loading')) settle(); else release(); } }, PLACE_QUIET);
+  };
+  // At the newest message, the list moving up can mean two things: you (or something) scrolled it, and the newest
+  // message is let go; or it got shorter under you (a video that turned out smaller, a message deleted) and the
+  // browser pulled it up, and it stays. Scrolled by you (a wheel, a finger, the keyboard, the scrollbar) is clear at
+  // once. Otherwise it's the second when a size change comes with it (by the next frame), else the first.
+  let unsure = 0;
+  const changed = () => { unsure = 0; place(); settle(); };
+  // Watched: the list's own size (the message box, the keyboard on a phone, the window) and each row's (a picture
+  // coming in), and rows coming and going (a page loading, a redraw).
+  if (typeof ResizeObserver === 'function') { ro = new ResizeObserver(changed); ro.observe(sc); }
+  if (typeof MutationObserver === 'function') {
+    mo = new MutationObserver((records) => {
+      if (ro) for (const r of records) { for (const n of r.addedNodes) if (n.nodeType === 1) ro.observe(n); for (const n of r.removedNodes) if (n.nodeType === 1) ro.unobserve(n); }
+      changed();
+    });
+    mo.observe(sc, { childList: true });
+  }
+  let lastInput = 0;
+  let downAt = 0; // a mouse button, finger or pen down on the list (or its scrollbar) since then
+  const byYou = () => (downAt && Date.now() - downAt < 30000) || Date.now() - lastInput < 1000;
+  sc.addEventListener('scroll', () => {
+    if (fromBottom() < NEAR_NEWEST) { stuck = true; unsure = 0; } else if (!held && stuck && sc.scrollTop < lastTop - 1) {
+      if (byYou()) stuck = false;
+      else {
+        const mark = ++unsure;
+        requestAnimationFrame(() => requestAnimationFrame(() => { if (unsure === mark) { unsure = 0; stuck = false; } }));
+      }
+    }
+    lastTop = sc.scrollTop;
+  }, { passive: true });
+  // Scrolling yourself also lets go of a message's place.
+  const yours = (upward) => { lastInput = Date.now(); release(); if (upward) stuck = false; };
+  sc.addEventListener('wheel', (e) => yours(e.deltaY < 0), { passive: true });
+  sc.addEventListener('touchstart', () => yours(false), { passive: true });
+  sc.addEventListener('touchmove', () => { lastInput = Date.now(); }, { passive: true });
+  const lifted = () => { downAt = 0; lastInput = Date.now(); };
+  sc.addEventListener('pointerdown', (e) => {
+    downAt = lastInput = Date.now();
+    window.addEventListener('pointerup', lifted, { once: true });
+    window.addEventListener('pointercancel', lifted, { once: true });
+    if (e.target === sc) release(); // its scrollbar
+  });
+  sc.addEventListener('keydown', (e) => {
+    // (Not keys typed into a message being edited, or a poll's field.)
+    if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+    if (SCROLL_KEYS.has(e.key)) yours(['ArrowUp', 'PageUp', 'Home'].includes(e.key)); else lastInput = Date.now();
+  });
+  sc._place = {
+    // The newest message at the bottom, and staying there (smoothly: Jump to latest).
+    newest(smooth = false) {
+      release();
+      stuck = true;
+      if (smooth) sc.scrollTo({ top: sc.scrollHeight, behavior: 'smooth' }); else sc.scrollTop = sc.scrollHeight;
+      lastTop = sc.scrollTop;
+    },
+    // What find() returns, in the middle (block 'start': `offset` below the top), now and as things around it move.
+    hold(find, { block = 'center', offset = 0 } = {}) {
+      if (held) { clearTimeout(held.quiet); clearTimeout(held.max); }
+      stuck = false;
+      const now = held = { find, block, offset, found: false, quiet: 0, max: 0 };
+      now.max = setTimeout(() => { if (held === now) release(); }, PLACE_MAX);
+      changed();
+    },
+    release,
+  };
+}
+// The newest message at the bottom of the list, and kept there while you stay (keepPlace).
+function toNewest(sc, smooth = false) {
+  if (!sc) return;
+  if (sc._place) sc._place.newest(smooth); else sc.scrollTop = sc.scrollHeight;
+}
+// A message in the list (by id) held in place as it's drawn and while what's around it settles (keepPlace).
+function holdMessage(sc, id, opts) {
+  if (sc && sc._place) sc._place.hold(() => sc.querySelector(`.msg[data-mid="${id}"]`), opts);
+}
 function chatView() {
   const wrap = h('div', { class: 'chat' });
   const scroller = h('div', { class: 'messages', id: 'messages', tabindex: '0', 'aria-label': 'Messages', role: 'log' });
   scroller.addEventListener('scroll', onMessagesScroll);
   scroller.addEventListener('click', onMessageAreaClick);
   messageListKeys(scroller);
-  // Phones: the keyboard coming up (or the phone turning) makes the list shorter. If you were at the newest messages,
-  // they stay in view instead of sliding down behind the message box.
-  if (typeof ResizeObserver === 'function') {
-    let newest = true;
-    scroller.addEventListener('scroll', () => { newest = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8; }, { passive: true });
-    new ResizeObserver(() => { if (newest && isPhoneLayout()) scroller.scrollTop = scroller.scrollHeight; }).observe(scroller);
-  }
+  // Where it stays as things load (keepPlace). On a phone, too: the keyboard coming up (or the phone turning) makes the
+  // list shorter, and the newest messages stay in view instead of sliding down behind the message box.
+  keepPlace(scroller);
   const jump = h('button', { class: 'jump-latest', id: 'jump-latest', hidden: true, onclick: () => jumpToLatest() }, icon('arrowDown'), 'Jump to latest');
   const unreadBar = h('div', { class: 'unread-bar', id: 'unread-bar', role: 'status', hidden: true });
   const selectBar = h('div', { class: 'select-bar', id: 'select-bar', role: 'region', 'aria-label': 'Selected messages', hidden: true });
@@ -3559,11 +3682,15 @@ function chatView() {
   queueMicrotask(() => {
     comp.renderExtras();
     if (S.view.jumpTo) { const id = S.view.jumpTo; S.view.jumpTo = null; jumpToMessage(key, id); }
-    // Back after an update's reload, where you'd scrolled to: that message at the top, quietly.
+    // Back after an update's reload, where you'd scrolled to: that message at the top, quietly (and kept there while
+    // the pictures around it load).
     else if (S.view.restoreAt) {
       const id = S.view.restoreAt; S.view.restoreAt = null;
-      loadMessages(key, { around: id }).then(() => { const el = $(`#messages [data-mid="${id}"]`); if (el) el.scrollIntoView({ block: 'start' }); else loadMessages(key); }).catch(() => {});
-    } else loadMessages(key);
+      holdMessage(scroller, id, { block: 'start' });
+      loadMessages(key, { around: id }).then(() => {
+        if (!scroller.querySelector(`.msg[data-mid="${id}"]`) && scroller.isConnected) { if (scroller._place) scroller._place.release(); loadMessages(key, 'open'); }
+      }).catch(() => {});
+    } else loadMessages(key, 'open');
   });
   return wrap;
 }
@@ -3587,14 +3714,17 @@ function openChannelMention(el) {
 }
 
 const msgUrl = (key) => (key.startsWith('c:') ? `/channels/${encodeURIComponent(key.slice(2))}/messages` : `/dms/${encodeURIComponent(key.slice(2))}/messages`);
-// mode: 'latest' | 'older' | 'newer' | { around: id }
+// mode: 'latest' | 'open' | 'older' | 'newer' | { around: id }
+// ('open': the latest, as the conversation opens. renderMessages puts a server channel at its "New messages" line.)
 async function loadMessages(key, mode = 'latest') {
+  const stick = mode === 'open' ? 'open' : true;
+  if (mode === 'open') mode = 'latest';
   let store = S.msgs[key];
   if (mode === 'latest' && store && store.loaded && !store.hasNewer) {
     trimStore(store, 120);
     await decryptAll(key);
     dropExpired(store);
-    return renderMessages(true);
+    return renderMessages(stick);
   }
   if (!store || (mode === 'latest' && store.hasNewer) || typeof mode === 'object') store = S.msgs[key] = { list: [], hasMore: true, hasNewer: false, loaded: false, loading: false };
   if (store.loading || (mode === 'older' && !store.hasMore) || (mode === 'newer' && !store.hasNewer)) return;
@@ -3632,7 +3762,7 @@ async function loadMessages(key, mode = 'latest') {
       // Coming back down: let go of the oldest ones instead, and keep what you're reading where it is.
       if (store.list.length > HISTORY_WINDOW) { store.list.splice(0, store.list.length - HISTORY_WINDOW); store.hasMore = true; }
       keepAnchor(sc, () => renderMessages(false));
-    } else renderMessages(typeof mode !== 'object');
+    } else renderMessages(typeof mode === 'object' ? false : stick);
     if (!store.hasNewer) markRead(key);
   } catch (e) {
     toast(e.message, 'error');
@@ -3724,7 +3854,7 @@ function jumpToLatest() {
   const key = currentKey();
   const store = S.msgs[key];
   if (store && store.hasNewer) { delete S.msgs[key]; loadMessages(key); }
-  else { const sc = $('#messages'); if (sc) sc.scrollTo({ top: sc.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); }
+  else toNewest($('#messages'), !matchMedia('(prefers-reduced-motion: reduce)').matches);
 }
 
 // ---- decryption (DMs and channels are both end-to-end encrypted)
@@ -3905,6 +4035,8 @@ function hookFace(author, m) {
   if (!w || (!w.name && !w.avatar)) return author;
   return { id: `hook:${author.id}`, username: author.username, bot: true, profile: { displayName: w.name || displayName(author) }, avatar: (w.avatarSrc && mediaSrc(w.avatarSrc)) || author.avatar || null };
 }
+// DMs and group chats open at their newest message, whatever is unread (renderMessages).
+const opensAtNewest = () => S.view.type === 'dm' || isGroup(currentServer());
 function renderMessages(stick) {
   const sc = $('#messages');
   if (!sc) return;
@@ -3937,10 +4069,14 @@ function renderMessages(stick) {
     prev = m;
   }
   while (li < lines.length) line();
+  // stick: true for the newest message at the bottom; 'open' as the conversation opens. Opening a server channel with
+  // more than a screenful unread starts at its "New messages" line. A DM or group chat always opens at the newest
+  // message: the line, and the bar's "Jump to first unread", are there to go up to. Either place is kept while the
+  // pictures load (keepPlace).
   if (stick) {
-    const marker = sc.querySelector('.new-div');
-    if (marker && marker.offsetTop > sc.clientHeight * 0.6) sc.scrollTop = marker.offsetTop - 80;
-    else sc.scrollTop = sc.scrollHeight;
+    const marker = stick === 'open' && !opensAtNewest() && sc.querySelector('.new-div');
+    if (marker && sc._place && marker.offsetTop > sc.clientHeight * 0.6) sc._place.hold(() => sc.querySelector('.new-div'), { block: 'start', offset: MARKER_GAP });
+    else toNewest(sc);
   }
   if (!store.hasNewer) redrawPendingSends(key);
   const jl = $('#jump-latest');
@@ -3971,10 +4107,13 @@ async function jumpToFirstUnread() {
   if (S.unreadMarker !== key) return;
   const store = S.msgs[key];
   const loadedFrom = store && store.list.length ? store.list[0].id : null;
+  // Straight to the line, just under the bar, and kept there while the pictures around it load (keepPlace).
+  const sc = $('#messages');
+  if (!sc || !sc._place) return;
+  sc._place.hold(() => sc.querySelector('.new-div'), { block: 'start', offset: MARKER_GAP });
   // The first unread message isn't loaded yet (lots of new messages): load the page around the marker.
   if (!loadedFrom || loadedFrom > S.markerId) await loadMessages(key, { around: S.markerId });
-  const div = $('#new-div');
-  if (div) div.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  if (!sc.querySelector('.new-div')) sc._place.release();
 }
 // The top of a conversation once its first message is loaded: the welcome, and in a server that keeps what came before
 // from new members, one line saying so when the server left messages out for you (store.hidden), instead of a row
@@ -4751,9 +4890,27 @@ function replaceMessageEl(m) {
   });
 }
 
-// ---- jumping to messages (replies, links, search results, notifications)
+// ---- jumping to messages (pins, replies, links, search results, Photos & videos, the side view, notifications)
+// In the chat it goes straight there rather than gliding: on the way, every picture passed would start loading and,
+// those whose size isn't known yet (GIFs, videos, picture links), push the message on down as they came in. It lands
+// in the middle and stays there while the pictures around it load (keepPlace), lit up for a moment (again, should it
+// be drawn anew meanwhile).
 function flash(el) {
-  el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  const sc = el.closest('#messages');
+  const id = el.dataset.mid;
+  if (sc && sc._place && id) {
+    const until = Date.now() + 2000;
+    let at = el;
+    sc._place.hold(() => {
+      if (at.isConnected) return at;
+      const again = sc.querySelector(`.msg[data-mid="${id}"]`);
+      if (again) { at = again; if (Date.now() < until) flashRow(again); }
+      return again;
+    });
+  } else el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  flashRow(el);
+}
+function flashRow(el) {
   el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
   setTimeout(() => el.classList.remove('flash'), 2000);
 }
@@ -4766,9 +4923,18 @@ async function jumpToMessage(key, id) {
   }
   const el = $(`#messages [data-mid="${id}"]`);
   if (el) return flash(el);
+  // Not loaded: the page around it, the list held at it from the moment it's drawn.
+  const sc = $('#messages');
+  holdMessage(sc, id);
   await loadMessages(key, { around: id });
   const again = $(`#messages [data-mid="${id}"]`);
-  if (again) flash(again); else toast('That message was deleted.');
+  if (again) flash(again);
+  else { if (sc && sc._place) sc._place.release(); toast('That message was deleted.'); }
+}
+// Jump from a side panel: on a phone the panel covers the chat, so it closes first (beside the chat, it stays).
+function jumpFromPanel(key, id) {
+  if (isPhoneLayout() && panelMode()) closePanel();
+  return jumpToMessage(key, id);
 }
 // Settings → Storage: the name and type of one of your files. The server only knows sizes and where it was posted;
 // the name is inside the encrypted message, so it comes from a message this app has open, or fetches and opens now.
@@ -5577,7 +5743,8 @@ async function onNewMessage(key, m) {
         const above = firstPending ? firstPending.previousElementSibling : sc.lastElementChild;
         put(messageEl(m, newDay || (above && above.classList.contains('sys-line')) ? null : prev, 'main'));
         ensureCurrentMessage(sc);
-        if (near || (m.authorId === S.me.id && !m.scheduled)) sc.scrollTop = sc.scrollHeight;
+        if (m.authorId === S.me.id && !m.scheduled) toNewest(sc);
+        else if (near) sc.scrollTop = sc.scrollHeight;
       }
     }
   }
@@ -6223,7 +6390,7 @@ async function pinsPanel(el) {
         wf ? h('div', { class: 'pin-text' }, h('em', null, previewLabel(wf)))
           : h('div', { class: 'pin-text', html: readable(m) ? md(textOf(m) || (filesOf(m).length ? '_Attachment_' : ''), { mentionName: S.me.username }) : '<em>Encrypted message</em>' }),
         h('div', { class: 'pin-actions' },
-          h('button', { class: 'btn ghost sm', onclick: () => jumpToMessage(key, m.id) }, 'Jump'),
+          h('button', { class: 'btn ghost sm', onclick: () => jumpFromPanel(key, m.id) }, 'Jump'),
           ibtn('close', 'Unpin', () => togglePin(m), { cls: 'sm' }))));
     });
   } catch (e) { clear(list).append(h('p', { class: 'sidebar-empty' }, e.message)); }
@@ -6235,7 +6402,7 @@ async function pinHistory(el, channelId) {
     if (!log.length || currentKey() !== 'c:' + channelId || panelMode() !== 'pins') return;
     el.append(h('details', { class: 'pin-history' }, h('summary', null, 'Pin history'),
       h('ul', null, log.slice(0, 20).map((x) => h('li', null, nameEl(getUser(x.userId), { server: serverOfChannel(channelId) }), ` ${x.action === 'pin' ? 'pinned' : 'unpinned'} a message \u00b7 ${fmtStamp(x.at)} `,
-        h('button', { class: 'link-btn', onclick: () => jumpToMessage('c:' + channelId, x.messageId) }, 'Jump'))))));
+        h('button', { class: 'link-btn', onclick: () => jumpFromPanel('c:' + channelId, x.messageId) }, 'Jump'))))));
   } catch { /* the pins still show */ }
 }
 function threadPanel(el) {
@@ -7701,7 +7868,7 @@ function showPendingSend(key, nonce, text, files, replyTo) {
   const p = { key, nonce, text, files, replyTo };
   pendingSends.set(nonce, p);
   const sc = $('#messages');
-  if (sc && currentKey() === key) { p.el = pendingEl(p); sc.append(p.el); sc.scrollTop = sc.scrollHeight; }
+  if (sc && currentKey() === key) { p.el = pendingEl(p); sc.append(p.el); toNewest(sc); }
 }
 function dropPendingSend(nonce) {
   const p = pendingSends.get(nonce);
