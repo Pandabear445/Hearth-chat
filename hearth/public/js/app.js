@@ -200,6 +200,8 @@ export const app = {
   decryptMessage: (m) => decryptMessage(m),
   wordFilter: WF,
   openShortcuts: () => openShortcuts(),
+  // A server event for a settings page that follows it live (Help host: relays:mine). Returns how to stop listening.
+  onSocket: (ev, fn) => { if (!socket) return () => {}; socket.on(ev, fn); return () => socket.off(ev, fn); },
 };
 
 // ======================================================================= boot

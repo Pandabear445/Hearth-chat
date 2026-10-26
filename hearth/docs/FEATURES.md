@@ -1946,3 +1946,52 @@ Tests:
 - `test/chat-look-client.test.js` (formats, tampering, trust, the version rule, blob URLs, the switch);
 - `test/side-view-client.test.js`;
 - the e2e flows "chat backgrounds" and "the side view".
+
+## Member relays (help host)
+
+What the owner asked for: "when users join they can also host, like everyone that joins makes it stronger". Any member
+can run a call relay (coturn) for everyone here on a Linux machine of their own; it's used once the owner approves it,
+and if both agree it also keeps copies of the encrypted backups. It builds on linked regions (`server/regions.js`): a
+member's relay is a `regions` row with `kind = 'member'` (schema v23), with its own TURN secret.
+
+**The member's page** (Settings → Help host, `hostTab` in `public/js/settings.js`):
+- `GET /api/me/relays` lists their relays (at most 2) with status, traffic, bandwidth limit and backup copies, and
+  whether offers are on (when they're off: "The owner has turned off member relays.", and no offer button);
+- **Offer a machine**: a name, a bandwidth limit (10, 25, 50 or 100 Mbit/s, or no limit) and "Also keep encrypted
+  backup copies", then `POST /api/me/relays` and the install command in a dialog (`showCommand`, shared with
+  Admin → Regions);
+- **New install command** (`POST /api/me/relays/:id/reinstall`; for a relay that already checked in it asks first,
+  since the machine's check-in stops working until the new command runs there) and **Remove**
+  (`DELETE /api/me/relays/:id`, then `sudo hearth-relay-uninstall` to run on the machine);
+- the page follows `relays:mine` (the server sends it when the owner changes one; `app.onSocket`) and asks again every
+  30 seconds while it's open, since a relay going offline sends nothing.
+
+The page lists what a relay sees and can't (the same list as README → Member relays).
+
+**Statuses** (`relayStatus` in `public/js/admin.js`, the same words on both pages):
+- *Waiting for install*;
+- *Waiting for approval*;
+- *Relaying calls*;
+- *Paused by the owner* (*Paused* in Admin);
+- *Offline since 3:12 PM*;
+- *Relay stopped*, when it checks in but coturn isn't running.
+
+**The owner's side** (Admin → Regions → Member relays, `memberRelays` in `admin.js`):
+- each row: who runs it, its IP (or "hasn't checked in"), status, load and traffic, limit, and backups (offered or
+  not, on or off); the heading counts the ones waiting for approval;
+- **Approve** (with "Keep encrypted backup copies on it" only when backup space was offered, off to start with),
+  **Resume** and **Backups on** ask for the password again (`withPassword`), as the server's step-up does;
+- **Pause**, **Backups off**, **Rename** and **Remove** don't;
+- "Let members offer relays" is `PATCH /api/admin/member-relays`.
+
+**Privacy & safety**: "Avoid relays run by members" sets `memberRelays: 'avoid'` (`PATCH /api/me/privacy`). The app
+then never measures or uses a member's relay, and drops the other side's candidates on one (`relays.js`, `voice.js`).
+
+The rest of the server side (per-relay pseudonyms, at most 8 member relays per person, the uninstall script, the
+agent switching itself off after a day of refusals): README → Member relays, and SECURITY.md.
+
+Tests:
+- `test/member-relays.test.js` (server);
+- `test/relays-client.test.js` (choosing relays, dropping candidates);
+- `test/member-relays-ui.test.js` (the pages' words and wiring);
+- the e2e flow "member relays".

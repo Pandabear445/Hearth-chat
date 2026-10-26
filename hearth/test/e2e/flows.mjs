@@ -4998,6 +4998,107 @@ async function sideView(t) {
   delete t.people['bob-side'];
 }
 
+// ------------------------------------------------------------------ member relays (Settings → Help host)
+// A member offers a machine as a call relay and gets its install command; the machine checks in (here: a heartbeat
+// sent the way the relay's agent sends it); the owner approves it with their password in Admin → Regions; the
+// member's page follows by itself; everyone's /api/ice then carries it, marked as a member's, under a login that
+// doesn't name the person. The member then keeps their own calls off members' relays, removes theirs and is shown
+// how to take it off the machine. By now bob owns the instance and alice is a member.
+async function memberRelays(t) {
+  const { alice, bob } = t.people;
+  const name = 'Alice’s Pi, Lisbon';
+  await catchCopies(alice);
+  await alice.openSettings('Help host');
+  const page = alice.$('.set-content');
+  await page.locator('.set-section', { hasText: 'What your relay can and can’t see' }).waitFor();
+  await page.locator('button', { hasText: 'Offer a machine' }).click();
+  const offer = await alice.dialog('Offer a machine');
+  await offer.locator('input[placeholder^="e.g."]').fill(name);
+  await offer.locator('.chips .chip', { hasText: exact('50 Mbit/s') }).click();
+  await offer.locator('.toggle-row', { hasText: 'Also keep encrypted backup copies' }).locator('.switch').click();
+  await offer.locator('.modal-foot .btn.primary').click();
+  const setup = alice.modal(`Set up ${name}`);
+  const command = (await setup.locator('.cmd-box code').innerText()).trim();
+  const link = command.match(/\/regions\/install\/(\w+)\?k=([0-9a-f]+)/);
+  check(link, `The install command should carry its one-time link (got “${command}”).`);
+  check(/24 hours/.test(await setup.innerText()) && /every minute/.test(await setup.innerText()), 'The command should say its link works for 24 hours and what it installs.');
+  await setup.locator('.cmd-box button', { hasText: 'Copy' }).click();
+  check(await lastCopy(alice) === command, 'Copy should copy the install command.');
+  await setup.locator('.modal-x').click();
+  await setup.waitFor({ state: 'detached' }); // (Settings stays open underneath)
+  const mine = () => page.locator('.relay-row', { hasText: name });
+  await mine().locator('.rpill', { hasText: 'Waiting for install' }).waitFor();
+  check((await mine().innerText()).includes('Limit 50 Mbit/s'), 'The bandwidth limit picked should show.');
+
+  // The machine checks in, as its agent does every minute. A relay waiting for approval gets no backup key.
+  const [, id, token] = link;
+  const beat = await fetch(`${t.server.base}/api/regions/${id}/heartbeat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Region-Token': token },
+    body: JSON.stringify({ ip: '203.0.113.7', tx: 5000000, rx: 4000000, load: 0.2, cpus: 4, mem: 31, relay: true, uptime: 86400,
+      ssh: { port: 22, hostKey: '', ready: false, usedMb: 0, freeMb: 20000, files: 0 }, version: 3 }),
+  });
+  const said = await beat.json().catch(() => ({}));
+  check(beat.ok && said.ok, `The relay’s check-in should be taken (${beat.status} ${JSON.stringify(said)}).`);
+  check(!said.backupKey, 'A relay waiting for approval should get no backup key.');
+  await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Privacy & safety') }).click();
+  await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Help host') }).click();
+  await mine().locator('.rpill', { hasText: 'Waiting for approval' }).waitFor();
+
+  // The owner sees it waiting, with who runs it and where, and approves it with his password.
+  await bob.railButton('Admin');
+  await bob.$('.admin-tabs .admin-tab', { hasText: 'Regions' }).click();
+  await bob.$('.admin-body .admin-head', { hasText: 'Member relays' }).locator('.badge-tag', { hasText: '1 waiting' }).waitFor();
+  const row = bob.$('.admin-body .member-row', { hasText: name });
+  await row.locator('.rpill', { hasText: 'Waiting for approval' }).waitFor();
+  const seen = await row.innerText();
+  check(seen.includes('by @alice_w') && seen.includes('203.0.113.7') && seen.includes('limit 50 Mbit/s') && seen.includes('backups offered, off'), `The row should say who runs it, its address, its limit and its backup offer (got “${seen}”).`);
+  await row.locator('button', { hasText: exact('Approve') }).click();
+  const approve = await bob.dialog(`Approve ${name}?`);
+  // Backup copies stay off: that's a separate choice, with its own warning.
+  await approve.locator('.toggle-row', { hasText: 'Keep encrypted backup copies on it' }).waitFor();
+  await approve.locator('.modal-foot .btn.primary').click();
+  await bob.confirmPassword('Confirm approving a relay', t.pw.bob);
+  await bob.toast(`${name} is approved.`);
+  await bob.noModals();
+  await row.locator('.rpill', { hasText: 'Relaying calls' }).waitFor();
+  check(!(await bob.$('.admin-body .admin-head', { hasText: 'Member relays' }).locator('.badge-tag').count()), 'Nothing should be waiting any more.');
+
+  // Alice's page follows by itself.
+  await mine().locator('.rpill', { hasText: 'Relaying calls' }).waitFor();
+  check((await mine().innerText()).includes('No backups'), 'Her page should say the relay keeps no backups.');
+
+  // Everyone's calls can use it now: it's in /api/ice, marked as a member's, and its login doesn't name her.
+  const ice = await alice.page.evaluate(() => fetch('/api/ice', { headers: { Authorization: 'Bearer ' + localStorage.getItem('hearth.token') } }).then((r) => r.json()));
+  const entry = ice.find((e) => e.community === true);
+  check(entry && [].concat(entry.urls).some((u) => u.includes('203.0.113.7')), `/api/ice should carry the member’s relay (got ${JSON.stringify(ice.map((e) => e.urls))}).`);
+  const aliceId = await alice.page.evaluate(() => localStorage.getItem('hearth.userId'));
+  check(!String(entry.username).includes(aliceId) && !String(entry.username).includes('alice'), 'The relay login should not name the person.');
+
+  // Alice keeps her own calls off members' relays.
+  await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Privacy & safety') }).click();
+  const avoid = alice.$('.set-content .toggle-row', { hasText: 'Avoid relays run by members' });
+  check(!(await avoid.locator('input').isChecked()), 'Avoiding members’ relays should be off to begin with.');
+  await avoid.locator('.switch').click();
+  await alice.toast('Saved.');
+  check(JSON.parse(t.server.rows('SELECT privacy FROM users WHERE id = ?', aliceId)[0].privacy).memberRelays === 'avoid', 'The choice should be saved on her account.');
+
+  // She removes her relay, and is shown how to take it off the machine.
+  await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Help host') }).click();
+  await mine().locator('button', { hasText: exact('Remove') }).click();
+  await alice.modal(`Remove ${name}?`).locator('.modal-foot .btn.danger').click();
+  const uninstall = alice.modal(`Uninstall ${name}`);
+  check((await uninstall.locator('.cmd-box code').innerText()).trim() === 'sudo hearth-relay-uninstall', 'The uninstall command should be shown.');
+  await uninstall.locator('.modal-x').click();
+  await uninstall.waitFor({ state: 'detached' });
+  await mine().waitFor({ state: 'detached' });
+  await alice.closeSettings();
+  await bob.$('.admin-tabs .admin-tab', { hasText: 'Regions' }).click();
+  await bob.$('.admin-body .admin-head', { hasText: 'Member relays' }).waitFor();
+  check(!(await bob.$('.admin-body .member-row', { hasText: name }).count()), 'The owner’s list should no longer have it.');
+  const thrown = [...alice.pageErrors, ...bob.pageErrors];
+  check(!thrown.length, `No page errors (got ${thrown.join(' / ')}).`);
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -5056,6 +5157,7 @@ export const FLOWS = [
   ['photo comments and tags: a comment on one photo of several, tags added and removed, the panel filtered by a tag', photoNotes],
   ['chat backgrounds: set in a DM and a group chat, seen live by the other side with a line in the chat, a picture, removed, and turned off on one device', chatBackgrounds],
   ['the side view: a message and a picture pinned to the side stay beside the chat while you switch conversations, jump, unpin', sideView],
+  ['member relays: a member offers a machine in Help host, it checks in, the owner approves it with a password, it’s in everyone’s calls under a made-up login; the member avoids members’ relays, removes theirs and gets the uninstall command', memberRelays],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
 ];
