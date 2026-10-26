@@ -1,10 +1,10 @@
 // Admin dashboard (server administrators only). Everything here is also enforced by the server.
-import { h, clear, icon, toast, fmtStamp, fmtSize, copyText } from './util.js';
+import { h, clear, icon, toast, fmtTime, fmtStamp, fmtSize, copyText } from './util.js';
 import { api } from './api.js';
 import { avatarEl } from './profile-ui.js';
 import { modal, confirmDialog, field, menu } from './ui.js';
 import { renderDoc, render as md } from './markdown.js';
-import { rankRelays, relayTime } from './relays.js';
+import { rankRelays, relayTime, usableIce, avoidsMemberRelays } from './relays.js';
 import { underWay } from './auto-update.js';
 import { markNotesSeen } from './whatsnew.js';
 
@@ -60,7 +60,43 @@ const userCell = (b, onOpen) => h('button', { class: 'adm-user', onclick: () => 
   b && b.bot ? h('span', { class: 'bot-tag' }, 'BOT') : null,
   b && b.suspended ? h('span', { class: 'badge-tag bad' }, 'Suspended') : null, b ? roleTag(b.role) : null);
 
-export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, role = 'admin', confirm = null } = {}) {
+// An install (or uninstall) command in a dialog with a Copy button: for the owner's regions below, and for a member's
+// own relay in Settings → Help host. steps say what to do before pasting it, notes what it does and what comes next.
+export function showCommand(title, command, { steps = [], notes = [] } = {}) {
+  return modal({
+    title, size: 'lg',
+    body: h('div', { class: 'stack' },
+      steps.length ? h('ol', { class: 'steps' }, steps.map((s) => h('li', null, s))) : null,
+      h('div', { class: 'cmd-box' }, h('code', null, command), h('button', { class: 'btn sm', onclick: () => { copyText(command); toast('Copied.'); } }, icon('copy'), 'Copy')),
+      notes.map((n) => h('p', { class: 'field-hint' }, n))),
+  });
+}
+// "3:12 PM" today, "Oct 24, 3:12 PM" before.
+const sinceText = (ts) => (!ts ? 'a while' : new Date(ts).toDateString() === new Date().toDateString() ? fmtTime(ts)
+  : `${new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${fmtTime(ts)}`);
+// What a member relay is doing, as a pill ({ kind: 'ok' | 'warn' | 'bad', label }): the same words in Admin → Regions
+// and on the member's own Settings → Help host page (member: true says who paused it). Calls use a relay only while
+// it's approved, checking in (the server drops one after 3 minutes without) and its relay program is running.
+export function relayStatus(r, { member = false } = {}) {
+  if (r.status === 'paused') return { kind: 'bad', label: member ? 'Paused by the owner' : 'Paused' };
+  if (r.waitingForInstall) return { kind: 'warn', label: r.installOpen ? 'Waiting for install' : 'Install link expired' };
+  if (r.status === 'pending') return { kind: 'warn', label: 'Waiting for approval' };
+  if (!r.alive) return { kind: 'bad', label: `Offline since ${sinceText(r.lastSeen)}` };
+  if (r.relayUp === false) return { kind: 'bad', label: 'Relay stopped' };
+  return { kind: 'ok', label: 'Relaying calls' };
+}
+// Backup copies on a member's relay, as its member reads them: it keeps copies only if they offered it and the
+// owner turned it on when approving (or later).
+export function relayBackupText(r) {
+  if (!r.offersBackups) return 'No backups';
+  if (r.status === 'pending') return 'Backups: waiting for approval';
+  if (!r.backups) return 'No backups: the owner kept them off';
+  if (!r.backup || !r.backup.ready) return 'Backups: no backup space yet (needs SSH reachable from the internet)';
+  return `${r.backup.files} backup cop${r.backup.files === 1 ? 'y' : 'ies'}`;
+}
+
+// me: the signed-in user, read when it's needed (their privacy choices can change while the dashboard is open).
+export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, role = 'admin', confirm = null, me = () => null } = {}) {
   const myRank = RANK[role] || 0;
   confirmPw = confirm;
   const tabs = TABS.filter((t) => myRank >= t[3]);
@@ -696,17 +732,16 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
 
   async function regions() {
     const d = await api('GET', '/admin/regions');
-    const showCommand = (title, command) => modal({
-      title, size: 'lg',
-      body: h('div', { class: 'stack' },
-        h('ol', { class: 'steps' },
-          h('li', null, 'Rent the cheapest VPS in that part of the world (1 CPU and 1 GB is plenty; Ubuntu or Debian). See the price guide below.'),
-          h('li', null, 'Log in to it as root (ssh root@its-ip) and paste this one line:'),
-        ),
-        h('div', { class: 'cmd-box' }, h('code', null, command), h('button', { class: 'btn sm', onclick: () => { copyText(command); toast('Copied.'); } }, icon('copy'), 'Copy')),
-        h('p', { class: 'field-hint' }, 'The link works for 24 hours. It installs the call relay with this server\u2019s secret and a tiny check-in that reports here every minute. Within a minute of finishing, the region shows as online and calls start using it.'),
-        h('p', { class: 'field-hint' }, 'The line checks the download against the SHA-256 it carries before running anything. If that says FAILED, nothing ran: make a new command here.'),
-        h('p', { class: 'field-hint' }, 'If the VPS provider has a firewall in its control panel, open UDP + TCP 3478 and UDP 49160\u201349400 there.')),
+    const regionCommand = (title, command) => showCommand(title, command, {
+      steps: [
+        'Rent the cheapest VPS in that part of the world (1 CPU and 1 GB is plenty; Ubuntu or Debian). See the price guide below.',
+        'Log in to it as root (ssh root@its-ip) and paste this one line:',
+      ],
+      notes: [
+        'The link works for 24 hours. It installs the call relay with this server\u2019s secret and a tiny check-in that reports here every minute. Within a minute of finishing, the region shows as online and calls start using it.',
+        'The line checks the download against the SHA-256 it carries before running anything. If that says FAILED, nothing ran: make a new command here.',
+        'If the VPS provider has a firewall in its control panel, open UDP + TCP 3478 and UDP 49160\u201349400 there.',
+      ],
     });
     // An install command carries this server's relay secret, so making one asks for your password again.
     const withPassword = (fn) => (confirm ? confirm(fn, { title: 'Confirm it\u2019s you', text: 'The install command carries this server\u2019s relay secret.' }) : fn({}));
@@ -717,13 +752,14 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
           if (!name.value.trim()) throw new Error('Give the region a name, like "Frankfurt" or "US West".');
           const r = await withPassword((x) => api('POST', '/admin/regions', { name: name.value.trim(), origin: location.origin, ...x }));
           if (!r) return false;
-          regions(); setTimeout(() => showCommand(`Set up ${r.region.name}`, r.command), 150);
+          regions(); setTimeout(() => regionCommand(`Set up ${r.region.name}`, r.command), 150);
         } }] });
     };
     const measured = h('div', { class: 'stack' });
     const measure = async (btn) => {
       btn.disabled = true; clear(measured).append(h('span', { class: 'spinner' }));
-      const ice = await api('GET', '/ice');
+      // Someone who avoids members' relays (Privacy & safety) never contacts one, here either: they aren't measured or listed.
+      const ice = usableIce(await api('GET', '/ice'), avoidsMemberRelays(me()));
       const ranks = await rankRelays(ice, { force: true });
       clear(measured);
       const relays = ice.filter((e) => [].concat(e.urls || []).some((u) => /^turns?:/.test(u)));
@@ -748,11 +784,12 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
             h('button', { class: 'btn ghost sm', onclick: async () => {
               try {
                 const x = await withPassword((y) => api('POST', `/admin/regions/${r.id}/reinstall`, { origin: location.origin, ...y }));
-                if (x) showCommand(`Reinstall ${r.name}`, x.command);
+                if (x) regionCommand(`Reinstall ${r.name}`, x.command);
               } catch (e) { if (!e.cancelled) toast(e.message, 'error'); }
             } }, r.waitingForInstall ? 'Install command' : 'Reinstall'),
             h('button', { class: 'btn ghost sm danger-text', onclick: async () => { if (await confirmDialog({ title: `Remove ${r.name}?`, text: 'Calls stop using it right away. The VPS keeps running until you cancel it with your provider.', confirm: 'Remove', danger: true })) { await api('DELETE', `/admin/regions/${r.id}`); regions(); } } }, 'Remove'))))),
       d.regions.length ? '' : h('p', { class: 'field-hint' }, 'No regions yet.'),
+      ...memberRelays(d),
       h('div', { class: 'admin-head' }, h('h3', null, 'Which relay is nearest to me?')),
       h('div', null, h('button', { class: 'btn', onclick: (e) => measure(e.currentTarget) }, 'Measure from this device')), measured,
       h('div', { class: 'admin-head' }, h('h3', null, 'Cheap places to put a region')),
@@ -765,7 +802,104 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
           ['Vultr / DigitalOcean / Linode', '$4\u20136/mo', '30+ cities worldwide, 0.5\u20132 TB traffic. Good for places the others don\u2019t cover (South America, India, Japan, Australia).'],
         ].map(([n, p2, t]) => h('div', { class: 'adm-row three' }, h('b', null, n), h('span', null, p2), h('span', { class: 'stat-sub' }, t)))),
       h('p', { class: 'field-hint' }, 'Start with the region where most people who can\u2019t connect live (Europe and US East cover most friend groups). Two or three regions is plenty for thousands of people.'));
-    timer = setInterval(() => { api('GET', '/admin/regions').then((x) => { if (JSON.stringify(x.regions.map((r) => [r.alive, r.mbps])) !== JSON.stringify(d.regions.map((r) => [r.alive, r.mbps]))) regions(); }).catch(() => {}); }, 20000);
+    // Redrawn when a region or a member's relay comes or goes, changes state or its traffic changes. (One timer: a
+    // redraw after a change here mustn't leave the old one running too.)
+    const sig = (x) => JSON.stringify([x.regions.map((r) => [r.alive, r.mbps]), (x.members || []).map((r) => [r.id, r.status, r.alive, r.waitingForInstall, r.mbps, r.backups]), x.memberRelays]);
+    clearInterval(timer);
+    timer = setInterval(() => { api('GET', '/admin/regions').then((x) => { if (sig(x) !== sig(d)) regions(); }).catch(() => {}); }, 20000);
+  }
+
+  // Member relays (Settings → Help host): machines members offer as call relays for everyone here. None is used until
+  // it's approved here. Approving one, resuming one and sending it backup copies each put someone else's machine into
+  // everyone's calls or this server's backups, so they need the password again; pausing one, stopping its copies and
+  // removing it never do (the server checks the same).
+  function memberRelays(d) {
+    const list = d.members || [];
+    const on = d.memberRelays !== 'off';
+    const waiting = list.filter((r) => r.status === 'pending').length;
+    const who = (r) => (r.owner ? `@${r.owner.username}` : 'a member');
+    const fail = (e) => { if (!e.cancelled) toast(e.message, 'error'); };
+    const run = async (fn, done) => {
+      try { if (await fn()) { if (done) toast(done); regions(); } } catch (e) { fail(e); }
+    };
+    const approve = (r) => {
+      const keep = h('input', { type: 'checkbox' });
+      modal({ title: `Approve ${r.name}?`, size: 'md',
+        body: h('div', { class: 'stack' },
+          h('p', { class: 'muted-p' }, `${who(r)} runs it. Approving puts it in everyone’s calls: each person’s app measures it and uses it when it’s among the fastest to answer. Whoever runs it then sees the IP address of everyone whose call goes through it or whose app measures it, when, and how much they send. Never what’s said or shown: calls stay encrypted between the people in them, and a relay only passes the packets along.`),
+          h('p', { class: 'field-hint' }, 'People who turned on Avoid relays run by members (Settings → Privacy & safety) never use it. You can pause or remove it here at any time.'),
+          r.waitingForInstall ? h('p', { class: 'field-hint' }, 'It hasn’t checked in yet. Approved, it starts relaying calls once it does.') : null,
+          r.offersBackups
+            ? h('label', { class: 'toggle-row' }, h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Keep encrypted backup copies on it'),
+              h('span', { class: 'field-hint' }, 'Copies are locked with your backup key, which never leaves this server. Only send them to people you trust: anyone who someday got the key could open one.')),
+            h('span', { class: 'switch' }, keep, h('span', { class: 'switch-track' })))
+            : h('p', { class: 'field-hint' }, `${who(r)} didn’t offer backup space on it, so it only relays calls.`)),
+        actions: [{ label: 'Cancel' }, { label: 'Approve', kind: 'primary', action: async () => {
+          const x = await withPassword((y) => api('POST', `/admin/regions/${r.id}/approve`, { backups: keep.checked, ...y }),
+            { title: 'Confirm approving a relay', text: `${r.name} goes into everyone’s calls. That needs your password.`, button: 'Approve' });
+          if (!x) return false;
+          toast(`${r.name} is approved.`);
+          regions();
+        } }] });
+    };
+    const rename = (r) => {
+      const name = h('input', { class: 'input', maxlength: '40', value: r.name });
+      modal({ title: `Rename ${r.name}`, size: 'sm', body: h('div', { class: 'stack' }, field('Name', name, `Shown to you, to ${who(r)} and to people in calls that use it.`)),
+        actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', action: async () => {
+          if (!name.value.trim()) throw new Error('Give it a name.');
+          await api('PATCH', `/admin/regions/${r.id}`, { name: name.value.trim() });
+          toast('Saved.');
+          regions();
+        } }] });
+    };
+    const remove = async (r) => {
+      if (!(await confirmDialog({ title: `Remove ${r.name}?`, danger: true, confirm: 'Remove',
+        text: `Calls stop using it right away. ${who(r)}’s machine keeps the relay until they uninstall it; it switches itself off a day after this server starts refusing its check-ins.` }))) return;
+      run(() => api('DELETE', `/admin/regions/${r.id}`), `${r.name} removed.`);
+    };
+    // What it reports, when it's up; its bandwidth limit; and backup copies: offered or not, and on or off.
+    const details = (r) => [
+      r.alive ? `load ${r.load ?? '?'} / ${r.cpus || 1} CPU · ${r.mbps ?? 0} Mbit/s now · ${r.monthGb ?? 0} GB this month` : null,
+      r.capMbit ? `limit ${r.capMbit} Mbit/s` : 'no bandwidth limit',
+      !r.offersBackups ? 'backups not offered' : !r.backups ? 'backups offered, off'
+        : !r.backup || !r.backup.ready ? 'backups on, no backup space yet (needs SSH)'
+          : `backups on: ${r.backup.files} cop${r.backup.files === 1 ? 'y' : 'ies'}, ${fmtMb(r.backup.usedMb)} (${fmtMb(r.backup.freeMb)} free)${r.backup.last ? (r.backup.last.ok ? ` · last copy ${ago(r.backup.last.at)} ✓` : ' · last copy FAILED') : ''}`,
+    ].filter(Boolean).join(' · ');
+    const row = (r) => {
+      const st = relayStatus(r);
+      const btn = (label, onclick, cls = 'btn ghost sm') => h('button', { class: cls, onclick }, label);
+      return h('div', { class: 'adm-row member-row', 'data-relay': r.id },
+        h('span', { class: 'member-who' }, h('b', null, r.name), h('span', { class: 'stat-sub' }, `by ${who(r)}`)),
+        h('span', { class: 'stat-sub' }, r.ip || 'hasn’t checked in'),
+        h('span', { class: `rpill ${st.kind}` }, st.label),
+        h('span', { class: 'stat-sub', 'data-tip': r.backup && r.backup.last && !r.backup.last.ok ? r.backup.last.error : null }, details(r)),
+        h('span', { class: 'row gap tight member-actions' },
+          r.status === 'pending' ? btn('Approve', () => approve(r), 'btn primary sm') : null,
+          r.status === 'approved' ? btn('Pause', () => run(() => api('POST', `/admin/regions/${r.id}/pause`), `${r.name} is paused.`)) : null,
+          r.status === 'paused' ? btn('Resume', () => run(() => withPassword((y) => api('POST', `/admin/regions/${r.id}/resume`, y),
+            { title: 'Confirm resuming a relay', text: `${r.name} goes back into everyone’s calls. That needs your password.`, button: 'Resume' }), `${r.name} is back in calls.`)) : null,
+          r.offersBackups && r.status !== 'pending' ? (r.backups
+            ? btn('Backups off', () => run(() => api('POST', `/admin/regions/${r.id}/backups`, { on: false }), `No more copies go to ${r.name}. Copies already there stay until ${who(r)} uninstalls it.`))
+            : btn('Backups on', () => run(() => withPassword((y) => api('POST', `/admin/regions/${r.id}/backups`, { on: true, ...y }),
+              { title: 'Confirm sending backup copies', text: `Every encrypted backup is copied to ${r.name}, which ${who(r)} runs. Copies are locked with your backup key, which never leaves this server; anyone who someday got the key could open one. That needs your password.`, button: 'Turn on' }), `Backups go to ${r.name} too.`))) : null,
+          btn('Rename', () => rename(r)),
+          btn('Remove', () => remove(r), 'btn ghost sm danger-text')));
+    };
+    const setOn = async (input) => {
+      try {
+        await api('PATCH', '/admin/member-relays', { enabled: input.checked });
+        toast(input.checked ? 'Members can offer relays.' : 'Members can’t offer new relays.');
+      } catch (e) { input.checked = !input.checked; fail(e); }
+      regions();
+    };
+    return [
+      h('div', { class: 'admin-head' }, h('h3', null, 'Member relays ', waiting ? h('span', { class: 'badge-tag warn' }, `${waiting} waiting for approval`) : null)),
+      h('p', { class: 'field-hint' }, 'Members can offer a machine of their own (a VPS, a Raspberry Pi, a home PC) as a call relay, from Settings → Help host. None is used until you approve it. A member’s relay sees the IP address of everyone whose call goes through it or whose app measures it, never what’s said or shown. Each has its own relay secret (never this server’s) and logs people in under names made up for it alone. People who turn on Avoid relays run by members never use them.'),
+      h('label', { class: 'toggle-row' }, h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Let members offer relays'),
+        h('span', { class: 'field-hint' }, on ? 'Up to 2 each. Nothing is used until you approve it.' : 'Members can’t offer new relays. The ones you approved keep working.')),
+      h('span', { class: 'switch' }, h('input', { type: 'checkbox', checked: on, onchange: (e) => setOn(e.target) }), h('span', { class: 'switch-track' }))),
+      list.length ? h('div', { class: 'adm-table' }, ...list.map(row)) : h('p', { class: 'field-hint' }, 'No member has offered a relay yet.'),
+    ];
   }
 
   // ---------------------------------------------------------------- money (Ko-fi / Stripe → automatic supporters)

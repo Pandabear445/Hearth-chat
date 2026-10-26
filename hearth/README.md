@@ -491,6 +491,7 @@ All chats are end-to-end encrypted: your browser encrypts each message and file 
 | Server channel messages and files | **No** — end-to-end encrypted, signed by the sender |
 | Direct messages and files | **No** — end-to-end encrypted |
 | Voice | **No** — encrypted between browsers (DTLS-SRTP), handshakes signed; a relay, when one is needed, only forwards encrypted packets |
+| Your IP address on a call relay a **member** runs (Settings → Help host) | Not what's said or shown: the relay only passes encrypted packets along. The member running it sees your IP address, when, and how much you send, when your call goes through it or your app measures it. **Avoid relays run by members** (Settings → Privacy & safety) keeps your calls off them. See [Member relays](#member-relays-help-host) |
 | Who's in which server, who messages whom and when, emoji reactions, server/channel names, avatars and profiles, file sizes, which messages carry files (and how many), which photo of a message a comment is about, that a photo has tags (by whom and when, not the words), that a chat has a background (who changed it and when, a picture's size, not which one), which GIFs people pick and load, and when and where (not what) you search | Yes |
 | Whether each of your open apps is in use or idle (for automatic **Away**), and how long a custom status should last | Yes. Away, like Online, goes to everyone signed in on this Hearth (people you've blocked too), so it shows when you stop and start using Hearth. See [Away and custom statuses](#away-and-custom-statuses) |
 | Links you ask a **link preview** for (and that it was you, and when) | Yes: the server fetches the page for you. The preview itself then travels inside the encrypted message. See [Link previews](#link-previews) |
@@ -1116,6 +1117,28 @@ Activity shows only while someone is online and not invisible, and each person c
 ## Capacity, regions and costs
 
 See [docs/RUNNING-HEARTH.md](docs/RUNNING-HEARTH.md): measured capacity (how many people one VPS holds), linked regions (Admin → Regions) and what they cost, cost per person, automatic supporter payments with Ko-fi and Stripe (Admin → Money), and how to talk about it.
+
+### Member relays (help host)
+
+Regions are machines the owner rents. Members can help too: any member can run a call relay for everyone on the server on a Linux machine of their own (Debian, Ubuntu or Raspberry Pi OS): a cheap VPS, a Raspberry Pi or a home PC. Calls that can't connect directly go through a relay, so more relays near people means calls connect sooner and hold up better. If both the member and the owner agree, it also keeps copies of the server's encrypted backups. Nothing is used until the owner approves it.
+
+- **Offering one**: Settings → Help host → **Offer a machine**. Pick a name (shown to the owner, and to people in calls that use it, in call diagnostics), a bandwidth limit (10, 25, 50 or 100 Mbit/s, or no limit; 25 to start with) and whether it may also keep encrypted backup copies (that needs SSH on the machine reachable from the internet, and a few GB). You get a one-line install command for the machine, good for 24 hours. It installs coturn with a relay secret made for that relay alone (never the server's own), and a check-in that reports to the server every minute. Up to 2 relays per member and 40 in all; one that never checks in is dropped once its link expires.
+- **Ports**: at home, forward UDP and TCP 3478 and UDP 49160–49400 to the machine in your router. On a VPS, open them in the provider's firewall.
+- **Approving**: Admin → Regions → **Member relays** lists each one with who runs it, its address, load and traffic (reported while it waits, too), its bandwidth limit and whether it offered backup space. **Approve** needs the owner's password. Backup copies are a separate choice in the same step, off unless the owner turns them on: they're locked with the backup key, which never leaves the server, but anyone who someday got that key could open one, so only send them to people you trust. **Pause** and **Backups off** work straight away; **Resume** and **Backups on** need the password again. Every change goes in the audit log, and the member's Help host page shows it as it happens. **Let members offer relays** turns new offers off; relays already approved keep working.
+- **What the member sees** on Help host: *Waiting for install*, *Waiting for approval*, *Relaying calls*, *Paused by the owner* or *Offline since 3:12 PM*, plus this month's traffic and the backup copies it holds. A member's machine going offline doesn't count against the server's health.
+- **Who uses it**: each person's app is given at most 8 members' relays (always the same ones for that person, which spreads the load and how many members see each person's address), measures them along with the owner's relays, and uses the two that answer fastest, one of them the owner's whenever one of the owner's answers (so people who avoid members' relays can still reach you). A suspended member's relays are left out of calls and backups until the suspension ends; deleting an account deletes its relays.
+- **Removing one**: **Remove** (on Help host, or in Admin → Regions) takes it out of calls right away. Then, on the machine, `sudo hearth-relay-uninstall` takes it all off again: the check-in, the backup account and any copies on it, the firewall rules the installer added, and coturn's settings (coturn itself too, if Hearth installed it). It lists what it removed, and running it twice does no harm. If nobody runs it, the relay switches itself off a day after the server starts refusing its check-ins.
+
+**What a member's relay sees**
+
+- The IP address of everyone whose call goes through it, when, and how much they send. Also the IP addresses of everyone whose app measures it: apps measure relays to pick the nearest.
+- Never what's said or shown. Call audio, video and screen shares are encrypted between the people in the call (DTLS-SRTP, with the DTLS fingerprints signed by Hearth, so a relay can't step in the middle). The relay only passes packets along.
+- Not who's who: each person logs in to it under a made-up name that's different on every member's relay, so two members' relays can't tell they're seeing the same person. (One relay can tell when the same person uses it again.)
+- The member's machine's IP address goes to everyone's app: it's a relay address.
+- Backup copies are `.hbk` files locked with the backup key, which never leaves the main server, so the member can't open them. Anyone who someday got the backup key could, which is why the owner decides for each relay whether it gets copies.
+- It can't be used to reach the member's own network: coturn refuses to relay to private addresses (the same rules `scripts/setup-turn.sh` sets up).
+
+Don't want your IP address seen by members' machines? Settings → Privacy & safety → **Avoid relays run by members**. Your app then never uses or measures a member's relay, and drops the other side's addresses that are on one, so none of your call's packets reach a member's machine. On some networks calls can then take longer to connect, or fail. The threat model is in [SECURITY.md](SECURITY.md).
 
 ## Project layout
 

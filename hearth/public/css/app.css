@@ -2778,6 +2778,13 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 .rpill.warn { background: rgb(242 165 65 / .16); color: var(--accent); }
 .rpill.bad { background: rgb(239 84 102 / .16); color: var(--danger); }
 .adm-row.region-row { grid-template-columns: minmax(110px, 1fr) minmax(110px, 1fr) auto minmax(180px, 2fr) auto; }
+.adm-row.member-row { grid-template-columns: minmax(130px, 1.2fr) minmax(100px, 1fr) auto minmax(180px, 2fr) auto; }
+.member-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.member-actions { flex-wrap: wrap; justify-content: flex-end; }
+/* Settings → Help host: a member's own relays */
+.relay-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 12px; border-radius: 10px; background: var(--hover); border: 1px solid var(--line); }
+.relay-text { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 3px; }
+.relay-text strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; }
 .adm-row.pay-row { grid-template-columns: 90px 90px minmax(120px, 1fr) minmax(150px, 1.2fr) minmax(0, 1.5fr); }
 .price-table .adm-row.three { grid-template-columns: minmax(150px, 1fr) 100px 3fr; }
 .warn-box { margin: 0; padding: 10px 12px; border-radius: 10px; background: rgb(242 165 65 / .12); border: 1px solid rgb(242 165 65 / .3); font-size: 13.5px; }
@@ -2785,7 +2792,8 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 .perk-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 3px; color: var(--text-2); }
 .stack.tight { gap: 6px; }
 @media (max-width: 700px) {
-  .adm-row.region-row, .adm-row.pay-row, .price-table .adm-row.three { grid-template-columns: 1fr 1fr; }
+  .adm-row.region-row, .adm-row.member-row, .adm-row.pay-row, .price-table .adm-row.three { grid-template-columns: 1fr 1fr; }
+  .member-actions { justify-content: flex-start; }
 }
 
 /* ---------------------------------------------------------------- GIF picker, Discord-style */
