@@ -5018,7 +5018,8 @@ async function memberRelays(t) {
   await offer.locator('.toggle-row', { hasText: 'Also keep encrypted backup copies' }).locator('.switch').click();
   await offer.locator('.modal-foot .btn.primary').click();
   const setup = alice.modal(`Set up ${name}`);
-  const command = (await setup.locator('.cmd-box code').innerText()).trim();
+  // (textContent: as it's written, with the two spaces sha256sum wants; innerText would show them as one)
+  const command = (await setup.locator('.cmd-box code').textContent()).trim();
   const link = command.match(/\/regions\/install\/(\w+)\?k=([0-9a-f]+)/);
   check(link, `The install command should carry its one-time link (got “${command}”).`);
   check(/24 hours/.test(await setup.innerText()) && /every minute/.test(await setup.innerText()), 'The command should say its link works for 24 hours and what it installs.');
