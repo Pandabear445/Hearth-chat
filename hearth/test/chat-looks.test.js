@@ -1,6 +1,6 @@
 // Chat backgrounds (schema v22, server/looks.js): a DM's or group chat's background, sealed on the device. The version
 // rule (409 stale_look with the look as it is now), the exact lkd1 / lkc1 shapes, a group look's epoch taken from
-// inside it, the same look sealed again with a group's new key (once, quietly), who may change it (blocks and deleted accounts in DMs, anyone in a group chat, nobody outside), its
+// inside it, the same look sealed again with a group's new key (once, quietly, still counted as whoever set it), who may change it (blocks and deleted accounts in DMs, anyone in a group chat, nobody outside), its
 // picture's uploads (linked, replaced, kept, removed, and kept by every sweep), the live events and their lines, the
 // bootstrap, lookEvents on history pages (paged exactly like timerEvents), clean-up, the rate limit, and the upgrade
 // from a version 21 database.
@@ -207,12 +207,13 @@ test('group chats: after a key change the same look is sealed again with the new
   assert.equal(lookRow('d:' + d.id), undefined);
   assert.equal(lookRow(conv).version, 1);
   assert.equal(blob(other).look_conv, null);
-  // b's app seals it again: the next version, key 2, the same picture, and no line in the history.
+  // b's app seals it again: the next version, key 2, the same picture, and no line in the history. It's sealed and
+  // signed by b, but a set it: setBy says so (the person on the newest line), and b's re-seal doesn't change that.
   const [sa, sb] = [await sock(a), await sock(b)];
   const gA = collect(sa, 'group:look'); const gB = collect(sb, 'group:look'); const gD = collect(sd, 'group:look');
   const ct2 = lookC(2);
   const again = ok(await setG(b, g.id, { version: 2, ciphertext: ct2, files: [pic], reseal: true }));
-  assert.deepEqual(again.look, { ciphertext: ct2, epoch: 2, authorId: b.id, version: 2, updatedAt: again.look.updatedAt });
+  assert.deepEqual(again.look, { ciphertext: ct2, epoch: 2, authorId: b.id, version: 2, updatedAt: again.look.updatedAt, setBy: a.id });
   assert.equal(logRows(conv).length, lines, 'no "changed the chat background" line');
   assert.equal(lookRow(conv).epoch, 2);
   assert.deepEqual(JSON.parse(lookRow(conv).files), [pic]);
@@ -229,14 +230,19 @@ test('group chats: after a key change the same look is sealed again with the new
   // Dave's copy is sealed with the key he has.
   const boot = ok(await as(dave, 'GET', '/bootstrap'));
   assert.deepEqual(boot.servers.find((x) => x.id === g.id).look, again.look);
-  // A change after it is an ordinary change, with its line.
-  ok(await setG(dave, g.id, { version: 3, ciphertext: lookC(2) }));
+  // A change after it is an ordinary change, with its line: the new one is its author's.
+  const changed = ok(await setG(dave, g.id, { version: 3, ciphertext: lookC(2) }));
   assert.equal(logRows(conv).length, lines + 1);
+  assert.equal(changed.look.setBy, undefined);
   assert.equal(blob(pic), undefined, 'the picture it dropped is removed');
-  // A removed look has nothing to seal again, nor has a group chat that never had one.
-  ok(await clearG(a, g.id, { version: 4 }));
+  // Sealed again by whoever set it: theirs, so nothing to say.
   srv.sql('UPDATE servers SET key_epoch = 3 WHERE id = ?', g.id);
-  refused(await setG(a, g.id, { version: 5, ciphertext: lookC(3), reseal: true }), 409, 'not_stale');
+  const own = ok(await setG(dave, g.id, { version: 4, ciphertext: lookC(3), reseal: true }));
+  assert.deepEqual([own.look.authorId, own.look.setBy], [dave.id, undefined]);
+  // A removed look has nothing to seal again, nor has a group chat that never had one.
+  ok(await clearG(a, g.id, { version: 5 }));
+  srv.sql('UPDATE servers SET key_epoch = 4 WHERE id = ?', g.id);
+  refused(await setG(a, g.id, { version: 6, ciphertext: lookC(4), reseal: true }), 409, 'not_stale');
   const g2 = await newGroup(a, [b]);
   srv.sql('UPDATE servers SET key_epoch = 2 WHERE id = ?', g2.id);
   refused(await setG(a, g2.id, { version: 1, ciphertext: lookC(2), reseal: true }), 409, 'not_stale');
@@ -638,6 +644,8 @@ test('the log and the look files are read through their indexes', () => {
     assert.match(plan('SELECT * FROM look_log WHERE conv = ? AND created_at >= ? AND created_at < ? ORDER BY created_at DESC, id DESC LIMIT ?', 'd:x', 0, 1, 50),
       /SEARCH look_log USING INDEX idx_look_log_conv \(conv=\? AND created_at>\? AND created_at<\?\)/);
     assert.match(plan('SELECT name FROM blobs WHERE look_conv = ?', 'd:x'), /SEARCH blobs USING (COVERING )?INDEX idx_blobs_look \(look_conv=\?\)/);
+    // Who set the look (lookOut's setBy): the newest line.
+    assert.match(plan('SELECT user_id, action FROM look_log WHERE conv = ? ORDER BY created_at DESC, id DESC LIMIT 1', 'd:x'), /SEARCH look_log USING INDEX idx_look_log_conv \(conv=\?\)/);
     const idx = (name) => dbh.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?").get(name).sql;
     assert.match(idx('idx_blobs_look'), /ON blobs\(look_conv\) WHERE look_conv IS NOT NULL/);
   } finally { dbh.close(); }

@@ -30,16 +30,21 @@
 // the same look again with that key: { reseal: true }, the next version as usual, the epoch inside it the current one,
 // and exactly the uploads the look already uses. That's taken only while the look stored is still sealed with an older
 // key than the group's, so it happens once per key change, and it gets no line in the history (nothing changed; the
-// live group:look has event: null). The server can't see inside, so a member could pass a different background off as
-// one sealed again, but only right after a key change, and anyone in a group chat may change it anyway: all it saves
-// them is the line. As with saving it again by hand, the look then counts as the re-sealer's (authorId), whose
-// signature it carries.
+// live group:look has event: null). It's sealed and signed by the re-sealer (authorId), but still whoever set it chose
+// it: the look says so (setBy, the person on the newest line), so the apps go on counting it as theirs (one set by
+// someone you blocked stays hidden; one sealed again by someone you blocked still shows).
+// The server can't see inside, so a member could pass a different background off as one sealed again. Once per key
+// change is no real limit there: any member may replace the group's key by hand (keys/rotate, 10 minutes after the last
+// one) and seal "again" right after. All it saves them is the line (anyone in a group chat may change it anyway), and
+// only on apps that open it fresh: an app that had the background open sees it isn't the same one, and shows it as that
+// member's change, with a line (public/js/chat-look.js).
 //
 // Routes (all signed in; look:<uid> 20 a minute between them)
 //   PUT    /dms/:id/look, /groups/:id/look     { version, ciphertext, files, reseal? } -> { look }
 //   DELETE /dms/:id/look, /groups/:id/look     { version } -> { look }
-// look: { ciphertext, epoch, authorId, version, updatedAt }, { version, cleared: true } once removed, or null when the
-// conversation never had one. Every DM (serializeDm) and every group chat (serializeServer) carries its look.
+// look: { ciphertext, epoch, authorId, version, updatedAt, setBy? } (setBy only on one sealed again by someone other
+// than whoever set it), { version, cleared: true } once removed, or null when the conversation never had one. Every DM
+// (serializeDm) and every group chat (serializeServer) carries its look.
 // Live: dm:look { dmId, look, event } to both people, group:look { serverId, look, event } to the group's members, with
 // event: { id, userId, action: 'set' | 'clear', createdAt }, the line the apps show in the conversation (null for a look
 // sealed again after a key change, which has none). History pages
@@ -94,10 +99,16 @@ module.exports = function setupLooks(ctx) {
 
   // ---------------------------------------------------------------- reading
   const rowOf = (conv) => db.prepare('SELECT * FROM chat_looks WHERE conv = ?').get(conv);
+  // Who chose the look stored: the person on the conversation's newest line. A look sealed again after a key change has
+  // no line of its own, so that's whoever set it before, and the look says so (setBy) when it's not its author.
+  const lastLine = (conv) => db.prepare('SELECT user_id, action FROM look_log WHERE conv = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(conv);
   function lookOut(r) {
     if (!r) return null;
     if (!r.ciphertext) return { version: r.version, cleared: true };
-    return { ciphertext: r.ciphertext, epoch: r.epoch == null ? null : r.epoch, authorId: r.author_id, version: r.version, updatedAt: r.updated_at };
+    const out = { ciphertext: r.ciphertext, epoch: r.epoch == null ? null : r.epoch, authorId: r.author_id, version: r.version, updatedAt: r.updated_at };
+    const last = lastLine(r.conv);
+    if (last && last.action === 'set' && last.user_id !== r.author_id) out.setBy = last.user_id;
+    return out;
   }
   const lookOf = (conv) => lookOut(rowOf(conv));
   const logOut = (r) => ({ id: r.id, userId: r.user_id, action: r.action, createdAt: r.created_at });

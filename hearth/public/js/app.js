@@ -1690,8 +1690,9 @@ function shareChanged() {
   if (now === wasSharing) return;
   wasSharing = now;
   if (!now) shareAllowed.clear();
-  // The chat background goes with the conversation it belongs to (applyServerTheme), and comes back with it.
-  applyServerTheme(); renderMain(); renderSidebar(); renderPanel();
+  // The chat background goes with the conversation it belongs to (applyServerTheme), and comes back with it; its dialog
+  // doesn't stay up either (LOOK.coverChanged).
+  applyServerTheme(); LOOK.coverChanged(); renderMain(); renderSidebar(); renderPanel();
   if (now && privateKey()) toast('You\u2019re sharing your screen, so this conversation is hidden from view.');
 }
 function shareCover(key) {
@@ -3805,9 +3806,12 @@ async function onKeysChanged(serverId, added, heldChanged) {
   // them, the header's badge.
   if (heldChanged && S.view.serverId === serverId && S.panel === 'members') later(renderPanel);
   if (heldChanged && S.view.type === 'dm') { later(renderHeader); if (composers.main) composers.main.renderExtras(); }
+  // A group chat's background that was waiting for a key, or that's sealed with an older key than the group's now. Also
+  // when nothing was added: a key this app made itself (secure.js rotate) is held before the state that names it comes
+  // back, so it never counts as added, and this app may be the only one here to seal the background again with it.
+  LOOK.onKeys(serverId);
   if (added) {
     NOTES.onKeys(serverId); // photo tags that were waiting for this key
-    LOOK.onKeys(serverId); // a group chat's background that was waiting for it
     const server = S.servers.find((s) => s.id === serverId);
     for (const c of server ? server.channels : []) {
       const store = S.msgs['c:' + c.id];
@@ -6589,6 +6593,14 @@ const LOOK = createChatLook({
   withKeyRetry: (serverId, fn) => withKeyRetry(serverId, fn),
   // The group key this device would seal with now, if it has it: a background sealed with an older one is sealed again.
   currentEpoch: (serverId) => { const ck = sec.currentKey(serverId); return ck ? ck.epoch : null; },
+  // Another background passed off as the same one sealed again: drawn in the group chat as the change it is.
+  changedQuietly: (serverId, event) => onLookEvent('group:look', { serverId, event }),
+  // Covered while you share your screen (a group chat by its chat's key, as the cover goes): no dialog for it then.
+  covered: (key) => {
+    const g = key.startsWith('g:') ? S.servers.find((s) => s.id === key.slice(2)) : null;
+    const c = g && textChannel(g);
+    return hiddenWhileSharing(g && c ? 'c:' + c.id : key);
+  },
   // A picture is made ready like a photo (at most 2560 px, re-encoded), and goes up the way attachments do.
   prepareImage: (file) => prepareImage(file, { compress: true }),
   upload: (bytes) => (bytes.byteLength > CHUNKED_ABOVE ? uploadResumable(bytes) : uploadSimple(bytes)),

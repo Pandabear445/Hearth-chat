@@ -5,8 +5,10 @@
 // vouches for counts, that every one is the same size, that the app keeps to the version rule (one more try when someone
 // changed it meanwhile), that a picture is shown only through a blob: URL this module made and is let go of when it
 // changes, that a group chat's background sealed with an older key is sealed again with the current one (once, by the
-// first app that can), that the device's switch is honoured, that a covered conversation's background is covered too
-// while you share your screen, and that app.js, settings.js and appearance.js are wired to it.
+// first app that can, the one that made the key included) and still counts as whoever set it, that another background
+// passed off as one sealed again shows as its author's change where the app can tell, that the device's switch is
+// honoured, that a covered conversation's background (and its dialog) is covered too while you share your screen, and
+// that app.js, settings.js and appearance.js are wired to it.
 const { test, before, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -215,14 +217,14 @@ test('cleanLook: a preset by its id, or a picture on this server with its key an
 
 // ------------------------------------------------------------------ secure.js: sealing and opening, trust
 // One device as the app sets it up: its own keys, the people it knows, a group chat whose key it holds, a DM.
-async function device(self, others, { raw, epochs = [1], current = epochs[epochs.length - 1], dms } = {}) {
+async function device(self, others, { raw, epochs = [1], current = epochs[epochs.length - 1], dms, onKeysChanged } = {}) {
   const users = Object.fromEntries([self, ...others].map((u) => [u.id, { id: u.id, username: u.id, publicKey: u.publicKey, signPublicKey: u.signPublicKey }]));
   const S = {
     me: users[self.id], users, privateKey: self.privateKey, signKey: self.signKey,
     servers: [{ id: 'g1', kind: 'group', memberIds: [self.id, ...others.map((u) => u.id)], channels: [{ id: 'c1', type: 'text' }] }],
     dms: dms || (others.length ? [{ id: 'd1', userId: others[0].id }] : []),
   };
-  const sec = SEC.createSecure({ S });
+  const sec = SEC.createSecure({ S, onKeysChanged });
   others.forEach((u) => sec.trust(S.users[u.id]));
   const keys = [];
   for (const epoch of epochs) {
@@ -232,6 +234,9 @@ async function device(self, others, { raw, epochs = [1], current = epochs[epochs
   await sec.applyState({ serverId: 'g1', keyEpoch: current, needsRotation: false, keys, missing: [] });
   return { sec, S };
 }
+// Group g1's keys for these epochs as the server hands them to p (wrapped for p by p).
+const wrappedKeys = (raw, p, epochs) => Promise.all(epochs.map(async (epoch) => ({ epoch, wrapperId: p.id, createdAt: Date.now(), check: await E.keyCheck(raw[epoch], 'g1', epoch),
+  wrapped: await E.wrapGroupKey({ raw: raw[epoch], serverId: 'g1', epoch, recipientId: p.id, recipientPub: p.publicKey, wrapperId: p.id, signKey: p.signKey }) })));
 const recOf = (where, ciphertext, over = {}) => ({ ...where, ciphertext, version: 1, authorId: 'alice', updatedAt: Date.now() - 1000, ...over });
 
 test('secure.js: a group chat’s background sealed with its current key opens for the others; moved, forged or signed only by a new key not verified yet, it doesn’t', async () => {
@@ -337,6 +342,11 @@ test('records from the server: a version from 1, a ciphertext and its author, or
   assert.deepEqual(CL.cleanRecord({ version: 2, ciphertext: 'lkd1:x', authorId: 'maya', updatedAt: 5, epoch: 9 }), { version: 2, ciphertext: 'lkd1:x', authorId: 'maya', updatedAt: 5 });
   assert.deepEqual(CL.cleanRecord({ version: 3, cleared: true }), { version: 3, cleared: true });
   assert.deepEqual(CL.cleanRecord({ version: 3, ciphertext: '', authorId: 'maya' }), { version: 3, cleared: true });
+  // One sealed again after a key change: still whoever set it (setBy), when that's someone else and a well-formed id.
+  assert.deepEqual(CL.cleanRecord({ version: 4, ciphertext: 'lkc1:x', authorId: 'bob', setBy: 'maya', updatedAt: 5 }), { version: 4, ciphertext: 'lkc1:x', authorId: 'bob', updatedAt: 5, setBy: 'maya' });
+  for (const setBy of ['bob', 'a b', 7, null, '', 'x'.repeat(65)]) {
+    assert.deepEqual(CL.cleanRecord({ version: 4, ciphertext: 'lkc1:x', authorId: 'bob', setBy, updatedAt: 5 }), { version: 4, ciphertext: 'lkc1:x', authorId: 'bob', updatedAt: 5 }, JSON.stringify(setBy));
+  }
   for (const x of [null, 7, [], { version: 0, ciphertext: 'x', authorId: 'a' }, { version: '2', ciphertext: 'x', authorId: 'a' }, { version: 2, ciphertext: 'x' },
     { version: 2, ciphertext: 'x', authorId: 'a b' }, { version: 2, ciphertext: 'x'.repeat(2001), authorId: 'a' }, { version: 2, ciphertext: 5, authorId: 'a' }]) {
     assert.equal(CL.cleanRecord(x), null, JSON.stringify(x));
@@ -351,10 +361,12 @@ test('records from the server: a version from 1, a ciphertext and its author, or
 // ------------------------------------------------------------------ chat-look.js: the module, with real keys
 // Alice's and Bob's apps, each with chat-look.js on top of its own secure.js: a DM d1 between them, a group chat g1.
 // The server is a fake: it keeps one record per conversation and the version rule, and stores uploads. A re-seal
-// (reseal: true) is taken as server/looks.js takes it: only for a look sealed with an older key, with the same uploads.
+// (reseal: true) is taken as server/looks.js takes it: only for a look sealed with an older key, with the same uploads,
+// and it still counts as whoever set it (setBy, when that's not whoever sealed it again).
 function fakeServer() {
   const looks = new Map();
   const files = new Map();
+  const setters = new Map();
   const uploads = new Map();
   let n = 0;
   return {
@@ -371,8 +383,10 @@ function fakeServer() {
         if (!was || !(E.lookEpoch(body.ciphertext) > was)) return { status: 409, json: { error: 'This background doesn’t need sealing again.', code: 'not_stale' } };
         if (JSON.stringify(body.files) !== JSON.stringify(files.get(key))) return { status: 400, json: { error: 'Bad encrypted background.', code: 'bad_look' } };
       }
+      if (!body.reseal) setters.set(key, this.me);
+      const setBy = setters.get(key);
       const look = method === 'DELETE' ? { version: body.version, cleared: true }
-        : { ciphertext: body.ciphertext, epoch: null, authorId: this.me, version: body.version, updatedAt: Date.now() };
+        : { ciphertext: body.ciphertext, epoch: null, authorId: this.me, version: body.version, updatedAt: Date.now(), ...(setBy !== this.me ? { setBy } : {}) };
       looks.set(key, look);
       files.set(key, method === 'DELETE' ? [] : body.files || []);
       return { look };
@@ -628,6 +642,7 @@ test('chat-look.js: after the group’s key changes, the first app that can seal
   assert.equal(E.lookEpoch(put.body.ciphertext), 2, 'with the group’s new key');
   const again = srv.looks.get('g:g1');
   assert.equal(again.authorId, 'bob');
+  assert.equal(again.setBy, 'alice', 'still Alice’s background');
   await until(() => B.themeFor(GROUP_VIEW), 'Bob still sees it');
   // Carol's app gets key 2 too, but hears of Bob's (group:look, no line) before its own turn comes: it doesn't try.
   await rotate(devs.carol, carol);
@@ -683,6 +698,185 @@ test('chat-look.js: after the group’s key changes, the first app that can seal
   for (const x of [A, B, C, D, E2, F, G]) x.reset();
 });
 
+// The app that replaces the group's key (after someone leaves, or "Replace key now") holds the new key before the state
+// that names it comes back, so for it no key is ever "added". Its app.js onKeysChanged, run as it is with the rest of
+// the app stubbed, still hands chat-look.js the change: when it's the only one here, it seals the background again.
+test('chat-look.js: the app that replaces the group’s key seals the background again itself, also when nobody else is there', async () => {
+  const alice = await person('alice'); const carol = await person('carol'); const dave = await person('dave');
+  const raw = { 1: E.newGroupKey() };
+  const srv = fakeServer();
+  // The server's side of the key: what keys/rotate was handed, as the state it answers with.
+  const wrapped = {};
+  const [k1] = await wrappedKeys(raw, alice, [1]);
+  let state = null;
+  routes = async (url, method, body) => {
+    if (url === '/api/servers/g1/keys/rotate' && method === 'POST') {
+      wrapped[body.epoch] = { epoch: body.epoch, wrapperId: 'alice', createdAt: Date.now(), check: body.check, wrapped: body.wraps.alice };
+      state = { serverId: 'g1', keyEpoch: body.epoch, needsRotation: false, keys: [k1, ...Object.values(wrapped)], missing: [] };
+      return state;
+    }
+    if (url === '/api/servers/g1/keys' && method === 'GET') return state;
+    return srv.route(url, method, body);
+  };
+  // app.js onKeysChanged as it is; the rest of the app stubbed (no messages loaded, nothing on screen).
+  const appJs = read('public', 'js', 'app.js');
+  const at = appJs.search(/^async function onKeysChanged\(/m);
+  assert.ok(at > 0);
+  const src = appJs.slice(at, appJs.indexOf('\n}\n', at) + 2);
+  let look = null;
+  const calls = [];
+  const S = { me: { id: 'alice' }, view: {}, servers: [], msgs: {}, panel: null };
+  const stub = { onKeys() {} };
+  const onKeysChanged = new Function('S', 'later', 'renderPanel', 'renderHeader', 'composers', 'LOOK', 'NOTES', 'MEDIA', 'SIDE', 'SCHED', 'isGroup', 'previewGroup',
+    'renderSidebar', 'decryptAll', 'currentKey', '$', 'renderMessages', `${src}\nreturn onKeysChanged;`)(
+    S, () => {}, () => {}, () => {}, {}, { onKeys: (id) => { if (look) look.onKeys(id); } }, stub, stub, stub, stub, (s) => !!s && s.kind === 'group', async () => {},
+    () => {}, async () => {}, () => null, () => null, () => {});
+  const dev = await device(alice, [carol], { raw, epochs: [1], onKeysChanged: (id, added, held) => { calls.push(added); return onKeysChanged(id, added, held); } });
+  S.servers = dev.S.servers;
+  const A = app(dev, srv);
+  look = A.look;
+  A.look.fromBootstrap([], [{ id: 'g1', kind: 'group', look: null }]);
+  srv.me = 'alice';
+  await A.look.save('g:g1', { preset: 'nebula' });
+  const first = srv.looks.get('g:g1');
+  assert.equal(E.lookEpoch(first.ciphertext), 1);
+  const reseals = () => asked.filter((x) => x.method === 'PUT' && x.body.reseal);
+  // Carol leaves: the group needs a new key, and Alice's app, the only one left, makes it (secure.js maintain).
+  dev.S.servers[0].memberIds = ['alice'];
+  calls.length = 0;
+  await dev.sec.applyState({ serverId: 'g1', keyEpoch: 1, needsRotation: true, keys: [k1], missing: [] });
+  await until(() => srv.looks.get('g:g1').version === 2, 'Alice’s app seals it again with the key it made');
+  assert.ok(calls.length >= 2 && calls.every((x) => x === false), `no key counted as added on the app that made it (${calls})`);
+  const again = srv.looks.get('g:g1');
+  assert.equal(E.lookEpoch(again.ciphertext), 2);
+  assert.equal(again.authorId, 'alice');
+  assert.equal(again.setBy, undefined, 'still hers');
+  assert.equal(reseals().length, 1);
+  await until(() => A.look.themeFor(GROUP_VIEW), 'Alice still sees it');
+  // Dave is added: he's only handed key 2, and it opens for him.
+  const D = app(await device(dave, [alice], { raw: { 2: dev.sec.currentKey('g1').raw }, epochs: [2] }), srv).look;
+  D.fromBootstrap([], [{ id: 'g1', kind: 'group', look: again }]);
+  await until(() => D.themeFor(GROUP_VIEW), 'Dave sees it');
+  assert.equal(D.themeFor(GROUP_VIEW).background.preset, 'nebula');
+  // "Replace key now" (secure.js forceRotate), the same way.
+  await dev.sec.forceRotate('g1');
+  await until(() => srv.looks.get('g:g1').version === 3, 'sealed again after the key was replaced by hand');
+  assert.equal(E.lookEpoch(srv.looks.get('g:g1').ciphertext), 3);
+  assert.equal(reseals().length, 2);
+  for (const x of [A.look, D]) x.reset();
+});
+
+// A re-seal is signed by whoever's app did it, but the background is still whoever set it (setBy): who a block hides
+// goes by that, so a background sealed again by someone you blocked still shows, and one set by someone you blocked
+// stays hidden whoever seals it again. Live, and fresh from the bootstrap.
+test('chat-look.js: a background sealed again still counts as whoever set it, for a block either way', async () => {
+  const alice = await person('alice'); const bob = await person('bob'); const carol = await person('carol');
+  const raw = { 1: E.newGroupKey(), 2: E.newGroupKey() };
+  const srv = fakeServer();
+  routes = (url, method, body) => srv.route(url, method, body);
+  const quiet = [];
+  const make = async (p, epochs, over = {}) => {
+    const dev = await device(p, [alice, bob, carol].filter((x) => x !== p), { raw, epochs });
+    const x = app(dev, srv, { changedQuietly: (...a) => quiet.push(a), ...over });
+    return { dev, look: x.look };
+  };
+  const A = await make(alice, [1]);
+  const B = await make(bob, [1]);
+  const C = await make(carol, [1], { blocked: (id) => id === 'bob' }); // (Carol blocked Bob)
+  const C2 = await make(carol, [1], { blocked: (id) => id === 'alice' }); // (and on another device, Alice)
+  for (const x of [A, B, C, C2]) x.look.fromBootstrap([], [{ id: 'g1', kind: 'group', look: null }]);
+  srv.me = 'alice';
+  await A.look.save('g:g1', { preset: 'aurora' });
+  const first = srv.looks.get('g:g1');
+  for (const x of [B, C, C2]) x.look.onEvent('group:look', { serverId: 'g1', look: first, event: { id: 'e1', userId: 'alice', action: 'set', createdAt: Date.now() } });
+  await until(() => C.look.themeFor(GROUP_VIEW), 'Carol sees Alice’s');
+  await settle();
+  assert.equal(C2.look.themeFor(GROUP_VIEW), null, 'hidden where Alice is blocked');
+  // The key moves on to 2 and Bob's app seals it again: it's signed by Bob, still Alice's.
+  srv.me = 'bob';
+  await B.dev.sec.applyState({ serverId: 'g1', keyEpoch: 2, needsRotation: false, keys: await wrappedKeys(raw, bob, [1, 2]), missing: [] });
+  B.look.onKeys('g1');
+  await until(() => srv.looks.get('g:g1').version === 2, 'Bob’s re-seal');
+  const again = srv.looks.get('g:g1');
+  assert.deepEqual([again.authorId, again.setBy], ['bob', 'alice']);
+  for (const x of [C, C2]) {
+    await x.dev.sec.applyState({ serverId: 'g1', keyEpoch: 2, needsRotation: false, keys: await wrappedKeys(raw, carol, [1, 2]), missing: [] });
+    x.look.onEvent('group:look', { serverId: 'g1', look: again, event: null });
+  }
+  await settle();
+  assert.equal(C.look.themeFor(GROUP_VIEW).background.preset, 'aurora', 'Carol blocked Bob, not Alice: it still shows');
+  assert.equal(C2.look.themeFor(GROUP_VIEW), null, 'Alice’s, sealed again by Bob, stays hidden where Alice is blocked');
+  // Fresh from the bootstrap, the same.
+  const C3 = await make(carol, [1, 2], { blocked: (id) => id === 'bob' });
+  const C4 = await make(carol, [1, 2], { blocked: (id) => id === 'alice' });
+  for (const x of [C3, C4]) x.look.fromBootstrap([], [{ id: 'g1', kind: 'group', look: again }]);
+  await until(() => C3.look.themeFor(GROUP_VIEW), 'shows after a reload');
+  assert.equal(C4.look.themeFor(GROUP_VIEW), null);
+  assert.equal(quiet.length, 0, 'the same background sealed again is no change');
+  for (const x of [A, B, C, C2, C3, C4]) x.look.reset();
+});
+
+// The server can't see inside, so a member could pass another background off as the same one sealed again (after a key
+// change she brought about herself, say). An app that had the one before it open sees it isn't: it's hers, with the
+// line it would have had. An app that opens it fresh can't tell, and takes the server's word that it's the setter's.
+test('chat-look.js: another background passed off as sealed again is shown as its author’s change, with a line, where the app can tell', async () => {
+  const alice = await person('alice'); const mallory = await person('mallory'); const carol = await person('carol');
+  const raw = { 1: E.newGroupKey(), 2: E.newGroupKey() };
+  const srv = fakeServer();
+  routes = (url, method, body) => srv.route(url, method, body);
+  const quiet = [];
+  let blockMallory = false;
+  const A = app(await device(alice, [mallory, carol], { raw, epochs: [1] }), srv).look;
+  const Cdev = await device(carol, [alice, mallory], { raw, epochs: [1] });
+  const C = app(Cdev, srv, { changedQuietly: (...a) => quiet.push(a), blocked: (id) => blockMallory && id === 'mallory' }).look;
+  for (const x of [A, C]) x.fromBootstrap([], [{ id: 'g1', kind: 'group', look: null }]);
+  srv.me = 'alice';
+  await A.save('g:g1', { preset: 'aurora' });
+  C.onEvent('group:look', { serverId: 'g1', look: srv.looks.get('g:g1'), event: { id: 'e1', userId: 'alice', action: 'set', createdAt: Date.now() } });
+  await until(() => C.themeFor(GROUP_VIEW), 'Carol sees Aurora');
+  // Mallory's app holds key 2, and "seals it again": Nebula, as the next version, with the same (no) uploads.
+  const M = await device(mallory, [alice, carol], { raw, epochs: [1, 2] });
+  const { ciphertext } = await M.sec.encryptLook({ serverId: 'g1' }, { version: 2, payload: { bg: { kind: 'preset', preset: 'nebula' }, dim: 0 } });
+  srv.me = 'mallory';
+  const r = await srv.route('/api/groups/g1/look', 'PUT', { version: 2, ciphertext, files: [], reseal: true });
+  assert.deepEqual([r.look.authorId, r.look.setBy], ['mallory', 'alice'], 'the server takes it as sealed again');
+  await Cdev.sec.applyState({ serverId: 'g1', keyEpoch: 2, needsRotation: false, keys: await wrappedKeys(raw, carol, [1, 2]), missing: [] });
+  C.onEvent('group:look', { serverId: 'g1', look: r.look, event: null });
+  await until(() => quiet.length === 1, 'the change gets its line');
+  const [serverId, event] = quiet[0];
+  assert.equal(serverId, 'g1');
+  assert.deepEqual(event, { id: 'reseal-2', userId: 'mallory', action: 'set', createdAt: r.look.updatedAt });
+  const [entry] = CL.lookEvents([event]);
+  assert.equal(CL.lookLineText(entry, 'carol', (id) => id), 'mallory changed the chat background');
+  assert.equal(C.themeFor(GROUP_VIEW).background.preset, 'nebula');
+  blockMallory = true;
+  assert.equal(C.themeFor(GROUP_VIEW), null, 'it counts as Mallory’s: hidden where she’s blocked');
+  // Opened fresh, it can't be told from the one before: no line, and it goes by the server's word (Alice's).
+  const quiet2 = [];
+  const F = app(await device(carol, [alice, mallory], { raw, epochs: [1, 2] }), srv, { changedQuietly: (...a) => quiet2.push(a), blocked: (id) => id === 'mallory' }).look;
+  F.fromBootstrap([], [{ id: 'g1', kind: 'group', look: r.look }]);
+  await until(() => F.themeFor(GROUP_VIEW), 'shows');
+  assert.equal(quiet2.length, 0);
+  for (const x of [A, C, F]) x.reset();
+});
+
+test('chat-look.js: no "Chat background…" for a conversation covered while you share your screen', async () => {
+  const alice = await person('alice'); const bob = await person('bob');
+  const dev = await device(alice, [bob], { raw: { 1: E.newGroupKey() } });
+  const covered = new Set();
+  const A = app(dev, fakeServer(), { covered: (key) => covered.has(key) }).look;
+  const item = A.menuItem('d:d1');
+  assert.equal(item.label, 'Chat background…');
+  covered.add('d:d1');
+  assert.equal(A.menuItem('d:d1'), null, 'covered: its dialog would show the picture');
+  assert.equal(A.menuItem('g:g1').label, 'Chat background…', 'another conversation');
+  // A menu drawn before the share started: its item does nothing once the conversation is covered.
+  assert.doesNotThrow(() => item.action());
+  A.coverChanged(); // (no dialog open: nothing to do)
+  covered.clear();
+  assert.equal(A.menuItem('d:d1').label, 'Chat background…', 'shown again ("Show while sharing", or the share stopped)');
+});
+
 test('chat-look.js: the menu item, only where you may set it', async () => {
   const alice = await person('alice'); const bob = await person('bob');
   const raw = { 1: E.newGroupKey() };
@@ -729,7 +923,10 @@ test('static: app.js shows a chat’s background in renderAll, has the menu item
   assert.equal(shown(group, GROUP_VIEW, new Set(['c:c1'])), null, 'a group chat covered while you share your screen');
   assert.deepEqual(shown(space, { type: 'channel', serverId: 's1', channelId: 'c2' }, new Set(['c:c2'])), { accent: '#f00', chat: false }, 'a server’s own theme isn’t private');
   // ...and it follows the cover both ways: starting or stopping a share, and "Show while sharing".
-  assert.match(fn('shareChanged'), /applyServerTheme\(\); renderMain\(\); renderSidebar\(\); renderPanel\(\);/);
+  assert.match(fn('shareChanged'), /applyServerTheme\(\); LOOK\.coverChanged\(\); renderMain\(\); renderSidebar\(\); renderPanel\(\);/);
+  // Covered as the cover goes: a DM by its key, a group chat by its chat's.
+  assert.match(app, /covered: \(key\) => \{\n    const g = key\.startsWith\('g:'\) \? S\.servers\.find\(\(s\) => s\.id === key\.slice\(2\)\) : null;\n    const c = g && textChannel\(g\);\n    return hiddenWhileSharing\(g && c \? 'c:' \+ c\.id : key\);\n  \},/);
+  assert.match(app, /changedQuietly: \(serverId, event\) => onLookEvent\('group:look', \{ serverId, event \}\),/);
   assert.match(fn('shareCover'), /onclick: \(\) => \{ shareAllowed\.add\(key\); applyServerTheme\(\); renderMain\(\); renderSidebar\(\); renderPanel\(\); \}/);
   assert.match(app, /currentEpoch: \(serverId\) => \{ const ck = sec\.currentKey\(serverId\); return ck \? ck\.epoch : null; \},/, 'a group chat’s background is sealed again with the current key');
   assert.match(fn('dmMenuItems'), /LOOK\.menuItem\('d:' \+ d\.id\)/);
@@ -740,7 +937,9 @@ test('static: app.js shows a chat’s background in renderAll, has the menu item
   assert.match(fn('sysLineEl'), /const p = e\.look \? LOOK\.lineParts\(e, S\.me\.id, nameOf, handleOf\) : sysLineParts\(e, S\.me\.id, nameOf, handleOf\);/);
   assert.match(fn('sysLineEl'), /icon\(e\.look \? 'palette' : 'timer'\)/);
   assert.match(fn('loadBootstrap'), /await sec\.applyState\(st\);\n\s*LOOK\.fromBootstrap\(b\.dms, b\.servers\);/, 'after the keys');
-  assert.match(fn('onKeysChanged'), /LOOK\.onKeys\(serverId\)/);
+  // Called whether or not a key was added: a key this app made itself never counts as added (see the test above).
+  assert.match(fn('onKeysChanged'), /\n  LOOK\.onKeys\(serverId\);\n  if \(added\) \{/);
+  assert.equal(fn('onKeysChanged').match(/LOOK\.onKeys/g).length, 1);
   assert.match(fn('signOutHere'), /LOOK\.reset\(\)/);
   assert.match(app, /enabled: \(\) => loadAppearance\(\)\.chatLooks !== false,/);
   const settings = read('public', 'js', 'settings.js');

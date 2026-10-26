@@ -1901,9 +1901,15 @@ app takes it in and tries once more.
 - `openLook` only counts a background a key this device trusts for its author opened, the same rule as photo tags.
 - After a group chat's key changes (someone left, say), people who join are only handed the new key. So the first app
   that opens the background and holds the new key seals the same background again with it (`reseal: true`, after a
-  random wait of up to 8 s so members don't all go at once; a 409 `stale_look` means someone else did it). The server
-  takes that only while the stored one is sealed with an older key, with exactly the same uploads, and adds no line
-  to the chat.
+  random wait of up to 8 s so members don't all go at once; a 409 `stale_look` means someone else did it). The app
+  that made the new key does this too, even though for it the key was never "new". The server takes that only while
+  the stored one is sealed with an older key, with exactly the same uploads, and adds no line to the chat.
+- A background sealed again still counts as whoever set it: the server says so (`setBy`, the person on the newest
+  line), and blocking someone hides the backgrounds they set, not the ones their app happened to seal again.
+- The server can't see inside, and any member can replace the key by hand, so a member could pass another background
+  off as one sealed again. An app that had the background open checks: if it isn't the same one, it shows it as that
+  member's change, with a line in the chat (and counts it as theirs for a block). An app that opens it fresh can't
+  tell.
 - The picture is decrypted into a `blob:` URL this module made. Only such URLs reach CSS `url()`, and old ones are
   revoked.
 
@@ -1911,8 +1917,9 @@ app takes it in and tries once more.
 place a server's theme background goes (`setServerTheme` in `renderAll`, `appearance.js`).
 - Settings → Appearance → **Show backgrounds people set for chats** (`chatLooks`, per device) turns it off.
 - Server themes and chat backgrounds each have their own switch.
-- While you share your screen, a DM or group chat that's covered has no background either (`applyServerTheme`), until
-  you pick "Show while sharing" or stop sharing.
+- While you share your screen, a DM or group chat that's covered has no background either (`applyServerTheme`), and
+  no "Chat background…" item (its dialog shows the picture; one that's open closes when the share starts), until you
+  pick "Show while sharing" or stop sharing.
 - Every change adds a line to the chat ("maya changed the chat background"). The lines come from `look_log` and
   arrive as `lookEvents` with history pages, and live with `dm:look` / `group:look`.
 
