@@ -15,6 +15,7 @@ import { englishHere } from './spelling.js';
 import { underWay } from './auto-update.js';
 import { OUTSIDE_MODES, OUTSIDE_LABELS, outsideMode } from './outside.js';
 import { pickGame, gameImg, openActivityPicker, startDesktopDetection } from './activity.js';
+import { usableIce, avoidsMemberRelays } from './relays.js';
 import { getKeybinds, saveKeybinds, comboLabel, recordCombo, DEFAULT_KEYBINDS } from './keybinds.js';
 import { clearsLabel } from './presence.js';
 import {
@@ -2069,7 +2070,7 @@ function instanceTab(app) {
               if (r) { toast('Saved.'); draw(); }
             } catch (e) { quiet(e); }
           } }, 'Save'),
-          h('button', { class: 'btn ghost', onclick: () => testRelay(relayResult) }, 'Test relay')),
+          h('button', { class: 'btn ghost', onclick: () => testRelay(relayResult, app) }, 'Test relay')),
         relayResult)
     );
   };
@@ -2126,11 +2127,12 @@ function soundsSection() {
   return section('Sounds', wrap);
 }
 
-// Checks from this browser that the relay hands out working relay addresses.
-async function testRelay(out) {
+// Checks from this browser that the relay hands out working relay addresses. (Not through member relays when this
+// person avoids them: the test would show them this device's IP address.)
+async function testRelay(out, app) {
   clear(out).append(h('span', { class: 'spinner' }), ' Testing the relay\u2026');
   try {
-    const ice = await api('GET', '/ice');
+    const ice = usableIce(await api('GET', '/ice'), avoidsMemberRelays(app && app.S && app.S.me));
     if (!ice.some((x) => String(x.urls).includes('turn:'))) throw new Error('No relay is configured yet.');
     const pc = new RTCPeerConnection({ iceServers: ice, iceTransportPolicy: 'relay' });
     pc.createDataChannel('t');

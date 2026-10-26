@@ -22,7 +22,7 @@ import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, profileCard, 
 import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
 import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice, voicePlaying } from './features.js';
-import { rankRelays, chooseIce, relayTime, iceStale } from './relays.js';
+import { rankRelays, chooseIce, relayTime, iceStale, usableIce, memberRelayHosts, avoidsMemberRelays, isMemberRelay } from './relays.js';
 import { watchConnection } from './conn.js';
 import { unseenNotes, markNotesSeen } from './whatsnew.js';
 import { autocorrect, correctSending, isCommand, englishHere, lastWordPasted } from './spelling.js';
@@ -574,8 +574,10 @@ function startApp() {
         S.regionWarned.add(room);
         setTimeout(() => toast(`This call\u2019s region (${regionName(pinned)}) is offline, so your connection uses automatic relays.`), 0);
       }
-      return chooseIce(S.iceServers || S.config.iceServers || [], S.relayRanks, pinned);
+      return chooseIce(S.iceServers || S.config.iceServers || [], S.relayRanks, pinned, { avoid: avoidsMemberRelays(S.me) });
     },
+    // Avoiding member relays (Settings → Privacy & safety): the other side's candidates on their machines are dropped.
+    avoidHosts: () => (avoidsMemberRelays(S.me) ? memberRelayHosts(S.iceServers || S.config.iceServers || []) : new Set()),
     myId: () => S.me && S.me.id,
     onNotice: (text, kind) => toast(text, kind),
     onRegion: (room, region, version) => applyCallRegion({ room, region, version }),
@@ -1068,8 +1070,12 @@ async function loadBootstrap() {
   drafts = createDrafts(S.me.id);
   S.mediaToken = b.mediaToken;
   S.iceServers = b.iceServers;
-  // With relays in several regions, find the nearest ones in the background (cached for 6 hours).
-  if ((b.iceServers || []).filter((e) => [].concat(e.urls || []).some((u) => /^turns?:/.test(u))).length > 2) setTimeout(() => rankRelays(b.iceServers).then((r) => { S.relayRanks = r; }).catch(() => {}), 4000);
+  // With relays in several regions, find the nearest ones in the background (cached for 6 hours). Someone who avoids
+  // member relays never measures one (measuring shows the relay this device's IP address).
+  setTimeout(() => {
+    const usable = usableIce(b.iceServers, avoidsMemberRelays(S.me));
+    if (usable.filter((e) => [].concat(e.urls || []).some((u) => /^turns?:/.test(u))).length > 2) rankRelays(usable).then((r) => { S.relayRanks = r; }).catch(() => {});
+  }, 4000);
   S.e2eeSince = rememberE2eeSince(b.e2eeSince);
   S.users = b.users;
   S.servers = b.servers;
@@ -1717,7 +1723,7 @@ function callRegion(room) {
 // Regions this server can relay calls through right now: [{ id, name, ms }]
 function callRegions() {
   const seen = new Map();
-  for (const e of S.iceServers || []) if (e.regionId && !seen.has(e.regionId)) seen.set(e.regionId, { id: e.regionId, name: e.region || 'Relay', ms: relayTime(S.relayRanks, e) });
+  for (const e of S.iceServers || []) if (e.regionId && !isMemberRelay(e) && !seen.has(e.regionId)) seen.set(e.regionId, { id: e.regionId, name: e.region || 'Relay', ms: relayTime(S.relayRanks, e) });
   return [...seen.values()];
 }
 const regionName = (id) => (id ? (callRegions().find((r) => r.id === id) || {}).name || 'an offline region' : 'Automatic');
