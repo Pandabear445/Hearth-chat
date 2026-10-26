@@ -1292,7 +1292,9 @@ function appearanceTab(app) {
       effectsSection() || '',
       accentSection(),
       section('Server themes',
-        toggle('Show server themes', a.serverThemes !== false, (v) => { a.serverThemes = v; commit(); }, 'Servers can set their own accent color and background. Turn this off to always use yours.')),
+        toggle('Show server themes', a.serverThemes !== false, (v) => { a.serverThemes = v; commit(); }, 'Servers can set their own accent color and background. Turn this off to always use yours.'),
+        // (The app works out the open chat's background again: with this off it doesn't even download a picture.)
+        toggle('Show backgrounds people set for chats', a.chatLooks !== false, (v) => { a.chatLooks = v; commit(); if (app && app.rerender) app.rerender(); }, 'Anyone in a DM or group chat can give it a background that everyone there sees. Turn this off to keep yours.')),
       section('Text and layout',
         sliderRow('Text size', 85, 125, 5, a.scale, (v) => `${v}%`, (v) => { a.scale = v; commit(); }),
         h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Message density'),

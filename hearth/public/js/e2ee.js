@@ -424,6 +424,77 @@ export async function decryptDmTag({ myPriv, theirPub, dmId, messageId, fileInde
   return { payload: JSON.parse(dec.decode(await aesDecrypt(key, unb64(iv), unb64(ct), dmTagAad(dmId, messageId, fileIndex, tagId, authorId)))) };
 }
 
+// ---------------------------------------------------------------- chat backgrounds (chat-look.js)
+// A DM's or group chat's background, set by someone in it: which preset, or which picture (its upload address and file
+// key) and how much to dim it. Its formats, key derivation (HKDF info) and additional data are its own, so a background
+// never opens as a message, a tag, a key wrap or a voice handshake, nor any of those as a background. The additional
+// data binds the conversation, the key epoch (group chats), the version (the server counts each change up and keeps the
+// count after a removal, so a background sealed for an earlier version can't be brought back as a later one) and who set
+// it: the server can't move one to another conversation or author.
+// The payload is padded with spaces to exactly LOOK_BYTES (padded() steps by 256, so it isn't used here): every
+// background is the same size, a preset or a picture, and its length says nothing about which.
+//   Group chat: lkc1:<epoch>:<salt>:<iv>:<ciphertext>:<signature>   (signed like channel messages)
+//   DM:         lkd1:<salt>:<iv>:<ciphertext>                       (not signed, like DMs)
+export const LOOK_BYTES = 512;
+function lookBytes(payload) {
+  const b = enc.encode(JSON.stringify(payload));
+  if (b.length > LOOK_BYTES) throw new Error('That background doesn’t fit.');
+  const out = new Uint8Array(LOOK_BYTES).fill(0x20);
+  out.set(b);
+  return out;
+}
+// The version goes into the additional data as written here: a whole number from 1, one way to write it.
+function lookVersion(version) {
+  if (!Number.isInteger(version) || version < 1 || version > 1e9) throw new Error('Bad background version');
+  return version;
+}
+const openLookBytes = (bytes) => {
+  if (bytes.length !== LOOK_BYTES) throw new Error('Unknown format');
+  return JSON.parse(dec.decode(bytes));
+};
+const groupLookAad = (serverId, epoch, version, authorId) => `hearth-lkc1|${serverId}|${epoch}|${lookVersion(version)}|${authorId}`;
+const dmLookAad = (dmId, version, authorId) => `hearth-lkd1|${dmId}|${lookVersion(version)}|${authorId}`;
+export async function encryptGroupLook({ raw, serverId, epoch, version, authorId, signKey, payload }) {
+  const salt = rand(32);
+  const iv = rand(12);
+  const aad = groupLookAad(serverId, epoch, version, authorId);
+  const key = await hkdfAes(await groupBase(raw, `${serverId}|${epoch}`), salt, `hearth-look-v1|${serverId}`, ['encrypt']);
+  const body = `${epoch}:${b64(salt)}:${b64(iv)}:${b64(await aesEncrypt(key, iv, lookBytes(payload), aad))}`;
+  return `lkc1:${body}:${await sign(signKey, `${aad}|${body}`)}`;
+}
+// The key epoch a group chat's background says it was sealed with (null for anything else).
+export function lookEpoch(text) {
+  const p = String(text || '').split(':');
+  return p[0] === 'lkc1' && /^[1-9][0-9]{0,8}$/.test(p[1] || '') ? parseInt(p[1], 10) : null;
+}
+// authorSignPub: the author's signing key or a list of them, as for decryptGroup; signedBy says which one signed it.
+export async function decryptGroupLook({ raw, serverId, version, authorId, authorSignPub, text }) {
+  const parts = String(text).split(':');
+  const [v, epoch, salt, iv, ct, sig] = parts;
+  if (parts.length !== 6 || v !== 'lkc1' || lookEpoch(text) === null) throw new Error('Unknown format');
+  const aad = groupLookAad(serverId, epoch, version, authorId);
+  const key = await hkdfAes(await groupBase(raw, `${serverId}|${epoch}`), unb64(salt), `hearth-look-v1|${serverId}`, ['decrypt']);
+  const payload = openLookBytes(await aesDecrypt(key, unb64(iv), unb64(ct), aad));
+  const signedBy = await verifyAny(authorSignPub, `${aad}|${epoch}:${salt}:${iv}:${ct}`, sig);
+  return { payload, verified: !!signedBy, signedBy };
+}
+export async function encryptDmLook({ myPriv, theirPub, dmId, version, authorId, payload }) {
+  const salt = rand(32);
+  const iv = rand(12);
+  const aad = dmLookAad(dmId, version, authorId);
+  const key = await hkdfAes(await dmBase(myPriv, theirPub), salt, `hearth-dm-look-v1|${dmId}`, ['encrypt']);
+  const ct = await aesEncrypt(key, iv, lookBytes(payload), aad);
+  return `lkd1:${b64(salt)}:${b64(iv)}:${b64(ct)}`;
+}
+export async function decryptDmLook({ myPriv, theirPub, dmId, version, authorId, text }) {
+  const parts = String(text).split(':');
+  const [v, salt, iv, ct] = parts;
+  if (parts.length !== 4 || v !== 'lkd1') throw new Error('Unknown format');
+  const aad = dmLookAad(dmId, version, authorId);
+  const key = await hkdfAes(await dmBase(myPriv, theirPub), unb64(salt), `hearth-dm-look-v1|${dmId}`, ['decrypt']);
+  return { payload: openLookBytes(await aesDecrypt(key, unb64(iv), unb64(ct), aad)) };
+}
+
 // ---------------------------------------------------------------- attachments (one random key per file)
 export async function encryptFile(arrayBuffer) {
   const raw = rand(32);

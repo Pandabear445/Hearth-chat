@@ -484,6 +484,7 @@ async function signOutHere() {
   setToken('');
   localStorage.removeItem('hearth.userId');
   fileUrls.release(); // decrypted files in memory
+  LOOK.reset(); // and chat backgrounds' pictures
   clearAllDrafts(); // unsent words stay with the account, not the next person on this browser
   // So do the inbox and reminders, which keep copies of messages' words (disappearing ones too): nothing here would
   // drop them at their deadline once no one is signed in. (addInbox writes nothing more while signing out; this
@@ -698,7 +699,7 @@ function startApp() {
     const keysNow = () => { const x = S.users[u.id]; return x ? `${x.publicKey || ''}|${x.signPublicKey || ''}` : ''; };
     const keysBefore = keysNow();
     setUser(u); sec.trust(u); refreshUserBits(u.id);
-    if (keysNow() !== keysBefore) NOTES.onTrust(u.id); // photo tags that didn't open with the keys known before
+    if (keysNow() !== keysBefore) { NOTES.onTrust(u.id); LOOK.onTrust(u.id); } // photo tags and backgrounds that didn't open with the keys known before
     // Outside images changed on another device: the image links on screen follow the new choice.
     if (u.id === S.me.id && outsideMode(S.me.privacy) !== outsideBefore) later(redrawImageLinks);
     // Verified after a reset without their recovery key (crypto-2): their servers' keys can go to them now.
@@ -796,6 +797,8 @@ function startApp() {
     Object.assign(S.voice, vs || {});
     if (!S.servers.find((s) => s.id === server.id)) S.servers.push(server);
     if (keyState) sec.applyState(keyState);
+    // Added to a group chat that has a background (chat-look.js): it opens once the group's key is here.
+    if (isGroup(server) && server.look !== undefined) LOOK.onEvent('group:look', { serverId: server.id, look: server.look });
     previewGroup(server);
     renderRail();
     if (!S.view.serverId) renderSidebar();
@@ -906,6 +909,9 @@ function startApp() {
     if (last !== undefined) { const s = serverOfChannel(channelId); if (isGroup(s)) { s.last = last; previewGroup(s).then(() => { if (!S.view.serverId) later(renderSidebar); }); } }
   });
   socket.on('disappear:update', (p) => onDisappearUpdate(p));
+  // Chat backgrounds (chat-look.js): a DM's or group chat's background changed, with its line in the conversation.
+  socket.on('dm:look', (p) => onLookEvent('dm:look', p));
+  socket.on('group:look', (p) => onLookEvent('group:look', p));
   socket.on('thread:update', ({ rootId, channelId, threadCount, threadLastAt }) => {
     const store = S.msgs['c:' + channelId];
     const m = store && store.list.find((x) => x.id === rootId);
@@ -1078,6 +1084,7 @@ async function loadBootstrap() {
   await sec.ensureSigningKey(b.encSignPrivateKey);
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(b.keyStates || {})) await sec.applyState(st);
+  LOOK.fromBootstrap(b.dms, b.servers); // (after the keys: a group chat's background opens with its group's)
   if (S.view.serverId && !S.servers.find((s) => s.id === S.view.serverId)) S.view = { type: 'home' };
   if (S.view.dmId && !S.dms.find((d) => d.id === S.view.dmId)) S.view = { type: 'home' };
   if (!S.view.serverId && !S.view.dmId && !['friends', 'saved', 'people'].includes(S.view.type)) S.view = { type: 'home' };
@@ -1380,6 +1387,37 @@ function mergeTimerEvents(store, list) {
   }
   return n;
 }
+// Chat background changes (chat-look.js) the server handed out with a page of history (lookEvents), or live: kept with
+// the timer's, by id ('lk:' in front keeps the two apart), so they page and draw the same way (sysLineEl). Returns how
+// many are new.
+function mergeLookEvents(store, list) {
+  const fresh = LOOK.events(list).filter((e) => !(store.events && store.events.has(e.id)));
+  if (!fresh.length) return 0;
+  store.events ||= new Map();
+  fresh.forEach((e) => store.events.set(e.id, e));
+  return fresh.length;
+}
+// A live dm:look / group:look: the background (LOOK.onEvent), then "maya changed the chat background" in the
+// conversation, at the bottom like a new timer line (onDisappearUpdate), when its newest messages are loaded.
+function onLookEvent(kind, p) {
+  if (!S.me || !p || typeof p !== 'object') return;
+  LOOK.onEvent(kind, p);
+  if (!p.event || typeof p.event !== 'object') return;
+  let key = null;
+  if (kind === 'dm:look' && typeof p.dmId === 'string') key = 'd:' + p.dmId;
+  if (kind === 'group:look') { const s = S.servers.find((x) => x.id === p.serverId); const c = isGroup(s) && textChannel(s); key = c ? 'c:' + c.id : null; }
+  const store = key && S.msgs[key];
+  if (!store || !store.loaded || store.hasNewer || !mergeLookEvents(store, [p.event])) return;
+  const e = store.events.get('lk:' + p.event.id);
+  const sc = currentKey() === key && $('#messages');
+  if (!e || !sc) return;
+  const near = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160;
+  const firstPending = sc.querySelector('.msg.sending');
+  const put = (node) => (firstPending ? sc.insertBefore(node, firstPending) : sc.append(node));
+  if (shownDay(sc, firstPending) !== new Date(e.at).toDateString()) put(dayDivEl(e.at));
+  put(sysLineEl(e));
+  if (near) sc.scrollTop = sc.scrollHeight;
+}
 // The lines that belong between the messages loaded now, oldest first (the rest show with their part of history).
 function timerLines(store) {
   if (!store.events || !store.events.size) return [];
@@ -1402,11 +1440,14 @@ function sysLineEl(e) {
   // account (the entry's user id); anyone else's name is drawn apart from it, and their @username follows any name
   // that isn't simply that username (sysLineParts), so no display name or nickname, look-alike letters or not, can
   // pass for your own change.
-  const p = sysLineParts(e, S.me.id, (id) => nameInServer(currentServer(), getUser(id)), (id) => (S.users[id] ? S.users[id].username : null));
+  const nameOf = (id) => nameInServer(currentServer(), getUser(id));
+  const handleOf = (id) => (S.users[id] ? S.users[id].username : null);
+  // A chat background change (chat-look.js, e.look: 'set' or 'clear') is drawn the same way, with its own words.
+  const p = e.look ? LOOK.lineParts(e, S.me.id, nameOf, handleOf) : sysLineParts(e, S.me.id, nameOf, handleOf);
   const handle = !p.self && e.by && S.users[e.by] ? '@' + S.users[e.by].username : null;
   const who = p.self ? h('span', { class: 'sys-you' }, 'You')
     : h('bdi', { class: 'sys-who', ...(handle ? { title: handle } : {}) }, p.who);
-  return h('div', { class: 'sys-line', role: 'note' }, icon('timer'),
+  return h('div', { class: 'sys-line', role: 'note' }, icon(e.look ? 'palette' : 'timer'),
     h('span', null, who, p.handle ? h('span', { class: 'sys-handle' }, ` (@${p.handle})`) : null, ` ${p.action}`),
     h('time', { datetime: new Date(e.at).toISOString(), title: new Date(e.at).toLocaleString() }, fmtStamp(e.at)));
 }
@@ -2140,7 +2181,9 @@ function stepChannel(dir) {
 // ======================================================================= render: shell
 function applyServerTheme() {
   const server = currentServer();
-  setServerTheme(server && !isGroup(server) ? server.theme : null);
+  // A DM or group chat shows the background someone there set (chat-look.js), while this device shows them (LOOK.themeFor
+  // is null otherwise). A server's own theme never passes for one: "Show server themes" is the switch for it.
+  setServerTheme(server && !isGroup(server) ? server.theme && { ...server.theme, chat: false } : LOOK.themeFor(S.view));
 }
 function renderAll() {
   applyServerTheme();
@@ -2403,6 +2446,7 @@ function dmMenuItems(d) {
     ...notifyItems('d:' + d.id),
     ...disappearItems('d:' + d.id),
     '-',
+    LOOK.menuItem('d:' + d.id), // "Chat background…" (none once they're blocked or their account is gone)
     { label: 'View profile', icon: 'user', action: () => openProfileModal(u.id) },
     { label: 'Verify encryption', icon: 'shield', action: () => openSafetyNumber(u) },
   ];
@@ -2415,6 +2459,7 @@ function groupMenuItems(g) {
     ...(c ? [{ label: 'Mark as read', icon: 'check', action: () => markConvRead('c:' + c.id) }, ...notifyItems('c:' + c.id), ...disappearItems('c:' + c.id), '-'] : []),
     { label: 'Rename group', icon: 'edit', action: () => renameGroup(g) },
     { label: 'Change group picture', icon: 'image', action: () => changeGroupIcon(g) },
+    LOOK.menuItem('g:' + g.id), // "Chat background…"
     { label: 'Add people', icon: 'userPlus', action: () => openNewConversation(g) },
     { label: 'Members', icon: 'people', action: () => manageGroup(g) },
     '-',
@@ -3507,7 +3552,7 @@ async function loadMessages(key, mode = 'latest') {
     if (mode !== 'newer' && !res.hasMore) store.hidden = !!res.hidden;
     if (mode !== 'older') store.hasNewer = !!res.hasNewer;
     store.loaded = true;
-    const newLines = mergeTimerEvents(store, res.timerEvents);
+    const newLines = mergeTimerEvents(store, res.timerEvents) + mergeLookEvents(store, res.lookEvents);
     await decryptAll(key);
     // The timer inside a message can say it's gone before the server has deleted it.
     const hid = dropExpired(store);
@@ -3730,6 +3775,7 @@ async function onKeysChanged(serverId, added, heldChanged) {
   if (heldChanged && S.view.type === 'dm') { later(renderHeader); if (composers.main) composers.main.renderExtras(); }
   if (added) {
     NOTES.onKeys(serverId); // photo tags that were waiting for this key
+    LOOK.onKeys(serverId); // a group chat's background that was waiting for it
     const server = S.servers.find((s) => s.id === serverId);
     for (const c of server ? server.channels : []) {
       const store = S.msgs['c:' + c.id];
@@ -6469,16 +6515,36 @@ const NOTES = createPhotoNotes({
   // (Comments and tagged messages it loads that disappear: the timer counts them in, NOTES.messages.)
   armExpiry: () => armClientExpiry(),
 });
+// Disappearing messages that went from wherever else they were loaded: their tags and comments go too.
+expiryListeners.add((ids) => NOTES.onDelete(null, ids));
 
 // Chat backgrounds (chat-look.js): a background for a DM or group chat, set by someone in it.
 const LOOK = createChatLook({
+  me: () => S.me,
+  dms: () => S.dms,
+  server: (id) => S.servers.find((s) => s.id === id),
+  getUser: (id) => getUser(id),
+  blocked: (id) => S.blocked.has(id),
+  title: (key) => {
+    if (key.startsWith('d:')) return convTitle(key);
+    const g = S.servers.find((s) => s.id === key.slice(2));
+    return g ? groupName(g) : 'this group chat';
+  },
+  encryptLook: (where, look) => sec.encryptLook(where, look),
+  openLook: (look) => sec.openLook(look),
+  withKeyRetry: (serverId, fn) => withKeyRetry(serverId, fn),
+  // A picture is made ready like a photo (at most 2560 px, re-encoded), and goes up the way attachments do.
+  prepareImage: (file) => prepareImage(file, { compress: true }),
+  upload: (bytes) => (bytes.byteLength > CHUNKED_ABOVE ? uploadResumable(bytes) : uploadSimple(bytes)),
+  download: (url, opts) => download(url, opts),
+  // Settings → Appearance → "Show backgrounds people set for chats" (on this device).
+  enabled: () => loadAppearance().chatLooks !== false,
+  changed: () => applyServerTheme(),
 });
 
 // The side view (side-view.js): messages and pictures pinned to a panel that stays open while you chat.
 const SIDE = createSideView({
 });
-// Disappearing messages that went from wherever else they were loaded: their tags and comments go too.
-expiryListeners.add((ids) => NOTES.onDelete(null, ids));
 // Why you can't add a comment or a tag here (a sentence), or null when you can: the same rules as the message box.
 function photoPostBlock(key, threadId) {
   if (key.startsWith('d:')) {
@@ -8303,6 +8369,7 @@ async function openSafetyNumber(u) {
           sec.acceptKeys(user);
           SCHED.onKeys(); // a scheduled DM waiting for their new key
           NOTES.onTrust(user.id); // photo tags only their new key vouches for
+          LOOK.onTrust(user.id); // and a chat background
           if (vouch) {
             // Tells the server too, with the key compared: everyone's apps share the keys of the servers and groups
             // you're both in with them again (and of all theirs, once each one they were in has been verified).

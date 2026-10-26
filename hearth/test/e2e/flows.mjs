@@ -4643,7 +4643,140 @@ async function photoNotes(t) {
 }
 
 // ------------------------------------------------------------------ chat backgrounds
+// Alice gives her DM with Bob a preset from the More menu: it's sealed for the DM (lkd1) and both see it at once, as
+// the app's backdrop, with a line in the chat; Bob turns chat backgrounds off on his device and his own comes back. Bob
+// sets a picture of his own, dimmed: it goes up encrypted, linked to the background, and both see it (as a blob: copy).
+// Alice removes it. A fresh page still has the lines (from history) and what's set (from the bootstrap). In Fruit Club,
+// a preset sealed and signed with the group's key (lkc1), which stays with that chat.
 async function chatBackgrounds(t) {
+  const { alice, bob } = t.people;
+  // Colors from appearance.js BACKGROUNDS as the browser writes them in the backdrop's style.
+  const AURORA = 'rgb(6, 18, 31)';
+  const NEBULA = 'rgb(11, 6, 24)';
+  const backdrop = (p) => p.page.evaluate(() => { const l = document.querySelector('#app-bg .bg-layer'); return l ? l.style.background : ''; });
+  const shows = (p, part) => p.page.waitForFunction((x) => { const l = document.querySelector('#app-bg .bg-layer'); return !!l && l.style.background.includes(x); }, part, { timeout: 30000 });
+  const gone = (p, part) => p.page.waitForFunction((x) => { const l = document.querySelector('#app-bg .bg-layer'); return !!l && !l.style.background.includes(x); }, part, { timeout: 30000 });
+  const openDialog = async (p) => {
+    await p.$('#main-head button[aria-label="More"]').click();
+    await p.menuItem('Chat background…').click();
+    return p.dialog('Chat background');
+  };
+  const tile = (m, name) => m.locator('.bg-tile').filter({ has: m.locator('.bg-tile-name', { hasText: exact(name) }) });
+  const sealed = (p, re) => p.page.waitForRequest((r) => re.test(r.url()) && r.method() === 'PUT');
+  const line = (p, text) => p.$('#messages .sys-line', { hasText: text });
+
+  // ---- the DM: Alice picks Aurora.
+  for (const [p, name] of [[alice, 'bob'], [bob, 'Alice Wonder']]) {
+    await p.railButton('Direct messages');
+    await p.dmRow(name).click();
+    await p.page.waitForSelector(`#composer-input[placeholder="Message ${name}"]`);
+  }
+  check(!(await backdrop(bob)).includes(AURORA), 'Bob shouldn’t have Aurora as his own background.');
+  // The sidebar's right-click menu has it too.
+  await alice.dmRow('bob').click({ button: 'right' });
+  await alice.menuItem('Chat background…').waitFor();
+  await alice.page.keyboard.press('Escape');
+  let m = await openDialog(alice);
+  check(await m.locator('.cl-note', { hasText: 'Everyone in this conversation sees it. It’s end-to-end encrypted, like your messages.' }).count() === 1, 'The dialog should say who sees it.');
+  check(!(await m.locator('.modal-foot .btn', { hasText: 'Remove background' }).count()), 'Nothing to remove yet.');
+  check(await m.locator('.cl-dim').isHidden(), 'Dim is for pictures.');
+  await tile(m, 'Aurora').click();
+  check((await tile(m, 'Aurora').getAttribute('aria-pressed')) === 'true', 'The tile picked should be pressed.');
+  let req = sealed(alice, /\/api\/dms\/\w+\/look$/);
+  await m.locator('.modal-foot .btn.primary', { hasText: 'Save' }).click();
+  let body = (await req).postDataJSON();
+  check(body.version === 1 && /^lkd1:/.test(body.ciphertext) && Array.isArray(body.files) && !body.files.length, `The first background should go sealed for the DM as version 1 (got ${JSON.stringify({ ...body, ciphertext: body.ciphertext.slice(0, 5) })}).`);
+  const presetSize = body.ciphertext.length;
+  await alice.toast('Chat background saved.');
+  await alice.noModals();
+  await shows(alice, AURORA);
+  await shows(bob, AURORA);
+  await line(alice, 'You changed the chat background').locator('.sys-you').waitFor();
+  await line(bob, 'changed the chat background').locator('.sys-who', { hasText: 'Alice Wonder' }).waitFor();
+
+  // ---- Bob turns chat backgrounds off on his device: his own comes back; on again, Aurora's back.
+  await bob.openSettings('Appearance');
+  const sw = bob.$('.set-content .toggle-row', { hasText: 'Show backgrounds people set for chats' });
+  check(await sw.locator('input[type=checkbox]').isChecked(), 'Chat backgrounds should be on to start with.');
+  await sw.locator('.switch').click();
+  await gone(bob, AURORA);
+  await sw.locator('.switch').click();
+  await shows(bob, AURORA);
+  await sw.locator('.switch').click();
+  await bob.closeSettings();
+  check(!(await backdrop(bob)).includes(AURORA), 'Off should stay off after closing Settings.');
+
+  // ---- Bob sets a picture of his own, dimmed by half (his device still has them off, so he turns them back on after).
+  m = await openDialog(bob);
+  check((await tile(m, 'Aurora').getAttribute('aria-pressed')) === 'true', 'The dialog should start on what’s set.');
+  await m.locator('input[type=file]').setInputFiles({ name: 'meadow.png', mimeType: 'image/png', buffer: makePng(64, 48) });
+  await m.locator('.cl-dim').waitFor();
+  await bob.page.waitForFunction(() => (document.querySelector('.chat-look-modal .cl-sw') || { style: {} }).style.background.includes('blob:'));
+  await m.locator('.cl-dim input[type=range]').evaluate((el) => { el.value = '50'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  check((await m.locator('.cl-dim .counter').textContent()) === '50%', 'The slider should say how much.');
+  req = sealed(bob, /\/api\/dms\/\w+\/look$/);
+  await m.locator('.modal-foot .btn.primary', { hasText: 'Save' }).click();
+  body = (await req).postDataJSON();
+  check(body.version === 2 && /^lkd1:/.test(body.ciphertext) && body.files.length === 1 && /^\/uploads\/[a-z0-9]+\.bin$/.test(body.files[0]),
+    `The picture should go up encrypted and be linked to the background (got ${JSON.stringify(body.files)}, version ${body.version}).`);
+  check(body.ciphertext.length === presetSize, 'A picture’s background should be the same size as a preset’s: its length says nothing about which.');
+  await bob.toast('Chat background saved.');
+  await bob.noModals();
+  await shows(alice, 'blob:');
+  check((await alice.page.evaluate(() => document.documentElement.style.getPropertyValue('--dim'))).trim() === '0.5', 'Alice should see it dimmed by half.');
+  await line(alice, 'changed the chat background').locator('.sys-who', { hasText: 'bob' }).waitFor();
+  check(!(await backdrop(bob)).includes('blob:'), 'Bob has them off on this device.');
+  await bob.openSettings('Appearance');
+  await bob.$('.set-content .toggle-row', { hasText: 'Show backgrounds people set for chats' }).locator('.switch').click();
+  await bob.closeSettings();
+  await shows(bob, 'blob:');
+  // What went up is ciphertext: not a PNG.
+  const head = await bob.page.evaluate(async (u) => [...new Uint8Array(await (await fetch(u)).arrayBuffer()).slice(0, 4)], body.files[0]);
+  check(head.join() !== '137,80,78,71', 'The uploaded picture should be encrypted.');
+
+  // ---- Alice removes it: gone for both, with a line.
+  m = await openDialog(alice);
+  await m.locator('.modal-foot .btn', { hasText: 'Remove background' }).click();
+  await alice.toast('Chat background removed.');
+  await alice.noModals();
+  await gone(alice, 'blob:');
+  await gone(bob, 'blob:');
+  await line(bob, 'removed the chat background').waitFor();
+  await line(alice, 'You removed the chat background').waitFor();
+
+  // ---- Fruit Club: Alice picks Nebula; it's sealed and signed with the group's key, and Bob sees it.
+  for (const p of [alice, bob]) {
+    await p.dmRow('Fruit Club').click();
+    await p.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  }
+  m = await openDialog(alice);
+  await tile(m, 'Nebula').click();
+  req = sealed(alice, /\/api\/groups\/\w+\/look$/);
+  await m.locator('.modal-foot .btn.primary', { hasText: 'Save' }).click();
+  body = (await req).postDataJSON();
+  check(body.version === 1 && /^lkc1:[1-9]\d*:/.test(body.ciphertext), `A group chat’s background should go sealed and signed with its key (got ${body.ciphertext.slice(0, 8)}…).`);
+  await alice.toast('Chat background saved.');
+  await shows(alice, NEBULA);
+  await shows(bob, NEBULA);
+  await line(bob, 'changed the chat background').waitFor();
+  // It stays with that chat: the DM has none now.
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await gone(bob, NEBULA);
+
+  // ---- A fresh page: the lines come with the history, and what's set with the bootstrap.
+  await bob.page.reload();
+  await bob.waitApp();
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await line(bob, 'removed the chat background').waitFor();
+  check(await line(bob, 'changed the chat background').count() === 2, 'Both changes should be in the DM’s history.');
+  check(!(await backdrop(bob)).includes('blob:'), 'The DM has none.');
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  await shows(bob, NEBULA);
+  await line(bob, 'changed the chat background').waitFor();
 }
 
 // ------------------------------------------------------------------ the side view

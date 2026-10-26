@@ -58,6 +58,7 @@ export const DEFAULTS = {
   bg: { kind: 'preset', preset: 'plain', colors: ['#7f00ff', '#e100ff', '#f2a541'], three: false, angle: 135, style: 'linear', animate: false },
   glass: 0.82,
   serverThemes: true, // let servers you visit apply their accent + background
+  chatLooks: true, // show the backgrounds people set for DMs and group chats (chat-look.js)
   // Layout: the order of the four columns, where the server bar sits, sizes and panel style.
   layout: { order: ['rail', 'sidebar', 'main', 'panel'], rail: 'side', railSize: 'normal', sideW: 256, panelW: 272, threadW: 400, style: 'floating' },
   imgBlur: 0,
@@ -247,7 +248,8 @@ function applyLayout(root, L) {
   root.dataset.railSide = L.order.indexOf('rail') < main ? 'left' : 'right';
 }
 
-// The server you're looking at can bring its own accent and background (if you allow it).
+// The server you're looking at can bring its own accent and background (if you allow it). So can a DM or group chat
+// (chat-look.js: a theme with chat: true), which has a switch of its own.
 let serverTheme = null;
 let serverThemeKey = 'null';
 export function setServerTheme(t) {
@@ -270,7 +272,7 @@ export function applyAppearance() {
   const root = document.documentElement;
   root.dataset.theme = THEMES.some((t) => t.id === a.theme) ? a.theme : 'dark';
 
-  const st = a.serverThemes !== false ? serverTheme : null;
+  const st = serverTheme && (serverTheme.chat ? a.chatLooks !== false : a.serverThemes !== false) ? serverTheme : null;
   const accent = st && HEX.test(st.accent || '') ? st.accent : HEX.test(a.accent) ? a.accent : DEFAULTS.accent;
   const [r, g, b] = hexToRgb(accent);
   root.style.setProperty('--accent', accent);

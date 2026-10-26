@@ -23,6 +23,27 @@ function cleanPoll(p) {
   return { q: String(p.q || '').slice(0, 300), o, m: !!p.m };
 }
 
+// A chat background (chat-look.js, e2ee.js lkc1 / lkd1) as it's sealed and as it's opened: { bg, dim }, where bg is a
+// preset by its id ({ kind: 'preset', preset }), or a picture: its upload address on this server, its file key, its
+// size in pixels (0 when unknown) and its type, one of the picture types a browser shows as a background
+// ({ kind: 'image', url, k, w, h, type }). dim is how much it's darkened, 0 to 0.8. null for anything else, so nothing
+// else in a payload ever reaches the page, and whatever does fits the one 512-byte size (e2ee.js LOOK_BYTES).
+export const LOOK_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif'];
+export const LOOK_DIM_MAX = 0.8;
+const LOOK_PRESET = /^[a-z][a-z0-9-]{0,31}$/;
+const LOOK_FILE = /^\/uploads\/[a-z0-9]{1,80}\.bin$/; // what the server links to a background (an encrypted upload)
+const LOOK_KEY = /^[A-Za-z0-9+/]{43}=$/; // a file key: 32 bytes (e2ee.js encryptFile)
+export function cleanLook(p) {
+  if (!p || typeof p !== 'object' || Array.isArray(p) || !p.bg || typeof p.bg !== 'object' || Array.isArray(p.bg)) return null;
+  const d = typeof p.dim === 'number' && Number.isFinite(p.dim) ? p.dim : 0;
+  const dim = Math.round(Math.min(LOOK_DIM_MAX, Math.max(0, d)) * 100) / 100;
+  const b = p.bg;
+  if (b.kind === 'preset') return typeof b.preset === 'string' && LOOK_PRESET.test(b.preset) ? { bg: { kind: 'preset', preset: b.preset }, dim } : null;
+  if (b.kind !== 'image' || typeof b.url !== 'string' || !LOOK_FILE.test(b.url) || typeof b.k !== 'string' || !LOOK_KEY.test(b.k) || !LOOK_TYPES.includes(b.type)) return null;
+  const px = (n) => (Number.isInteger(n) && n >= 0 && n <= 20000 ? n : 0);
+  return { bg: { kind: 'image', url: b.url, k: b.k, w: px(b.w), h: px(b.h), type: b.type }, dim };
+}
+
 // Marks the server sends only while they're set (server/index.js publicUser: keysReset, deleted, bot).
 const ONLY_WHILE_SET = ['keysReset', 'deleted', 'bot'];
 // A user object from the server on top of what the app had. A whole one (it always has publicKey) that leaves one of
@@ -680,6 +701,66 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     }
   }
 
+  // ---------------------------------------------------------------- chat backgrounds (chat-look.js, e2ee.js lkc1 / lkd1)
+  // where: { serverId } (a group chat) or { dmId }. version: the one the server is to store it as (its version + 1).
+  // payload: { bg, dim } (cleanLook). Sealed as a message there would be: in a group chat with its current key and your
+  // signature (ready() rotates or waits for it, and refuses as a send does), in a DM with the key you share with them,
+  // refused the same way while their key changed and you haven't verified it.
+  async function encryptLook(where, { version, payload }) {
+    const clean = cleanLook(payload);
+    if (!clean) throw new Error('That background can’t be saved.');
+    const look = { version, authorId: S.me.id, payload: clean };
+    if (where && where.serverId) {
+      const ck = await ready(where.serverId);
+      const ciphertext = await E2EE.encryptGroupLook({ raw: ck.raw, serverId: where.serverId, epoch: ck.epoch, signKey: S.signKey, ...look });
+      return { ciphertext, epoch: ck.epoch };
+    }
+    const peer = await writablePeer(where.dmId);
+    return { ciphertext: await E2EE.encryptDmLook({ myPriv: S.privateKey, theirPub: peer.publicKey, dmId: where.dmId, ...look }) };
+  }
+  // A background as the server lists it ({ ciphertext, authorId, version, updatedAt }, with serverId or dmId): { bg, dim }
+  // as its author sealed them (cleanLook), { pending: true } while the group key it was sealed with isn't here yet
+  // (before: it never will be, as for messages), or { error: true }, with retry: true when its author's keys couldn't be
+  // looked up (offline, the server busy). Never throws.
+  // The same rule as tags: it only counts when it checks out with a key this device trusts for its author. In a group
+  // chat it's signed with their current key or one this device pinned for them back then ('now' or 'pinned'); in a DM
+  // it opens with such a key. Anything only a new key not verified yet, or a key the server merely lists, would vouch
+  // for is left out: a background has nowhere to carry the warnings a message shows.
+  async function openLook(look) {
+    try {
+      const at = Number(look.updatedAt) || 0;
+      const bound = { version: look.version, authorId: look.authorId };
+      if (!Number.isInteger(look.version) || look.version < 1 || typeof look.authorId !== 'string' || !look.authorId || typeof look.ciphertext !== 'string') return { error: true };
+      let payload = null;
+      if (look.serverId) {
+        const epoch = E2EE.lookEpoch(look.ciphertext);
+        const mine = keysFor(look.serverId);
+        const raw = epoch === null ? null : mine.get(epoch);
+        if (!raw) {
+          if (epoch === null) return { error: true };
+          const held = [...mine.keys()];
+          return { pending: true, before: held.length > 0 && epoch < Math.max(...held) };
+        }
+        const author = await lookedUp(userWithKeys(look.authorId));
+        if (look.authorId === S.me.id) await ownKeysOk();
+        const keys = keysOf(author, 's', at);
+        const r = await E2EE.decryptGroupLook({ raw, serverId: look.serverId, ...bound, authorSignPub: keys.map((k) => k.key), text: look.ciphertext });
+        const how = r.signedBy ? keys.find((k) => k.key === r.signedBy).trust : null;
+        if (how !== 'now' && how !== 'pinned') return { error: true };
+        payload = r.payload;
+      } else {
+        if (!look.dmId || !S.dms.some((d) => d.id === look.dmId)) return { error: true };
+        for (const { key, trust: how } of await lookedUp(dmKeys(look.dmId, at))) {
+          if (how !== 'now' && how !== 'pinned') continue;
+          try { payload = (await E2EE.decryptDmLook({ myPriv: S.privateKey, theirPub: key, dmId: look.dmId, ...bound, text: look.ciphertext })).payload; break; } catch { /* not this key */ }
+        }
+      }
+      return cleanLook(payload) || { error: true };
+    } catch (e) {
+      return e === LOOKUP ? { error: true, retry: true } : { error: true };
+    }
+  }
+
   // ---------------------------------------------------------------- voice handshakes
   const sdpText = (channelId, from, to, desc) => `hearth-voice|${channelId}|${from}|${to}|${desc.type}|${desc.sdp}`;
   const signSdp = (channelId, toUserId, desc) => E2EE.sign(S.signKey, sdpText(channelId, S.me.id, toUserId, desc));
@@ -716,7 +797,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
 
   return {
     ensureSigningKey, applyState, stateOf, currentKey, ready, refresh, forceRotate, maintain, awaitingVerify, heldBack, isHeld,
-    encryptChannel, decryptChannelMessage, encryptDm, decryptDmMessage, decryptAttachment, encryptTag, openTag,
+    encryptChannel, decryptChannelMessage, encryptDm, decryptDmMessage, decryptAttachment, encryptTag, openTag, encryptLook, openLook,
     signSdp, verifySdp, checkSdp, keyChanged, keysChanged, acceptKeys, trust, userWithKeys, reset,
     heldEpochs: (serverId) => [...keysFor(serverId).keys()],
     keysSaved: (serverId) => keeping.get(serverId) || Promise.resolve(), // our own copies are stored back
