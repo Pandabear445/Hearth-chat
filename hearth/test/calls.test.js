@@ -126,8 +126,9 @@ test('regions with backup space get this server\'s key; their identity is checke
   const add = await as(owner, 'POST', '/admin/regions', { name: 'US Central', origin: 'https://chat.example.test', authKey: owner.authKey });
   assert.equal(add.status, 200, add.text);
   const { id } = add.json.region;
-  const token = add.json.command.match(/k=([0-9a-f]+)/)[1];
-  const text = await (await fetch(`${srv.base}/regions/install/${id}?k=${token}`)).text();
+  const link = add.json.command.match(/k=([0-9a-f]+)/)[1];
+  const text = await (await fetch(`${srv.base}/regions/install/${id}?k=${link}`)).text();
+  const token = /^TOKEN='([0-9a-f]+)'$/m.exec(text)[1]; // (the check-in token is inside the installer, not in the link)
   for (const must of ['ForceCommand internal-sftp -d /backups', 'ChrootDirectory /var/lib/hearth-backup', 'AuthorizedKeysFile /etc/ssh/hearth-backup.keys', 'restrict $KEY', 'sshd -t']) assert.ok(text.includes(must), must);
   const beat = (ssh) => fetch(`${srv.base}/api/regions/${id}/heartbeat`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-region-token': token },
     body: JSON.stringify({ ip: '203.0.113.9', tx: 1, rx: 1, load: 0.1, cpus: 1, mem: 10, relay: true, uptime: 5, ssh, version: 2 }) }).then((r) => r.json());

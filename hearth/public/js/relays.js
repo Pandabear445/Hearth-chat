@@ -3,16 +3,16 @@
 // it takes is a good stand-in for distance. Results are kept for 6 hours.
 const KEY = 'hearth.relayRtt';
 const TTL = 6 * 3600000;
-const isRelay = (e) => [].concat(e.urls || []).some((u) => /^turns?:/.test(u));
+export const isRelay = (e) => !!e && [].concat(e.urls || []).some((u) => /^turns?:/.test(u));
 const sig = (e) => `${e.region || ''}|${[].concat(e.urls).join(',')}`;
 
 // Member relays: call relays that members run on their own machines (Settings → Help host), approved by the owner.
 // The server marks their entries `community: true`. A relay sees the IP address of everyone whose call goes through
 // it (never what's said or shown), so people can choose to avoid them (Settings → Privacy & safety,
 // `memberRelays: 'avoid'`): then this app never measures one, never gets an address on one, and drops the other
-// side's network candidates on any member relay (memberRelayHosts), so it never connects through one. That's as far
-// as it goes: the browser answers the connection checks that reach it, so when the other side's call goes through a
-// member relay, that relay can still learn this device's address.
+// side's network candidates on any member relay (memberRelayHosts), so it never connects through one. It also tells
+// the others in a call (voice.js), whose apps then build their connection with this person without member relays
+// (chooseIce with { avoid }), so a member relay is never asked to let this device's packets through either.
 export const isMemberRelay = (e) => !!e && e.community === true;
 export const avoidsMemberRelays = (me) => !!(me && me.privacy && me.privacy.memberRelays === 'avoid');
 // Someone who avoids them gets every member relay from the server by address only, with no login (so this app knows
@@ -40,13 +40,12 @@ function normHost(a) {
   if (groups.length !== 8 || !groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return s;
   return groups.map((g) => g.replace(/^0+(?=.)/, '')).join(':');
 }
-// The machines member relays run on: a Set of the hosts in their addresses (turn:<host>:3478?transport=udp, with
-// IPv6 in brackets).
-export function memberRelayHosts(list) {
+// The machines relays run on: a Set of the hosts in their addresses (turn:<host>:3478?transport=udp, with IPv6 in
+// brackets).
+export function relayHosts(list) {
   const hosts = new Set();
   for (const e of list || []) {
-    if (!isMemberRelay(e)) continue;
-    for (const u of [].concat(e.urls || [])) {
+    for (const u of [].concat((e && e.urls) || [])) {
       const m = /^turns?:(\[[^\]]*\]|[^:?/\s]+)/i.exec(String(u));
       if (m) hosts.add(normHost(m[1]));
     }
@@ -54,6 +53,8 @@ export function memberRelayHosts(list) {
   hosts.delete('');
   return hosts;
 }
+// The machines member relays run on.
+export const memberRelayHosts = (list) => relayHosts((list || []).filter(isMemberRelay));
 // The connection address of a candidate ("candidate:<foundation> <component> <transport> <priority> <address> <port>
 // typ …", or the same as an SDP line after "a="). Not the related address: that's where it came from, not where
 // packets go.

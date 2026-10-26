@@ -5193,13 +5193,22 @@ async function memberRelays(t) {
   await mine().locator('.rpill', { hasText: 'Waiting for install' }).waitFor();
   check((await mine().innerText()).includes('Limit 50 Mbit/s'), 'The bandwidth limit picked should show.');
 
-  // The machine checks in, as its agent does every minute. A relay waiting for approval gets no backup key.
-  const [, id, token] = link;
-  const checkIn = () => fetch(`${t.server.base}/api/regions/${id}/heartbeat`, {
+  // The machine checks in, as its agent does every minute, with the check-in token its installer carries (the link's own
+  // token only downloads the installer). A relay waiting for approval gets no backup key.
+  const [, id, k] = link;
+  const installer = await (await fetch(`${t.server.base}/regions/install/${id}?k=${k}`)).text();
+  const token = (/^TOKEN='([0-9a-f]+)'$/m.exec(installer) || [])[1];
+  check(token && token !== k, 'The installer should carry a check-in token of its own.');
+  const checkIn = (ip = '198.51.100.77') => fetch(`${t.server.base}/api/regions/${id}/heartbeat`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Region-Token': token },
-    body: JSON.stringify({ ip: '203.0.113.7', tx: 5000000, rx: 4000000, load: 0.2, cpus: 4, mem: 31, relay: true, uptime: 86400,
-      ssh: { port: 22, hostKey: '', ready: false, usedMb: 0, freeMb: 20000, files: 0 }, version: 3 }),
+    body: JSON.stringify({ ip, tx: 5000000, rx: 4000000, load: 0.2, cpus: 4, mem: 31, relay: true, uptime: 86400,
+      ssh: { port: 22, hostKey: '', ready: false, usedMb: 0, freeMb: 20000, files: 0 }, version: 4 }),
   });
+  // It can't claim another machine's address: this server's own relay is at 203.0.113.7 (set in the step-up flow).
+  if (String((t.server.rows("SELECT value FROM instance_settings WHERE key = 'turnUrls'")[0] || {}).value || '').includes('203.0.113.7')) {
+    const claimed = await checkIn('203.0.113.7');
+    check(claimed.status === 409, `A member relay claiming this server's relay's address should be refused (got ${claimed.status}).`);
+  }
   const beat = await checkIn();
   const said = await beat.json().catch(() => ({}));
   check(beat.ok && said.ok, `The relay’s check-in should be taken (${beat.status} ${JSON.stringify(said)}).`);
@@ -5215,7 +5224,7 @@ async function memberRelays(t) {
   const row = bob.$('.admin-body .member-row', { hasText: name });
   await row.locator('.rpill', { hasText: 'Waiting for approval' }).waitFor();
   const seen = await row.innerText();
-  check(seen.includes('by @alice_w') && seen.includes('203.0.113.7') && seen.includes('limit 50 Mbit/s') && seen.includes('backups offered, off'), `The row should say who runs it, its address, its limit and its backup offer (got “${seen}”).`);
+  check(seen.includes('by @alice_w') && seen.includes('198.51.100.77') && seen.includes('limit 50 Mbit/s') && seen.includes('backups offered, off'), `The row should say who runs it, its address, its limit and its backup offer (got “${seen}”).`);
   await row.locator('button', { hasText: exact('Approve') }).click();
   const approve = await bob.dialog(`Approve ${name}?`);
   // Backup copies stay off: that's a separate choice, with its own warning.
@@ -5234,9 +5243,10 @@ async function memberRelays(t) {
   // Everyone's calls can use it now: it's in /api/ice, marked as a member's, and its login doesn't name her.
   const ice = await alice.page.evaluate(() => fetch('/api/ice', { headers: { Authorization: 'Bearer ' + localStorage.getItem('hearth.token') } }).then((r) => r.json()));
   const entry = ice.find((e) => e.community === true);
-  check(entry && [].concat(entry.urls).some((u) => u.includes('203.0.113.7')), `/api/ice should carry the member’s relay (got ${JSON.stringify(ice.map((e) => e.urls))}).`);
+  check(entry && [].concat(entry.urls).some((u) => u.includes('198.51.100.77')), `/api/ice should carry the member’s relay (got ${JSON.stringify(ice.map((e) => e.urls))}).`);
   const aliceId = await alice.page.evaluate(() => localStorage.getItem('hearth.userId'));
   check(!String(entry.username).includes(aliceId) && !String(entry.username).includes('alice'), 'The relay login should not name the person.');
+  check(entry.region === 'Member relay' && !JSON.stringify(ice).includes('Lisbon'), `Apps should get “Member relay”, never the name she gave it (got ${entry.region}).`);
 
   // Alice keeps her own calls off members' relays.
   await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Privacy & safety') }).click();
@@ -5244,24 +5254,30 @@ async function memberRelays(t) {
   check(!(await avoid.locator('input').isChecked()), 'Avoiding members’ relays should be off to begin with.');
   check((await checkIn()).ok, 'The relay checks in again (it’s up).');
   // Her app fetches its relay list again at once: the member's relay is in it only as where it is, with no login.
-  const refetched = alice.page.waitForResponse((r) => r.url().endsWith('/api/ice') && r.request().method() === 'GET', { timeout: 15000 });
+  // (The list it fetches for the new choice: approving the relay made every app fetch one too, a moment later.)
+  const iceWhere = (page, want) => page.waitForResponse(async (r) => r.url().endsWith('/api/ice') && r.request().method() === 'GET' && want(await r.json().catch(() => [])), { timeout: 15000 });
+  const refetched = iceWhere(alice.page, (list) => list.some((e) => e.community === true && !('username' in e)));
   await avoid.locator('.switch').click();
   await alice.toast('Saved.');
   check(JSON.parse(t.server.rows('SELECT privacy FROM users WHERE id = ?', aliceId)[0].privacy).memberRelays === 'avoid', 'The choice should be saved on her account.');
   const avoiding = await (await refetched).json();
   const where = avoiding.find((e) => e.community === true);
-  check(where && [].concat(where.urls).some((u) => u.includes('203.0.113.7')) && !('username' in where) && !('credential' in where),
+  check(where && [].concat(where.urls).some((u) => u.includes('198.51.100.77')) && !('username' in where) && !('credential' in where),
     `After avoiding, her app should fetch the relay list again, with the member’s relay and no login for it (got ${JSON.stringify(avoiding)}).`);
 
-  // She removes her relay, and is shown how to take it off the machine.
+  // She removes her relay, and is shown how to take it off the machine. Everyone's apps are told and fetch their relay
+  // list again (bob's too, who uses members' relays), so nobody's calls keep using it.
   await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Help host') }).click();
   await mine().locator('button', { hasText: exact('Remove') }).click();
+  const bobRefetched = iceWhere(bob.page, (list) => !list.some((e) => e.community === true));
   await alice.modal(`Remove ${name}?`).locator('.modal-foot .btn.danger').click();
   const uninstall = alice.modal(`Uninstall ${name}`);
   check((await uninstall.locator('.cmd-box code').innerText()).trim() === 'sudo hearth-relay-uninstall', 'The uninstall command should be shown.');
   await uninstall.locator('.modal-x').click();
   await uninstall.waitFor({ state: 'detached' });
   await mine().waitFor({ state: 'detached' });
+  const bobsList = await (await bobRefetched).json();
+  check(!bobsList.some((e) => e.community === true && e.username), `Bob’s app should fetch its relay list again, without a login for the removed relay (got ${JSON.stringify(bobsList)}).`);
   await alice.closeSettings();
   await bob.$('.admin-tabs .admin-tab', { hasText: 'Regions' }).click();
   await bob.$('.admin-body .admin-head', { hasText: 'Member relays' }).waitFor();

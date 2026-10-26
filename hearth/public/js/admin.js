@@ -108,6 +108,8 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
   const nav = h('nav', { class: 'admin-tabs', role: 'tablist' });
   const body = h('div', { class: 'admin-body' });
   let timer = null;
+  // Admin → Regions' "Measure from this device" results: kept across the page's redraws.
+  let measuredBox = null;
   // Health redraws replace every button. The one last pressed there gets focus back afterwards when a password dialog
   // or a disabled button lost it meanwhile (see healthPage), so keyboard and screen-reader users stay where they were.
   let pressed = null;
@@ -731,7 +733,9 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
   }
 
   async function regions() {
-    const d = await api('GET', '/admin/regions');
+    let d = await api('GET', '/admin/regions');
+    // A redraw keeps keyboard focus on the button it was on (each has a data-focus key).
+    const had = body.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.focus : null;
     const regionCommand = (title, command) => showCommand(title, command, {
       steps: [
         'Rent the cheapest VPS in that part of the world (1 CPU and 1 GB is plenty; Ubuntu or Debian). See the price guide below.',
@@ -755,7 +759,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
           regions(); setTimeout(() => regionCommand(`Set up ${r.region.name}`, r.command), 150);
         } }] });
     };
-    const measured = h('div', { class: 'stack' });
+    const measured = measuredBox || (measuredBox = h('div', { class: 'stack' }));
     const measure = async (btn) => {
       btn.disabled = true; clear(measured).append(h('span', { class: 'spinner' }));
       // Someone who avoids members' relays (Privacy & safety) never contacts one, here either: they aren't measured or listed.
@@ -768,6 +772,10 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       btn.disabled = false;
     };
     const status = (r) => r.alive ? h('span', { class: 'rpill ok' }, 'Online') : r.waitingForInstall ? h('span', { class: 'rpill warn' }, r.installOpen ? 'Waiting for install' : 'Install link expired') : h('span', { class: 'rpill bad' }, `Offline since ${ago(r.lastSeen)}`);
+    // The lines that change at every check-in (load, traffic, free space): updated where they are (data-live), see below.
+    const regionStats = (r) => (r.alive ? `load ${r.load ?? '?'} / ${r.cpus || 1} CPU \u00b7 ${r.mbps ?? 0} Mbit/s now \u00b7 ${r.monthGb ?? 0} GB this month${r.relayUp ? '' : ' \u00b7 relay stopped!'}` : '');
+    const regionBackup = (r) => (!r.backup ? 'Backups: reinstall to add backup space' : !r.backup.ready ? 'Backups: no backup space (needs SSH)'
+      : `Backups: ${r.backup.files} cop${r.backup.files === 1 ? 'y' : 'ies'}, ${fmtMb(r.backup.usedMb)} (${fmtMb(r.backup.freeMb)} free)${r.backup.last ? (r.backup.last.ok ? ` \u00b7 last copy ${ago(r.backup.last.at)} \u2713` : ' \u00b7 last copy FAILED') : ' \u00b7 waiting for the next backup'}`);
     clear(body).append(
       h('div', { class: 'admin-head' }, h('h3', null, 'Regions'), h('button', { class: 'btn primary', onclick: add }, icon('plus'), 'Add a region')),
       h('p', { class: 'field-hint' }, 'Chat lives on this one server: everyone sees the same messages instantly, and there\u2019s one database to back up. What distance slows down is calls that can\u2019t connect directly (about 1 in 5) and go through a relay. Regions put relays near people; each person\u2019s app measures which answer fastest and uses those two.'),
@@ -775,23 +783,21 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
         h('div', { class: 'adm-row region-row' }, h('b', null, 'This server'), h('span', { class: 'stat-sub' }, d.mainTurn.length ? d.mainTurn[0].replace(/^turn:|\?.*$/g, '') : 'No relay here (run scripts/setup-turn.sh to add one)'), h('span', { class: `rpill ${d.mainTurn.length ? 'ok' : 'warn'}` }, d.mainTurn.length ? 'Relay on' : 'Chat only'), h('span'), h('span')),
         ...d.regions.map((r) => h('div', { class: 'adm-row region-row' },
           h('b', null, r.name), h('span', { class: 'stat-sub' }, r.ip || '\u2014'), status(r),
-          h('span', { class: 'stat-sub' }, r.alive ? `load ${r.load ?? '?'} / ${r.cpus || 1} CPU \u00b7 ${r.mbps ?? 0} Mbit/s now \u00b7 ${r.monthGb ?? 0} GB this month${r.relayUp ? '' : ' \u00b7 relay stopped!'}` : ''),
+          h('span', { class: 'stat-sub', 'data-live': `stats:${r.id}` }, regionStats(r)),
           // Backup space on the region (Hearth 1.25+): keeps copies of this server's encrypted backups.
-          h('span', { class: 'stat-sub', 'data-tip': r.backup && r.backup.last && !r.backup.last.ok ? r.backup.last.error : null },
-            !r.backup ? 'Backups: reinstall to add backup space' : !r.backup.ready ? 'Backups: no backup space (needs SSH)'
-              : `Backups: ${r.backup.files} cop${r.backup.files === 1 ? 'y' : 'ies'}, ${fmtMb(r.backup.usedMb)} (${fmtMb(r.backup.freeMb)} free)${r.backup.last ? (r.backup.last.ok ? ` \u00b7 last copy ${ago(r.backup.last.at)} \u2713` : ' \u00b7 last copy FAILED') : ' \u00b7 waiting for the next backup'}`),
+          h('span', { class: 'stat-sub', 'data-live': `backup:${r.id}`, 'data-tip': r.backup && r.backup.last && !r.backup.last.ok ? r.backup.last.error : null }, regionBackup(r)),
           h('span', { class: 'row gap tight' },
-            h('button', { class: 'btn ghost sm', onclick: async () => {
+            h('button', { class: 'btn ghost sm', 'data-focus': `reinstall:${r.id}`, onclick: async () => {
               try {
                 const x = await withPassword((y) => api('POST', `/admin/regions/${r.id}/reinstall`, { origin: location.origin, ...y }));
                 if (x) regionCommand(`Reinstall ${r.name}`, x.command);
               } catch (e) { if (!e.cancelled) toast(e.message, 'error'); }
             } }, r.waitingForInstall ? 'Install command' : 'Reinstall'),
-            h('button', { class: 'btn ghost sm danger-text', onclick: async () => { if (await confirmDialog({ title: `Remove ${r.name}?`, text: 'Calls stop using it right away. The VPS keeps running until you cancel it with your provider.', confirm: 'Remove', danger: true })) { await api('DELETE', `/admin/regions/${r.id}`); regions(); } } }, 'Remove'))))),
+            h('button', { class: 'btn ghost sm danger-text', 'data-focus': `remove:${r.id}`, onclick: async () => { if (await confirmDialog({ title: `Remove ${r.name}?`, text: 'Calls stop using it right away. The VPS keeps running until you cancel it with your provider.', confirm: 'Remove', danger: true })) { await api('DELETE', `/admin/regions/${r.id}`); regions(); } } }, 'Remove'))))),
       d.regions.length ? '' : h('p', { class: 'field-hint' }, 'No regions yet.'),
       ...memberRelays(d),
       h('div', { class: 'admin-head' }, h('h3', null, 'Which relay is nearest to me?')),
-      h('div', null, h('button', { class: 'btn', onclick: (e) => measure(e.currentTarget) }, 'Measure from this device')), measured,
+      h('div', null, h('button', { class: 'btn', 'data-focus': 'measure', onclick: (e) => measure(e.currentTarget) }, 'Measure from this device')), measured,
       h('div', { class: 'admin-head' }, h('h3', null, 'Cheap places to put a region')),
       h('p', { class: 'field-hint' }, 'A relay only forwards call traffic, so the smallest plan is enough. Traffic matters more than CPU: one relayed video call is about 1\u20132 Mbit/s per person. Prices change; check before buying.'),
       h('div', { class: 'adm-table price-table' },
@@ -802,12 +808,36 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
           ['Vultr / DigitalOcean / Linode', '$4\u20136/mo', '30+ cities worldwide, 0.5\u20132 TB traffic. Good for places the others don\u2019t cover (South America, India, Japan, Australia).'],
         ].map(([n, p2, t]) => h('div', { class: 'adm-row three' }, h('b', null, n), h('span', null, p2), h('span', { class: 'stat-sub' }, t)))),
       h('p', { class: 'field-hint' }, 'Start with the region where most people who can\u2019t connect live (Europe and US East cover most friend groups). Two or three regions is plenty for thousands of people.'));
-    // Redrawn when a region or a member's relay comes or goes, changes state or its traffic changes. (One timer: a
-    // redraw after a change here mustn't leave the old one running too.)
-    const sig = (x) => JSON.stringify([x.regions.map((r) => [r.alive, r.mbps]), (x.members || []).map((r) => [r.id, r.status, r.alive, r.waitingForInstall, r.mbps, r.backups]), x.memberRelays]);
+    const again = had && [...body.querySelectorAll('[data-focus]')].find((el) => el.dataset.focus === had);
+    if (again) again.focus({ preventScroll: true });
+    // Redrawn when a region or a member's relay comes or goes or changes state. What changes at nearly every check-in
+    // (load, traffic, free space, the time of the last one) is left out of that, and its lines are updated where they
+    // are instead: a home machine's traffic changes all the time, and a redraw each time would keep taking keyboard
+    // focus away and wipe the measurements. (One timer: a redraw after a change here mustn't leave the old one running.)
+    const steady = (r) => {
+      const { load: _l, cpus: _c, mem: _m, mbps: _b, monthGb: _g, month: _mo, lastSeen, backup, ...rest } = r;
+      return { ...rest, lastSeen: r.alive ? null : lastSeen, backup: backup ? { ...backup, usedMb: null, freeMb: null } : null };
+    };
+    const sig = (x) => JSON.stringify([x.regions.map(steady), (x.members || []).map(steady), x.memberRelays, x.mainTurn]);
     clearInterval(timer);
-    timer = setInterval(() => { api('GET', '/admin/regions').then((x) => { if (sig(x) !== sig(d)) regions(); }).catch(() => {}); }, 20000);
+    timer = setInterval(() => {
+      api('GET', '/admin/regions').then((x) => {
+        if (sig(x) !== sig(d)) { regions(); return; }
+        d = x;
+        const live = new Map([...x.regions.flatMap((r) => [[`stats:${r.id}`, regionStats(r)], [`backup:${r.id}`, regionBackup(r)]]), ...(x.members || []).map((r) => [`stats:${r.id}`, memberDetails(r)])]);
+        body.querySelectorAll('[data-live]').forEach((el) => { const t = live.get(el.dataset.live); if (t !== undefined && el.textContent !== t) el.textContent = t; });
+      }).catch(() => {});
+    }, 20000);
   }
+  // A member relay's line in Admin → Regions: what it reports, when it's up; its bandwidth limit; and backup copies:
+  // offered or not, and on or off.
+  const memberDetails = (r) => [
+    r.alive ? `load ${r.load ?? '?'} / ${r.cpus || 1} CPU · ${r.mbps ?? 0} Mbit/s now · ${r.monthGb ?? 0} GB this month` : null,
+    r.capMbit ? `limit ${r.capMbit} Mbit/s` : 'no bandwidth limit',
+    !r.offersBackups ? 'backups not offered' : !r.backups ? 'backups offered, off'
+      : !r.backup || !r.backup.ready ? 'backups on, no backup space yet (needs SSH)'
+        : `backups on: ${r.backup.files} cop${r.backup.files === 1 ? 'y' : 'ies'}, ${fmtMb(r.backup.usedMb)} (${fmtMb(r.backup.freeMb)} free)${r.backup.last ? (r.backup.last.ok ? ` · last copy ${ago(r.backup.last.at)} ✓` : ' · last copy FAILED') : ''}`,
+  ].filter(Boolean).join(' · ');
 
   // Member relays (Settings → Help host): machines members offer as call relays for everyone here. None is used until
   // it's approved here. Approving one, resuming one and sending it backup copies each put someone else's machine into
@@ -844,7 +874,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
     };
     const rename = (r) => {
       const name = h('input', { class: 'input', maxlength: '40', value: r.name });
-      modal({ title: `Rename ${r.name}`, size: 'sm', body: h('div', { class: 'stack' }, field('Name', name, `Shown to you, to ${who(r)} and to people in calls that use it.`)),
+      modal({ title: `Rename ${r.name}`, size: 'sm', body: h('div', { class: 'stack' }, field('Name', name, `Shown to you and to ${who(r)}. Everyone else’s app just says “Member relay”.`)),
         actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', action: async () => {
           if (!name.value.trim()) throw new Error('Give it a name.');
           await api('PATCH', `/admin/regions/${r.id}`, { name: name.value.trim() });
@@ -854,25 +884,19 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
     };
     const remove = async (r) => {
       if (!(await confirmDialog({ title: `Remove ${r.name}?`, danger: true, confirm: 'Remove',
-        text: `Calls stop using it right away. ${who(r)}’s machine keeps the relay until they uninstall it; it switches itself off a day after this server starts refusing its check-ins.` }))) return;
+        text: `Calls stop using it right away: everyone’s apps are told to fetch their relay list again, and a call going through it starts over without it. ${who(r)} is told on Help host. Their machine keeps the relay until they uninstall it; it switches itself off a day after this server starts telling it it’s gone.` }))) return;
       run(() => api('DELETE', `/admin/regions/${r.id}`), `${r.name} removed.`);
     };
-    // What it reports, when it's up; its bandwidth limit; and backup copies: offered or not, and on or off.
-    const details = (r) => [
-      r.alive ? `load ${r.load ?? '?'} / ${r.cpus || 1} CPU · ${r.mbps ?? 0} Mbit/s now · ${r.monthGb ?? 0} GB this month` : null,
-      r.capMbit ? `limit ${r.capMbit} Mbit/s` : 'no bandwidth limit',
-      !r.offersBackups ? 'backups not offered' : !r.backups ? 'backups offered, off'
-        : !r.backup || !r.backup.ready ? 'backups on, no backup space yet (needs SSH)'
-          : `backups on: ${r.backup.files} cop${r.backup.files === 1 ? 'y' : 'ies'}, ${fmtMb(r.backup.usedMb)} (${fmtMb(r.backup.freeMb)} free)${r.backup.last ? (r.backup.last.ok ? ` · last copy ${ago(r.backup.last.at)} ✓` : ' · last copy FAILED') : ''}`,
-    ].filter(Boolean).join(' · ');
     const row = (r) => {
       const st = relayStatus(r);
-      const btn = (label, onclick, cls = 'btn ghost sm') => h('button', { class: cls, onclick }, label);
+      const btn = (label, onclick, cls = 'btn ghost sm') => h('button', { class: cls, 'data-focus': `${label}:${r.id}`, onclick }, label);
+      // Its address, and where it was before if that changed lately (a member's machine says where it is).
+      const moved = r.ipChanged && Date.now() - r.ipChanged.at < 7 * 86400000 ? r.ipChanged : null;
       return h('div', { class: 'adm-row member-row', 'data-relay': r.id },
         h('span', { class: 'member-who' }, h('b', null, r.name), h('span', { class: 'stat-sub' }, `by ${who(r)}`)),
-        h('span', { class: 'stat-sub' }, r.ip || 'hasn’t checked in'),
+        h('span', { class: 'stat-sub' }, r.ip || 'hasn’t checked in', moved ? h('span', { class: 'stat-sub member-moved' }, ` (was ${moved.from} until ${ago(moved.at)})`) : null),
         h('span', { class: `rpill ${st.kind}` }, st.label),
-        h('span', { class: 'stat-sub', 'data-tip': r.backup && r.backup.last && !r.backup.last.ok ? r.backup.last.error : null }, details(r)),
+        h('span', { class: 'stat-sub', 'data-live': `stats:${r.id}`, 'data-tip': r.backup && r.backup.last && !r.backup.last.ok ? r.backup.last.error : null }, memberDetails(r)),
         h('span', { class: 'row gap tight member-actions' },
           r.status === 'pending' ? btn('Approve', () => approve(r), 'btn primary sm') : null,
           r.status === 'approved' ? btn('Pause', () => run(() => api('POST', `/admin/regions/${r.id}/pause`), `${r.name} is paused.`)) : null,

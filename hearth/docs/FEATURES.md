@@ -1967,6 +1967,10 @@ member's relay is a `regions` row with `kind = 'member'` (schema v23), with its 
 - **New install command** (`POST /api/me/relays/:id/reinstall`; for a relay that already checked in it asks first,
   since the machine's check-in stops working until the new command runs there) and **Remove**
   (`DELETE /api/me/relays/:id`, then `sudo hearth-relay-uninstall` to run on the machine);
+- a relay the owner removed (or that was dropped after a week offline while it waited for approval) stays listed,
+  *Removed by the owner*, with **How to uninstall** and **Dismiss** (`removed` in `GET /api/me/relays`; dismissing is
+  `DELETE /api/me/relays/:id` on it);
+- the name is shown only to the member and the owner: apps get "Member relay";
 - the page follows `relays:mine` (the server sends it when the owner changes one; `app.onSocket`) and asks again every
   30 seconds while it's open, since a relay going offline sends nothing.
 
@@ -1981,21 +1985,33 @@ The page lists what a relay sees and can't (the same list as README → Member r
 - *Relay stopped*, when it checks in but coturn isn't running.
 
 **The owner's side** (Admin → Regions → Member relays, `memberRelays` in `admin.js`):
-- each row: who runs it, its IP (or "hasn't checked in"), status, load and traffic, limit, and backups (offered or
-  not, on or off); the heading counts the ones waiting for approval;
+- each row: who runs it, its IP (or "hasn't checked in", and where it was before if it changed in the last week),
+  status, load and traffic, limit, and backups (offered or not, on or off); the heading counts the ones waiting for
+  approval;
+- the page checks every 20 seconds and redraws only when something comes, goes or changes state; load, traffic and
+  free space are updated where they are (`data-live`), so keyboard focus and "Measure from this device" stay, and a
+  redraw puts focus back on the button it was on;
 - **Approve** (with "Keep encrypted backup copies on it" only when backup space was offered, off to start with),
   **Resume** and **Backups on** ask for the password again (`withPassword`), as the server's step-up does;
 - **Pause**, **Backups off**, **Rename** and **Remove** don't;
 - "Let members offer relays" is `PATCH /api/admin/member-relays`.
 
-**Privacy & safety**: "Avoid relays run by members" sets `memberRelays: 'avoid'` (`PATCH /api/me/privacy`). The app
-then never uses, measures or connects through a member's relay, and drops the other side's candidates on one
-(`relays.js`, `voice.js`). `/api/ice` gives it no login for any member relay, only where every approved one is
-(`community: true`, no username or credential), and the app never hands such an entry to WebRTC or measures it.
-Changing the choice fetches `/api/ice` again at once on every device (`user:update`), a call in progress switches to
-the new list and the relays are measured again; before a call, an avoider's list is fetched again when it's more than
-10 minutes old. What it can't do: the browser answers the connection checks that reach it, so a member relay the other
-person's call goes through can still learn the avoider's address when their network lets those checks in.
+**Privacy & safety**: "Avoid relays run by members" sets `memberRelays: 'avoid'` (`PATCH /api/me/privacy`; the switch
+goes back if saving fails). The app then never uses, measures or connects through a member's relay, and drops the
+other side's candidates on one (`relays.js`, `voice.js`). `/api/ice` gives it no login for any member relay, only where
+every one is that anyone may still hold a login for (`community: true`, no username or credential), and the app never
+hands such an entry to WebRTC or measures it. Its offers and answers say `avoid: true`, and `voice:join` marks it in
+the list of who's in the call, so the other side's app builds that connection without member relays (`rtcConfig`), and
+starts it over without them if it learns this from an answer or a new offer. Changing the choice fetches `/api/ice`
+again at once on every device (`user:update`) and the relays are measured again; turned on during a call, every
+connection that may use a member relay starts over (`voice.avoidChanged`). Before a call, an avoider's list is fetched
+again when it's more than 10 minutes old. What it can't stop: someone running a modified app.
+
+**Keeping relay lists current**: the server emits `ice:changed` when a member relay comes into calls or leaves them,
+and every app fetches `/api/ice` again within 3 seconds (`iceChanged` in `app.js`); a list with member relays in it is
+also fetched again every 10 minutes. Member relays that leave the list start the connections set up with them over
+(`voice.relaysGone`), and relays not measured yet are measured (otherwise every relay in the list would go into each
+call). Settings → Calls → Test relay tests this server's own relay only.
 
 The rest of the server side (per-relay pseudonyms, at most 8 member relays per person, the uninstall script, the
 agent switching itself off after a day of refusals): README → Member relays, and SECURITY.md.

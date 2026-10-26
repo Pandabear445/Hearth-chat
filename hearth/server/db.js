@@ -1702,6 +1702,33 @@ addColumn('regions', 'backups', 'INTEGER NOT NULL DEFAULT 1');
 addColumn('regions', 'approved_at', 'INTEGER');
 addColumn('regions', 'approved_by', 'TEXT');
 db.exec('CREATE INDEX IF NOT EXISTS idx_regions_owner ON regions(owner_id) WHERE owner_id IS NOT NULL');
+//   regions.install_hash  SHA-256 of the install link's own token (?k=), which only downloads the installer while the
+//                     link is open. The check-in token inside the installer is a different one (token_hash), so the link
+//                     in someone's shell history can't be used to check in. NULL for links made before (then ?k= was
+//                     the check-in token itself).
+//   member_relay_hosts  every address a member relay was handed out at, until the last login handed out for it runs
+//                     out. Someone who avoids member relays is given all of them: an app may still hold a login for a
+//                     relay that has since been paused, removed, or stopped checking in, and the relay still takes it.
+//   member_relays_gone  member relays that were removed (by the owner, their member, with the account, or swept as
+//                     abandoned), kept for 30 days. A check-in from one is told it's gone, which is what makes its
+//                     machine switch itself off after a day: a plain "unknown" (a rebuilt server with an empty
+//                     database) never does. notice = 1: removed by the owner, and its member hasn't seen it yet.
+addColumn('regions', 'install_hash', 'TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS member_relay_hosts (
+  ip TEXT PRIMARY KEY,
+  until INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS member_relays_gone (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT,
+  name TEXT NOT NULL DEFAULT '',
+  by TEXT NOT NULL,
+  notice INTEGER NOT NULL DEFAULT 0,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_member_relays_gone_owner ON member_relays_gone(owner_id) WHERE notice = 1;
+`);
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
 db.exec('COMMIT');
