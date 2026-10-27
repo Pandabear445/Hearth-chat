@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 23;
+const SCHEMA_VERSION = 24;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1729,6 +1729,19 @@ CREATE TABLE IF NOT EXISTS member_relays_gone (
 );
 CREATE INDEX IF NOT EXISTS idx_member_relays_gone_owner ON member_relays_gone(owner_id) WHERE notice = 1;
 `);
+
+// v24 (server search): a server's owner (or anyone with Manage Server) can list it in server search (server/discovery.js).
+// Off for every server until someone turns it on; nothing about a server that's off is ever shown there.
+//   servers.discoverable    1 = shown in server search, and anyone signed in may join from there (bans still apply).
+//   servers.discover_about  the short description shown in search (not the members' own description, which may say
+//                           things meant only for them).
+//   servers.discover_tags   up to 5 short tags, a JSON list of lowercase words.
+//   servers.discover_at     when it was last turned on (newer listings first among equals).
+addColumn('servers', 'discoverable', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('servers', 'discover_about', "TEXT NOT NULL DEFAULT ''");
+addColumn('servers', 'discover_tags', "TEXT NOT NULL DEFAULT '[]'");
+addColumn('servers', 'discover_at', 'INTEGER');
+db.exec('CREATE INDEX IF NOT EXISTS idx_servers_discoverable ON servers(discoverable) WHERE discoverable = 1');
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
 db.exec('COMMIT');

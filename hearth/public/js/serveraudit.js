@@ -52,6 +52,7 @@ const duration = (min) => (min % 1440 === 0 ? plural(min / 1440, 'day', 'days') 
 const SETTING = {
   name: 'the name', description: 'the description', icon: 'the icon', banner: 'the banner', background: 'the background', accent: 'the accent color',
   welcome: 'the welcome message', roleColors: 'names colored by role', iconShape: 'the icon shape', bannerCrop: 'the banner position',
+  discoverAbout: 'the description for server search', discoverTags: 'the tags for server search',
 };
 // Kinds of entries for the filter (the server takes the action names).
 export const AUDIT_KINDS = [
@@ -197,7 +198,7 @@ export function sentence(e, users) {
     case 'voice_mute': return [[who, ' server-muted ', them, d.channel ? ` (in ${ch})` : '']];
     case 'voice_unmute': return [[who, ' lifted the server mute of ', them]];
     case 'server_update': {
-      const ch2 = (d.changes || []).filter((k) => k !== 'name' && k !== 'hideHistory' && k !== 'invitePreview').map((k) => SETTING[k] || k);
+      const ch2 = (d.changes || []).filter((k) => k !== 'name' && k !== 'hideHistory' && k !== 'invitePreview' && k !== 'discoverable').map((k) => SETTING[k] || k);
       const out = [who];
       if (d.name) out.push(` renamed the server from ${quoted(d.name.from)} to ${quoted(d.name.to)}`);
       if (ch2.length) out.push(`${d.name ? ' and' : ''} ${d.removed ? 'removed' : 'changed'} ${list(ch2)}`);
@@ -205,6 +206,8 @@ export function sentence(e, users) {
       if ((d.changes || []).includes('hideHistory')) out.push(`${d.name || ch2.length ? ' and' : ''} turned ${d.hideHistory ? 'on' : 'off'} ${quoted('New members can’t read messages from before they joined')}`);
       // Invite link previews showing the server's name (server/invitepreview.js), the same way.
       if ((d.changes || []).includes('invitePreview')) out.push(`${d.name || ch2.length || (d.changes || []).includes('hideHistory') ? ' and' : ''} turned ${d.invitePreview ? 'on' : 'off'} ${quoted('Show this server’s name and member count in invite link previews')}`);
+      // Listing the server in server search (server/discovery.js), the same way.
+      if ((d.changes || []).includes('discoverable')) out.push(`${out.length > 1 ? ' and' : ''} turned ${d.discoverable ? 'on' : 'off'} ${quoted('Show in server search')}`);
       return [out];
     }
     case 'server_transfer': return [[who, ' made ', them, ' the owner', d.from ? ` (it was ${nameOf(users, d.from)})` : '']];

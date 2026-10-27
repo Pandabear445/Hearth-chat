@@ -312,11 +312,16 @@ export class Person {
   }
   // Creating a server opens "Your server is ready. Invite your people." with a link made (app.js openInvite's
   // welcome): closed with Done, or handed back open with keepInvite.
-  async createServer(name, { keepInvite = false } = {}) {
+  // template: a template's name to pick first ("Gaming"…); none leaves Blank.
+  async createServer(name, { keepInvite = false, template = null } = {}) {
     await this.railButton('Add a server');
     await this.page.locator('.modal .choice', { hasText: 'Create my own' }).click();
     const m = await this.dialog('Create a server');
     await m.locator('input.input').fill(name);
+    if (template) {
+      await m.locator('.chips .chip', { hasText: exact(template) }).click();
+      await m.locator('.chips .chip.active', { hasText: exact(template) }).waitFor();
+    }
     await m.locator('.modal-foot .btn.primary').click();
     await this.page.locator('#sidebar-head .server-head-name', { hasText: exact(name) }).waitFor();
     const welcome = await this.dialog('Your server is ready. Invite your people.');

@@ -2100,3 +2100,53 @@ Tests:
 - `test/relays-client.test.js` (choosing relays, dropping candidates, following the list);
 - `test/member-relays-ui.test.js` (the pages' words and wiring);
 - the e2e flow "member relays".
+
+## Server templates, server search and the main server (v24)
+
+Three ways people find each other on a Hearth: a server that starts with a sensible shape, servers that choose to be
+found, and one server everyone joins at sign-up (`server/templates.js`, `server/discovery.js`, `server/mainserver.js`).
+
+**Templates.** "Create a server" offers Blank, Friends, Gaming, Study group, Community/Club and Creators
+(`GET /api/server-templates`). The app only sends the template's name with `POST /api/servers` (`template`); the server
+builds the categories, channels, roles and channel permissions from its own list, and refuses any other name
+(`400 bad_template`), so a request can't hand out permissions this way. No template is Blank, which is what servers
+started with before. Roles are moderator-style (Kick Members, Manage Messages, Mute and Move Members, Manage
+Nicknames, View Audit Log), plus Ban Members, Manage Channels, Roles, Server and Emoji for the Community/Club "Admin";
+none is an Administrator. Announcement-style channels (#welcome, #rules, #announcements…) deny @everyone Send Messages
+and Create Threads, and allow them for the template's moderator roles. @everyone keeps the usual defaults.
+
+**Server search** (Server settings → Overview → Server search; Search → Find servers):
+
+- Off for every server (`servers.discoverable = 0`). The owner or anyone with Manage Server turns it on with a short
+  description (needed, up to 200 characters, kept apart from the members' own description) and up to 5 tags
+  (`PATCH /api/servers/:id` `{ discoverable, discoverAbout, discoverTags }`). The instance's word filter checks the
+  name, description and tags. Each change is in the server's audit log; 30 changes an hour per server. Group chats
+  can't be listed.
+- `GET /api/discover/servers?q=&page=` (signed in): listed servers whose name, description or tags contain every word
+  (up to 5 words; `%` and `_` are plain characters), most members first, 20 a page, up to 50 pages. 60 searches a
+  minute per account, 240 per network. Each result is `{ id, name, icon, about, tags, memberCount, joined }`, nothing
+  else: never the owner, members, channels, roles or messages. Servers you're banned from aren't shown.
+- `POST /api/discover/servers/:id/join`: joins a server that is listed at that moment, exactly like an invite
+  (`addMember` in index.js): the same join limits (20 an hour per account, 60 per network), bans refused (403), a new
+  key when someone comes back, "New members can't read messages from before they joined" respected. A server that
+  isn't listed (any more), or doesn't exist, gets the same 404, so ids can't be probed for private servers.
+- Encryption is unchanged: the newcomer is listed as needing the server key and the members' apps wrap it for them,
+  as for any invite join. Listing a server is like posting a never-expiring invite link publicly on this instance:
+  anyone signed in can join and read from then on (or from their join, with the join-history setting on).
+- In the app, Find servers is its own tab, and only it sends what's typed to the server; message search never does.
+  The All tab offers a shortcut to it instead of searching servers by itself.
+
+**The main server** (Admin → Registration & Terms → Main server, instance admins):
+
+- `PUT /api/admin/main-server` `{ invite }` (a link or code) or `{ serverId }`; `null` turns it off. Stored in
+  `instance_settings.mainServer`. Group chats are refused.
+- Every account made afterwards joins it right after sign-up, like an invite join (members told, key handed over by
+  their apps, bans respected). Auto-joins don't count as the invite's uses. Picked by an invite, it works while that
+  invite exists and hasn't expired: the server's moderators can stop it by revoking the invite. A deleted server or
+  any error just means no auto-join; sign-up never fails because of it.
+- People can leave it like any server.
+- `POST /api/admin/main-server/add-everyone` `{ confirm: true }`: adds the accounts that aren't in it, once per server
+  (`409 already_done` after that), skipping bots, deleted and suspended accounts, people who were in it before (they
+  left or were kicked) and anyone banned from it. Both are in the instance audit log.
+
+Tests: `test/community.test.js`; the e2e flow "community".

@@ -8685,6 +8685,57 @@ function openSearch({ scope = null } = {}) {
     }
   }
 
+  // ---- server search (server/discovery.js): servers that chose to be listed. Unlike message search this asks the
+  // server, with what was typed, so it only runs on its own tab.
+  const disc = { q: null, items: [], page: 0, hasMore: false, loading: false, error: null };
+  async function loadServers(text, more = false) {
+    if (!more) Object.assign(disc, { q: text, items: [], page: 0, hasMore: false });
+    disc.loading = true;
+    disc.error = null;
+    const want = disc.q;
+    try {
+      const r = await api('GET', '/discover/servers?' + new URLSearchParams({ q: want, page: String(more ? disc.page + 1 : 0) }));
+      if (closed || disc.q !== want) return;
+      disc.items = more ? disc.items.concat(r.servers) : r.servers;
+      disc.page = r.page;
+      disc.hasMore = r.hasMore;
+    } catch (e) {
+      if (disc.q === want) disc.error = e.message;
+    } finally {
+      if (disc.q === want) { disc.loading = false; draw(); }
+    }
+  }
+  async function joinListed(x) {
+    if (S.servers.some((y) => y.id === x.id)) { mdl.close(); openServer(x.id); return; }
+    try {
+      const sv = await api('POST', `/discover/servers/${x.id}/join`);
+      if (!S.servers.find((y) => y.id === sv.id)) S.servers.push(sv);
+      if (sv.keyState) await sec.applyState(sv.keyState);
+      mdl.close();
+      openServer(sv.id);
+    } catch (e) { toast(e.message, 'error'); }
+  }
+  function serversTab(add) {
+    const text = input.value.trim().slice(0, 64);
+    if (disc.q !== text) loadServers(text);
+    results.append(h('div', { class: 'search-empty' }, `Servers whose owners chose to show them in search. What you type here goes to ${S.config.name}’s server to find them (message search never does).`));
+    const n = (x) => `${x.memberCount.toLocaleString()} member${x.memberCount === 1 ? '' : 's'}`;
+    add(text ? 'Servers' : 'Biggest servers', disc.items.map((x) => {
+      const mine = S.servers.some((y) => y.id === x.id);
+      return item('ds:' + x.id, {
+        av: x.icon ? h('img', { class: 'search-img', src: x.icon, alt: '' }) : h('span', { class: 'search-ic' }, x.name.slice(0, 2)),
+        title: x.name, sub: x.about || null,
+        badges: x.tags.map((t) => h('span', { class: 'search-badge' }, t)),
+        meta: h('span', null, `${n(x)} · `, h('strong', null, mine ? 'Open' : 'Join')),
+        action: () => joinListed(x),
+      });
+    }));
+    if (disc.loading) results.append(h('div', { class: 'search-status' }, h('span', { class: 'spinner' }), h('span', null, 'Looking for servers…')));
+    else if (disc.error) results.append(h('div', { class: 'search-status bad' }, h('span', null, disc.error), h('button', { class: 'btn ghost sm', onclick: () => { disc.q = null; draw(); } }, 'Try again')));
+    else if (!disc.items.length) results.append(h('div', { class: 'search-empty' }, text ? 'No listed servers match.' : `No servers on ${S.config.name} are shown in search yet.`));
+    else if (disc.hasMore) results.append(h('div', { class: 'search-status' }, h('button', { class: 'btn ghost sm', onclick: () => loadServers(disc.q, true) }, 'Show more servers')));
+  }
+
   // ---- matching, on this device
   // While you share your screen, DMs and group chats stay out of the results (see shareCover).
   const privateHidden = (key) => (key.startsWith('d:') || isGroup(serverOfChannel(key.slice(2)))) && hiddenWhileSharing(key);
@@ -8810,7 +8861,7 @@ function openSearch({ scope = null } = {}) {
     if (wantsMessages && messageQuery) startScan(p);
 
     clear(tabsEl);
-    [['all', 'All'], ['messages', 'Messages'], ['people', 'People'], ['places', 'Channels & servers'], ['files', 'Files'], ['links', 'Links']].forEach(([k, l]) => tabsEl.append(
+    [['all', 'All'], ['messages', 'Messages'], ['people', 'People'], ['places', 'Channels & servers'], ['servers', 'Find servers'], ['files', 'Files'], ['links', 'Links']].forEach(([k, l]) => tabsEl.append(
       h('button', { class: `seg-btn${tab === k ? ' active' : ''}`, role: 'tab', 'aria-selected': String(tab === k), onclick: () => { tab = k; refocus(); } }, l)));
 
     // Chips: where the search is limited to, then each filter (× removes it from the box).
@@ -8869,6 +8920,11 @@ function openSearch({ scope = null } = {}) {
       groups().forEach((g) => { if (!words || groupName(g).toLowerCase().includes(words)) places.push({ id: 'g:' + g.id, av: groupAvatar(g, 30), title: groupName(g), sub: 'Group', action: go(() => openGroup(g.id)) }); });
       add('Channels & servers', places.slice(0, tab === 'all' ? 6 : 50).map((x) => item(x.id, x)));
     }
+    // Servers you're not in: a way to the Servers tab (which asks the server), so plain search never sends the words.
+    if (!scopeKey && !q.filters.length && tab === 'all' && words) {
+      add('', [item('find-servers', { av: h('span', { class: 'search-ic' }, icon('compass')), title: `Find servers matching “${words}”`, sub: 'Servers that chose to show in search', action: () => { tab = 'servers'; refocus(); } })]);
+    }
+    if (tab === 'servers') serversTab(add);
     lastHits = 0;
     if (wantsMessages && messageQuery) {
       const hits = messageHits(p);
@@ -8883,7 +8939,7 @@ function openSearch({ scope = null } = {}) {
       const st = statusEl(p, hits.length);
       if (st) results.append(st);
       else if (!hits.length) results.append(h('div', { class: 'search-empty' }, 'No messages match.'));
-    } else if (!empty && !rows.length && !typing && !p.errors.length) {
+    } else if (!empty && !rows.length && !typing && !p.errors.length && tab !== 'servers') {
       results.append(h('div', { class: 'search-empty' }, wantsMessages ? 'Keep typing to search messages.' : 'Nothing matches.'));
     }
     const keep = selId ? rows.findIndex((r) => r.id === selId) : -1;
@@ -9245,16 +9301,30 @@ function openCreateServer() {
     iconFile = e.target.files[0];
     if (iconFile) clear(preview).append(h('img', { src: URL.createObjectURL(iconFile), alt: '' }));
   } });
+  // Templates (server/templates.js): the server builds the channels and roles; the app only names one.
+  let template = 'blank';
+  let templates = [];
+  const tplChips = h('div', { class: 'chips', role: 'radiogroup', 'aria-label': 'Template' });
+  const tplHint = h('p', { class: 'field-hint' });
+  const drawTemplates = () => {
+    clear(tplChips).append(...templates.map((t) => h('button', { class: `chip${template === t.key ? ' active' : ''}`, role: 'radio', 'aria-checked': String(template === t.key),
+      onclick: () => { template = t.key; drawTemplates(); } }, t.name)));
+    const t = templates.find((x) => x.key === template);
+    tplHint.textContent = t ? `${t.about} ${t.text} text and ${t.voice} voice channel${t.voice === 1 ? '' : 's'}${t.roles.length ? `; roles: ${t.roles.join(', ')}` : ''}.` : '';
+  };
+  api('GET', '/server-templates').then((list) => { templates = list; drawTemplates(); }).catch(() => {});
   modal({
     title: 'Create a server', size: 'sm',
     body: h('div', { class: 'stack center' },
       h('button', { class: 'icon-upload', onclick: () => fileIn.click() }, preview, h('span', null, 'Upload an icon (GIFs work)')), fileIn,
-      field('Server name', name)),
+      field('Server name', name),
+      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Start from a template'), tplChips, tplHint)),
     actions: [
       { label: 'Back', action: () => openAddServer() },
       { label: 'Create', kind: 'primary', action: async () => {
         const fd = new FormData();
         fd.append('name', name.value);
+        fd.append('template', template);
         if (iconFile) fd.append('icon', iconFile);
         const s = await api('POST', '/servers', fd);
         if (!S.servers.find((x) => x.id === s.id)) S.servers.push(s);
@@ -9566,6 +9636,22 @@ function openServerSettings(server, startTab = 'overview') {
         run(() => api('PATCH', `/servers/${s.id}`, { invitePreview: box.checked }), box.checked ? 'Invite link previews now show this server’s name.' : 'Invite link previews no longer show this server’s name.')
           .then(() => { box.checked = !!live().invitePreview; });
       } }), h('span', { class: 'switch-track' }))));
+    // Server search (server/discovery.js): off until someone turns it on here.
+    const about = h('textarea', { class: 'input', rows: '2', maxlength: '200', placeholder: 'What should people know before they join?' });
+    about.value = s.discoverAbout || '';
+    const tags = h('input', { class: 'input', maxlength: '140', placeholder: 'gaming, art, study', value: (s.discoverTags || []).join(', ') });
+    const listing = (on) => ({ discoverable: on, discoverAbout: about.value, discoverTags: tags.value.split(',').map((t) => t.trim()).filter(Boolean) });
+    add(body, h('h3', null, 'Server search'),
+      h('label', { class: 'toggle-row' }, h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Show in server search'),
+        h('span', { class: 'field-hint' }, `Anyone on ${S.config.name} can find this server in Search → Servers by its name, the description and tags below, see its icon and member count, and join without an invite. Bans still apply. Never its channels, members or messages. Turn it off and it’s gone from search right away.`)),
+      h('span', { class: 'switch' }, h('input', { type: 'checkbox', checked: !!s.discoverable, onchange: (e) => {
+        const box = e.target;
+        run(() => api('PATCH', `/servers/${s.id}`, listing(box.checked)), box.checked ? 'This server now shows in server search.' : 'This server no longer shows in server search.')
+          .then(() => { box.checked = !!live().discoverable; });
+      } }), h('span', { class: 'switch-track' }))),
+      field('Description for search', about, 'A sentence or two, up to 200 characters. Needed to show in search.'),
+      field('Tags', tags, 'Up to 5, separated by commas.'),
+      h('div', null, h('button', { class: 'btn ghost', onclick: () => run(() => api('PATCH', `/servers/${s.id}`, listing(!!live().discoverable)), 'Saved.') }, 'Save search listing')));
   }
 
   function appearance(s) {

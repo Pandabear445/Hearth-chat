@@ -28,6 +28,7 @@ jobs.setStore((r) => db.prepare(`INSERT INTO job_health (name, every_ms, last_ru
 const { sanitizeProfile, parseProfile } = require('./profile');
 const { sanitizePage, parsePage } = require('./page');
 const { PERMS: PM, ALL: ALL_PERMS, DEFAULT_EVERYONE, CHANNEL_SCOPED, makePerms } = require('./perms');
+const TEMPLATES = require('./templates');
 const { stripFile, ImageRejected, StripTimedOut } = require('./imagemeta');
 // files-10: signed links for the news, webhook-avatar and music-art picture proxies (server/mediasign.js). The server
 // signs each picture's address when it hands it to an app, so the proxies only fetch what this server chose to show.
@@ -171,6 +172,8 @@ let ACCT = null; // server/accounts.js: email, recovery key, two-factor
 let STORE = null; // server/storage.js: resumable uploads, storage reports
 let BOTS = null; // server/bots.js: installed bots, their API and webhooks
 let SA = null; // server/serveraudit.js: each server's own audit log and its moderators' report inbox
+let DISC = null; // server/discovery.js: server search
+let MAIN = null; // server/mainserver.js: the server every new account joins
 // An entry in a server's own audit log (see server/serveraudit.js): (server or id, actorId, action, targetId, detail,
 // channelId). Never message text. Many actions also still go to the instance audit log (auditLog) as before.
 const serverAudit = (...a) => { if (SA) SA.record(...a); };
@@ -448,6 +451,8 @@ function serializeServer(s, uid, common = serverCommon(s), ev = null) {
   if (out.kind !== 'group') out.hideHistory = !!s.hide_history;
   // Whether invite link previews show this server's name and member count (server/invitepreview.js).
   if (out.kind !== 'group') out.invitePreview = !!s.invite_preview;
+  // Whether it's listed in server search, and how (server/discovery.js): public once it's on, the same for everyone.
+  if (out.kind !== 'group' && DISC) Object.assign(out, DISC.forMembers(s));
   if (out.kind === 'group') { out.last = common.last; out.lastMessageAt = common.lastMessageAt; out.look = common.look ?? null; }
   const to = USE && out.kind !== 'group' ? USE.timeoutOf(s.id, uid) : null;
   if (to) out.timeout = { until: to.until, reason: to.reason };
@@ -2154,6 +2159,8 @@ api.post('/auth/register', wrap(async (req, res) => {
   settleOwnerAtFirstSignUp();
   const token = createSession(req, id);
   addSupportFriend(id);
+  // The instance's main server (server/mainserver.js), if the owner picked one: joined like an invite.
+  MAIN.onSignUp(id);
   res.json({ token, user: selfUser(getUserRow(id)), encPrivateKey, device: deviceNote(getUserRow(id)) });
 }));
 
@@ -2786,15 +2793,17 @@ api.delete('/friends/:id', auth, (req, res) => {
 api.post('/servers', auth, (req, res, next) => (features().createServers === 'staff' && !isStaff(req.userId) ? next(new HttpError(403, 'On this Hearth, only staff can create servers. Ask an admin.')) : next()), limited('image', uploadImage, 'icon'), (req, res) => {
   const name = String((req.body || {}).name || '').trim().slice(0, 64);
   if (!name) fail(400, 'Give your server a name.');
+  // A template (server/templates.js) sets up channels and roles; none means the Blank one, as before templates.
+  const template = TEMPLATES.templateKey((req.body || {}).template, fail);
   const id = newId();
   const t = now();
   const tx = db.transaction(() => {
     db.prepare('INSERT INTO servers (id, name, icon, owner_id, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(id, name, req.file ? '/uploads/' + req.file.filename : null, req.userId, t);
     db.prepare('INSERT INTO members (server_id, user_id, joined_at) VALUES (?, ?, ?)').run(id, req.userId, t);
-    db.prepare(`INSERT INTO channels (id, server_id, name, type, position, created_at, category) VALUES (?, ?, 'general', 'text', 0, ?, 'Text')`).run(newId(), id, t);
-    db.prepare(`INSERT INTO channels (id, server_id, name, type, position, created_at, category) VALUES (?, ?, 'Lounge', 'voice', 1, ?, 'Voice')`).run(newId(), id, t);
     db.prepare(`INSERT INTO roles (id, server_id, name, position, permissions, created_at) VALUES (?, ?, '@everyone', 0, ?, ?)`).run(id, id, DEFAULT_EVERYONE, t);
+    const order = TEMPLATES.build(db, { serverId: id, key: template, newId, now: t });
+    if (template && template !== 'blank') db.prepare('UPDATE servers SET category_order = ? WHERE id = ?').run(JSON.stringify(order), id);
   });
   tx();
   io.in(`user:${req.userId}`).socketsJoin(`server:${id}`);
@@ -2802,6 +2811,9 @@ api.post('/servers', auth, (req, res, next) => (features().createServers === 'st
   io.to(`user:${req.userId}`).emit('server:add', { server, users: {}, voice: {}, keyState: keyState(id, req.userId) });
   res.json({ ...server, keyState: keyState(id, req.userId) });
 });
+
+// The templates the app offers in "Create a server" (server/templates.js).
+api.get('/server-templates', auth, (req, res) => res.json(TEMPLATES.list()));
 
 api.patch('/servers/:id', auth, (req, res) => {
   const srv = requireServer(req.params.id, req.userId);
@@ -2827,6 +2839,8 @@ api.patch('/servers/:id', auth, (req, res) => {
     if (srv.kind === 'group') fail(400, 'Group chats don’t have invite links.');
     if (typeof body.invitePreview !== 'boolean') fail(400, 'invitePreview is true or false.');
   }
+  // Listing the server in server search (server/discovery.js), checked before anything is written.
+  const listing = DISC.plan(srv, body, body.name !== undefined ? String(body.name || '').trim().slice(0, 64) : srv.name);
   // The category order is about channels: it needs Manage Channels however it comes (with other changes, or in a
   // group chat), and is worked out before anything is written, since it can be refused (server/channelorder.js).
   let categoryPlan = null;
@@ -2884,7 +2898,13 @@ api.patch('/servers/:id', auth, (req, res) => {
     db.prepare('UPDATE servers SET invite_preview = ? WHERE id = ?').run(invitePreview ? 1 : 0, srv.id);
     changes.push('invitePreview');
   }
-  if (changes.length) serverAudit(srv, req.userId, 'server_update', null, { changes, name: renamed || undefined, hideHistory, invitePreview });
+  let discoverable;
+  if (listing && listing.changes.length) {
+    listing.apply();
+    changes.push(...listing.changes);
+    if (listing.changes.includes('discoverable')) discoverable = listing.on;
+  }
+  if (changes.length) serverAudit(srv, req.userId, 'server_update', null, { changes, name: renamed || undefined, hideHistory, invitePreview, discoverable });
   if (reordered) serverAudit(srv, req.userId, 'category_reorder');
   if (rekey) emitKeyState(srv.id);
   emitServer(srv.id);
@@ -3150,37 +3170,52 @@ api.get('/invites/:code', auth, (req, res) => {
   res.json({ serverId: s.id, name: s.name, icon: s.icon, memberCount: count, alreadyMember: isMember(s.id, req.userId) });
 });
 
-// Joining updates everyone in the server (and their keys), so it's limited: a script that joins and leaves a big
-// community in a loop would otherwise keep the whole instance busy.
-api.post('/invites/:code/join', auth, (req, res) => {
-  rateLimit('join:' + req.userId, 20, 3600000);
-  limitNet(req, 'join', 60, 3600000);
-  const inv = validInvite(req.params.code);
-  const sid = inv.server_id;
-  if (db.prepare('SELECT 1 FROM bans WHERE server_id = ? AND user_id = ?').get(sid, req.userId)) fail(403, 'You are banned from this server.');
-  const joined = !isMember(sid, req.userId);
-  if (joined) {
-    keyOnRejoin(sid, req.userId);
-    db.prepare('INSERT INTO members (server_id, user_id, joined_at) VALUES (?, ?, ?)').run(sid, req.userId, now());
-    // "New members can't read messages from before they joined" (server/joinhistory.js): their history starts now,
-    // and the apps switch to a new key for them (at once, or shared with other joins close by).
-    HIST.joined(sid, req.userId);
-    db.prepare('UPDATE invites SET uses = uses + 1 WHERE code = ?').run(inv.code);
-    io.to(`server:${sid}`).emit('member:add', { serverId: sid, user: publicUser(getUserRow(req.userId)) });
-    io.in(`user:${req.userId}`).socketsJoin(`server:${sid}`);
-    BOTS.event('member.joined', sid, { serverId: sid, userId: req.userId, joinedAt: now() }, { actorId: req.userId });
-    MEMB.syncRoles(sid, req.userId); // back with a membership they still pay for: their role comes back too
-  }
-  const server = serializeServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(sid), req.userId);
+// Someone banned from a server can't come back in by any door: an invite, server search (server/discovery.js) or
+// the instance's main server (server/mainserver.js).
+const bannedFrom = (serverId, userId) => !!db.prepare('SELECT 1 FROM bans WHERE server_id = ? AND user_id = ?').get(serverId, userId);
+// Adds someone to a server the way every join does: a new key when they were here before, their history starting now
+// when the server hides older messages, the other members told, bots told, a paid-for role back. Returns whether they
+// were new (false: they were in already). The caller checks bans and limits first, and sends joinedPayload after.
+function addMember(sid, userId) {
+  if (isMember(sid, userId)) return false;
+  keyOnRejoin(sid, userId);
+  db.prepare('INSERT INTO members (server_id, user_id, joined_at) VALUES (?, ?, ?)').run(sid, userId, now());
+  // "New members can't read messages from before they joined" (server/joinhistory.js): their history starts now,
+  // and the apps switch to a new key for them (at once, or shared with other joins close by).
+  HIST.joined(sid, userId);
+  io.to(`server:${sid}`).emit('member:add', { serverId: sid, user: publicUser(getUserRow(userId)) });
+  io.in(`user:${userId}`).socketsJoin(`server:${sid}`);
+  BOTS.event('member.joined', sid, { serverId: sid, userId, joinedAt: now() }, { actorId: userId });
+  MEMB.syncRoles(sid, userId); // back with a membership they still pay for: their role comes back too
+  return true;
+}
+// The server as the person who just joined sees it, sent to their open apps too. A newcomer needs the server key, so
+// the members holding it hear about that (nothing changed if they were in already): their apps wrap it for them.
+function joinedPayload(sid, userId, joined) {
+  const server = serializeServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(sid), userId);
   const users = {};
   const rows = userRows(server.memberIds);
   server.memberIds.forEach((id) => { users[id] = publicUser(rows.get(id)); });
   const voice = {};
   server.channels.filter((c) => c.type === 'voice').forEach((c) => { voice[c.id] = voiceStateList(c.id); });
-  io.to(`user:${req.userId}`).emit('server:add', { server, users, voice, keyState: keyState(sid, req.userId) });
-  // Someone new needs the server key, so the members holding it hear about that (nothing changed if they were in already).
+  io.to(`user:${userId}`).emit('server:add', { server, users, voice, keyState: keyState(sid, userId) });
   if (joined) emitKeyState(sid);
-  res.json({ ...server, keyState: keyState(sid, req.userId) });
+  return { ...server, keyState: keyState(sid, userId) };
+}
+// Joining updates everyone in the server (and their keys), so it's limited: a script that joins and leaves a big
+// community in a loop would otherwise keep the whole instance busy. Server search uses the same limits.
+function limitJoins(req) {
+  rateLimit('join:' + req.userId, 20, 3600000);
+  limitNet(req, 'join', 60, 3600000);
+}
+api.post('/invites/:code/join', auth, (req, res) => {
+  limitJoins(req);
+  const inv = validInvite(req.params.code);
+  const sid = inv.server_id;
+  if (bannedFrom(sid, req.userId)) fail(403, 'You are banned from this server.');
+  const joined = addMember(sid, req.userId);
+  if (joined) db.prepare('UPDATE invites SET uses = uses + 1 WHERE code = ?').run(inv.code);
+  res.json(joinedPayload(sid, req.userId, joined));
 });
 
 // ---------------------------------------------------------------- server encryption keys
@@ -6796,6 +6831,11 @@ SA = require('./serveraudit')({ api, auth, db, fail, rateLimit, perms, PM, ALL: 
 // Start a server from a Discord server template the person pastes (server/imports.js, server/discordmap.js).
 require('./imports')({ api, auth, db, fail, rateLimit, limitNet, countHit, hitsSoFar, newId, now, features, isStaff, ALL: ALL_PERMS, CHANNEL_SCOPED, PM,
   serializeServer, keyState, getIo: () => io, auditLog, requirePerm });
+// Server search (server/discovery.js) and the main server every new account joins (server/mainserver.js). Both join
+// people exactly like an invite does (addMember, joinedPayload).
+DISC = require('./discovery')({ api, auth, db, fail, rateLimit, limitNet, isMember, bannedFrom, addMember, joinedPayload, limitJoins, checkWords });
+MAIN = require('./mainserver')({ api, auth, adminOnly, db, fail, rateLimit, now, getSetting, setSetting, auditLog, bannedFrom, addMember, joinedPayload,
+  emitKeyState, stillSuspended, connected, log });
 // Scheduled messages, "Send later" (server/scheduled.js): ciphertext held until its time, then posted as if sent then.
 SCHED = require('./scheduled')({ api, auth, db, fail, rateLimit, limitMessages, newId, now, perms, PM, requireChannel, requireDm, isMember, serverOf, msgFor,
   isBlocked, getUserRow, stillSuspended, validCipher, cipherMax, maxFilesOf, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,

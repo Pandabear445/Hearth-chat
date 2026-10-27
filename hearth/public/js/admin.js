@@ -265,6 +265,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       h('div', { class: 'chips' }, [['open', 'Open to anyone'], ['code', 'Invite code only'], ['closed', 'Closed']].map(([k, l]) => h('button', { class: `chip${reg.mode === k ? ' active' : ''}`, onclick: () => setMode(k) }, l))),
       h('p', { class: 'field-hint' }, 'Close registration instantly if you\u2019re getting spam sign-ups. Existing accounts are unaffected.'),
       h('div', { class: 'row gap' }, field('Invite code', code), h('button', { class: 'btn ghost', onclick: () => setMode(reg.mode) }, 'Save code')),
+      mainServerBox(),
       h('div', { class: 'admin-head' }, h('h3', null, 'Robot check (captcha)')),
       h('p', { class: 'field-hint' }, 'A private, self-hosted "I\u2019m not a robot" check: people\u2019s browsers solve a small puzzle (well under a second), which makes mass sign-ups and password guessing expensive for bots. IPs that keep failing get harder puzzles automatically.'),
       ...[['captchaRegister', 'On sign-up'], ['captchaLogin', 'On login']].map(([k, l]) => h('div', { class: 'kv' }, h('span', null, l),
@@ -280,6 +281,43 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
           await api('PUT', '/admin/terms', { text: ta.value }); toast('Terms published.');
         } }, 'Publish terms'),
         h('button', { class: 'btn ghost', onclick: async () => { await api('PUT', '/admin/terms', { text: '' }); toast('Back to the default terms.'); registration(); } }, 'Use the default terms')));
+  }
+
+  // The main server every new account joins (server/mainserver.js).
+  function mainServerBox() {
+    const box = h('div', { class: 'stack' });
+    const draw = async () => {
+      let st;
+      try { st = await api('GET', '/admin/main-server'); } catch (e) { clear(box).append(h('p', { class: 'field-hint bad' }, e.message)); return; }
+      const all = await api('GET', '/admin/servers').catch(() => []);
+      const link = h('input', { class: 'input mono', placeholder: `${location.origin}/invite/abcd2345` });
+      const pick = h('select', { class: 'input', 'aria-label': 'Server' }, h('option', { value: '' }, 'Choose a server…'),
+        ...all.map((x) => h('option', { value: x.id, selected: st.server && st.server.id === x.id }, `${x.name} (${x.members} member${x.members === 1 ? '' : 's'})`)));
+      const save = async (body, msg) => { try { await api('PUT', '/admin/main-server', body); toast(msg); draw(); } catch (e) { toast(e.message, 'error'); } };
+      const status = {
+        off: 'Off: new accounts start without any server.',
+        on: `On: everyone who signs up joins ${st.server ? st.server.name : ''}.`,
+        invite_gone: 'Paused: the invite it was set with was revoked or has expired, so new accounts don’t join anything. Paste a new invite (one that never expires) or pick the server.',
+        server_gone: 'Paused: that server was deleted. Pick another one.',
+      }[st.status];
+      const expires = st.invite && st.invite.expiresAt ? h('p', { class: 'field-hint' }, `Its invite expires ${fmtStamp(st.invite.expiresAt)}; after that new accounts stop joining. An invite that never expires keeps it working.`) : null;
+      clear(box).append(
+        h('p', { class: 'field-hint' }, 'Every new account joins this server when it signs up, as if it had used an invite, so nobody starts out alone. People can still leave it. Like anyone who joins, newcomers get the server’s encryption key from its members’ apps.'),
+        h('p', null, h('strong', null, status)), expires,
+        h('div', { class: 'row gap' }, field('Invite link or code', link), h('button', { class: 'btn ghost', onclick: () => save({ invite: link.value }, 'Main server set.') }, 'Use this invite')),
+        h('div', { class: 'row gap' }, field('Or pick a server', pick), h('button', { class: 'btn ghost', onclick: () => (pick.value ? save({ serverId: pick.value }, 'Main server set.') : toast('Choose a server first.', 'error')) }, 'Use this server')),
+        st.status !== 'off' ? h('div', null, h('button', { class: 'btn ghost', onclick: () => save({ serverId: null }, 'New accounts no longer join a server.') }, 'Turn off')) : null,
+        st.status === 'on' ? (st.addedEveryone
+          ? h('p', { class: 'field-hint' }, `Existing accounts were added ${fmtStamp(st.addedEveryone.at)} (${st.addedEveryone.added}).`)
+          : h('div', { class: 'stack tight' },
+            h('p', { class: 'field-hint' }, `${st.waiting} existing account${st.waiting === 1 ? ' isn’t' : 's aren’t'} in it. You can add them once; people who left it or are banned from it are skipped.`),
+            st.waiting ? h('div', null, h('button', { class: 'btn ghost', onclick: async () => {
+              if (!(await confirmDialog({ title: `Add ${st.waiting} account${st.waiting === 1 ? '' : 's'} to ${st.server.name}?`, text: 'They’ll see it in their server list next time they open Hearth, and can leave it. This can only be done once for this server.', confirm: 'Add them' }))) return;
+              try { const r = await api('POST', '/admin/main-server/add-everyone', { confirm: true }); toast(`Added ${r.added}.`); draw(); } catch (e) { toast(e.message, 'error'); }
+            } }, 'Add existing accounts')) : null)) : null);
+    };
+    draw();
+    return h('div', null, h('div', { class: 'admin-head' }, h('h3', null, 'Main server')), box);
   }
 
   async function servers() {

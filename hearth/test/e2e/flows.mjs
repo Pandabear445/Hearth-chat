@@ -5696,6 +5696,60 @@ async function memberRelays(t) {
   check(!thrown.length, `No page errors (got ${thrown.join(' / ')}).`);
 }
 
+// ------------------------------------------------------------------ community: templates, server search, main server
+// Alice makes a server from the Gaming template (its channels and read-only #rules are there) and shows it in server
+// search; bob finds it under Search → Find servers and joins with one click. Bob, who runs this Hearth by now, makes it
+// the main server: a brand-new account is in it straight after signing up, and reads what alice writes there (her app
+// handed it the key like for any newcomer). Then the main server is turned off again.
+async function community(t) {
+  const { alice, bob } = t.people;
+  const GUILD = 'E2E Guild';
+  await alice.createServer(GUILD, { template: 'Gaming' });
+  for (const ch of ['rules', 'looking-for-group', 'general']) await alice.channelRow(ch).waitFor();
+  await alice.serverMenu('Server settings');
+  const ss = alice.page.locator('.modal.server-settings');
+  await ss.locator('textarea[placeholder="What should people know before they join?"]').fill('Raids every Thursday, all welcome.');
+  await ss.locator('input[placeholder="gaming, art, study"]').fill('raids, mmo');
+  await ss.locator('.toggle-row', { hasText: 'Show in server search' }).locator('.switch').click();
+  await alice.toast('This server now shows in server search.');
+  await ss.locator('.modal-x').click();
+  await alice.noModals();
+
+  await bob.page.keyboard.press('Control+k');
+  const input = bob.$('.search-modal input.search-main');
+  await input.waitFor();
+  await bob.$('.search-modal .seg-btn', { hasText: exact('Find servers') }).click();
+  await input.fill('thursday raids');
+  const hit = bob.$('.search-modal .search-item', { hasText: GUILD });
+  await hit.locator('.search-item-sub', { hasText: 'Raids every Thursday' }).waitFor();
+  check(await hit.locator('.search-badge', { hasText: 'mmo' }).count() === 1, 'A listing should show its tags.');
+  await hit.click();
+  await bob.page.locator('#sidebar-head .server-head-name', { hasText: exact(GUILD) }).waitFor();
+  await bob.noModals();
+
+  await bob.railButton('Admin');
+  await bob.$('.admin-tabs .admin-tab', { hasText: 'Registration & Terms' }).click();
+  await bob.$('.admin-body select[aria-label="Server"]').selectOption({ label: `${GUILD} (2 members)` });
+  await bob.$('.admin-body button', { hasText: exact('Use this server') }).click();
+  await bob.toast('Main server set.');
+  await bob.$('.admin-body strong', { hasText: `everyone who signs up joins ${GUILD}` }).waitFor();
+
+  const dana = await t.open('dana');
+  await dana.register('dana', t.pw.alice + 'd');
+  await dana.page.locator(`#rail button[aria-label="${GUILD}"]`).waitFor();
+  await alice.railButton(GUILD);
+  await alice.openChannel('general');
+  await alice.send('Welcome aboard, dana: apricot');
+  await dana.railButton(GUILD);
+  await dana.openChannel('general');
+  await dana.message('Welcome aboard, dana: apricot').waitFor({ timeout: 60000 });
+
+  await bob.$('.admin-body button', { hasText: exact('Turn off') }).click();
+  await bob.toast('New accounts no longer join a server.');
+  await dana.close();
+  delete t.people.dana;
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -5756,6 +5810,7 @@ export const FLOWS = [
   ['the side view: a message and a picture pinned to the side stay beside the chat while you switch conversations, jump, unpin', sideView],
   ['where the chat puts you: a DM reopens at its newest message as GIFs load, the "New messages" line above; Jump on a pin or a search result lands on the message and keeps it there; on a phone the pins close on Jump', keepYourPlace],
   ['member relays: a member offers a machine in Help host, it checks in, the owner approves it with a password, it’s in everyone’s calls under a made-up login; the member avoids members’ relays, removes theirs and gets the uninstall command', memberRelays],
+  ['community: a server from the Gaming template, shown in server search and joined from there; the main server a new account joins at sign-up and reads in', community],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
 ];
