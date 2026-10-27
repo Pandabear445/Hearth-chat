@@ -265,7 +265,8 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       h('div', { class: 'chips' }, [['open', 'Open to anyone'], ['code', 'Invite code only'], ['closed', 'Closed']].map(([k, l]) => h('button', { class: `chip${reg.mode === k ? ' active' : ''}`, onclick: () => setMode(k) }, l))),
       h('p', { class: 'field-hint' }, 'Close registration instantly if you\u2019re getting spam sign-ups. Existing accounts are unaffected.'),
       h('div', { class: 'row gap' }, field('Invite code', code), h('button', { class: 'btn ghost', onclick: () => setMode(reg.mode) }, 'Save code')),
-      mainServerBox(),
+      // Only the instance's owner can see or set it (the server refuses anyone else).
+      myRank >= RANK.owner ? mainServerBox() : null,
       h('div', { class: 'admin-head' }, h('h3', null, 'Robot check (captcha)')),
       h('p', { class: 'field-hint' }, 'A private, self-hosted "I\u2019m not a robot" check: people\u2019s browsers solve a small puzzle (well under a second), which makes mass sign-ups and password guessing expensive for bots. IPs that keep failing get harder puzzles automatically.'),
       ...[['captchaRegister', 'On sign-up'], ['captchaLogin', 'On login']].map(([k, l]) => h('div', { class: 'kv' }, h('span', null, l),
@@ -289,7 +290,8 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
     const draw = async () => {
       let st;
       try { st = await api('GET', '/admin/main-server'); } catch (e) { clear(box).append(h('p', { class: 'field-hint bad' }, e.message)); return; }
-      const all = await api('GET', '/admin/servers').catch(() => []);
+      // Only servers the owner is in with Manage Server can be picked from the list; the server says which.
+      const all = st.choices || [];
       const link = h('input', { class: 'input mono', placeholder: `${location.origin}/invite/abcd2345` });
       const pick = h('select', { class: 'input', 'aria-label': 'Server' }, h('option', { value: '' }, 'Choose a server…'),
         ...all.map((x) => h('option', { value: x.id, selected: st.server && st.server.id === x.id }, `${x.name} (${x.members} member${x.members === 1 ? '' : 's'})`)));
@@ -297,7 +299,8 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       const status = {
         off: 'Off: new accounts start without any server.',
         on: `On: everyone who signs up joins ${st.server ? st.server.name : ''}.`,
-        invite_gone: 'Paused: the invite it was set with was revoked or has expired, so new accounts don’t join anything. Paste a new invite (one that never expires) or pick the server.',
+        invite_gone: 'Paused: the invite it was set with was revoked, has expired or has a use limit now, so new accounts don’t join anything. Paste a new invite (one that never expires, with no use limit) or pick the server.',
+        not_allowed: 'Paused: you’re no longer in that server with Manage Server (or you were banned from it), so new accounts don’t join it. Paste one of its invites, or pick another server.',
         server_gone: 'Paused: that server was deleted. Pick another one.',
       }[st.status];
       const expires = st.invite && st.invite.expiresAt ? h('p', { class: 'field-hint' }, `Its invite expires ${fmtStamp(st.invite.expiresAt)}; after that new accounts stop joining. An invite that never expires keeps it working.`) : null;

@@ -2133,24 +2133,35 @@ and Create Threads, and allow them for the template's moderator roles. @everyone
 - Encryption is unchanged: the newcomer is listed as needing the server key and the members' apps wrap it for them,
   as for any invite join. Listing a server is like posting a never-expiring invite link publicly on this instance:
   anyone signed in can join and read from then on (or from their join, with the join-history setting on).
-- In the app, Find servers is its own tab, and only it sends what's typed to the server; message search never does.
-  The All tab offers a shortcut to it instead of searching servers by itself.
+- In the app, Find servers is its own tab, and only it sends what's typed to the server (the words, never filters
+  like `from:`); message search never does, and the footer says which one you're on. The All tab offers a button to
+  it after the results instead of searching servers by itself; it isn't a result, so Enter never picks it. Results
+  belong to the words they were found for: when the words change they're dropped at once (a late answer for older
+  words is ignored), so Enter or a click can't join a server from them; Join and Show more servers go once.
 
 **The main server** (Admin → Registration & Terms → Main server, the instance's owner only):
 
 - `PUT /api/admin/main-server` `{ invite }` (a link or code) or `{ serverId }`; `null` turns it off. Stored in
   `instance_settings.mainServer`. Group chats are refused. Picking from the list needs the owner to be in that server
-  with Manage Server (`403 not_yours`); otherwise it takes one of its invites. Everyone it adds gets the server key from
-  the members' apps, so this must never be a way into a server nobody there let the owner into: an invite means
-  someone with Create Invite there let people in, and its moderators can revoke it.
+  with Manage Server (`403 not_yours`; `GET` lists the servers that can be picked as `choices`); otherwise it takes one
+  of its invites, one that works and has no use limit (`400`/`410 bad_invite`: auto-joins don't count as its uses, so
+  a limit would mean nothing). Everyone it adds gets the server key from the members' apps, so this must never be a way
+  into a server nobody there let the owner into: an invite means someone with Create Invite there let people in, and
+  its moderators can revoke it.
+- The chosen server's own audit log says the instance's owner made it the main server (with the invite, shown whole
+  only to readers with Manage Server there), stopped it, or added everyone, so its moderators see why new people
+  arrive. The instance audit log never has the invite code (every staff moderator reads it).
 - Every account made afterwards joins it right after sign-up, like an invite join (members told, key handed over by
   their apps, bans respected). Auto-joins don't count as the invite's uses. Picked by an invite, it works while that
-  invite exists and hasn't expired: the server's moderators can stop it by revoking the invite. A deleted server or
-  any error just means no auto-join; sign-up never fails because of it.
+  invite exists, hasn't expired and has no use limit: the server's moderators can stop it by revoking the invite
+  (`invite_gone`). Picked from the list, it works while the owner is still in it with Manage Server and isn't banned
+  from it: taking that away stops it (`not_allowed`). Both are checked at every sign-up. A deleted server or any error
+  just means no auto-join; sign-up never fails because of it.
 - People can leave it like any server.
 - `POST /api/admin/main-server/add-everyone` `{ confirm: true }`: adds the accounts that aren't in it, once per server
   (`409 already_done` after that, even after picking another server and back), in batches that are announced once
   each is committed, skipping bots, deleted and suspended accounts, people who were in it before (they
-  left or were kicked) and anyone banned from it. Both are in the instance audit log.
+  left or were kicked) and anyone banned from it. Each account is checked again as its batch is written, and the run
+  stops if the main server stops working part-way. Both are in the instance audit log.
 
 Tests: `test/community.test.js`; the e2e flow "community".

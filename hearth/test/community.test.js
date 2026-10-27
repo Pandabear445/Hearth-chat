@@ -187,6 +187,122 @@ test('main server: picked from the list; adding everyone runs once, after a conf
   await as(owner, 'PUT', '/admin/main-server', { serverId: null });
 });
 
+test('main server: only an invite with no use limit can be picked; one that gets a limit stops it', async () => {
+  const den = await mk(owner, 'Limited Den');
+  const once = await invite(owner, den.id, { maxUses: 1 });
+  let r = await as(owner, 'PUT', '/admin/main-server', { invite: once });
+  assert.equal(r.status, 400, 'a use limit the moderators set would mean nothing: auto-joins don’t count');
+  assert.equal(r.json.code, 'bad_invite');
+  // Used up already: refused like validInvite refuses it.
+  srv.sql('UPDATE invites SET uses = 1 WHERE code = ?', once);
+  r = await as(owner, 'PUT', '/admin/main-server', { invite: once });
+  assert.equal(r.status, 410);
+  assert.equal((await as(owner, 'GET', '/admin/main-server')).json.status, 'off');
+  // An unlimited one works; given a limit afterwards (or used up), it stops, and sign-ups don't join.
+  const open2 = await invite(owner, den.id, { expiresHours: 0 });
+  assert.equal((await as(owner, 'PUT', '/admin/main-server', { invite: open2 })).json.status, 'on');
+  srv.sql('UPDATE invites SET max_uses = 5, uses = 0 WHERE code = ?', open2);
+  assert.equal((await as(owner, 'GET', '/admin/main-server')).json.status, 'invite_gone');
+  const u = await srv.register('limited_newbie');
+  assert.ok(!memberOf(den.id, u.id));
+  srv.sql('UPDATE invites SET max_uses = 0 WHERE code = ?', open2);
+  assert.equal((await as(owner, 'GET', '/admin/main-server')).json.status, 'on');
+});
+
+test('main server: the instance’s audit log never has the invite code; the server’s own audit log says what the owner did', async () => {
+  const den = srv.sql("SELECT id FROM servers WHERE name = 'Limited Den'")[0].id;
+  const code = (await as(owner, 'GET', '/admin/main-server')).json.invite.code;
+  const instance = srv.sql("SELECT detail FROM admin_log WHERE action = 'main_server'");
+  assert.ok(instance.length >= 1);
+  for (const row of instance) assert.ok(!row.detail.includes(code), 'staff moderators read this log: no codes in it');
+  // The server's moderators see who made it the main server, and with which invite (so they can revoke it).
+  const on = srv.sql("SELECT * FROM server_audit WHERE server_id = ? AND action = 'main_server' ORDER BY seq DESC LIMIT 1", den)[0];
+  assert.equal(on.actor_id, owner.id);
+  assert.equal(on.target_id, code);
+  assert.equal(JSON.parse(on.detail).on, true);
+  const log = (await as(owner, 'GET', `/servers/${den}/audit?action=main_server`)).json;
+  assert.ok(log.entries.some((e) => e.action === 'main_server' && e.targetId === code), 'shown whole to someone with Manage Server');
+  // Turning it off is written there too.
+  assert.equal((await as(owner, 'PUT', '/admin/main-server', { serverId: null })).json.status, 'off');
+  const off = srv.sql("SELECT * FROM server_audit WHERE server_id = ? AND action = 'main_server' ORDER BY seq DESC LIMIT 1", den)[0];
+  assert.equal(JSON.parse(off.detail).on, false);
+});
+
+test('main server: picked from the list, it stops once the owner loses Manage Server there or is banned', async () => {
+  const other = await srv.register('lent_owner');
+  const lent = await mk(other, 'Lent Server');
+  await as(owner, 'POST', `/invites/${await invite(other, lent.id)}/join`);
+  const role = (await as(other, 'POST', `/servers/${lent.id}/roles`, { name: 'Helpers', permissions: P.MANAGE_SERVER })).json.id;
+  assert.equal((await as(other, 'PUT', `/servers/${lent.id}/members/${owner.id}/roles`, { add: [role] })).status, 200);
+  const st = (await as(owner, 'GET', '/admin/main-server')).json;
+  assert.ok(st.choices.some((x) => x.id === lent.id), 'listed: they manage it');
+  assert.ok(!st.choices.some((x) => x.id === srv.sql("SELECT id FROM servers WHERE name = 'Private Den'")[0].id), 'not listed: they don’t');
+  assert.equal((await as(owner, 'PUT', '/admin/main-server', { serverId: lent.id })).json.status, 'on');
+  assert.ok(srv.sql("SELECT 1 FROM server_audit WHERE server_id = ? AND action = 'main_server' AND actor_id = ?", lent.id, owner.id).length);
+  const a = await srv.register('lent_newbie_a');
+  assert.ok(memberOf(lent.id, a.id));
+  // The server's owner takes the role away: no more auto-joins, and adding everyone is refused.
+  assert.equal((await as(other, 'PUT', `/servers/${lent.id}/members/${owner.id}/roles`, { remove: [role] })).status, 200);
+  assert.equal((await as(owner, 'GET', '/admin/main-server')).json.status, 'not_allowed');
+  const b = await srv.register('lent_newbie_b');
+  assert.ok(!memberOf(lent.id, b.id));
+  assert.equal((await as(owner, 'POST', '/admin/main-server/add-everyone', { confirm: true })).status, 409);
+  // Given back, it works again; banned, it stops for good.
+  assert.equal((await as(other, 'PUT', `/servers/${lent.id}/members/${owner.id}/roles`, { add: [role] })).status, 200);
+  assert.equal((await as(owner, 'GET', '/admin/main-server')).json.status, 'on');
+  assert.equal((await as(other, 'POST', `/servers/${lent.id}/bans`, { userId: owner.id })).status, 200);
+  assert.equal((await as(owner, 'GET', '/admin/main-server')).json.status, 'not_allowed');
+  const c = await srv.register('lent_newbie_c');
+  assert.ok(!memberOf(lent.id, c.id));
+  assert.equal((await as(owner, 'PUT', '/admin/main-server', { serverId: null })).json.status, 'off');
+});
+
+// Adding everyone looks at each account again as it's written: one deleted, suspended, banned or gone between
+// batches isn't added. Run against the module itself, with an account changing while the first one is added.
+test('main server: adding everyone skips accounts that were deleted, suspended, banned or left while it ran', async () => {
+  const Database = require('better-sqlite3');
+  const db = new Database(':memory:');
+  db.exec(`CREATE TABLE users (id TEXT PRIMARY KEY, is_bot INTEGER DEFAULT 0, deleted_at INTEGER, suspended_at INTEGER);
+    CREATE TABLE servers (id TEXT PRIMARY KEY, name TEXT, icon TEXT, kind TEXT DEFAULT 'server');
+    CREATE TABLE members (server_id TEXT, user_id TEXT); CREATE TABLE former_members (server_id TEXT, user_id TEXT);
+    CREATE TABLE bans (server_id TEXT, user_id TEXT); CREATE TABLE invites (code TEXT, server_id TEXT, max_uses INTEGER, uses INTEGER, expires_at INTEGER);
+    INSERT INTO servers (id, name) VALUES ('s1', 'Main');
+    INSERT INTO members VALUES ('s1', 'boss');`);
+  for (const id of ['boss', 'a', 'deleted', 'suspended', 'banned', 'left', 'botty', 'b']) db.prepare('INSERT INTO users (id) VALUES (?)').run(id);
+  const settings = new Map([['mainServer', JSON.stringify({ serverId: 's1', code: null, by: 'boss' })]]);
+  const routes = {};
+  const route = (m) => (p, ...h) => { routes[`${m} ${p}`] = h[h.length - 1]; };
+  const isMember = (sid, uid) => !!db.prepare('SELECT 1 FROM members WHERE server_id = ? AND user_id = ?').get(sid, uid);
+  const added = [];
+  let first = true;
+  require('../server/mainserver')({
+    api: { get: route('GET'), put: route('PUT'), post: route('POST') }, auth: null, ownerOnly: null, db, now: Date.now,
+    fail: (status, msg, code) => { throw Object.assign(new Error(msg), { status, code }); }, wrap: (f) => f, rateLimit: () => {},
+    getSetting: (k) => settings.get(k), setSetting: (k, v) => settings.set(k, v), auditLog: () => {},
+    bannedFrom: (sid, uid) => !!db.prepare('SELECT 1 FROM bans WHERE server_id = ? AND user_id = ?').get(sid, uid),
+    insertMember: (sid, uid) => {
+      if (isMember(sid, uid)) return false;
+      db.prepare('INSERT INTO members VALUES (?, ?)').run(sid, uid);
+      added.push(uid);
+      if (first) {
+        // While the first one is added, everything else changes under it.
+        first = false;
+        db.exec(`UPDATE users SET deleted_at = 1 WHERE id = 'deleted'; UPDATE users SET suspended_at = 1 WHERE id = 'suspended';
+          UPDATE users SET is_bot = 1 WHERE id = 'botty'; INSERT INTO bans VALUES ('s1', 'banned'); INSERT INTO former_members VALUES ('s1', 'left');`);
+      }
+      return true;
+    },
+    announceMember: () => {}, addMember: () => false, joinedPayload: () => {}, emitKeyState: () => {}, connected: () => false,
+    stillSuspended: (u) => !!u.suspended_at, log: { warn: () => {} }, canManageServer: (s, uid) => isMember(s.id, uid) && uid === 'boss',
+  });
+  let out;
+  await routes['POST /admin/main-server/add-everyone']({ userId: 'boss', body: { confirm: true } }, { json: (x) => { out = x; } });
+  assert.equal(added[0], 'a');
+  assert.deepEqual(added.slice(1), ['b'], 'only the accounts still waiting');
+  assert.equal(out.added, 2);
+  db.close();
+});
+
 // ------------------------------------------------------------------ server search
 let open; let mod; let stranger;
 test('server search: off by default; turning it on needs Manage Server and a description', async () => {

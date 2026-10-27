@@ -8585,6 +8585,7 @@ function openSearch({ scope = null } = {}) {
   const noteEl = h('div', { class: 'search-note', 'aria-live': 'polite' });
   const tabsEl = h('div', { class: 'seg', role: 'tablist' });
   const results = h('div', { class: 'search-results', id: 'search-results', role: 'listbox', 'aria-label': 'Search results' });
+  const footNote = h('span'); // where what you type goes, for the tab that's open
   const go = (fn) => () => { mdl.close(); fn(); };
   const refocus = () => { selId = null; draw(); input.focus(); };
 
@@ -8686,57 +8687,68 @@ function openSearch({ scope = null } = {}) {
   }
 
   // ---- server search (server/discovery.js): servers that chose to be listed. Unlike message search this asks the
-  // server, with what was typed, so it only runs on its own tab.
-  const disc = { q: null, items: [], page: 0, hasMore: false, loading: false, waiting: false, timer: null, error: null };
+  // server, with what was typed, so it only runs on its own tab, once you pick it (never from Enter elsewhere).
+  // q: the words the results are for (null: never asked; undefined: the words changed, results dropped).
+  // seq: the request whose answer counts; an older one's answer (another query, a page asked twice) is dropped.
+  const disc = { q: null, items: [], page: 0, hasMore: false, loading: false, waiting: false, timer: null, error: null, seq: 0, joining: null };
   async function loadServers(text, more = false) {
+    if (more && disc.loading) return; // 'Show more servers' clicked twice: one request
     if (!more) Object.assign(disc, { q: text, items: [], page: 0, hasMore: false });
     disc.loading = true;
     disc.error = null;
     const want = disc.q;
+    const seq = ++disc.seq;
+    draw();
     try {
       const r = await api('GET', '/discover/servers?' + new URLSearchParams({ q: want, page: String(more ? disc.page + 1 : 0) }));
-      if (closed || disc.q !== want) return;
-      disc.items = more ? disc.items.concat(r.servers) : r.servers;
+      if (closed || disc.seq !== seq) return;
+      disc.items = more ? disc.items.concat(r.servers.filter((x) => !disc.items.some((y) => y.id === x.id))) : r.servers;
       disc.page = r.page;
       disc.hasMore = r.hasMore;
     } catch (e) {
-      if (disc.q === want) disc.error = e.message;
+      if (disc.seq === seq) disc.error = e.message;
     } finally {
-      if (disc.q === want) { disc.loading = false; draw(); }
+      if (disc.seq === seq) { disc.loading = false; draw(); }
     }
   }
   async function joinListed(x) {
     if (S.servers.some((y) => y.id === x.id)) { mdl.close(); openServer(x.id); return; }
+    if (disc.joining) return; // a double click or Enter held down: one join
+    disc.joining = x.id;
+    draw();
     try {
       const sv = await api('POST', `/discover/servers/${x.id}/join`);
       if (!S.servers.find((y) => y.id === sv.id)) S.servers.push(sv);
       if (sv.keyState) await sec.applyState(sv.keyState);
       mdl.close();
       openServer(sv.id);
-    } catch (e) { toast(e.message, 'error'); }
+    } catch (e) { toast(e.message, 'error'); } finally { disc.joining = null; draw(); }
   }
   function serversTab(add) {
-    const text = input.value.trim().slice(0, 64);
+    // Only the words: filters (from:, in: …) are for message search and never go to the server.
+    const text = q.terms.join(' ').trim().slice(0, 64);
     // Asked a moment after typing stops (searches are limited per minute); a changed query shows as loading meanwhile.
+    // Results for other words are dropped at once, so Enter or a click can never join a server from them.
     clearTimeout(disc.timer);
+    if (disc.q !== null && disc.q !== text) { Object.assign(disc, { q: undefined, items: [], page: 0, hasMore: false, error: null }); disc.seq++; disc.loading = false; }
     disc.waiting = disc.q !== text;
     if (disc.waiting) disc.timer = setTimeout(() => { if (!closed && disc.q !== text) { disc.waiting = false; loadServers(text); } }, disc.q === null ? 0 : 350);
     results.append(h('div', { class: 'search-empty' }, `Servers whose owners chose to show them in search. What you type here goes to ${S.config.name}’s server to find them (message search never does).`));
     const n = (x) => `${x.memberCount.toLocaleString()} member${x.memberCount === 1 ? '' : 's'}`;
-    add(text ? 'Servers' : 'Biggest servers', disc.items.map((x) => {
+    add(text ? 'Servers' : 'Biggest servers', (disc.q === text ? disc.items : []).map((x) => {
       const mine = S.servers.some((y) => y.id === x.id);
       return item('ds:' + x.id, {
         av: x.icon ? h('img', { class: 'search-img', src: x.icon, alt: '' }) : h('span', { class: 'search-ic' }, x.name.slice(0, 2)),
         title: x.name, sub: x.about || null,
         badges: x.tags.map((t) => h('span', { class: 'search-badge' }, t)),
-        meta: h('span', null, `${n(x)} · `, h('strong', null, mine ? 'Open' : 'Join')),
+        meta: h('span', null, `${n(x)} · `, h('strong', null, mine ? 'Open' : disc.joining === x.id ? 'Joining…' : 'Join')),
         action: () => joinListed(x),
       });
     }));
     if (disc.loading || disc.waiting) results.append(h('div', { class: 'search-status' }, h('span', { class: 'spinner' }), h('span', null, 'Looking for servers…')));
     else if (disc.error) results.append(h('div', { class: 'search-status bad' }, h('span', null, disc.error), h('button', { class: 'btn ghost sm', onclick: () => { disc.q = null; draw(); } }, 'Try again')));
     else if (!disc.items.length) results.append(h('div', { class: 'search-empty' }, text ? 'No listed servers match.' : `No servers on ${S.config.name} are shown in search yet.`));
-    else if (disc.hasMore) results.append(h('div', { class: 'search-status' }, h('button', { class: 'btn ghost sm', onclick: () => loadServers(disc.q, true) }, 'Show more servers')));
+    else if (disc.hasMore) results.append(h('div', { class: 'search-status' }, h('button', { class: 'btn ghost sm', disabled: disc.loading, onclick: () => loadServers(disc.q, true) }, 'Show more servers')));
   }
 
   // ---- matching, on this device
@@ -8886,6 +8898,7 @@ function openSearch({ scope = null } = {}) {
     if (typing) { noteEl.classList.add('hint'); noteEl.append(icon('info'), h('span', null, SEARCH_HINTS[typing[1].toLowerCase()])); }
     else if (p.errors.length) { noteEl.classList.add('bad'); noteEl.append(icon('info'), h('span', null, p.errors.join(' '))); }
 
+    clear(footNote).append(...(tab === 'servers' ? [icon('compass', 'ic'), `What you type here is sent to ${S.config.name}’s server`] : [icon('lock', 'ic'), 'Search words stay on this device']));
     clear(results);
     rows = [];
     const add = (title, items) => {
@@ -8923,10 +8936,6 @@ function openSearch({ scope = null } = {}) {
       groups().forEach((g) => { if (!words || groupName(g).toLowerCase().includes(words)) places.push({ id: 'g:' + g.id, av: groupAvatar(g, 30), title: groupName(g), sub: 'Group', action: go(() => openGroup(g.id)) }); });
       add('Channels & servers', places.slice(0, tab === 'all' ? 6 : 50).map((x) => item(x.id, x)));
     }
-    // Servers you're not in: a way to the Servers tab (which asks the server), so plain search never sends the words.
-    if (!scopeKey && !q.filters.length && tab === 'all' && words) {
-      add('', [item('find-servers', { av: h('span', { class: 'search-ic' }, icon('compass')), title: `Find servers matching “${words}”`, sub: 'Servers that chose to show in search', action: () => { tab = 'servers'; refocus(); } })]);
-    }
     if (tab === 'servers') serversTab(add);
     lastHits = 0;
     if (wantsMessages && messageQuery) {
@@ -8944,6 +8953,11 @@ function openSearch({ scope = null } = {}) {
       else if (!hits.length) results.append(h('div', { class: 'search-empty' }, 'No messages match.'));
     } else if (!empty && !rows.length && !typing && !p.errors.length && tab !== 'servers') {
       results.append(h('div', { class: 'search-empty' }, wantsMessages ? 'Keep typing to search messages.' : 'Nothing matches.'));
+    }
+    // Servers you're not in: a button to the Find servers tab (which asks the server), after everything else. Not a
+    // result row, so Enter can never pick it: message search never sends the words, only choosing that tab does.
+    if (!scopeKey && !q.filters.length && tab === 'all' && words) {
+      results.append(h('div', { class: 'search-status' }, h('button', { class: 'btn ghost sm', onclick: () => { tab = 'servers'; refocus(); } }, icon('compass', 'ic'), `Find servers matching “${words}”`)));
     }
     const keep = selId ? rows.findIndex((r) => r.id === selId) : -1;
     select(keep >= 0 ? keep : 0);
@@ -8963,7 +8977,7 @@ function openSearch({ scope = null } = {}) {
     h('div', { class: 'search-bar' }, icon('search'), input, h('kbd', null, 'Esc'), h('button', { class: 'icon-btn search-close', 'aria-label': 'Close search', onclick: () => mdl.close() }, icon('close'))),
     chipsEl, noteEl, tabsEl, results,
     h('div', { class: 'search-foot' }, h('span', { class: 'search-keys' }, h('kbd', null, '↑'), h('kbd', null, '↓'), ' to move'), h('span', { class: 'search-keys' }, h('kbd', null, 'Enter'), ' to open'),
-      h('span', null, icon('lock', 'ic'), 'Search words stay on this device'))) });
+      footNote)) });
   mdl.box.setAttribute('aria-label', 'Search');
   draw();
   input.focus();

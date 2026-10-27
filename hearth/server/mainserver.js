@@ -2,7 +2,8 @@
 // account joins at sign-up, so nobody starts out alone and there's one place everyone shares.
 //
 // Routes (the instance's owner only)
-//   GET  /api/admin/main-server               which server it is, whether it's working, how many accounts aren't in it
+//   GET  /api/admin/main-server               which server it is, whether it's working, how many accounts aren't in it,
+//                                             and the servers the owner could pick from the list (choices)
 //   PUT  /api/admin/main-server               { invite } (a link or code to one of its invites) or { serverId } (a
 //                                             server the owner manages there); null for either turns it off
 //   POST /api/admin/main-server/add-everyone  { confirm: true }: also add the accounts that aren't in it yet, once per server
@@ -11,7 +12,11 @@
 // server key and wrap it for them, the newcomer's history starts at sign-up when the server hides older messages, and
 // a ban holds. People can leave it like any server; adding everyone later skips them (and anyone banned, bots, and
 // deleted or suspended accounts). Picked by an invite, it works while that invite does: once the server's moderators
-// revoke it, or it expires, sign-ups stop joining (it isn't used up, though: auto-joins don't count as its uses).
+// revoke it, or it expires, sign-ups stop joining. Auto-joins don't count as its uses, so only an invite with no use
+// limit can be picked (a limit the moderators set would mean nothing otherwise); one that has a limit stops working.
+// Picked from the list, it works while the owner is still in it with Manage Server and isn't banned from it.
+// Either way the server's own audit log says the instance's owner made it the main server (and when that stopped),
+// so its moderators can see why new people arrive, and revoke the invite or take the permission away.
 // Nothing here ever stops a sign-up: a main server that's gone, or any error, just means no auto-join.
 //
 // Encryption: everyone it adds is handed the server key by the members' apps, like anyone joining with an invite. So
@@ -22,11 +27,22 @@ const CODE = /(?:invite\/)?([A-Za-z0-9]{6,16})\/?$/;
 
 module.exports = function setupMainServer(ctx) {
   const { api, auth, ownerOnly, db, fail, wrap, rateLimit, now, getSetting, setSetting, auditLog, bannedFrom, addMember, insertMember, announceMember, joinedPayload,
-    emitKeyState, stillSuspended, connected, log, canManageServer } = ctx;
+    emitKeyState, stillSuspended, connected, log, canManageServer, serverAudit = () => {} } = ctx;
 
   const read = (k) => { try { return JSON.parse(getSetting(k) || 'null'); } catch { return null; } };
   const serverRow = (id) => db.prepare('SELECT * FROM servers WHERE id = ?').get(id);
-  // Where things stand. status: 'off' (none picked), 'on', 'server_gone' (deleted, or a group chat), or 'invite_gone'.
+  // An invite that can be the main server's: one that still works (like validInvite in index.js) and has no use limit.
+  // Returns why not, or null.
+  const inviteProblem = (inv) => {
+    if (!inv) return 'gone';
+    if (inv.expires_at && inv.expires_at < now()) return 'expired';
+    if (inv.max_uses && inv.uses >= inv.max_uses) return 'used_up';
+    if (inv.max_uses) return 'limited';
+    return null;
+  };
+  // Where things stand. status: 'off' (none picked), 'on', 'server_gone' (deleted, or a group chat), 'invite_gone'
+  // (revoked, expired, used up or limited), or 'not_allowed' (picked from the list, and whoever picked it isn't in it
+  // with Manage Server any more, or is banned from it). Checked again every time, so it stops when that changes.
   function current() {
     const set = read('mainServer');
     if (!set || typeof set.serverId !== 'string') return { status: 'off' };
@@ -34,9 +50,10 @@ module.exports = function setupMainServer(ctx) {
     if (!s || s.kind === 'group') return { status: 'server_gone', set };
     if (set.code) {
       const inv = db.prepare('SELECT * FROM invites WHERE code = ? AND server_id = ?').get(set.code, s.id);
-      if (!inv || (inv.expires_at && inv.expires_at < now())) return { status: 'invite_gone', set, server: s };
+      if (inviteProblem(inv)) return { status: 'invite_gone', set, server: s, invite: inv || null };
       return { status: 'on', set, server: s, invite: inv };
     }
+    if (typeof set.by !== 'string' || bannedFrom(s.id, set.by) || !canManageServer(s, set.by)) return { status: 'not_allowed', set, server: s };
     return { status: 'on', set, server: s };
   }
   // Who adding everyone would add: real accounts that aren't in it, weren't in it before (they left, or were kicked),
@@ -75,14 +92,26 @@ module.exports = function setupMainServer(ctx) {
     }
   }
 
-  api.get('/admin/main-server', auth, ownerOnly, (req, res) => res.json(state()));
+  // The servers the owner could pick from the list: ones they're in with Manage Server (not group chats).
+  const choices = (uid) => db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM members m2 WHERE m2.server_id = s.id) AS n FROM servers s
+      JOIN members m ON m.server_id = s.id AND m.user_id = ? WHERE s.kind != 'group' ORDER BY s.name COLLATE NOCASE LIMIT 500`).all(uid)
+    .filter((s) => canManageServer(s, uid)).map((s) => ({ id: s.id, name: s.name, members: s.n }));
+
+  // The entry in the chosen server's own audit log (server/serveraudit.js), so its moderators can see that the
+  // instance's owner made it (or stopped it being) the main server, and with which invite. The code is shown whole
+  // only to readers with Manage Server there, like every invite entry.
+  const noteServer = (sid, actorId, on, code) => serverAudit(sid, actorId, 'main_server', code || null, { on, instanceOwner: true, invite: !!code || undefined });
+
+  api.get('/admin/main-server', auth, ownerOnly, (req, res) => res.json({ ...state(), choices: choices(req.userId) }));
 
   api.put('/admin/main-server', auth, ownerOnly, (req, res) => {
     rateLimit('mainserver:' + req.userId, 30, 600000);
     const b = req.body || {};
+    const was = read('mainServer');
     if (b.invite === null || b.invite === '' || b.serverId === null) {
       setSetting('mainServer', null);
       auditLog(req, 'main_server', null, 'off');
+      if (was && typeof was.serverId === 'string') noteServer(was.serverId, req.userId, false, null);
       return res.json(state());
     }
     let s;
@@ -90,8 +119,11 @@ module.exports = function setupMainServer(ctx) {
     if (typeof b.invite === 'string') {
       const m = CODE.exec(b.invite.trim());
       const inv = m && db.prepare('SELECT * FROM invites WHERE code = ?').get(m[1]);
-      if (!inv) fail(404, 'That invite does not exist on this Hearth.', 'bad_invite');
-      if (inv.expires_at && inv.expires_at < now()) fail(410, 'That invite has expired. Make one that never expires.', 'bad_invite');
+      const why = inviteProblem(inv);
+      if (why === 'gone') fail(404, 'That invite does not exist on this Hearth.', 'bad_invite');
+      if (why === 'expired') fail(410, 'That invite has expired. Make one that never expires.', 'bad_invite');
+      if (why === 'used_up') fail(410, 'That invite has been used up. Use an invite with no use limit.', 'bad_invite');
+      if (why === 'limited') fail(400, 'That invite can only be used a few times. Use an invite with no use limit.', 'bad_invite');
       s = serverRow(inv.server_id);
       code = inv.code;
     } else if (typeof b.serverId === 'string') {
@@ -101,7 +133,10 @@ module.exports = function setupMainServer(ctx) {
     } else fail(400, 'Paste an invite link to the server, or pick one.');
     if (!s || s.kind === 'group') fail(400, 'Pick a server, not a group chat.');
     setSetting('mainServer', JSON.stringify({ serverId: s.id, code, at: now(), by: req.userId }));
-    auditLog(req, 'main_server', s.id, `${s.name}${code ? ` (invite ${code})` : ''}`);
+    // Not the invite code: every staff moderator reads this log, and the code would let them in.
+    auditLog(req, 'main_server', s.id, `${s.name}${code ? ' (by invite)' : ''}`);
+    if (was && typeof was.serverId === 'string' && was.serverId !== s.id) noteServer(was.serverId, req.userId, false, null);
+    noteServer(s.id, req.userId, true, code);
     res.json(state());
   });
 
@@ -116,13 +151,24 @@ module.exports = function setupMainServer(ctx) {
     // Marked before anything is added, so two requests at once can't both run it.
     done[sid] = { at: now(), added: 0, by: req.userId };
     setSetting('mainServerBackfill', JSON.stringify(done));
-    const rows = db.prepare(`SELECT u.* ${waitingSql}`).all(sid, sid, sid).filter((u) => !stillSuspended(u));
+    const ids = db.prepare(`SELECT u.id ${waitingSql}`).all(sid, sid, sid).map((u) => u.id);
+    // Each one is looked at again as its batch is written: between batches someone may have deleted their account,
+    // been suspended, been banned from the server or left it.
+    const stillWaiting = db.prepare(`SELECT u.* ${waitingSql} AND u.id = ?`);
     const added = [];
     // Written in batches (a big instance doesn't hold the database for one long write), and only told to anyone once
     // each batch is committed. Between batches the server gets on with everything else.
-    for (let i = 0; i < rows.length; i += 200) {
+    for (let i = 0; i < ids.length; i += 200) {
+      // Stopped part-way (turned off, server deleted, or no longer allowed): what was added stays, the rest isn't.
+      const live = i ? current() : c;
+      if (live.status !== 'on' || live.server.id !== sid) break;
       const batch = [];
-      db.transaction(() => { for (const u of rows.slice(i, i + 200)) if (!bannedFrom(sid, u.id) && insertMember(sid, u.id)) batch.push(u.id); })();
+      db.transaction(() => {
+        for (const id of ids.slice(i, i + 200)) {
+          const u = stillWaiting.get(sid, sid, sid, id);
+          if (u && !stillSuspended(u) && insertMember(sid, u.id)) batch.push(u.id);
+        }
+      })();
       for (const uid of batch) announceMember(sid, uid);
       added.push(...batch);
       await tick();
@@ -140,6 +186,7 @@ module.exports = function setupMainServer(ctx) {
     }
     if (added.length) emitKeyState(sid);
     auditLog(req, 'main_server_add_everyone', sid, `${c.server.name}: ${added.length} added`);
+    serverAudit(sid, req.userId, 'main_server_add_everyone', null, { count: added.length, instanceOwner: true });
     res.json({ ...state(), added: added.length });
   }));
 

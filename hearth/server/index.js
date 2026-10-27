@@ -6843,7 +6843,7 @@ require('./imports')({ api, auth, db, fail, rateLimit, limitNet, countHit, hitsS
 // people exactly like an invite does (addMember, joinedPayload).
 DISC = require('./discovery')({ api, auth, db, fail, rateLimit, limitNet, isMember, bannedFrom, addMember, joinedPayload, limitJoins, checkWords });
 MAIN = require('./mainserver')({ api, auth, ownerOnly, db, fail, wrap, rateLimit, now, getSetting, setSetting, auditLog, bannedFrom, addMember, insertMember, announceMember,
-  joinedPayload, emitKeyState, stillSuspended, connected, log, canManageServer: (s, uid) => isMember(s.id, uid) && can(s, uid, PM.MANAGE_SERVER) });
+  joinedPayload, emitKeyState, stillSuspended, connected, log, canManageServer: (s, uid) => isMember(s.id, uid) && can(s, uid, PM.MANAGE_SERVER), serverAudit });
 // Scheduled messages, "Send later" (server/scheduled.js): ciphertext held until its time, then posted as if sent then.
 SCHED = require('./scheduled')({ api, auth, db, fail, rateLimit, limitMessages, newId, now, perms, PM, requireChannel, requireDm, isMember, serverOf, msgFor,
   isBlocked, getUserRow, stillSuspended, validCipher, cipherMax, maxFilesOf, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,

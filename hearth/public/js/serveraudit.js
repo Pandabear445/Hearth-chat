@@ -65,7 +65,7 @@ export const AUDIT_KINDS = [
   ['invites', 'Invites', ['invite_create', 'invite_revoke']],
   ['emoji', 'Emoji', ['emoji_create', 'emoji_rename', 'emoji_delete']],
   ['integrations', 'Webhooks and bots', ['webhook_create', 'webhook_update', 'webhook_rotate', 'webhook_delete', 'bot_add', 'bot_update', 'bot_remove']],
-  ['server', 'Server settings', ['server_update', 'server_transfer', 'word_filter_update']],
+  ['server', 'Server settings', ['server_update', 'server_transfer', 'word_filter_update', 'main_server', 'main_server_add_everyone']],
 ];
 
 // A person as the log's users map has them (they may have left the server since).
@@ -223,6 +223,16 @@ export function sentence(e, users) {
       if (!d.count) return [[who, ' cleared the server’s suggested word filter'], bits.join(' ') || null];
       return [[who, ` changed the server’s suggested word filter (${plural(d.count, 'entry', 'entries')})`], bits.join(' ') || null];
     }
+    // The instance's owner making this the main server every new account joins (server/mainserver.js), or stopping
+    // it. Picked with an invite, revoking that invite stops it; picked from their list, taking away their Manage
+    // Server (or banning them) does.
+    case 'main_server': {
+      const owner = [who, ` (the owner of ${brand()})`];
+      if (!d.on) return [[...owner, ' stopped new accounts joining this server when they sign up']];
+      return [[...owner, ' made this the server every new account joins when it signs up'],
+        e.targetId ? `With the invite ${e.targetId}. Revoking that invite stops it.` : 'Taking away their Manage Server permission, or banning them, stops it.'];
+    }
+    case 'main_server_add_everyone': return [[who, ` (the owner of ${brand()}) added ${plural(d.count || 0, 'existing account', 'existing accounts')} to this server`]];
     default: return [[who, ` ${String(e.action || '').replace(/_/g, ' ')}`]];
   }
 }

@@ -15,6 +15,8 @@
 //     its permissions) is left out. A deleted channel counts as private if it was when it was deleted (its
 //     channel_delete entry says), whatever it was when older entries were written; then only Administrators see its
 //     name. Invite codes are shown whole only to people with Manage Server, who can list the server's invites anyway.
+//   - The instance's owner making this server the instance's main server (server/mainserver.js: every new account
+//     joins it) or stopping that, and adding everyone to it, so its moderators know why new people arrive.
 //   - Handling reports isn't written here: the person reported (or anyone who can't see the report) could read it,
 //     or, if those entries were hidden from them, spot the gap they leave in the numbering. Who handled a report,
 //     when and with what note stays on the report, for the moderators who can see it (Reports tab).
@@ -68,6 +70,7 @@ const ACTIONS = [
   'invite_create', 'invite_revoke', 'emoji_create', 'emoji_rename', 'emoji_delete',
   'webhook_create', 'webhook_update', 'webhook_rotate', 'webhook_delete', 'bot_add', 'bot_update', 'bot_remove',
   'voice_disconnect', 'voice_move', 'voice_mute', 'voice_unmute', 'word_filter_update',
+  'main_server', 'main_server_add_everyone',
 ];
 // Detail keys that hold a channel ({ id, name, private }), shown only to readers who can see it.
 const CHANNEL_KEYS = ['channel', 'toChannel'];
@@ -233,7 +236,7 @@ module.exports = function setupServerAudit(ctx) {
         delete detail.from; delete detail.to; detail.erased = true;
       }
       let targetId = r.target_id;
-      if (r.action.startsWith('invite_') && targetId && !manageServer) targetId = `${targetId.slice(0, 2)}…`;
+      if ((r.action.startsWith('invite_') || r.action === 'main_server') && targetId && !manageServer) targetId = `${targetId.slice(0, 2)}…`;
       [r.actor_id, r.target_id, d.creatorId, r.action === 'server_transfer' ? d.from : null].forEach((x) => x && userIds.add(x));
       if (Array.isArray(detail.changes)) detail.changes.forEach((o) => o && o.type === 'member' && userIds.add(o.id));
       return { id: r.id, seq: r.seq, action: r.action, actorId: r.actor_id, targetId, createdAt: r.created_at, detail };
