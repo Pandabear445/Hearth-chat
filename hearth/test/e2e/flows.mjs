@@ -5739,7 +5739,8 @@ async function community(t) {
   await bob.toast('Main server set.');
   await bob.$('.admin-body strong', { hasText: `everyone who signs up joins ${GUILD}` }).waitFor();
 
-  const nova = await t.open('nova');
+  // From a network of its own: earlier flows used up this one's sign-ups for the hour (5).
+  const nova = await t.open('nova', { extraHTTPHeaders: { 'x-forwarded-for': '198.18.77.7' } });
   await nova.register('nova', t.pw.alice + 'n');
   await nova.page.locator(`#rail button[aria-label="${GUILD}"]`).waitFor();
   await alice.railButton(GUILD);
