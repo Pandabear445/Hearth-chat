@@ -1055,6 +1055,29 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .key-warn .ic { width: 13px; height: 13px; }
 .dm-profile { padding: 10px; overflow-y: auto; }
 .dm-profile .pcard { width: 100%; }
+/* The DM profile's own row: its fold button where the panel meets the chat, so on the far end when the panel is on
+   the left of it (and pointing that way). */
+.dm-profile-head { padding: 0 16px 0 8px; }
+[data-panel-side='left'] .dm-profile-head { flex-direction: row-reverse; padding: 0 8px 0 16px; }
+[data-panel-side='left'] .dm-fold .ic { transform: scaleX(-1); }
+/* The DM header's profile button, lit while the profile is open beside the chat: the one to look for once it's
+   folded away. */
+#main-head .head-profile.active { color: var(--text); background: rgb(var(--accent-rgb) / .16); box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / .45); }
+/* Folding the DM profile away and back (app.js slidePanel): the panel's width goes to nothing and back, the chat
+   reaching over the gap and the panel's borders meanwhile (--fold-ml/--fold-mr), so the chat widens and narrows with
+   it rather than jumping, even by a few pixels at the end. What's inside keeps its width (--fold-w) and slides out
+   under the edge. panel-in stays in the list so it isn't played again when the slide's class goes. Only beside the
+   chat (app.js), and the reduced-motion rules below cover it. */
+#members.panel-folding { animation: panel-in .18s var(--ease), panel-fold .18s var(--ease) forwards; }
+#members.panel-unfolding { animation: panel-in .18s var(--ease), panel-unfold .18s var(--ease); }
+#members.panel-folding > :not(.resize-handle), #members.panel-unfolding > :not(.resize-handle) { width: var(--fold-w); }
+[data-panel-side='left'] #members.panel-folding, [data-panel-side='left'] #members.panel-unfolding { align-items: flex-end; }
+#main.panel-folding { animation: main-fold .18s var(--ease) forwards; }
+#main.panel-unfolding { animation: main-unfold .18s var(--ease); }
+@keyframes panel-fold { to { width: 0; opacity: 0; } }
+@keyframes panel-unfold { from { width: 0; opacity: 0; } }
+@keyframes main-fold { to { margin-left: var(--fold-ml, 0px); margin-right: var(--fold-mr, 0px); } }
+@keyframes main-unfold { from { margin-left: var(--fold-ml, 0px); margin-right: var(--fold-mr, 0px); } }
 .pc-mutuals { display: flex; flex-direction: column; gap: 2px; }
 .pc-mutual { display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 8px; font-size: 13.5px; text-align: left; }
 .pc-mutual:hover { background: rgb(255 255 255 / .07); }

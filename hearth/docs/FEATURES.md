@@ -1978,6 +1978,32 @@ Tests:
 - `test/side-view-client.test.js`;
 - the e2e flows "chat backgrounds" and "the side view".
 
+## The profile beside a DM folds away
+
+What the owner asked for: "make the side profile in dms fold in able so it's not always on the side". On a wide window
+a DM opens with the other person's profile in the side panel (`#members`, `dmProfilePanel` in `public/js/app.js`).
+- **Its own choice.** Whether it's shown is kept per device in `localStorage` `hearth.dmprofile` (`P.showDmProfile`),
+  apart from servers' and group chats' member lists (`hearth.members`, `P.showMembers`). It used to be that one choice,
+  so folding the profile hid member lists too and showing a member list brought the profile back. The first time an
+  app starts with it, it takes the member list's choice as it is then, so a profile someone had hidden stays hidden.
+  `restingPanel` decides the panel a channel or DM opens with, and goes back to when a thread closes (in a DM, also
+  when pinned messages, photos & videos or the side view close); going between a DM and a channel keeps an open panel
+  only if it's shown in both.
+- **Folding.** The panel has its own row with a fold button where it meets the chat ("Hide profile", mirrored when the
+  panel is on the left), and the header's person button ("Show profile" / "Hide profile", lit while it's open, with
+  `aria-expanded`) does the same. Folded with its own button, the focus goes to the header's button; unfolded from
+  there, it stays on it.
+- **The slide.** Beside the chat it slides in about 180 ms (`slidePanel`, app.css `#members.panel-folding`): its width
+  and the gap beside it go to nothing and back, so the chat widens and narrows with it, and `keepPlace` holds the
+  newest message at the bottom as lines rewrap. A presence change meanwhile waits for it; going anywhere else stops it.
+  With Reduce motion (the app's or the system's) it shows and hides at once.
+- **Narrower windows and phones** are as before: it never opens by itself there, the header's button opens it over the
+  chat, and the fold button (or Back on a phone) closes it.
+
+Tests: `test/dm-profile-client.test.js` (the choice, taking it from the member list's once, DMs and servers apart, the
+page) and the e2e flow "away and status" (`dmProfileFold`: fold, another DM, a server, a reload, unfold, focus,
+Reduce motion, a narrower window).
+
 ## Member relays (help host)
 
 What the owner asked for: "when users join they can also host, like everyone that joins makes it stronger". Any member

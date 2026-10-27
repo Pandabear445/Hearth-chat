@@ -157,12 +157,21 @@ const P = {
   set lastChannel(v) { LS.set(mine('lastChannel'), v); },
   // linkPreviews: 'ask' | 'always' | 'never' (when I send a link); linkCards: show previews in messages.
   get chat() { return { enterToSend: true, embeds: true, markdown: true, jumbo: true, linkPreviews: 'ask', linkCards: true, spellcheck: true, ...LS.get('hearth.chat', {}) }; },
+  // A server's or group chat's member list beside the chat, shown or hidden as you last left it.
   get showMembers() { return localStorage.getItem('hearth.members') !== 'off'; },
   set showMembers(v) { localStorage.setItem('hearth.members', v ? 'on' : 'off'); },
+  // A DM's profile beside the chat, shown or folded away as you last left it. A choice of its own: it used to be the
+  // member list's, so folding it in a DM hid servers' member lists too, and showing one brought it back. Not set yet
+  // (see below), it goes with the member list's.
+  get showDmProfile() { const v = localStorage.getItem('hearth.dmprofile'); return v === null ? this.showMembers : v !== 'off'; },
+  set showDmProfile(v) { localStorage.setItem('hearth.dmprofile', v ? 'on' : 'off'); },
   // The chat beside a voice channel's call: shown or hidden as you last left it (closed until you first open it).
   get voiceChat() { return localStorage.getItem('hearth.voiceChat') === 'on'; },
   set voiceChat(v) { localStorage.setItem('hearth.voiceChat', v ? 'on' : 'off'); },
 };
+// The first time this app starts with a choice of its own for the DM profile, it takes the member list's as it is now,
+// before anything here can change that: a profile someone had hidden stays hidden.
+try { if (localStorage.getItem('hearth.dmprofile') === null) P.showDmProfile = P.showMembers; } catch { /* storage blocked: it goes with the member list's */ }
 
 // expose for settings.js
 export const app = {
@@ -1940,7 +1949,10 @@ function setView(v) {
   // The side view ('side') stays: what's pinned there is from anywhere, and it's there to keep beside another chat. On a
   // phone, where it covers the chat, going to another conversation shows that conversation instead.
   if (S.panel === 'side' && isPhoneLayout() && currentKey() !== from) S.panel = null;
-  if (S.panel === null && P.showMembers && wideEnoughForPanel() && (v.type === 'channel' || v.type === 'dm')) S.panel = 'members';
+  // A DM's profile and a member list are two choices: going from a channel to a DM or back, the panel stays open only
+  // if it's shown where you're going too.
+  if (S.panel === 'members' && (v.type === 'dm' ? !P.showDmProfile : v.type === 'channel' && !P.showMembers)) S.panel = null;
+  if (S.panel === null && (v.type === 'channel' || v.type === 'dm')) S.panel = restingPanel(v);
   document.body.classList.remove('nav-open');
   // Going somewhere draws the side panel afresh (a voice chat panel otherwise stays as it is through redraws).
   const panelEl = $('#members');
@@ -2375,6 +2387,14 @@ function panelMode() {
   if (S.view.type === 'voice') return S.view.chat ? (S.panel === 'pins' ? 'pins' : 'chat') : null;
   if (!['channel', 'dm'].includes(S.view.type)) return null;
   return S.panel;
+}
+// The panel a channel or DM opens with, and goes back to when nothing else is open in it: a server's or group chat's
+// member list, or a DM's profile, each as you last left it on this device. Only where it fits beside the chat: a
+// narrower window or a phone opens it when asked.
+function restingPanel(v = S.view) {
+  if (!wideEnoughForPanel()) return null;
+  if (v.type === 'dm') return P.showDmProfile ? 'members' : null;
+  return v.type === 'channel' && P.showMembers ? 'members' : null;
 }
 
 // Which way popups from the server bar should open (it can sit left, right or on top).
@@ -3255,6 +3275,15 @@ function sideButton() {
   if (n) b.append(h('span', { class: 'sv-count', 'aria-hidden': 'true' }, String(n)));
   return b;
 }
+// A DM's profile beside the chat: shows it and folds it away (as its own fold button does), remembered on this device.
+// Lit while it's open (app.css), so it's the button to look for once it's folded. The label says what pressing it
+// does, so it says whether the panel is open with aria-expanded rather than aria-pressed ("Hide profile, pressed"
+// contradicts itself).
+function profileButton() {
+  const open = S.panel === 'members';
+  return ibtn('user', open ? 'Hide profile' : 'Show profile', () => togglePanel('members'),
+    { active: open, cls: 'head-profile', attrs: { 'aria-pressed': null, 'aria-expanded': String(open), 'aria-controls': 'members' } });
+}
 // Show or hide the chat beside a call. While it's hidden, its badge counts your pings there, and a dot means new
 // messages (when they count for you: you opened it before, or you're in the call).
 function voiceChatButton(c) {
@@ -3270,11 +3299,72 @@ function voiceChatButton(c) {
   return b;
 }
 function togglePanel(mode) {
+  const el = $('#members');
+  const dm = S.view.type === 'dm';
+  const shown = !!el && !el.hidden;
+  const profileShown = dm && shown && panelMode() === 'members';
+  const fromPanel = shown && el.contains(document.activeElement);
   S.panel = S.panel === mode ? null : mode;
-  if (mode === 'members') P.showMembers = S.panel === 'members';
+  // In a DM, closing something else (pinned messages, photos & videos, the side view) goes back to its profile when
+  // that's shown there.
+  if (!S.panel && dm && mode !== 'members') S.panel = restingPanel();
+  // Two choices: folding a DM's profile leaves servers' member lists as they are, and the other way round.
+  if (mode === 'members') { if (dm) P.showDmProfile = S.panel === 'members'; else P.showMembers = S.panel === 'members'; }
   if (S.panel !== 'thread') S.thread = null;
-  document.body.classList.toggle('panel-open', !!panelMode());
-  renderPanel(); renderHeader();
+  if (profileShown && !S.panel && slidesPanel()) slidePanel(el, true, () => renderPanel());
+  else {
+    document.body.classList.toggle('panel-open', !!panelMode());
+    renderPanel();
+    if (dm && !shown && S.panel === 'members' && !el.hidden && slidesPanel()) slidePanel(el, false);
+  }
+  renderHeader();
+  // Folded with its own button: the keyboard carries on from the header's profile button, which brings it back.
+  if (fromPanel && dm && mode === 'members' && !S.panel) { const b = $('#main-head .head-profile'); if (b) b.focus({ preventScroll: true }); }
+}
+// ---- the DM profile folding away and back
+// Its fold button and the header's profile button slide it shut and open (app.css #members.panel-folding): its width
+// goes to nothing and back, so the chat beside it widens and narrows with it rather than jumping, and keepPlace keeps
+// the newest message at the bottom as its lines rewrap. Only where it sits beside the chat: a narrower window
+// floats it over the chat and a phone covers the chat with it, so there it shows and hides as before, as it does with
+// Reduce motion (the app's or the system's).
+const FOLD_MS = 180;
+let sliding = null; // { shut, key, end(finished) }
+const slidesPanel = () => wideEnoughForPanel() && !document.documentElement.classList.contains('reduce-motion') && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+// shut: folding away (done, once it's shut, closes it); otherwise coming back, drawn already.
+function slidePanel(el, shut, done = null) {
+  if (sliding) sliding.end(false);
+  const main = $('#main');
+  // The gap between the chat and the panel, and the panel's borders (all that's left of it at the end), go and come
+  // with it: the chat reaches over them meanwhile. Only when there's nothing else between the two. (Where they're laid
+  // out, not drawn: panel-in moves the panel aside as it starts.)
+  const right = el.offsetLeft >= main.offsetLeft + main.offsetWidth;
+  const gap = right ? el.offsetLeft - main.offsetLeft - main.offsetWidth : main.offsetLeft - el.offsetLeft - el.offsetWidth;
+  if (gap >= 0 && gap <= (parseFloat(getComputedStyle($('#app')).columnGap) || 0) + 1) main.style.setProperty(right ? '--fold-mr' : '--fold-ml', `${-(gap + el.offsetWidth - el.clientWidth)}px`);
+  // What's in it keeps its width and slides out under the edge, rather than squeezing.
+  el.style.setProperty('--fold-w', `${el.clientWidth}px`);
+  const cls = shut ? 'panel-folding' : 'panel-unfolding';
+  el.classList.add(cls); main.classList.add(cls);
+  // Folding away, it's out of reach at once (togglePanel then hands the focus its button had to the header's).
+  if (shut) el.inert = true;
+  let timer = 0;
+  const onEnd = (e) => { if (e.target === el && /^panel-(un)?fold$/.test(e.animationName)) s.end(true); };
+  const s = {
+    shut, key: currentKey(),
+    end(finished) {
+      if (sliding !== s) return;
+      sliding = null;
+      clearTimeout(timer);
+      el.removeEventListener('animationend', onEnd);
+      el.classList.remove(cls); main.classList.remove(cls);
+      main.style.removeProperty('--fold-mr'); main.style.removeProperty('--fold-ml'); el.style.removeProperty('--fold-w');
+      el.inert = false;
+      if (finished && done) done();
+    },
+  };
+  sliding = s;
+  el.addEventListener('animationend', onEnd);
+  // In case the animation's end never comes (a tab in the background).
+  timer = setTimeout(() => s.end(true), FOLD_MS + 150);
 }
 
 function renderHeader() {
@@ -3364,7 +3454,7 @@ function drawHeader(head) {
         ibtn('search', 'Search (Ctrl+K)', () => openSearch({ scope: key })),
         mediaButton(),
         sideButton(),
-        ibtn('user', S.panel === 'members' ? 'Hide profile' : 'Show profile', () => togglePanel('members'), { active: S.panel === 'members' }),
+        profileButton(),
         ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), SIDE_ITEM, ...dmMenuItems(d), '-', blockItem(u)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
   } else if (v.type === 'voice' && server) {
     const c = server.channels.find((x) => x.id === v.channelId);
@@ -6206,7 +6296,7 @@ function closeThread(all = false) {
   const panel = $('#members');
   const hadFocus = !!panel && panel.contains(document.activeElement);
   S.thread = null;
-  S.panel = back ? 'threads' : P.showMembers && wideEnoughForPanel() && ['channel', 'dm'].includes(S.view.type) ? 'members' : null;
+  S.panel = back ? 'threads' : restingPanel();
   document.body.classList.toggle('panel-open', !!panelMode());
   delete composers.thread;
   renderPanel(); renderHeader();
@@ -6329,6 +6419,12 @@ function renderPanel() {
   // Photos & videos put the same elements back (media-panel.js), so whatever had focus in them can have it again.
   const mediaFocus = el.dataset.mode === 'media' && el.contains(document.activeElement) ? document.activeElement : null;
   const mode = panelMode();
+  // The DM profile sliding shut (slidePanel) stays as it is until it's shut: a presence change, which redraws a DM's
+  // panel often, waits for it. Anything else to show stops a slide where it is.
+  if (sliding) {
+    if (sliding.shut && !mode && sliding.key === currentKey()) { document.body.classList.add('panel-open'); return; }
+    if (sliding.shut || mode !== 'members' || sliding.key !== currentKey()) sliding.end(false);
+  }
   // Closed (or showing something else): it lets go of what it had, and starts from the newest when it opens again.
   if (mode !== 'media') MEDIA.reset();
   // The side view keeps what it loaded while it's open, though not shown in a view without a side panel (Friends,
@@ -6582,6 +6678,11 @@ function dmProfilePanel(el) {
   if (!d) return;
   const u = getUser(d.userId);
   const mutual = realServers().filter((s) => s.memberIds.includes(u.id));
+  // Its fold button sits where the panel meets the chat (app.css puts it on the other end of the row when the panel is
+  // on the left), and folds it away until the header's profile button brings it back.
+  el.append(h('div', { class: 'panel-head dm-profile-head' },
+    ibtn('panelClose', 'Hide profile', () => togglePanel('members'), { cls: 'dm-fold', side: 'bottom' }),
+    h('div', { class: 'panel-title' }, h('h2', null, 'Profile'))));
   el.append(h('div', { class: 'dm-profile' }, profileCard(u, {
     meId: S.me.id,
     mutual: mutual.length ? h('div', { class: 'pc-section' }, h('div', { class: 'pc-label' }, `Mutual servers \u2014 ${mutual.length}`),

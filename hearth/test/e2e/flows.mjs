@@ -2646,7 +2646,8 @@ async function channelOrder(t) {
 // Alice sees her go Away by herself, and Online again the moment she moves the mouse; Dana's own panel changes in
 // place (its buttons aren't rebuilt under her pointer). Dana saves a custom status in Settings → Profile and clears
 // it again in the same tab. Alice sets a status that clears after 30 minutes: Bob sees it, and when it's due the
-// server clears it for both of them without a reload.
+// server clears it for both of them without a reload. In between, in her new DM with Dana, Alice folds away the profile
+// beside it (dmProfileFold).
 async function awayAndStatus(t) {
   const { alice, bob } = t.people;
   await bob.railButton(SERVER);
@@ -2708,6 +2709,7 @@ async function awayAndStatus(t) {
   await dana.close();
   await alice.$('#main-head .head-topic', { hasText: 'Offline' }).waitFor({ timeout: 20000 });
   await alice.$('#main-head .status-dot.st-offline').waitFor();
+  await dmProfileFold(t);
 
   // A status that clears itself after 30 minutes.
   await alice.$('#user-panel .me-btn').click();
@@ -2736,6 +2738,169 @@ async function awayAndStatus(t) {
   t.server.sql('UPDATE users SET status_expires_at = ? WHERE id = ?', Date.now() - 1000, aliceId);
   await status.waitFor({ state: 'detached', timeout: 30000 });
   await alice.$('#user-panel .me-sub', { hasText: 'Out for lunch' }).waitFor({ state: 'detached', timeout: 10000 });
+}
+
+// The profile beside a DM folds away (an owner asked, "so it's not always on the side"). Its own fold button, from the
+// keyboard, slides it shut: the chat widens with it rather than at once, keeps its newest message at the bottom, and
+// the keyboard carries on from the header's "Show profile". It stays folded in another DM and after a reload. It's a
+// choice of its own: a server's member list is still shown, and hiding that doesn't bring the profile back (it used to
+// be one choice for both). The header's button brings it back the same way, keeping the focus. With Reduce motion it
+// goes and comes at once; a narrower window never opens it by itself, opens it over the chat from the header, and its
+// fold button closes it. Alice is in her new DM with Dana, on a wide window, with the profile beside it.
+async function dmProfileFold(t) {
+  const { alice } = t.people;
+  const { page } = alice;
+  const pane = alice.$('#members');
+  const profile = alice.$('#members .dm-profile');
+  const foldBtn = alice.$('#members .dm-profile-head button.dm-fold');
+  const headBtn = alice.$('#main-head button.head-profile');
+  // The two choices kept on this device: the DM profile's, and the member list's (never set: shown).
+  const chosen = () => page.evaluate(() => `${localStorage.getItem('hearth.dmprofile')}/${localStorage.getItem('hearth.members') || 'on'}`);
+  const focused = () => page.evaluate(() => { const a = document.activeElement; return a ? `${a.closest('#main-head') ? 'header: ' : ''}${a.getAttribute('aria-label') || a.id || a.tagName}` : null; });
+  const chatWidth = () => alice.$('#messages').evaluate((el) => Math.round(el.getBoundingClientRect().width));
+  // The chat against its own box: how far it is from its bottom, whether the newest message is all in view, and whether
+  // there's enough in it to scroll.
+  const atNewest = () => page.evaluate(() => {
+    const sc = document.querySelector('#messages'); const last = [...sc.querySelectorAll('.msg[data-mid]')].pop();
+    const r = last.getBoundingClientRect(); const box = sc.getBoundingClientRect();
+    return { fromBottom: Math.round(sc.scrollHeight - sc.scrollTop - sc.clientHeight), inside: r.top >= box.top - 1 && r.bottom <= box.bottom + 1, scrolls: sc.scrollHeight > sc.clientHeight + 100 };
+  });
+  const stillAtNewest = async (when) => {
+    const at = await atNewest();
+    check(at.fromBottom < 8 && at.inside, `${when}, the chat should still be at its newest message (got ${JSON.stringify(at)}).`);
+  };
+  // Watches what comes next for 1.5 s: whether the panel slides (its classes), and the chat's width on every frame.
+  const watch = () => page.evaluate(() => {
+    const el = document.querySelector('#members'); const sc = document.querySelector('#messages');
+    const w = { classes: [], widths: [], done: false };
+    window.e2eSlide = w;
+    const mo = new MutationObserver(() => { for (const c of ['panel-folding', 'panel-unfolding']) if (el.classList.contains(c) && !w.classes.includes(c)) w.classes.push(c); });
+    mo.observe(el, { attributes: true, attributeFilter: ['class'] });
+    const t0 = performance.now();
+    const tick = () => {
+      w.widths.push(Math.round(sc.getBoundingClientRect().width));
+      if (performance.now() - t0 < 1500) requestAnimationFrame(tick); else { mo.disconnect(); w.done = true; }
+    };
+    requestAnimationFrame(tick);
+  });
+  const watched = async () => { await page.waitForFunction(() => window.e2eSlide.done); return page.evaluate(() => window.e2eSlide); };
+  const slid = async (cls, from, to) => {
+    const w = await watched();
+    check(w.classes.includes(cls), `The profile should slide (${cls}; saw ${w.classes.join(', ') || 'none'}).`);
+    const [lo, hi] = [Math.min(from, to), Math.max(from, to)];
+    check(w.widths.some((x) => x > lo + 16 && x < hi - 16), `The chat should widen or narrow with it, not jump from ${from} to ${to} (widths ${w.widths.join(', ')}).`);
+    check(w.widths[w.widths.length - 1] === to, `The chat should end ${to} wide (widths ${w.widths.join(', ')}).`);
+  };
+  const noSlide = async (why) => { const w = await watched(); check(!w.classes.length, `${why}, it shouldn't slide (saw ${w.classes.join(', ')}).`); };
+  const toDm = async (name) => {
+    await alice.dmRow(name).click();
+    await page.waitForSelector(`#composer-input[placeholder="Message ${name}"]`);
+    await headBtn.waitFor();
+  };
+
+  // Shown, as before; the header's button says so (aria-expanded, which a label saying Show or Hide goes with).
+  await profile.waitFor();
+  check(await headBtn.getAttribute('aria-label') === 'Hide profile' && await headBtn.getAttribute('aria-expanded') === 'true' && await headBtn.getAttribute('aria-pressed') === null,
+    'The header’s profile button should say Hide profile, and that the profile is open.');
+  check(await chosen() === 'on/on', `The DM profile’s choice should start as the member list’s (got ${await chosen()}).`);
+  // Its fold button is where the panel meets the chat.
+  const [pb, fb] = [await pane.boundingBox(), await foldBtn.boundingBox()];
+  check(fb.x - pb.x < 24, `The fold button should be at the panel’s edge beside the chat (${fb.x - pb.x}px in).`);
+  check(await foldBtn.getAttribute('data-tip') === 'Hide profile', 'The fold button should have a tooltip.');
+  // (Enough in the conversation to scroll.)
+  for (let i = 1; i <= 9; i++) {
+    await alice.$('#composer-input').fill(`Folding ${i}:\nthe profile\nbeside\nthis chat`);
+    await alice.$('#composer-input').press('Enter');
+    await alice.message(`Folding ${i}:`).first().waitFor();
+    await page.waitForTimeout(450); // (under the server's limit on messages in a row)
+  }
+  check((await atNewest()).scrolls, 'The DM should have enough in it to scroll.');
+  await stillAtNewest('Before folding');
+
+  // Folded from the keyboard with its own button.
+  const narrow = await chatWidth();
+  await foldBtn.focus();
+  await watch();
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('#members', { state: 'hidden' });
+  const wide = await chatWidth();
+  check(wide > narrow + 200, `The chat should take the panel’s room (${narrow} → ${wide}).`);
+  await slid('panel-folding', narrow, wide);
+  await stillAtNewest('Folded');
+  check(await focused() === 'header: Show profile', `Folding should leave the focus on the header’s Show profile (it’s on ${await focused()}).`);
+  check(await headBtn.getAttribute('aria-expanded') === 'false', 'The header’s button should say the profile is folded.');
+  check(await chosen() === 'off/on', `Folding should be remembered for DMs only (got ${await chosen()}).`);
+
+  // Folded in another DM too.
+  await toDm('bob');
+  check(await pane.isHidden() && await headBtn.getAttribute('aria-label') === 'Show profile', 'The profile should stay folded in another DM.');
+  // A server's member list is still shown; hidden there, the profile stays as it was.
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await alice.$('#members .member-list').waitFor();
+  await alice.$('#main-head button[aria-label="Hide members"]').click();
+  await page.waitForSelector('#members', { state: 'hidden' });
+  check(await chosen() === 'off/off', `Hiding the member list should change only its own choice (got ${await chosen()}).`);
+
+  // After a reload: still folded.
+  await page.reload();
+  await alice.waitApp();
+  await alice.railButton('Direct messages');
+  await toDm('dana');
+  check(await pane.isHidden() && await headBtn.getAttribute('aria-label') === 'Show profile', 'The profile should stay folded after a reload.');
+  await alice.message('Folding 9:').first().waitFor();
+  await page.waitForTimeout(500);
+  await stillAtNewest('Reopened');
+
+  // The header's button brings it back, from the keyboard: it slides open, and the focus stays on it.
+  await headBtn.focus();
+  await watch();
+  await page.keyboard.press('Enter');
+  await profile.waitFor();
+  await slid('panel-unfolding', wide, narrow);
+  await stillAtNewest('Unfolded');
+  check(await focused() === 'header: Hide profile' && await headBtn.getAttribute('aria-expanded') === 'true', `Unfolding should keep the focus on the header’s button, now Hide profile (it’s on ${await focused()}).`);
+  check(await chosen() === 'on/off', `Unfolding should leave the member list’s choice alone (got ${await chosen()}).`);
+  // The member list stays hidden in the server, until it's shown there again.
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  check(await pane.isHidden(), 'Showing the profile shouldn’t bring the member list back.');
+  await alice.showMembers();
+  check(await chosen() === 'on/on', `Shown again (got ${await chosen()}).`);
+
+  // With Reduce motion (the app's), it goes and comes at once.
+  await alice.railButton('Direct messages');
+  await toDm('dana');
+  await profile.waitFor();
+  await page.evaluate(() => document.documentElement.classList.add('reduce-motion'));
+  await watch();
+  await foldBtn.click();
+  check(await pane.isHidden(), 'With Reduce motion the profile should fold away at once.');
+  await headBtn.click();
+  check(await pane.isVisible() && (await pane.boundingBox()).width > 200, 'With Reduce motion the profile should come back at once.');
+  await noSlide('With Reduce motion');
+  await page.evaluate(() => document.documentElement.classList.remove('reduce-motion'));
+
+  // A narrower window, where the panel floats over the chat: it doesn't open by itself, the header's button opens it
+  // over the chat and its fold button closes it, without the slide.
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.reload();
+  await alice.waitApp();
+  await alice.railButton('Direct messages');
+  await toDm('dana');
+  check(await pane.isHidden(), 'On a narrower window the profile shouldn’t open by itself.');
+  await watch();
+  await headBtn.click();
+  await profile.waitFor();
+  check(await pane.evaluate((el) => getComputedStyle(el).position) === 'absolute', 'On a narrower window the profile should open over the chat.');
+  await foldBtn.click();
+  await page.waitForSelector('#members', { state: 'hidden' });
+  await noSlide('On a narrower window');
+  // Back on a wide window, shown again for what comes next.
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await headBtn.click();
+  await profile.waitFor();
+  check(await chosen() === 'on/on', `The profile should be shown again (got ${await chosen()}).`);
 }
 
 // ------------------------------------------------------------------ 24. text chat in a voice channel
@@ -5507,7 +5672,7 @@ export const FLOWS = [
   ['outside images: a picture link waits for a click and loads after it; Never and Always load; fonts come from Hearth', outsideImages],
   ['discord import: paste a template, see what is skipped, leave some out, create', discordImport],
   ['channel order: drag a channel into a category and a category above another, live for everyone; Move down by keyboard keeps focus (into a collapsed category too); a menu left open doesn’t undo another move', channelOrder],
-  ['away and status: Away after inactivity and back on input; a custom status that clears itself, live', awayAndStatus],
+  ['away and status: Away after inactivity and back on input; a custom status that clears itself, live; the profile beside a DM folds away and stays folded, apart from servers\u2019 member lists, and comes back', awayAndStatus],
   ['voice chat: open beside the call, both ways, a picture link from another site waits for a click, no threads, unread only once opened, pings always, pins, All messages, in a call', voiceChat],
   ['send later: schedule from the send button, edit, reschedule and send now from the list; cancel one in a DM; re-encrypted by itself when the key changes, never from a copy it can’t confirm; a signed-out session’s message waits for Keep; overdue ones ask first', sendLater],
   ['nicknames: set your own, seen in the member list, messages and @mention suggestions; a moderator changes and removes it; audit log', nicknames],
