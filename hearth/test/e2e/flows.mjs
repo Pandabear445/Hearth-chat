@@ -1246,7 +1246,7 @@ function fakeAndroidBridge({ invite }) {
 async function androidApp(t) {
   const code = t.state.invite.split('/invite/')[1];
   const droid = await t.open('droid');
-  t.pw.droid = newPassword();
+  t.pw.droid = newPassword(); // the iPhone flow signs in to this account again
   await droid.register('droid', t.pw.droid);
   const subs = [];
   await droid.page.route('**/api/push/subscribe', (route) => { subs.push(route.request().postDataJSON()); route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }); });
@@ -1367,10 +1367,10 @@ function fakeIPhone() {
   Object.defineProperty(navigator, 'standalone', { get: () => localStorage.getItem('e2e.standalone') === '1' });
   Object.defineProperty(Notification, 'permission', { get: () => 'default' });
 }
+// It signs in to the Android flow's account rather than signing up (sign-ups from one network are limited, see
+// run.mjs): the tip and the offer are remembered by the browser, not the account, so a new browser shows both.
 async function iPhoneNotifications(t) {
   const phone = await t.open('iphone');
-  // The Android flow's account, signed in on this iPhone (what's checked here belongs to the device): the server takes
-  // five sign-ups an hour from one network, and the flows' own come to that already.
   await phone.login('droid', t.pw.droid);
   await phone.context.addInitScript(fakeIPhone);
   const restart = async () => { await phone.page.reload(); await phone.waitApp(); await phone.page.waitForTimeout(400); };
@@ -1393,6 +1393,9 @@ async function iPhoneNotifications(t) {
   await offer.waitFor({ state: 'detached' });
   await restart();
   check(!(await phone.$('.push-offer').count()), 'After "Not now" the offer should not come back.');
+  // droid is in E2E Hall: put the phone away so it isn't online there for the flows after this one.
+  await phone.close();
+  delete t.people.iphone;
 }
 
 async function stepUp(t) {

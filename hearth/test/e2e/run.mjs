@@ -40,7 +40,9 @@ async function main() {
   const browser = await launchBrowser({ headed, slowMo });
   const t = {
     server, browser, people: {}, state: {},
-    // Fresh passwords every run (none are kept in the repository).
+    // Fresh passwords every run (none are kept in the repository). Every account signs up from 127.0.0.1, and the
+    // server takes 5 sign-ups an hour from one network (POST /auth/register): alice, bob, droid, carl and dana use
+    // them all, so a new flow signs in to one of those accounts instead of making another.
     pw: { alice: newPassword(), bob: newPassword(), carl: newPassword(), relay: newPassword() },
     // Everyone ever opened, also once closed or opened again under the same name (t.people keeps the latest): the
     // checks after the flows, the failure report and the kept logs cover each of them.

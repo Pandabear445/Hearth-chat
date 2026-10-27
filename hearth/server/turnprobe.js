@@ -4,6 +4,11 @@
 // which only a relay that knows the secret can make, so a signed answer proves the relay at that address is this one.
 // The relayed address it hands out is given back at once.
 //
+// The hashes are the protocol's, not a choice: MESSAGE-INTEGRITY is HMAC-SHA1 (RFC 5389 section 15.4) and a relay checks
+// nothing else, the long-term key is MD5(login:realm:credential) (the same section), and coturn's shared-secret logins
+// make the credential as HMAC-SHA1 of the login (use-auth-secret). Nothing here is stored or kept: the login runs out,
+// and the key only signs this one exchange.
+//
 // server/regions.js uses it when a member relay checks in from somewhere other than the address it says it's at (a
 // proxy in front of this server, such as Cloudflare's, or a check-in over IPv6): that address goes to everyone's app
 // and into every avoider's list of addresses to leave out, so it has to be the relay's own.
@@ -31,7 +36,7 @@ function encode(type, tid, attrs, key = null) {
   if (!key) return Buffer.concat([header(body.length), body]);
   // (The length in the header counts the MESSAGE-INTEGRITY itself while it's worked out.)
   const head = header(body.length + 24);
-  const mac = crypto.createHmac('sha256', key).update(Buffer.concat([head, body])).digest();
+  const mac = crypto.createHmac('sha1', key).update(Buffer.concat([head, body])).digest();
   const mi = Buffer.alloc(4);
   mi.writeUInt16BE(A.MESSAGE_INTEGRITY, 0); mi.writeUInt16BE(20, 2);
   return Buffer.concat([head, body, mi, mac]);
@@ -74,14 +79,14 @@ function probeTurn({ host, port = 3478, secret, timeout = 3000 }) {
   return new Promise((resolve) => {
     if (!net.isIP(host) || !secret) { resolve(false); return; }
     const sock = dgram.createSocket(net.isIPv6(host) ? 'udp6' : 'udp4');
-    // A login as coturn takes them with use-auth-secret: "<expiry>:<name>", and its password the secret's HMAC of it.
+    // A login as coturn takes them with use-auth-secret: "<expiry>:<name>", and its credential the secret's HMAC of it.
     // coturn refuses one whose expiry has passed by its own clock, so it runs out 12 hours from now, like the logins apps
     // get: a relay whose clock is a few minutes (or hours) ahead still answers. (The relayed address goes back at once.)
-    const username = Buffer.from(`${Math.floor(Date.now() / 1000) + 12 * 3600}:hearth-check`);
-    const password = crypto.createHmac('sha256', String(secret)).update(username).digest('base64');
+    const login = Buffer.from(`${Math.floor(Date.now() / 1000) + 12 * 3600}:hearth-check`);
+    const credential = crypto.createHmac('sha1', String(secret)).update(login).digest('base64');
     let key = null; let realm = null; let nonce = null; let tid = null; let msg = null; let staleTries = 0;
     let resend = null; let done = false;
-    const auth = () => [[A.USERNAME, username], [A.REALM, realm], [A.NONCE, nonce]];
+    const auth = () => [[A.USERNAME, login], [A.REALM, realm], [A.NONCE, nonce]];
     const finish = (ok) => {
       if (done) return;
       done = true;
@@ -114,7 +119,7 @@ function probeTurn({ host, port = 3478, secret, timeout = 3000 }) {
         // The first answer: "unauthorized", with the relay's realm and a nonce to sign the real request with.
         if (m.type !== (ALLOCATE | ERROR) || errorCode(m) !== 401 || !m.attrs.get(A.REALM) || !m.attrs.get(A.NONCE)) { finish(false); return; }
         realm = Buffer.from(m.attrs.get(A.REALM)); nonce = Buffer.from(m.attrs.get(A.NONCE));
-        key = crypto.createHash('md5').update(Buffer.concat([username, Buffer.from(':'), realm, Buffer.from(':' + password)])).digest();
+        key = crypto.createHash('md5').update(Buffer.concat([login, Buffer.from(':'), realm, Buffer.from(':' + credential)])).digest();
         ask(true);
         return;
       }
