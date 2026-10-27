@@ -31,7 +31,7 @@ function encode(type, tid, attrs, key = null) {
   if (!key) return Buffer.concat([header(body.length), body]);
   // (The length in the header counts the MESSAGE-INTEGRITY itself while it's worked out.)
   const head = header(body.length + 24);
-  const mac = crypto.createHmac('sha1', key).update(Buffer.concat([head, body])).digest();
+  const mac = crypto.createHmac('sha256', key).update(Buffer.concat([head, body])).digest();
   const mi = Buffer.alloc(4);
   mi.writeUInt16BE(A.MESSAGE_INTEGRITY, 0); mi.writeUInt16BE(20, 2);
   return Buffer.concat([head, body, mi, mac]);
@@ -78,7 +78,7 @@ function probeTurn({ host, port = 3478, secret, timeout = 3000 }) {
     // coturn refuses one whose expiry has passed by its own clock, so it runs out 12 hours from now, like the logins apps
     // get: a relay whose clock is a few minutes (or hours) ahead still answers. (The relayed address goes back at once.)
     const username = Buffer.from(`${Math.floor(Date.now() / 1000) + 12 * 3600}:hearth-check`);
-    const password = crypto.createHmac('sha1', String(secret)).update(username).digest('base64');
+    const password = crypto.createHmac('sha256', String(secret)).update(username).digest('base64');
     let key = null; let realm = null; let nonce = null; let tid = null; let msg = null; let staleTries = 0;
     let resend = null; let done = false;
     const auth = () => [[A.USERNAME, username], [A.REALM, realm], [A.NONCE, nonce]];
