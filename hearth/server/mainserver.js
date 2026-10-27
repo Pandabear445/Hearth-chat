@@ -94,8 +94,8 @@ module.exports = function setupMainServer(ctx) {
 
   // The servers the owner could pick from the list: ones they're in with Manage Server (not group chats).
   const choices = (uid) => db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM members m2 WHERE m2.server_id = s.id) AS n FROM servers s
-      JOIN members m ON m.server_id = s.id AND m.user_id = ? WHERE s.kind != 'group' ORDER BY s.name COLLATE NOCASE LIMIT 500`).all(uid)
-    .filter((s) => canManageServer(s, uid)).map((s) => ({ id: s.id, name: s.name, members: s.n }));
+      JOIN members m ON m.server_id = s.id AND m.user_id = ? WHERE s.kind != 'group' ORDER BY s.name COLLATE NOCASE`).all(uid)
+    .filter((s) => canManageServer(s, uid)).slice(0, 500).map((s) => ({ id: s.id, name: s.name, members: s.n })); // (the first 500 they manage)
 
   // The entry in the chosen server's own audit log (server/serveraudit.js), so its moderators can see that the
   // instance's owner made it (or stopped it being) the main server, and with which invite. The code is shown whole
