@@ -2840,7 +2840,7 @@ api.patch('/servers/:id', auth, (req, res) => {
     if (typeof body.invitePreview !== 'boolean') fail(400, 'invitePreview is true or false.');
   }
   // Listing the server in server search (server/discovery.js), checked before anything is written.
-  const listing = DISC.plan(srv, body, body.name !== undefined ? String(body.name || '').trim().slice(0, 64) : srv.name);
+  const listing = DISC.plan(srv, body, body.name !== undefined ? String(body.name || '').trim().slice(0, 64) : srv.name, req.userId);
   // The category order is about channels: it needs Manage Channels however it comes (with other changes, or in a
   // group chat), and is worked out before anything is written, since it can be refused (server/channelorder.js).
   let categoryPlan = null;
@@ -3176,17 +3176,25 @@ const bannedFrom = (serverId, userId) => !!db.prepare('SELECT 1 FROM bans WHERE 
 // Adds someone to a server the way every join does: a new key when they were here before, their history starting now
 // when the server hides older messages, the other members told, bots told, a paid-for role back. Returns whether they
 // were new (false: they were in already). The caller checks bans and limits first, and sends joinedPayload after.
-function addMember(sid, userId) {
+// insertMember is the database part (safe inside a transaction); announceMember tells everyone, once it's committed.
+function insertMember(sid, userId) {
   if (isMember(sid, userId)) return false;
   keyOnRejoin(sid, userId);
   db.prepare('INSERT INTO members (server_id, user_id, joined_at) VALUES (?, ?, ?)').run(sid, userId, now());
   // "New members can't read messages from before they joined" (server/joinhistory.js): their history starts now,
   // and the apps switch to a new key for them (at once, or shared with other joins close by).
   HIST.joined(sid, userId);
+  return true;
+}
+function announceMember(sid, userId) {
   io.to(`server:${sid}`).emit('member:add', { serverId: sid, user: publicUser(getUserRow(userId)) });
   io.in(`user:${userId}`).socketsJoin(`server:${sid}`);
   BOTS.event('member.joined', sid, { serverId: sid, userId, joinedAt: now() }, { actorId: userId });
   MEMB.syncRoles(sid, userId); // back with a membership they still pay for: their role comes back too
+}
+function addMember(sid, userId) {
+  if (!insertMember(sid, userId)) return false;
+  announceMember(sid, userId);
   return true;
 }
 // The server as the person who just joined sees it, sent to their open apps too. A newcomer needs the server key, so
@@ -6834,8 +6842,8 @@ require('./imports')({ api, auth, db, fail, rateLimit, limitNet, countHit, hitsS
 // Server search (server/discovery.js) and the main server every new account joins (server/mainserver.js). Both join
 // people exactly like an invite does (addMember, joinedPayload).
 DISC = require('./discovery')({ api, auth, db, fail, rateLimit, limitNet, isMember, bannedFrom, addMember, joinedPayload, limitJoins, checkWords });
-MAIN = require('./mainserver')({ api, auth, adminOnly, db, fail, rateLimit, now, getSetting, setSetting, auditLog, bannedFrom, addMember, joinedPayload,
-  emitKeyState, stillSuspended, connected, log });
+MAIN = require('./mainserver')({ api, auth, ownerOnly, db, fail, wrap, rateLimit, now, getSetting, setSetting, auditLog, bannedFrom, addMember, insertMember, announceMember,
+  joinedPayload, emitKeyState, stillSuspended, connected, log, canManageServer: (s, uid) => isMember(s.id, uid) && can(s, uid, PM.MANAGE_SERVER) });
 // Scheduled messages, "Send later" (server/scheduled.js): ciphertext held until its time, then posted as if sent then.
 SCHED = require('./scheduled')({ api, auth, db, fail, rateLimit, limitMessages, newId, now, perms, PM, requireChannel, requireDm, isMember, serverOf, msgFor,
   isBlocked, getUserRow, stillSuspended, validCipher, cipherMax, maxFilesOf, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,

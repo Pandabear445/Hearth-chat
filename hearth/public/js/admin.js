@@ -305,7 +305,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
         h('p', { class: 'field-hint' }, 'Every new account joins this server when it signs up, as if it had used an invite, so nobody starts out alone. People can still leave it. Like anyone who joins, newcomers get the server’s encryption key from its members’ apps.'),
         h('p', null, h('strong', null, status)), expires,
         h('div', { class: 'row gap' }, field('Invite link or code', link), h('button', { class: 'btn ghost', onclick: () => save({ invite: link.value }, 'Main server set.') }, 'Use this invite')),
-        h('div', { class: 'row gap' }, field('Or pick a server', pick), h('button', { class: 'btn ghost', onclick: () => (pick.value ? save({ serverId: pick.value }, 'Main server set.') : toast('Choose a server first.', 'error')) }, 'Use this server')),
+        h('div', { class: 'row gap' }, field('Or pick a server you manage', pick), h('button', { class: 'btn ghost', onclick: () => (pick.value ? save({ serverId: pick.value }, 'Main server set.') : toast('Choose a server first.', 'error')) }, 'Use this server')),
         st.status !== 'off' ? h('div', null, h('button', { class: 'btn ghost', onclick: () => save({ serverId: null }, 'New accounts no longer join a server.') }, 'Turn off')) : null,
         st.status === 'on' ? (st.addedEveryone
           ? h('p', { class: 'field-hint' }, `Existing accounts were added ${fmtStamp(st.addedEveryone.at)} (${st.addedEveryone.added}).`)

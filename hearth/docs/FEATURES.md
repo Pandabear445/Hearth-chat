@@ -2136,17 +2136,21 @@ and Create Threads, and allow them for the template's moderator roles. @everyone
 - In the app, Find servers is its own tab, and only it sends what's typed to the server; message search never does.
   The All tab offers a shortcut to it instead of searching servers by itself.
 
-**The main server** (Admin → Registration & Terms → Main server, instance admins):
+**The main server** (Admin → Registration & Terms → Main server, the instance's owner only):
 
 - `PUT /api/admin/main-server` `{ invite }` (a link or code) or `{ serverId }`; `null` turns it off. Stored in
-  `instance_settings.mainServer`. Group chats are refused.
+  `instance_settings.mainServer`. Group chats are refused. Picking from the list needs the owner to be in that server
+  with Manage Server (`403 not_yours`); otherwise it takes one of its invites. Everyone it adds gets the server key from
+  the members' apps, so this must never be a way into a server nobody there let the owner into: an invite means
+  someone with Create Invite there let people in, and its moderators can revoke it.
 - Every account made afterwards joins it right after sign-up, like an invite join (members told, key handed over by
   their apps, bans respected). Auto-joins don't count as the invite's uses. Picked by an invite, it works while that
   invite exists and hasn't expired: the server's moderators can stop it by revoking the invite. A deleted server or
   any error just means no auto-join; sign-up never fails because of it.
 - People can leave it like any server.
 - `POST /api/admin/main-server/add-everyone` `{ confirm: true }`: adds the accounts that aren't in it, once per server
-  (`409 already_done` after that), skipping bots, deleted and suspended accounts, people who were in it before (they
+  (`409 already_done` after that, even after picking another server and back), in batches that are announced once
+  each is committed, skipping bots, deleted and suspended accounts, people who were in it before (they
   left or were kicked) and anyone banned from it. Both are in the instance audit log.
 
 Tests: `test/community.test.js`; the e2e flow "community".

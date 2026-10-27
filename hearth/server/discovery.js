@@ -46,9 +46,13 @@ module.exports = function setupDiscovery(ctx) {
 
   // The listing part of PATCH /servers/:id, checked before anything is written. Returns null when the request doesn't
   // touch it, else { changes, apply } (apply writes it; changes names what changed, for the server's audit log).
-  // name: the server's name once this request is done (search shows it, so the word filter checks it too).
-  function plan(srv, body, name) {
-    if (body.discoverable === undefined && body.discoverAbout === undefined && body.discoverTags === undefined) return null;
+  // name: the server's name once this request is done (search shows it, so the word filter checks it too). userId: who asks.
+  function plan(srv, body, name, userId) {
+    if (body.discoverable === undefined && body.discoverAbout === undefined && body.discoverTags === undefined) {
+      // Renaming a listed server: the new name shows in search too.
+      if (srv.discoverable && body.name !== undefined) checkWords(name);
+      return null;
+    }
     if (srv.kind === 'group') fail(400, 'Group chats can’t be listed in server search.');
     if (body.discoverable !== undefined && typeof body.discoverable !== 'boolean') fail(400, 'discoverable is true or false.');
     const was = { on: !!srv.discoverable, about: srv.discover_about || '', tags: tagsOf(srv) };
@@ -63,7 +67,8 @@ module.exports = function setupDiscovery(ctx) {
     if (about !== was.about) changes.push('discoverAbout');
     if (JSON.stringify(tags) !== JSON.stringify(was.tags)) changes.push('discoverTags');
     // Each change to a listing is an audit log entry, and turning it on and off over and over would only churn search.
-    if (changes.length) rateLimit(`discoverset:${srv.id}`, 30, 3600000);
+    // Per person in each server, so one member can't use up a budget the others need (to turn it off, say).
+    if (changes.length) rateLimit(`discoverset:${srv.id}:${userId}`, 30, 3600000);
     return {
       changes, on,
       apply: () => db.prepare('UPDATE servers SET discoverable = ?, discover_about = ?, discover_tags = ?, discover_at = ? WHERE id = ?')

@@ -79,7 +79,7 @@ test('templates: the server refuses a template name it doesn’t know, whatever 
 
 // ------------------------------------------------------------------ main server
 let hub;
-test('main server: off by default, and only instance admins can see or set it', async () => {
+test('main server: off by default, and nobody but the instance’s owner can see or set it', async () => {
   const st = (await as(owner, 'GET', '/admin/main-server')).json;
   assert.equal(st.status, 'off');
   const u = await srv.register('lonely_one');
@@ -137,6 +137,25 @@ test('main server: a revoked invite or a deleted server turns it off quietly, an
   assert.equal((await as(owner, 'PUT', '/admin/main-server', { serverId: null })).json.status, 'off');
 });
 
+test('main server: only the owner picks it, and only a server they manage there or have an invite to', async () => {
+  // An instance admin who isn't the owner can't touch it.
+  const adm = await srv.register('admin_two');
+  assert.equal((await as(owner, 'PUT', '/admin/staff', { userId: adm.id, role: 'admin', authKey: owner.authKey })).status, 200);
+  assert.equal((await as(adm, 'GET', '/admin/main-server')).status, 403);
+  assert.equal((await as(adm, 'PUT', '/admin/main-server', { serverId: hub.id })).status, 403);
+  // Someone else's private server, picked from the list: refused (its members' apps would hand over the key).
+  const other = await srv.register('private_owner');
+  const priv = await mk(other, 'Private Den');
+  const r = await as(owner, 'PUT', '/admin/main-server', { serverId: priv.id });
+  assert.equal(r.status, 403);
+  assert.equal(r.json.code, 'not_yours');
+  assert.equal((await as(owner, 'GET', '/admin/main-server')).json.status, 'off');
+  // With one of its invites (someone there let people in), it works.
+  const code = await invite(other, priv.id, { expiresHours: 0 });
+  assert.equal((await as(owner, 'PUT', '/admin/main-server', { invite: code })).json.status, 'on');
+  assert.equal((await as(owner, 'PUT', '/admin/main-server', { serverId: null })).json.status, 'off');
+});
+
 test('main server: picked from the list; adding everyone runs once, after a confirm, and skips people who left or are banned', async () => {
   const town = await mk(owner, 'Town Square');
   const stay = await srv.register('existing_a');
@@ -158,6 +177,10 @@ test('main server: picked from the list; adding everyone runs once, after a conf
   assert.ok(!memberOf(town.id, banned.id), 'someone banned stays out');
   assert.equal(r.json.waiting, 0);
   assert.equal((await as(owner, 'POST', '/admin/main-server/add-everyone', { confirm: true })).status, 409, 'once per server');
+  // Still once after switching to another server and back.
+  await as(owner, 'PUT', '/admin/main-server', { serverId: hub.id });
+  await as(owner, 'PUT', '/admin/main-server', { serverId: town.id });
+  assert.equal((await as(owner, 'POST', '/admin/main-server/add-everyone', { confirm: true })).status, 409, 'once per server, whatever was picked in between');
   // Accounts made after it ran still join at sign-up.
   const fresh = await srv.register('existing_d');
   assert.ok(memberOf(town.id, fresh.id));

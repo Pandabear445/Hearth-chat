@@ -5699,7 +5699,7 @@ async function memberRelays(t) {
 // ------------------------------------------------------------------ community: templates, server search, main server
 // Alice makes a server from the Gaming template (its channels and read-only #rules are there) and shows it in server
 // search; bob finds it under Search → Find servers and joins with one click. Bob, who runs this Hearth by now, makes it
-// the main server: a brand-new account is in it straight after signing up, and reads what alice writes there (her app
+// the main server with one of its invite links (from the list it takes Manage Server there): a brand-new account is in it straight after signing up, and reads what alice writes there (her app
 // handed it the key like for any newcomer). Then the main server is turned off again.
 async function community(t) {
   const { alice, bob } = t.people;
@@ -5727,10 +5727,15 @@ async function community(t) {
   await bob.page.locator('#sidebar-head .server-head-name', { hasText: exact(GUILD) }).waitFor();
   await bob.noModals();
 
+  // Bob isn't a moderator there, so picking it from the list is refused; one of its invite links works.
+  const link = await alice.inviteLink();
   await bob.railButton('Admin');
   await bob.$('.admin-tabs .admin-tab', { hasText: 'Registration & Terms' }).click();
   await bob.$('.admin-body select[aria-label="Server"]').selectOption({ label: `${GUILD} (2 members)` });
   await bob.$('.admin-body button', { hasText: exact('Use this server') }).click();
+  await bob.toast('you need to be in it with Manage Server');
+  await bob.$(`.admin-body input[placeholder="${t.server.base}/invite/abcd2345"]`).fill(link);
+  await bob.$('.admin-body button', { hasText: exact('Use this invite') }).click();
   await bob.toast('Main server set.');
   await bob.$('.admin-body strong', { hasText: `everyone who signs up joins ${GUILD}` }).waitFor();
 

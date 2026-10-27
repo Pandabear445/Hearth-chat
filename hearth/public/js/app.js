@@ -8687,7 +8687,7 @@ function openSearch({ scope = null } = {}) {
 
   // ---- server search (server/discovery.js): servers that chose to be listed. Unlike message search this asks the
   // server, with what was typed, so it only runs on its own tab.
-  const disc = { q: null, items: [], page: 0, hasMore: false, loading: false, error: null };
+  const disc = { q: null, items: [], page: 0, hasMore: false, loading: false, waiting: false, timer: null, error: null };
   async function loadServers(text, more = false) {
     if (!more) Object.assign(disc, { q: text, items: [], page: 0, hasMore: false });
     disc.loading = true;
@@ -8717,7 +8717,10 @@ function openSearch({ scope = null } = {}) {
   }
   function serversTab(add) {
     const text = input.value.trim().slice(0, 64);
-    if (disc.q !== text) loadServers(text);
+    // Asked a moment after typing stops (searches are limited per minute); a changed query shows as loading meanwhile.
+    clearTimeout(disc.timer);
+    disc.waiting = disc.q !== text;
+    if (disc.waiting) disc.timer = setTimeout(() => { if (!closed && disc.q !== text) { disc.waiting = false; loadServers(text); } }, disc.q === null ? 0 : 350);
     results.append(h('div', { class: 'search-empty' }, `Servers whose owners chose to show them in search. What you type here goes to ${S.config.name}’s server to find them (message search never does).`));
     const n = (x) => `${x.memberCount.toLocaleString()} member${x.memberCount === 1 ? '' : 's'}`;
     add(text ? 'Servers' : 'Biggest servers', disc.items.map((x) => {
@@ -8730,7 +8733,7 @@ function openSearch({ scope = null } = {}) {
         action: () => joinListed(x),
       });
     }));
-    if (disc.loading) results.append(h('div', { class: 'search-status' }, h('span', { class: 'spinner' }), h('span', null, 'Looking for servers…')));
+    if (disc.loading || disc.waiting) results.append(h('div', { class: 'search-status' }, h('span', { class: 'spinner' }), h('span', null, 'Looking for servers…')));
     else if (disc.error) results.append(h('div', { class: 'search-status bad' }, h('span', null, disc.error), h('button', { class: 'btn ghost sm', onclick: () => { disc.q = null; draw(); } }, 'Try again')));
     else if (!disc.items.length) results.append(h('div', { class: 'search-empty' }, text ? 'No listed servers match.' : `No servers on ${S.config.name} are shown in search yet.`));
     else if (disc.hasMore) results.append(h('div', { class: 'search-status' }, h('button', { class: 'btn ghost sm', onclick: () => loadServers(disc.q, true) }, 'Show more servers')));
@@ -9640,7 +9643,8 @@ function openServerSettings(server, startTab = 'overview') {
     const about = h('textarea', { class: 'input', rows: '2', maxlength: '200', placeholder: 'What should people know before they join?' });
     about.value = s.discoverAbout || '';
     const tags = h('input', { class: 'input', maxlength: '140', placeholder: 'gaming, art, study', value: (s.discoverTags || []).join(', ') });
-    const listing = (on) => ({ discoverable: on, discoverAbout: about.value, discoverTags: tags.value.split(',').map((t) => t.trim()).filter(Boolean) });
+    // Turning it off sends only that, so a description or tags that wouldn't pass can't keep it listed.
+    const listing = (on) => (on ? { discoverable: true, discoverAbout: about.value, discoverTags: tags.value.split(',').map((t) => t.trim()).filter(Boolean) } : { discoverable: false });
     add(body, h('h3', null, 'Server search'),
       h('label', { class: 'toggle-row' }, h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Show in server search'),
         h('span', { class: 'field-hint' }, `Anyone on ${S.config.name} can find this server in Search → Servers by its name, the description and tags below, see its icon and member count, and join without an invite. Bans still apply. Never its channels, members or messages. Turn it off and it’s gone from search right away.`)),
@@ -9651,7 +9655,7 @@ function openServerSettings(server, startTab = 'overview') {
       } }), h('span', { class: 'switch-track' }))),
       field('Description for search', about, 'A sentence or two, up to 200 characters. Needed to show in search.'),
       field('Tags', tags, 'Up to 5, separated by commas.'),
-      h('div', null, h('button', { class: 'btn ghost', onclick: () => run(() => api('PATCH', `/servers/${s.id}`, listing(!!live().discoverable)), 'Saved.') }, 'Save search listing')));
+      h('div', null, h('button', { class: 'btn ghost', onclick: () => run(() => api('PATCH', `/servers/${s.id}`, { ...listing(true), discoverable: !!live().discoverable }), 'Saved.') }, 'Save search listing')));
   }
 
   function appearance(s) {
