@@ -105,8 +105,11 @@ Foundation's certificate for real releases.
    - *Certificate fields*: *Common Name* `Hearth (test signing)`, *Organization* `Hearth`, *Country* your
      two-letter country code. Leave the rest empty: whatever you type ends up in every file it signs.
    - Keep *RSA 4096* and the one-year validity.
-3. **The project and its policies.** *Projects → Add*: name `Hearth`, slug `hearth`, the GitHub repository, and the
-   trusted build system **GitHub.com** linked (needed for origin verification). In it:
+3. **The project and its policies.** *Projects → Add*: name `Hearth`, slug `hearth`, and the GitHub repository. (The
+   trusted build system **GitHub.com**, which GitHub Actions' signing requests need, isn't in SignPath's free plan:
+   the Foundation turns it on when it accepts the project. Until then the build's requests are refused with
+   "Trusted build system is not allowed to log into the organization", and you test by uploading by hand, step 6.)
+   In it:
    - **Artifact configuration:** paste this one (it signs the `.exe` inside each file the build sends) and note
      its slug, or make it the project's default:
 
@@ -131,13 +134,16 @@ Foundation's certificate for real releases.
    |---|---|---|
    | Secret | `SIGNPATH_API_TOKEN` | the CI user's API token |
    | Variable | `SIGNPATH_ORGANIZATION_ID` | your organization ID (a secret of this name works too) |
-   | Variable | `SIGNPATH_PROJECT_SLUG` | e.g. `hearth` (a secret of this name works too) |
-   | Variable (optional) | `SIGNPATH_TEST_POLICY_SLUG` | only if the test policy isn't `test-signing` |
+   | Variable | `SIGNPATH_PROJECT_SLUG` | the project's slug, exactly as its *CI Integration* tab shows it (capitals count), e.g. `hearth` (a secret of this name works too) |
+   | Variable (optional) | `SIGNPATH_TEST_POLICY_SLUG` | only if the test policy's slug isn't `test-signing` (its *CI Integration* tab shows it) |
    | Variable (optional) | `SIGNPATH_POLICY_SLUG` | only if the release policy isn't `release-signing` |
    | Variable (optional) | `SIGNPATH_ARTIFACT_CONFIG_SLUG` | the artifact configuration's slug (default `initial`) |
    | Variable (optional) | `SIGNPATH_PUBLISHER` | only if the release certificate's name isn't exactly `SignPath Foundation` |
 
-6. **Test signing:** *Actions → Hearth apps → Run workflow*, tick **SignPath test signing**, run. (Pick the branch
+6. **Test signing.** Before the Foundation has accepted the project: in SignPath, *Sign artifact* with the
+   `test-signing` policy and a ZIP of a Windows installer from a build's artifacts (a ZIP, as the artifact
+   configuration expects); that shows the certificate, policy and configuration work. Once GitHub.com is available
+   to your organization: *Actions → Hearth apps → Run workflow*, tick **SignPath test signing**, run. (Pick the branch
    whose workflow has that box; the default branch has it once this change is merged.) The Windows job says
    **"Test signing with SignPath"** and sends two requests, the app, then a minute later the installer. If the
    policy needs approval, approve them on [app.signpath.io](https://app.signpath.io) → *Signing requests*. The
