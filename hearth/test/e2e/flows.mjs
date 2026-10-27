@@ -5390,7 +5390,14 @@ async function sideView(t) {
   const cdp = await phone.context.newCDPSession(page);
   const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
   await held.scrollIntoViewIfNeeded();
-  const b = await held.locator('.msg-text').boundingBox();
+  // The pictures above it may still be loading, and each one moves it: press only once it has stayed put a moment,
+  // or the press lands beside it (or counts as a drag) and no sheet opens.
+  let b = null;
+  for (let i = 0; i < 40; i++) {
+    const now = await held.locator('.msg-text').boundingBox();
+    if (b && now && Math.abs(now.y - b.y) < 1 && Math.abs(now.x - b.x) < 1) break;
+    b = now; await page.waitForTimeout(150);
+  }
   await touch('touchStart', b.x + 40, b.y + b.height / 2);
   await page.waitForTimeout(700);
   await touch('touchEnd');
