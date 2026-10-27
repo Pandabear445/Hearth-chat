@@ -50,6 +50,11 @@ test('SignPath test signing without the SignPath settings stops the build', () =
   const r = choose({ SIGNPATH_TEST: 'true', SIGN_THIS_BUILD: 'true' });
   assert.notEqual(r.status, 0);
   assert.match(r.log, /test signing needs the SIGNPATH_API_TOKEN secret/);
+  // It says which ones are missing (a value put on the wrong tab, say).
+  const half = choose({ SIGNPATH_TEST: 'true', SIGN_THIS_BUILD: 'true', SIGNPATH_API_TOKEN: 'token-not-printed' });
+  assert.notEqual(half.status, 0);
+  assert.match(half.log, /Missing: SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG\./);
+  assert.doesNotMatch(half.log, /token-not-printed/);
 });
 
 test('without the test flag nothing changes: a branch build stays unsigned, test=0', () => {
@@ -68,6 +73,9 @@ test('the workflow: a test-signing run uses the test policy, accepts only an unt
   // The check accepts an untrusted signature only in a test run, and never a missing one.
   assert.match(wf, /\$ok = \$s\.Status -eq 'Valid' -or \(\$test -and \$s\.SignerCertificate -and \$s\.Status -in @\('UnknownError', 'NotTrusted'\)\)/);
   assert.match(wf, /\$test = \$env:TEST_SIGNING -eq '1'/);
+  // The organization ID and project slug are read from a variable or, if that's empty, a secret of the same name.
+  assert.equal(wf.split('${{ vars.SIGNPATH_ORGANIZATION_ID || secrets.SIGNPATH_ORGANIZATION_ID }}').length - 1, 3);
+  assert.equal(wf.split('${{ vars.SIGNPATH_PROJECT_SLUG || secrets.SIGNPATH_PROJECT_SLUG }}').length - 1, 3);
   // Every job that signs update files, releases or publishes stays out of a test run (job conditions can't read env).
   // (A job's header: from its name to its first step.)
   const head = (name) => { const at = wf.indexOf(`\n  ${name}:\n`); assert.ok(at > 0, name); return wf.slice(at, wf.indexOf('steps:', at)); };

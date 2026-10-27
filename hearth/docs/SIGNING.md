@@ -130,8 +130,8 @@ Foundation's certificate for real releases.
    | Kind | Name | Value |
    |---|---|---|
    | Secret | `SIGNPATH_API_TOKEN` | the CI user's API token |
-   | Variable | `SIGNPATH_ORGANIZATION_ID` | your organization ID |
-   | Variable | `SIGNPATH_PROJECT_SLUG` | e.g. `hearth` |
+   | Variable | `SIGNPATH_ORGANIZATION_ID` | your organization ID (a secret of this name works too) |
+   | Variable | `SIGNPATH_PROJECT_SLUG` | e.g. `hearth` (a secret of this name works too) |
    | Variable (optional) | `SIGNPATH_TEST_POLICY_SLUG` | only if the test policy isn't `test-signing` |
    | Variable (optional) | `SIGNPATH_POLICY_SLUG` | only if the release policy isn't `release-signing` |
    | Variable (optional) | `SIGNPATH_ARTIFACT_CONFIG_SLUG` | the artifact configuration's slug (default `initial`) |

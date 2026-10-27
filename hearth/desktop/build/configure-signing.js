@@ -38,7 +38,7 @@ let method = 'none';
 const test = /^true$/i.test(env('SIGNPATH_TEST'));
 const azureSome = ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_SIGNING_PROFILE', 'AZURE_SIGNING_PUBLISHER'];
 if (test) {
-  if (!has('SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG')) fail('SignPath test signing needs the SIGNPATH_API_TOKEN secret and the SIGNPATH_ORGANIZATION_ID and SIGNPATH_PROJECT_SLUG variables. See hearth/docs/SIGNING.md.');
+  if (!has('SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG')) fail(`SignPath test signing needs the SIGNPATH_API_TOKEN secret and SIGNPATH_ORGANIZATION_ID and SIGNPATH_PROJECT_SLUG (variables, or secrets of those names). Missing: ${['SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG'].filter((k) => !env(k)).join(', ')}. See hearth/docs/SIGNING.md.`);
   // No publisher name for the app to expect on updates: these files are only for SignPath's review, never handed out.
   method = 'signpath';
   notice(`Test signing with SignPath (project ${env('SIGNPATH_PROJECT_SLUG')}, the test-signing policy). Approve the requests on signpath.io if the policy asks for it. Don't hand these files out.`);
