@@ -45,7 +45,7 @@ export const LIMITS = Object.freeze({
   words: 5, // words in a phrase
   wildcards: 4, // *'s per entry
   letters: 2, // letters or numbers per entry, at least (so "*" or "a*" can't hide everything)
-  text: 50000, // characters of a message looked at (more than any message the app sends)
+  text: 140000, // characters of a message looked at (more than any message the app sends: 100 files' names and descriptions)
 });
 export const ACTIONS = ['hide', 'blur'];
 // What find() answers instead of an entry when a message would take too long to check against the list. It can't be
@@ -433,6 +433,6 @@ export function textOfMessage(dec) {
   for (const l of Array.isArray(dec.l) ? dec.l.slice(0, 5) : []) if (l && typeof l === 'object') { add(l.title); add(l.desc); add(l.site); }
   if (dec.p && typeof dec.p === 'object') { add(dec.p.q); for (const o of Array.isArray(dec.p.o) ? dec.p.o.slice(0, 20) : []) add(typeof o === 'string' ? o : o && o.t); }
   if (dec.embed && typeof dec.embed === 'object') { add(dec.embed.title); add(dec.embed.summary); add(dec.embed.source); }
-  for (const f of Array.isArray(dec.f) ? dec.f.slice(0, 20) : []) if (f && typeof f === 'object') { add(f.name); add(f.alt); }
+  for (const f of Array.isArray(dec.f) ? dec.f.slice(0, 100) : []) if (f && typeof f === 'object') { add(f.name); add(f.alt); } // (attachments.js OWNER_MAX_FILES)
   return out.join('\n');
 }

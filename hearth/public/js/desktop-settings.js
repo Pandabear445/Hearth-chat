@@ -1,5 +1,6 @@
 // Settings → Apps & devices → "Desktop app": the Hearth desktop app's own settings (start with the computer,
-// tray, spelling, zoom, graphics, updates, server). Only shown inside the desktop app (window.hearthDesktop).
+// tray, zoom, graphics, updates, server; its spell checker is in Settings → Chat → Spelling). Only shown inside the
+// desktop app (window.hearthDesktop).
 // The app keeps these itself (settings.json on the computer, see desktop/main.js), not the server.
 //
 // Usage: desktopSettingsSection({ h, section, toggle, field, toast }) → a DOM node, or null outside the app.
@@ -84,8 +85,7 @@ export function desktopSettingsSection({ h, section, toggle, field, toast }) {
       body.append(toggle('Keep running in the tray when closed', s.closeToTray, (v) => set('closeToTray', v),
         'Closing the window keeps Hearth running, so messages and calls still reach you. Quit from the tray icon.'));
     }
-    body.append(toggle('Check spelling', s.spellcheck, (v) => set('spellcheck', v),
-      'Underlines misspelled words; right-click one for suggestions.'));
+    // (Its spell checker is switched in Settings → Chat → Spelling: one switch for it, settings.js spellingSection.)
 
     // Zoom: a slider over the same steps as Ctrl+= / Ctrl+-
     const label = h('span', null, `Zoom: ${pct(s.zoom)}`);

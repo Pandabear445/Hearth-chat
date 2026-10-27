@@ -202,7 +202,8 @@ test('static: secure.js checks previews in both openers, linkCardEl builds text 
   assert.doesNotMatch(card, /html:/, 'no HTML from a preview');
   assert.doesNotMatch(card, /md\(/, 'no markdown either');
   assert.match(app, /const CIPHER_MAX = 64000;/);
-  assert.match(read('server', 'index.js'), /const validCipher = \(c\) => \{\n\s+if \(typeof c !== 'string' \|\| c\.length < 20 \|\| c\.length > 64000\)/);
+  // (The server's owner gets more: test/owner-many-files.test.js.)
+  assert.match(read('server', 'index.js'), /const CIPHER_MAX = 64000;[\s\S]*const validCipher = \(c, uid\) => \{\n\s+if \(typeof c !== 'string' \|\| c\.length < 20 \|\| c\.length > cipherMax\(uid\)\)/);
   // The thumbnail limit the reader enforces is what the sender's app makes.
   assert.equal(LP.THUMB_MAX_BYTES, 16384);
   assert.match(read('public', 'js', 'media.js'), /r\.blob\.size <= 16384/);

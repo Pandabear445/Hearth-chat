@@ -1,6 +1,6 @@
 // Hearth web client.
 // Layout: server rail | sidebar (home or server) | conversation | contextual right panel (members, pins, thread).
-import { androidApp } from './android.js';
+import { androidApp, noPayments } from './android.js';
 import { h, $, $$, clear, icon, fmtTime, fmtStamp, fmtDay, fmtSize, toast, playSound, copyText, debounce } from './util.js';
 import { api, upload, getToken, setToken, setTokenOwner, onTokenChange, tokenMovedFrom } from './api.js';
 import * as E2EE from './e2ee.js';
@@ -10,24 +10,25 @@ import { PERMS, PERM_GROUPS, ALL as ALL_PERMS, has, memberRoles, basePerms, topC
 import { openCropper } from './cropper.js';
 import { adminView, CATEGORY_LABEL } from './admin.js';
 import { captchaWidget } from './captcha.js';
-import { prepareImage, makeQueue, whenVisible, previewThumb } from './media.js';
-import { isUploadUrl, safeDownloadHref, ALT_MAX } from './attachments.js';
+import { prepareImage, makeQueue, whenVisible, whenOnScreen, previewThumb } from './media.js';
+import { isUploadUrl, safeDownloadHref, ALT_MAX, MAX_FILES, maxFilesFor } from './attachments.js';
 import { outsideMode, outsideHost, imageDecision, openedLinks } from './outside.js';
 import { CHUNKED_ABOVE, uploadResumable, uploadSimple, download, makeUrlCache, mediaKind, typeLabel } from './files.js';
-import { EMOJI, EMOJI_NAMES, CATEGORY_ICONS, recentEmoji, pushRecentEmoji, searchEmoji } from './emoji.js';
+import { EMOJI, EMOJI_NAMES, CATEGORY_ICONS, QUICK_REACTIONS, recentEmoji, pushRecentEmoji, searchEmoji } from './emoji.js';
 import { Voice } from './voice.js';
 import { openCallDiagnostics } from './call-diagnostics.js';
 import { createSecure, mergeUser, callRefusedText, noSafetyNumbersText } from './secure.js';
-import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong } from './profile-ui.js';
+import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong, songPlaying } from './profile-ui.js';
 import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
-import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice } from './features.js';
-import { rankRelays, chooseIce, relayTime, iceStale } from './relays.js';
+import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice, voicePlaying } from './features.js';
+import { rankRelays, chooseIce, relayTime, iceStale, usableIce, memberRelayHosts, avoidsMemberRelays, isMemberRelay, isRelay } from './relays.js';
 import { watchConnection } from './conn.js';
-import { unseenChanges } from './whatsnew.js';
+import { unseenNotes, markNotesSeen } from './whatsnew.js';
+import { autocorrect, correctSending, isCommand, englishHere, lastWordPasted } from './spelling.js';
 import { initKeybinds, getKeybinds, comboLabel, reportCall, flashTaskbar, installUpdate, shortcutGroups, comboParts, keyName } from './keybinds.js';
 import { initActivity, activityLine, openActivityPicker, startDesktopDetection } from './activity.js';
-import { modal, popover, closePopover, menu, contextMenu, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
+import { modal, popover, closePopover, menu, contextMenu, sheet, quietFocus, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
 import { openSettings, applyAppearance, confirmedCall, displayNameDialog } from './settings.js';
 import { createFolders, dragDrop } from './folders.js';
 import { createUpdates } from './updates.js';
@@ -42,9 +43,19 @@ import { loadAppearance, saveAppearance, setServerTheme, BACKGROUNDS } from './a
 import { createDrafts, clearAllDrafts, clearLocalCopies, expireLocalCopies, claimOnce, rememberNotification, closeNotifications, closeNotificationFor, alsoCloseNotifications, quietNow } from './usability.js';
 import { label as disLabel, deadline, expired as isExpired, disappears, serverKept, nextDeadline, waitFor, sysLineParts, remaining, TIMERS, setChoices as setTimerChoices, weaker as weakerTimer, stricter as stricterTimer } from './disappear.js';
 import { createScheduled } from './scheduled.js';
+import { createMediaPanel } from './media-panel.js';
+import { createPhotoNotes } from './photo-notes.js';
+import { createChatLook } from './chat-look.js';
+import { createSideView, placeLabel as sidePlaceLabel } from './side-view.js';
 import { bindNew, bindEdit, describe as describeBinding, createVersions, createCopies, createOriginals, noteMessage, bindingState } from './binding.js';
 import { trackViewport } from './viewport.js';
+import { isPhone, isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
+import { createUpdater, underWay, jobsUnderWay } from './auto-update.js';
+import { canShrink, startShrink, probe as probeVideo, plan as shrinkPlan, longestFitting, budgetFor, fitsText } from './video-shrink.js';
+import { touchGestures } from './viewer-touch.js';
+import { backStack, edgeSwipes } from './phone-nav.js';
 import { initAway, CLEAR_AFTER, clearAfterMs, clearsLabel, onlyPresenceChanged } from './presence.js';
+import { createTyping, typingLine, typingPreview } from './typing.js';
 import { createWordFilter, filterLabel, previewLabel } from './wordfilter-app.js';
 import { inviteMessage, movingMessage, joinNote, signUpMode, canShare, nudgeWanted, nudgeDismissed, dismissNudge } from './invite-share.js';
 
@@ -62,7 +73,7 @@ const S = {
   blocked: new Set(),
   voice: {},
   view: { type: 'home' },
-  panel: null,          // right panel: 'members' | 'pins' | 'threads' | 'thread' | null
+  panel: null,          // right panel: 'members' | 'pins' | 'threads' | 'thread' | 'media' (Photos & videos) | 'side' (Pinned to side) | null
   thread: null,         // { rootId, channelId, serverId, from: 'threads' when opened from the Threads panel }
   msgs: {},             // 'c:<channelId>' | 'd:<dmId>' -> { list, hasMore, hasNewer, loaded }
   threads: {},          // rootId -> { root, list, loaded }
@@ -78,7 +89,6 @@ const S = {
   notifyPrefs: {},      // 's:'|'c:'|'d:' key -> { level, muteUntil, suppressEveryone } (on the server)
   notifySettings: { dnd: { on: false }, previews: 'hidden' },
   savedIds: new Set(),  // saved messages (ids only; on the server)
-  typing: {},
   speaking: new Set(),
   clockOffset: 0,       // the server's clock minus this device's (disappearing messages go by the server's time)
 };
@@ -95,6 +105,8 @@ let hadController = false; // was a service worker already in charge when the pa
 let voice;
 let away = null; // automatic Away (presence.js)
 const sec = createSecure({ S, onKeysChanged, onKeyWarning });
+// Who's typing where (typing.js): drawn under the open conversation's box and in the conversation lists.
+const TYPING = createTyping({ onChange: (key) => typingChanged(key) });
 // Word filter (wordfilter-app.js): your own list and your servers' suggested ones, applied on this device only.
 const WF = createWordFilter({ S, vaultKey: () => myVaultKey(), serverOf: (m) => msgServer(m), onChange: () => wordFilterChanged() });
 const fetchingUsers = new Set();
@@ -128,8 +140,9 @@ function later(fn) {
   drawFrame = document.hidden ? setTimeout(run, 250) : requestAnimationFrame(run);
 }
 const mine = (k) => `hearth.${k}.${S.me.id}`;
-// Below this width the member list floats over the chat, so it only opens when asked (not on every channel).
-const wideEnoughForPanel = () => matchMedia('(min-width: 1241px)').matches;
+// Below this width the member list floats over the chat, so it only opens when asked (not on every channel). In the
+// phone layout it covers the chat, whatever the width (a phone held sideways).
+const wideEnoughForPanel = () => matchMedia('(min-width: 1241px)').matches && !isPhoneLayout();
 const P = {
   get favorites() { return LS.get(mine('favs'), []); },
   set favorites(v) { LS.set(mine('favs'), v); },
@@ -143,13 +156,22 @@ const P = {
   get lastChannel() { return LS.get(mine('lastChannel'), {}); },
   set lastChannel(v) { LS.set(mine('lastChannel'), v); },
   // linkPreviews: 'ask' | 'always' | 'never' (when I send a link); linkCards: show previews in messages.
-  get chat() { return { enterToSend: true, embeds: true, markdown: true, jumbo: true, linkPreviews: 'ask', linkCards: true, ...LS.get('hearth.chat', {}) }; },
+  get chat() { return { enterToSend: true, embeds: true, markdown: true, jumbo: true, linkPreviews: 'ask', linkCards: true, spellcheck: true, ...LS.get('hearth.chat', {}) }; },
+  // A server's or group chat's member list beside the chat, shown or hidden as you last left it.
   get showMembers() { return localStorage.getItem('hearth.members') !== 'off'; },
   set showMembers(v) { localStorage.setItem('hearth.members', v ? 'on' : 'off'); },
+  // A DM's profile beside the chat, shown or folded away as you last left it. A choice of its own: it used to be the
+  // member list's, so folding it in a DM hid servers' member lists too, and showing one brought it back. Not set yet
+  // (see below), it goes with the member list's.
+  get showDmProfile() { const v = localStorage.getItem('hearth.dmprofile'); return v === null ? this.showMembers : v !== 'off'; },
+  set showDmProfile(v) { localStorage.setItem('hearth.dmprofile', v ? 'on' : 'off'); },
   // The chat beside a voice channel's call: shown or hidden as you last left it (closed until you first open it).
   get voiceChat() { return localStorage.getItem('hearth.voiceChat') === 'on'; },
   set voiceChat(v) { localStorage.setItem('hearth.voiceChat', v ? 'on' : 'off'); },
 };
+// The first time this app starts with a choice of its own for the DM profile, it takes the member list's as it is now,
+// before anything here can change that: a profile someone had hidden stays hidden.
+try { if (localStorage.getItem('hearth.dmprofile') === null) P.showDmProfile = P.showMembers; } catch { /* storage blocked: it goes with the member list's */ }
 
 // expose for settings.js
 export const app = {
@@ -162,6 +184,7 @@ export const app = {
   logout,
   rerender: () => { lsCache.clear(); renderAll(); }, // settings.js writes some preferences straight to localStorage
   redrawImageLinks: () => redrawImageLinks(),
+  followRelayChoice: () => followRelayChoice(), // after "Avoid relays run by members" changes
   openProfile: (id) => openProfileModal(id),
   install: () => installApp(),
   get canInstall() { return !!installPrompt; },
@@ -187,6 +210,8 @@ export const app = {
   decryptMessage: (m) => decryptMessage(m),
   wordFilter: WF,
   openShortcuts: () => openShortcuts(),
+  // A server event for a settings page that follows it live (Help host: relays:mine). Returns how to stop listening.
+  onSocket: (ev, fn) => { if (!socket) return () => {}; socket.on(ev, fn); return () => socket.off(ev, fn); },
 };
 
 // ======================================================================= boot
@@ -280,6 +305,10 @@ function showSignIn() {
   $('#insecure-warning').hidden = secure;
   $('#reg-code-field').hidden = !S.config.registrationRequiresCode;
   if (!S.config.registrationOpen) $('#to-register').parentElement.hidden = true;
+  // The server's privacy policy (PRIVACY_URL) under the terms, when it has one.
+  const privacyUrl = typeof S.config.privacyUrl === 'string' && /^https:\/\//i.test(S.config.privacyUrl) ? S.config.privacyUrl : '';
+  $('#reg-privacy').hidden = !privacyUrl;
+  if (privacyUrl) $('#reg-privacy-link').href = privacyUrl;
   inviteBanner();
 
   // "I'm not a robot" checks. They start solving as soon as someone starts filling in the form.
@@ -469,12 +498,15 @@ async function signOutHere() {
   setToken('');
   localStorage.removeItem('hearth.userId');
   fileUrls.release(); // decrypted files in memory
+  LOOK.reset(); // and chat backgrounds' pictures
   clearAllDrafts(); // unsent words stay with the account, not the next person on this browser
   // So do the inbox and reminders, which keep copies of messages' words (disappearing ones too): nothing here would
   // drop them at their deadline once no one is signed in. (addInbox writes nothing more while signing out; this
   // runs again last, in case anything else did.)
   clearLocalCopies();
   SCHED.reset();
+  MEDIA.reset({ all: true });
+  SIDE.reset({ all: true }); // (its list in this browser went with the local copies above)
   sec.reset();
   copies.clear();
   originals.clear();
@@ -546,7 +578,8 @@ function startApp() {
     isPeerMuted: (userId) => { const st = voice && (S.voice[voice.channelId] || []).find((x) => x.userId === userId); return !!(st && (st.muted || st.deafened)); },
     socket,
     // automatic: the call's region relay didn't answer, so this app falls back to the nearest relays (voice.js).
-    getIceServers: ({ automatic = false } = {}) => {
+    // avoid: the connection is with someone who avoids member relays, so it's built without them too.
+    getIceServers: ({ automatic = false, avoid = false } = {}) => {
       const room = voice && voice.channelId;
       const pinned = room && !automatic ? callRegion(room) : null;
       // Pinned to a region that's offline right now: automatic relays are used instead. Say so, once per call.
@@ -554,8 +587,14 @@ function startApp() {
         S.regionWarned.add(room);
         setTimeout(() => toast(`This call\u2019s region (${regionName(pinned)}) is offline, so your connection uses automatic relays.`), 0);
       }
-      return chooseIce(S.iceServers || S.config.iceServers || [], S.relayRanks, pinned);
+      return chooseIce(S.iceServers || S.config.iceServers || [], S.relayRanks, pinned, { avoid: avoidsMemberRelays(S.me) || avoid });
     },
+    // Avoiding member relays (Settings → Privacy & safety): the other side's candidates on their machines are dropped,
+    // and the others in the call are told, so their connections with us leave member relays out too.
+    avoidHosts: () => (avoidsMemberRelays(S.me) ? memberRelayHosts(S.iceServers || S.config.iceServers || []) : new Set()),
+    avoids: () => avoidsMemberRelays(S.me),
+    // Where the member relays in this app's list are (so it knows which relays a connection is set up with are members').
+    memberRelayHosts: () => memberRelayHosts(S.iceServers || S.config.iceServers || []),
     myId: () => S.me && S.me.id,
     onNotice: (text, kind) => toast(text, kind),
     onRegion: (room, region, version) => applyCallRegion({ room, region, version }),
@@ -566,7 +605,7 @@ function startApp() {
       toast(`A moderator moved you to ${c.name}.`);
       joinVoice(c, srv, { stay: S.view.type !== 'voice' });
     },
-    ensureIce: () => freshIce(),
+    ensureIce: () => iceBeforeCall(),
     signSdp: (toUserId, desc) => sec.signSdp(voice.channelId, toUserId, desc),
     verifySdp: (fromUserId, desc, sig) => sec.checkSdp(voice.channelId, fromUserId, desc, sig),
     onSecurityWarning: (userId, why) => callWarning(userId, why),
@@ -654,6 +693,7 @@ function startApp() {
         d.title = STATUS_LABEL[presence] || '';
         d.setAttribute('aria-label', STATUS_LABEL[presence] || '');
       });
+      showPresenceText(id);
     }
     if (!changed) return;
     later(redrawPeople);
@@ -669,6 +709,8 @@ function startApp() {
     later(redrawPeople);
     if (S.view.type === 'people' && S.view.tab !== 'add') later(renderMain);
   });
+  // A member's call relay came into calls or left them (server/regions.js iceChanged).
+  socket.on('ice:changed', () => iceChanged());
   socket.on('user:update', (u) => {
     if (!S.me) return;
     // Only your own Away for being inactive (or back): just the dots and the line under your name. Nothing is
@@ -678,9 +720,14 @@ function startApp() {
     const roleBefore = S.me.staffRole;
     const outsideBefore = outsideMode(S.me.privacy);
     const wasWaiting = sec.awaitingVerify(S.users[u.id]) || (u.id === S.me.id && sec.awaitingVerify(S.me));
+    const keysNow = () => { const x = S.users[u.id]; return x ? `${x.publicKey || ''}|${x.signPublicKey || ''}` : ''; };
+    const keysBefore = keysNow();
     setUser(u); sec.trust(u); refreshUserBits(u.id);
+    if (keysNow() !== keysBefore) { NOTES.onTrust(u.id); LOOK.onTrust(u.id); } // photo tags and backgrounds that didn't open with the keys known before
     // Outside images changed on another device: the image links on screen follow the new choice.
     if (u.id === S.me.id && outsideMode(S.me.privacy) !== outsideBefore) later(redrawImageLinks);
+    // So do call relays, when avoiding member relays was turned on or off.
+    if (u.id === S.me.id) followRelayChoice();
     // Verified after a reset without their recovery key (crypto-2): their servers' keys can go to them now.
     if (wasWaiting && !sec.awaitingVerify(S.users[u.id])) {
       S.servers.filter((s) => s.memberIds.includes(u.id)).forEach((s) => sec.maintain(s.id));
@@ -700,7 +747,7 @@ function startApp() {
     const sv = S.servers.find((x) => x.id === serverId);
     const where = sv ? sv.name : 'the server';
     if (m.status === 'active' && !m.cancelAtEnd && Date.now() - m.since < 10 * 60000) { toast(`\u2B50 You\u2019re a member of ${where}. Thank you!`); playSound('mention'); }
-    else if (m.status === 'past_due') toast(`Your membership payment for ${where} didn\u2019t go through. Stripe will try again; check your card.`, 'error');
+    else if (m.status === 'past_due' && !noPayments) toast(`Your membership payment for ${where} didn\u2019t go through. Stripe will try again; check your card.`, 'error');
     else if (m.status === 'ended') toast(`Your membership of ${where} has ended.`);
   });
   socket.on('support:thanks', ({ until, forever }) => {
@@ -738,10 +785,12 @@ function startApp() {
   // Another admin added, changed, tested or removed an alert channel: the Health tab shows it at once.
   socket.on('admin:alert-channels', refreshHealth);
   socket.on('profile:comment', ({ from }) => toast(`${displayName(getUser(from))} commented on your profile.`));
+  // The owner published an update note: it shows now, or as soon as the person isn't in the middle of something.
+  socket.on('update-notes', () => showUpdateNotes());
   socket.on('config:update', (c) => {
     Object.assign(S.config, c);
     if ('name' in c || 'tagline' in c) { document.title = S.config.name; $$('[data-instance-name]').forEach((el) => { el.textContent = S.config.name; }); }
-    if ('funding' in c && S.view.type === 'home') later(renderMain);
+    if (!noPayments && 'funding' in c && S.view.type === 'home') later(renderMain); // the funding card on Home (none in the app)
     if ('announcement' in c) renderAnnouncement();
     if (c.termsVersion) askToAcceptTerms();
     if (composers.main) composers.main.renderExtras();
@@ -774,7 +823,10 @@ function startApp() {
     Object.assign(S.voice, vs || {});
     if (!S.servers.find((s) => s.id === server.id)) S.servers.push(server);
     if (keyState) sec.applyState(keyState);
-    previewGroup(server);
+    // Added to a group chat that has a background (chat-look.js): it opens once the group's key is here.
+    if (isGroup(server) && server.look !== undefined) LOOK.onEvent('group:look', { serverId: server.id, look: server.look });
+    // A group chat's line in the conversation list, from the copy the list draws (drawn again once decrypted).
+    if (isGroup(server)) previewGroup(S.servers.find((s) => s.id === server.id)).then(redrawConvList);
     renderRail();
     if (!S.view.serverId) renderSidebar();
   });
@@ -797,9 +849,13 @@ function startApp() {
   socket.on('server:update', (server) => {
     const i = S.servers.findIndex((s) => s.id === server.id);
     if (i >= 0) S.servers[i] = server;
+    // A group chat carries its chat background (chat-look.js keeps only a newer one than it has).
+    if (isGroup(server) && server.look !== undefined) LOOK.onEvent('group:look', { serverId: server.id, look: server.look });
     const w = serverWaiters.get(server.id);
     if (w) { serverWaiters.delete(server.id); setTimeout(w, 0); }
-    previewGroup(server);
+    // A group chat comes with its newest message (deleting a channel can change it): its line in the conversation
+    // list is drawn again once decrypted.
+    if (isGroup(server)) previewGroup(server).then(redrawConvList);
     renderRail();
     if (S.view.serverId === server.id) {
       applyServerTheme();
@@ -876,14 +932,19 @@ function startApp() {
 
   socket.on('message:new', (m) => { if (!S.me) return; if (m.threadId) onThreadMessage(m); else onNewMessage('c:' + m.channelId, m); });
   socket.on('message:update', (m) => { if (m.threadId) onThreadUpdate(m); else onUpdateMessage('c:' + m.channelId, m); });
-  socket.on('message:delete', ({ id, channelId, threadId }) => onDeleteChannelMessages(channelId, [{ id, threadId }]));
+  // Deletes in a group chat carry its newest message now (last) and its time (lastMessageAt), for its line in the
+  // conversation list.
+  socket.on('message:delete', ({ id, channelId, threadId, last, lastMessageAt }) => { onDeleteChannelMessages(channelId, [{ id, threadId }]); groupLastIs(channelId, last, lastMessageAt); });
   // Bulk delete and a ban's cleanup: many at once, one redraw. Disappearing messages that reached their time come
-  // the same way (expired: true, with a group chat's new last message for its preview).
-  socket.on('message:delete-bulk', ({ channelId, messages, expired, last } = {}) => {
+  // the same way (expired: true).
+  socket.on('message:delete-bulk', ({ channelId, messages, expired, last, lastMessageAt } = {}) => {
     if (Array.isArray(messages)) onDeleteChannelMessages(channelId, messages, { expired: !!expired });
-    if (last !== undefined) { const s = serverOfChannel(channelId); if (isGroup(s)) { s.last = last; previewGroup(s).then(() => { if (!S.view.serverId) later(renderSidebar); }); } }
+    groupLastIs(channelId, last, lastMessageAt);
   });
   socket.on('disappear:update', (p) => onDisappearUpdate(p));
+  // Chat backgrounds (chat-look.js): a DM's or group chat's background changed, with its line in the conversation.
+  socket.on('dm:look', (p) => onLookEvent('dm:look', p));
+  socket.on('group:look', (p) => onLookEvent('group:look', p));
   socket.on('thread:update', ({ rootId, channelId, threadCount, threadLastAt }) => {
     const store = S.msgs['c:' + channelId];
     const m = store && store.list.find((x) => x.id === rootId);
@@ -898,6 +959,15 @@ function startApp() {
     const m = (store && store.list.find((x) => x.id === p.messageId)) || findThreadMessage(p.messageId);
     if (m) { m.reactions = p.reactions; replaceMessageEl(m); }
   });
+  // Photo comments and tags (photo-notes.js): a message's tags (its whole list), or how many comments each of its photos
+  // has. Its loaded copies take them, and only what shows them is drawn again (the counts on its pictures, an open
+  // viewer's side panel, the Photos & videos panel): never the whole message, which would load its pictures again.
+  socket.on('dm:tags', (p) => { if (S.me && p) NOTES.onTags('d:' + p.dmId, p.id, p.tags); });
+  socket.on('message:tags', (p) => { if (S.me && p) NOTES.onTags('c:' + p.channelId, p.id, p.tags); });
+  socket.on('dm:file-replies', (p) => { if (S.me && p) NOTES.onFileReplies('d:' + p.dmId, p.id, p.fileReplies); });
+  socket.on('message:file-replies', (p) => { if (S.me && p) NOTES.onFileReplies('c:' + p.channelId, p.id, p.fileReplies); });
+  // Back after the connection dropped: what came live before is no longer the latest word.
+  socket.on('connect', () => NOTES.reconnected());
   socket.on('pin:update', (p) => {
     const key = p.channelId ? 'c:' + p.channelId : 'd:' + p.dmId;
     const store = S.msgs[key];
@@ -911,21 +981,21 @@ function startApp() {
     const i = S.dms.findIndex((d) => d.id === dm.id);
     if (i >= 0) S.dms.splice(i, 1);
     S.dms.unshift(dm);
+    if (dm.look !== undefined) LOOK.onEvent('dm:look', { dmId: dm.id, look: dm.look }); // (a new DM's chat background)
     await onNewMessage('d:' + dm.id, message);
     if (!S.view.serverId) renderSidebar();
   });
   socket.on('dm:update', (m) => onUpdateMessage('d:' + m.dmId, m));
+  // With the DM's newest message now (last), for its line in the conversation list.
   socket.on('dm:delete', ({ id, dmId, expired, last }) => {
     onDeleteMessage('d:' + dmId, id, { expired: !!expired });
     const d = last !== undefined && S.dms.find((x) => x.id === dmId);
-    if (d) { d.last = last; previewDm(d).then(() => { if (!S.view.serverId) later(renderSidebar); }); }
+    if (d) setLast(d, last);
   });
+  // Kept for every conversation, open or not: the lists show it too, and it's there when you open one.
   socket.on('typing', (p) => {
-    const key = p.channelId ? 'c:' + p.channelId : 'd:' + p.dmId;
-    const t = (S.typing[key] ||= new Map());
-    clearTimeout(t.get(p.userId));
-    t.set(p.userId, setTimeout(() => { t.delete(p.userId); if (currentKey() === key) renderTyping(); }, 6000));
-    if (currentKey() === key) renderTyping();
+    if (!S.me || !p || p.userId === S.me.id) return; // (yourself on another device)
+    TYPING.start(p.channelId ? 'c:' + p.channelId : 'd:' + p.dmId, p.userId);
   });
   socket.on('poll:update', (st) => onPollUpdate(st));
   socket.on('events:update', (p) => onEventsUpdate(p));
@@ -973,21 +1043,114 @@ function startApp() {
   window.addEventListener('pagehide', () => { drafts.flush(); if (voice && voice.channelId) socket.emit('voice:leave', {}); });
   window.addEventListener('hashchange', () => openLinkFromHash());
   document.addEventListener('keydown', globalKeys);
+  initLongPress();
+  // A window narrowed past the phone layout (or a phone turned): the message boxes' + follows (createComposer).
+  onDeviceChange(() => Object.values(composers).forEach((c) => c && c.fitAttach()));
   document.querySelector('.nav-scrim').addEventListener('click', () => document.body.classList.remove('nav-open'));
   $('#sidebar').append(resizeHandle('sidebar'));
+  phoneNav();
 }
 
 // Relay logins run out 12 to 18 hours after they're handed out, and an app can stay open for days without
 // reconnecting. So new ones are fetched before a call when they're about to run out, and checked every
-// 10 minutes in the background (calls in progress switch to them too).
-async function freshIce() {
-  if (!iceStale(S.iceServers)) return;
+// minute in the background (calls in progress switch to them too).
+// { force }: fetch now, however new they are. { maxAge }: also when the list is older than that (in ms).
+// { remeasure }: measure the relays again afterwards, even the ones measured before.
+// Ages and waits here go by performance.now(), a clock that only moves forward: setting the device's clock (by hand, or
+// its time service putting it right) doesn't move it. Only the logins' expiry is a time of day, the server's, so it's
+// compared with the server's time (this device's clock corrected by the bootstrap's clockOffset).
+let iceAt = -Infinity; // when S.iceServers was asked for (its age counts from then)
+let iceFor = null; // and for which choice: avoidsMemberRelays(S.me) then (the list depends on it, see followRelayChoice)
+let iceAsked = 0; // the latest fetch: an older one that answers after it is stale (the choice may have changed since)
+let iceAskedAt = -Infinity; // when that one was asked for
+const ICE_CHECK = 10 * 60000; // how old a list with member relays in it gets before it's fetched again
+// The relays in a list this app may use (with a login), as one string to compare.
+const relaySet = (list) => usableIce(list, avoidsMemberRelays(S.me)).filter(isRelay).map((e) => [].concat(e.urls).join(',')).sort().join(' ');
+// A new relay list, from GET /api/ice or the bootstrap. A call in progress follows it: new relay logins from its next
+// network change on, and a connection set up with a member relay that isn't in the list at all any more (the owner paused
+// or removed it, or its member was suspended) starts over without it (voice.js followMemberRelays). A member relay
+// that's only offline for a few minutes, or that's no longer among this person's 8, is still in the list (by address,
+// without a login), so the calls set up with it are left alone. Returns the list it replaced.
+function takeIce(list, avoid, at) {
+  const before = S.iceServers;
+  S.iceServers = list; iceAt = at; iceFor = avoid;
+  if (voice) {
+    voice.updateIceServers();
+    voice.followMemberRelays(memberRelayHosts(list));
+  }
+  return before;
+}
+async function freshIce({ force = false, maxAge = Infinity, remeasure = false } = {}) {
+  if (!force && iceFor === avoidsMemberRelays(S.me) && !iceStale(S.iceServers, Date.now() + (S.clockOffset || 0)) && performance.now() - iceAt < maxAge) return;
+  const n = ++iceAsked;
+  const avoid = avoidsMemberRelays(S.me);
+  const asked = iceAskedAt = performance.now();
   try {
-    S.iceServers = await api('GET', '/ice');
-    if (voice) voice.updateIceServers();
+    const list = await api('GET', '/ice');
+    if (n !== iceAsked) return;
+    const before = takeIce(list, avoid, asked);
+    // Relays not measured yet (approved since, say) are measured now. Unmeasured, every relay in the list would go
+    // into each call, so every member relay among them would see this device's address.
+    if (remeasure || !S.relayRanks || relaySet(list) !== relaySet(before)) rankNearest({ force: remeasure });
   } catch { /* keep the old ones: the next check is soon */ }
 }
-setInterval(() => { if (S.me) freshIce(); }, 10 * 60000);
+// The bootstrap's list (at the start, and after every reconnect; `at`: when the bootstrap was asked for), taken like any
+// other, as long as it's the newest: a fetch asked for before the bootstrap is older (dropped when it answers), but one
+// asked for while the bootstrap was on its way (told of a change meanwhile: ice:changed) is newer, and its list stays.
+// A choice made on another device while this one was away (its user:update missed) is followed as followRelayChoice
+// would have: turned on, every connection in a call that may use a member relay starts over without them.
+function bootIce(list, at) {
+  const was = relayChoice;
+  if (iceAskedAt < at) iceAsked++;
+  if (at >= iceAt) takeIce(list, avoidsMemberRelays(S.me), at);
+  relayChoice = avoidsMemberRelays(S.me);
+  if (relayChoice && was === false && voice) voice.avoidChanged();
+}
+// The background check, every minute: a list whose logins are about to run out is fetched again, and so is a list with
+// member relays in it once it's 10 minutes old (counted from when it was asked for, so it really is every 10 minutes):
+// one the owner paused or removed meanwhile (the server says so at once, ice:changed, but this app may have missed it)
+// isn't used for long, and an avoider learns about relays approved since.
+setInterval(() => { if (S.me) freshIce((S.iceServers || []).some(isMemberRelay) ? { maxAge: ICE_CHECK } : {}); }, 60000);
+// Before a call. Someone who avoids member relays drops the other side's addresses on any of them, so their list
+// (where every member relay is, without logins) is fetched again when it's more than 10 minutes old, to know the
+// relays approved since.
+const iceBeforeCall = () => freshIce(avoidsMemberRelays(S.me) ? { maxAge: ICE_CHECK } : {});
+// A member relay came into calls or left them: the list is fetched again a moment later (a moment apart on each device,
+// so everyone's apps don't ask at the same instant). A few changes in a row are each fetched at once (an owner approving
+// a relay and pausing it again); past that, once a minute however often this comes, and whatever changed meanwhile comes
+// with that fetch. (The server lets each person fetch it 120 times an hour.)
+const ICE_CHANGED_BURST = 5;
+const ICE_CHANGED_EVERY = 60000;
+let iceChangeTimer = null;
+let iceChangeTokens = ICE_CHANGED_BURST; // fetches that may go out at once, one more every ICE_CHANGED_EVERY
+let iceChangeTokensAt = null;
+function iceChanged() {
+  if (iceChangeTimer) return; // one is coming: it brings this change too
+  const t = performance.now();
+  if (iceChangeTokensAt !== null) iceChangeTokens = Math.min(ICE_CHANGED_BURST, iceChangeTokens + (t - iceChangeTokensAt) / ICE_CHANGED_EVERY);
+  iceChangeTokensAt = t;
+  const wait = (iceChangeTokens >= 1 ? 0 : (1 - iceChangeTokens) * ICE_CHANGED_EVERY) + Math.floor(Math.random() * 3000);
+  iceChangeTokens -= 1;
+  iceChangeTimer = setTimeout(() => { iceChangeTimer = null; if (S.me) freshIce({ force: true }); }, wait);
+}
+// With relays in several regions, find the nearest ones in the background (cached for 6 hours; force: measure again
+// now). Someone who avoids member relays never measures one (measuring shows the relay this device's IP address).
+function rankNearest({ force = false } = {}) {
+  const usable = usableIce(S.iceServers, avoidsMemberRelays(S.me));
+  if (usable.filter(isRelay).length > 2) rankRelays(usable, { force }).then((r) => { S.relayRanks = r; }).catch(() => {});
+}
+// Avoiding member relays turned on or off (Settings → Privacy & safety, on this device or another: user:update). The
+// relay list depends on it (logins for member relays, or only where they are), so it's fetched again right away and
+// the relays are measured again. Turned on during a call, every connection that may use a member relay starts over
+// without them (voice.avoidChanged), and tells the others in the call to leave them out too.
+// (A fetch that fails is tried again by the next check, or before the next call: freshIce compares iceFor.)
+let relayChoice = null; // the choice last followed
+function followRelayChoice() {
+  const avoid = avoidsMemberRelays(S.me);
+  if (relayChoice === avoid) return;
+  relayChoice = avoid;
+  freshIce({ force: true, remeasure: true }).then(() => { if (avoid && voice) voice.avoidChanged(); });
+}
 // When this server switched on end-to-end encryption: plaintext channel messages dated later can only have come
 // from the server, so they aren't shown (secure.js). Remembered on this device, and the earliest time it was
 // ever told wins, so the server can't move it later.
@@ -1007,6 +1170,7 @@ async function loadBootstrap() {
   // Your word filter comes alongside too, and is opened before anything is drawn, so nothing it hides shows first.
   const filterList = api('GET', '/me/word-filter').catch(() => null);
   const asked = Date.now();
+  const askedAt = performance.now(); // (for the relay list in it: see bootIce)
   const b = await api('GET', '/bootstrap');
   // How far this device's clock is from the server's (at most a day either way), for disappearing messages and the
   // time inside each message you send (binding.js ts). Further off than that, the times inside your messages are off
@@ -1022,9 +1186,8 @@ async function loadBootstrap() {
   S.me = b.me;
   drafts = createDrafts(S.me.id);
   S.mediaToken = b.mediaToken;
-  S.iceServers = b.iceServers;
-  // With relays in several regions, find the nearest ones in the background (cached for 6 hours).
-  if ((b.iceServers || []).filter((e) => [].concat(e.urls || []).some((u) => /^turns?:/.test(u))).length > 2) setTimeout(() => rankRelays(b.iceServers).then((r) => { S.relayRanks = r; }).catch(() => {}), 4000);
+  bootIce(b.iceServers, askedAt);
+  setTimeout(() => rankNearest(), 4000);
   S.e2eeSince = rememberE2eeSince(b.e2eeSince);
   S.users = b.users;
   S.servers = b.servers;
@@ -1037,9 +1200,14 @@ async function loadBootstrap() {
   S.threads = {};
   S.threadState = {};
   S.threadsPanel = null;
+  // (An open Photos & videos panel asks for its newest page again, and lets go of the copies photo-notes.js handed it:
+  // comments, tags or edits made while this app was away aren't in them.)
+  MEDIA.reset({ all: true });
+  SIDE.reset(); // (and the side view loads what's pinned there again: edited or deleted meanwhile)
   await sec.ensureSigningKey(b.encSignPrivateKey);
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(b.keyStates || {})) await sec.applyState(st);
+  LOOK.fromBootstrap(b.dms, b.servers); // (after the keys: a group chat's background opens with its group's)
   if (S.view.serverId && !S.servers.find((s) => s.id === S.view.serverId)) S.view = { type: 'home' };
   if (S.view.dmId && !S.dms.find((d) => d.id === S.view.dmId)) S.view = { type: 'home' };
   if (!S.view.serverId && !S.view.dmId && !['friends', 'saved', 'people'].includes(S.view.type)) S.view = { type: 'home' };
@@ -1065,18 +1233,49 @@ async function loadBootstrap() {
   const invite = sessionStorage.getItem('hearth.pendingInvite');
   if (invite) { sessionStorage.removeItem('hearth.pendingInvite'); openJoinModal(invite); }
   else {
-    if (!S.whatsNewShown) {
-      S.whatsNewShown = true;
-      const news = unseenChanges(S.config.version);
-      if (news.length) {
-        modal({ title: 'What\u2019s new', size: 'md', className: 'whatsnew',
-          body: h('div', { class: 'stack' }, ...news.map((c) => h('section', null, h('h3', { class: 'set-h' }, `Version ${c.version}`), h('ul', { class: 'perk-list' }, c.items.map((t) => h('li', null, t)))))),
-          actions: [{ label: 'Nice', kind: 'primary' }] });
-      }
-    }
+    showUpdateNotes(); // (every start and reconnect: a note published while this app was asleep or offline shows too)
     // A link this page was opened with (a tapped notification, an invite in the Android app) opens on the
     // first start too, not only after a reconnect.
     if (location.hash) openLinkFromHash();
+  }
+}
+
+// "What's new": the update notes the owner published that this device hasn't shown yet (whatsnew.js), as plain text.
+// Never on top of something the person is in the middle of (a dialog or sheet, a menu, the picture viewer, typing),
+// nor while the app is out of sight: then it waits and looks again. A note counts as seen once its window is closed,
+// so one that's cut off (a reload for an update) comes back. The owner's own are seen already: they wrote them.
+let notesBusy = false; // a look at the notes, or their window, is under way
+let notesLater = null;
+let lastTyped = 0;
+document.addEventListener('keydown', () => { lastTyped = Date.now(); }, true);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && notesLater) { clearTimeout(notesLater); notesLater = null; setTimeout(showUpdateNotes, 3000); } });
+function busyForNotes() {
+  if (document.hidden || $$('#layer > .modal-backdrop:not(.closing), .sheet-backdrop, .popover, .viewer:not(.closing)').length) return true;
+  const a = document.activeElement;
+  const editing = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+  return !!editing && (!!(a.value && a.value.trim()) || Date.now() - lastTyped < 10000);
+}
+const notesAfterwards = () => { if (!notesLater) notesLater = setTimeout(() => { notesLater = null; showUpdateNotes(); }, 20000); };
+async function showUpdateNotes() {
+  if (notesBusy || !S.me) return;
+  if (busyForNotes()) { notesAfterwards(); return; }
+  notesBusy = true;
+  let open = false;
+  try {
+    let notes;
+    try { notes = (await api('GET', '/update-notes')).notes; } catch { return; }
+    if (S.me.staffRole === 'owner') { markNotesSeen((notes || []).map((n) => n.id)); return; }
+    const { notes: news, ids } = unseenNotes(notes, { android: noPayments });
+    if (!news.length) return;
+    if (busyForNotes()) { notesAfterwards(); return; } // something began meanwhile
+    open = true;
+    modal({ title: 'What\u2019s new', size: 'md', className: 'whatsnew',
+      body: h('div', { class: 'stack' }, ...news.map((n) => h('section', null, n.title ? h('h3', { class: 'set-h' }, n.title) : null,
+        h('ul', { class: 'perk-list' }, n.items.map((t) => h('li', null, t)))))),
+      onClose: () => { markNotesSeen(ids); notesBusy = false; },
+      actions: [{ label: 'Nice', kind: 'primary' }] });
+  } finally {
+    if (!open) notesBusy = false;
   }
 }
 
@@ -1105,10 +1304,15 @@ function refreshUserBits(id) {
     el.replaceWith(fresh);
   });
   $$(`[data-user-name="${id}"]`).forEach((el) => redrawName(el, u));
+  showPresenceText(id);
   if (id === S.me.id) renderUserPanel();
   if (S.panel === 'members' || S.view.type === 'dm') renderPanel();
   if (['friends', 'home'].includes(S.view.type) && S.view.tab !== 'add') renderMain();
   if (S.view.type === 'voice') renderMain();
+}
+// The words for someone's status drawn outside the lists (the DM header's "Online"), which nothing else redraws.
+function showPresenceText(id) {
+  $$(`[data-presence-of="${id}"]`).forEach((t) => { t.textContent = STATUS_LABEL[presenceOf(S.users[id], S.me.id)] || ''; });
 }
 // Someone came online, went Away, went offline or started a game: the lists that show it. The friends list and the
 // member list redraw only their rows, so what's typed in their search boxes (and focus there) stays; on Home only
@@ -1164,27 +1368,73 @@ function applyNick(serverId, userId, nickname) {
 }
 
 // ======================================================================= conversation previews (decrypted locally)
+// Each DM and group chat keeps its newest message (d.last / s.last: from the server, then kept up to date by new
+// messages, edits and deletes as they come), and the conversation list shows it decrypted. Decrypting takes a
+// moment, in which the newest message can change again (a delete, then a new message): a preview is only written
+// while the message it was worked out from is still the conversation's newest, and whatever replaced it writes its own.
 async function loadPreviews() {
   for (const d of S.dms) await previewDm(d);
   for (const s of S.servers.filter((x) => x.kind === 'group')) await previewGroup(s);
   if (!S.view.serverId) renderSidebar();
   if (S.view.type === 'home') renderMain();
 }
+function dmById(id) { return S.dms.find((x) => x.id === id); }
 async function previewDm(d) {
-  if (!d.last) { S.previews['d:' + d.id] = ''; return; }
-  const m = { ...d.last, dmId: d.id };
+  const last = d.last;
+  if (!last) { S.previews['d:' + d.id] = ''; return; }
+  const m = { ...last, dmId: d.id };
   await sec.decryptDmMessage(m);
+  if ((dmById(d.id) || {}).last !== last) return;
   // A last message that has disappeared shows nothing (the server sends the one before it with its next update).
   S.previews['d:' + d.id] = isExpired(m, nowServer()) ? '' : previewText(m);
-  if (disappears(m)) { d.last.dec = m.dec; armClientExpiry(); }
+  if (disappears(m)) { last.dec = m.dec; armClientExpiry(); }
 }
 async function previewGroup(s) {
   if (s.kind !== 'group') return;
-  if (!s.last) { S.previews['g:' + s.id] = ''; return; }
-  const m = { ...s.last, serverId: s.id };
+  const last = s.last;
+  if (!last) { S.previews['g:' + s.id] = ''; return; }
+  const m = { ...last, serverId: s.id };
   if (m.ciphertext) await sec.decryptChannelMessage(m); else m.dec = { t: '' };
+  if ((serverById(s.id) || {}).last !== last) return;
   S.previews['g:' + s.id] = isExpired(m, nowServer()) ? '' : previewText(m, true);
-  if (disappears(m)) { s.last.dec = m.dec; armClientExpiry(); }
+  if (disappears(m)) { last.dec = m.dec; armClientExpiry(); }
+}
+// The DM or group chat that a conversation ('d:<dm>' | 'c:<channel>') is a line of the conversation list for, or
+// null (a server's channel).
+function convOf(key) {
+  if (key.startsWith('d:')) return dmById(key.slice(2)) || null;
+  const s = serverOfChannel(key.slice(2));
+  return isGroup(s) ? s : null;
+}
+// A conversation's newest message changed (a delete, an edit, one disappearing): its line is worked out again and
+// drawn where it shows. A group chat is also placed in the list and dated by its newest message, as the server does
+// it (serverCommon's lastMessageAt), so a delete can move it down; with none left that's the group's own start, which
+// only the server knows (at). A DM keeps its time: the server doesn't go back on a delete either.
+function setLast(conv, last, at = null) {
+  conv.last = last;
+  const t = last ? last.createdAt : at;
+  if (isGroup(conv) && t != null) conv.lastMessageAt = t;
+  return (isGroup(conv) ? previewGroup(conv) : previewDm(conv)).then(redrawConvList);
+}
+// Deletes in a group chat come with its newest message now, and its time (server/index.js lastIfGroup).
+function groupLastIs(channelId, last, at) {
+  const s = last !== undefined && serverOfChannel(channelId);
+  if (isGroup(s)) setLast(s, last, at);
+}
+// An edit to a conversation's newest message changes its line too, whether or not the conversation is loaded here:
+// the newest message takes the new words (still encrypted, as the server keeps it) and is decrypted again.
+function lastEdited(key, m) {
+  const conv = convOf(key);
+  if (!conv || !conv.last || conv.last.id !== m.id) return;
+  setLast(conv, {
+    id: m.id, authorId: m.authorId, ...(m.channelId ? { channelId: m.channelId } : {}), ciphertext: m.ciphertext,
+    createdAt: m.createdAt, expiresAt: m.expiresAt || null, editedAt: m.editedAt || null,
+  });
+}
+// The conversation list is the sidebar on Home, in a DM and in a group chat; Home's recent conversations show it too.
+function redrawConvList() {
+  if (!S.view.serverId || isGroup(currentServer())) later(renderSidebar);
+  if (S.view.type === 'home') later(renderMain);
 }
 function previewText(m, group = false) {
   if (!m.dec || m.dec.error) return 'Encrypted message';
@@ -1306,6 +1556,37 @@ function mergeTimerEvents(store, list) {
   }
   return n;
 }
+// Chat background changes (chat-look.js) the server handed out with a page of history (lookEvents), or live: kept with
+// the timer's, by id ('lk:' in front keeps the two apart), so they page and draw the same way (sysLineEl). Returns how
+// many are new.
+function mergeLookEvents(store, list) {
+  const fresh = LOOK.events(list).filter((e) => !(store.events && store.events.has(e.id)));
+  if (!fresh.length) return 0;
+  store.events ||= new Map();
+  fresh.forEach((e) => store.events.set(e.id, e));
+  return fresh.length;
+}
+// A live dm:look / group:look: the background (LOOK.onEvent), then "maya changed the chat background" in the
+// conversation, at the bottom like a new timer line (onDisappearUpdate), when its newest messages are loaded.
+function onLookEvent(kind, p) {
+  if (!S.me || !p || typeof p !== 'object') return;
+  LOOK.onEvent(kind, p);
+  if (!p.event || typeof p.event !== 'object') return;
+  let key = null;
+  if (kind === 'dm:look' && typeof p.dmId === 'string') key = 'd:' + p.dmId;
+  if (kind === 'group:look') { const s = S.servers.find((x) => x.id === p.serverId); const c = isGroup(s) && textChannel(s); key = c ? 'c:' + c.id : null; }
+  const store = key && S.msgs[key];
+  if (!store || !store.loaded || store.hasNewer || !mergeLookEvents(store, [p.event])) return;
+  const e = store.events.get('lk:' + p.event.id);
+  const sc = currentKey() === key && $('#messages');
+  if (!e || !sc) return;
+  const near = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160;
+  const firstPending = sc.querySelector('.msg.sending');
+  const put = (node) => (firstPending ? sc.insertBefore(node, firstPending) : sc.append(node));
+  if (shownDay(sc, firstPending) !== new Date(e.at).toDateString()) put(dayDivEl(e.at));
+  put(sysLineEl(e));
+  if (near) sc.scrollTop = sc.scrollHeight;
+}
 // The lines that belong between the messages loaded now, oldest first (the rest show with their part of history).
 function timerLines(store) {
   if (!store.events || !store.events.size) return [];
@@ -1328,11 +1609,14 @@ function sysLineEl(e) {
   // account (the entry's user id); anyone else's name is drawn apart from it, and their @username follows any name
   // that isn't simply that username (sysLineParts), so no display name or nickname, look-alike letters or not, can
   // pass for your own change.
-  const p = sysLineParts(e, S.me.id, (id) => nameInServer(currentServer(), getUser(id)), (id) => (S.users[id] ? S.users[id].username : null));
+  const nameOf = (id) => nameInServer(currentServer(), getUser(id));
+  const handleOf = (id) => (S.users[id] ? S.users[id].username : null);
+  // A chat background change (chat-look.js, e.look: 'set' or 'clear') is drawn the same way, with its own words.
+  const p = e.look ? LOOK.lineParts(e, S.me.id, nameOf, handleOf) : sysLineParts(e, S.me.id, nameOf, handleOf);
   const handle = !p.self && e.by && S.users[e.by] ? '@' + S.users[e.by].username : null;
   const who = p.self ? h('span', { class: 'sys-you' }, 'You')
     : h('bdi', { class: 'sys-who', ...(handle ? { title: handle } : {}) }, p.who);
-  return h('div', { class: 'sys-line', role: 'note' }, icon('timer'),
+  return h('div', { class: 'sys-line', role: 'note' }, icon(e.look ? 'palette' : 'timer'),
     h('span', null, who, p.handle ? h('span', { class: 'sys-handle' }, ` (@${p.handle})`) : null, ` ${p.action}`),
     h('time', { datetime: new Date(e.at).toISOString(), title: new Date(e.at).toLocaleString() }, fmtStamp(e.at)));
 }
@@ -1381,6 +1665,9 @@ function armClientExpiry() {
   for (const st of Object.values(S.msgs)) for (const m of st.list) items.push(m);
   for (const t of Object.values(S.threads)) { if (t.root) items.push(t.root); for (const m of t.list || []) items.push(m); }
   if (S.threadsPanel) for (const x of S.threadsPanel.items) items.push(x.root);
+  for (const m of MEDIA.messages()) items.push(m); // (Photos & videos keep messages the chat may not have)
+  for (const m of SIDE.messages()) items.push(m); // (and so does the side view)
+  for (const m of NOTES.messages()) items.push(m); // (and so do photo tags and comments)
   for (const d of S.dms) if (d.last) items.push(d.last);
   for (const sv of S.servers) if (sv.last) items.push(sv.last);
   for (const exp of [...P.inbox.map((x) => x.exp), ...reminderDeadlines()]) if (exp) items.push({ expiresAt: exp });
@@ -1407,9 +1694,12 @@ function purgeExpired() {
   const tp = S.threadsPanel;
   const goneRoots = tp ? tp.items.filter((x) => isExpired(x.root, t)).map((x) => x.rootId) : [];
   if (goneRoots.length) forgetThreads('c:' + tp.channelId, new Set(goneRoots));
-  const sidebar = () => { if (!S.view.serverId) later(renderSidebar); };
-  for (const d of S.dms) if (d.last && isExpired(d.last, t)) { d.last = newestLive('d:' + d.id); previewDm(d).then(sidebar); }
-  for (const g of groups()) if (g.last && isExpired(g.last, t)) { const c = textChannel(g); g.last = c ? newestLive('c:' + c.id) : null; previewGroup(g).then(sidebar); }
+  // Photos & videos of messages the chat hasn't loaded (the rest went with the conversations above).
+  MEDIA.expire();
+  NOTES.expire(); // and the copies photo tags and comments keep by themselves
+  SIDE.expire(); // and the side view's
+  for (const d of S.dms) if (d.last && isExpired(d.last, t)) setLast(d, newestLive('d:' + d.id));
+  for (const g of groups()) if (g.last && isExpired(g.last, t)) { const c = textChannel(g); setLast(g, c ? newestLive('c:' + c.id) : null); }
   purgeInbox();
   purgeReminders();
   armClientExpiry();
@@ -1437,8 +1727,8 @@ function forgetCopies(msgs, ids, key = null) {
   if (key ? S.unread.has(key) || S.mentions.has(key) || S.threadMentions.has(key) : S.unread.size || S.mentions.size || S.threadMentions.size) refreshUnreadSoon();
   armClientExpiry();
 }
-// Unread and mention counts still include messages that have since disappeared: ask the server again, a moment after
-// its sweep, and at most every 30 seconds.
+// Unread and mention counts still include messages that have since disappeared or were deleted: ask the server again,
+// a moment after its sweep, and at most every 30 seconds.
 let unreadTimer = 0;
 let unreadAsked = 0;
 function refreshUnreadSoon() {
@@ -1450,6 +1740,8 @@ function refreshUnreadSoon() {
       applyUserState([await api('GET', '/me/unread'), null, null]);
       later(renderRail);
       later(renderSidebar);
+      // (Home's recent conversations show what's unread too.)
+      if (S.view.type === 'home') later(renderMain);
     } catch { /* the next change asks again */ }
   }, Math.max(1500, 30000 - (Date.now() - unreadAsked)));
 }
@@ -1563,7 +1855,9 @@ function shareChanged() {
   if (now === wasSharing) return;
   wasSharing = now;
   if (!now) shareAllowed.clear();
-  renderMain(); renderSidebar(); renderPanel();
+  // The chat background goes with the conversation it belongs to (applyServerTheme), and comes back with it; its dialog
+  // doesn't stay up either (LOOK.coverChanged).
+  applyServerTheme(); LOOK.coverChanged(); renderMain(); renderSidebar(); renderPanel();
   if (now && privateKey()) toast('You\u2019re sharing your screen, so this conversation is hidden from view.');
 }
 function shareCover(key) {
@@ -1574,7 +1868,7 @@ function shareCover(key) {
       h('h2', null, 'Hidden while you share your screen'),
       h('p', null, `Your conversation with ${who} stays private: anyone watching your screen sees this instead.`),
       h('div', { class: 'row gap center' },
-        h('button', { class: 'btn primary', onclick: () => { shareAllowed.add(key); renderMain(); renderSidebar(); renderPanel(); } }, 'Show while sharing'),
+        h('button', { class: 'btn primary', onclick: () => { shareAllowed.add(key); applyServerTheme(); renderMain(); renderSidebar(); renderPanel(); } }, 'Show while sharing'),
         h('button', { class: 'btn ghost', onclick: () => toggleScreen() }, 'Stop sharing')),
       h('p', { class: 'field-hint' }, 'Only for this conversation, until you stop sharing. You can turn this off in Settings \u2192 Chat.')));
 }
@@ -1590,7 +1884,7 @@ function callRegion(room) {
 // Regions this server can relay calls through right now: [{ id, name, ms }]
 function callRegions() {
   const seen = new Map();
-  for (const e of S.iceServers || []) if (e.regionId && !seen.has(e.regionId)) seen.set(e.regionId, { id: e.regionId, name: e.region || 'Relay', ms: relayTime(S.relayRanks, e) });
+  for (const e of S.iceServers || []) if (e.regionId && !isMemberRelay(e) && !seen.has(e.regionId)) seen.set(e.regionId, { id: e.regionId, name: e.region || 'Relay', ms: relayTime(S.relayRanks, e) });
   return [...seen.values()];
 }
 const regionName = (id) => (id ? (callRegions().find((r) => r.id === id) || {}).name || 'an offline region' : 'Automatic');
@@ -1645,11 +1939,20 @@ function applyCallRegion({ room, region = null, version }) {
 const textChannel = (server) => server.channels.find((c) => c.type === 'text');
 
 function setView(v) {
+  const from = currentKey();
   S.view = v;
   S.editing = null;
   if (S.panel === 'thread' && (!S.thread || S.thread.channelId !== v.channelId)) { S.panel = null; S.thread = null; }
   if (S.panel === 'pins' || (S.panel === 'threads' && (!S.threadsPanel || S.threadsPanel.channelId !== v.channelId))) S.panel = null;
-  if (S.panel === null && P.showMembers && wideEnoughForPanel() && (v.type === 'channel' || v.type === 'dm')) S.panel = 'members';
+  // Photos & videos belong to their conversation: going to another one closes them (coming back to the same one doesn't).
+  if (S.panel === 'media' && (!['channel', 'dm'].includes(v.type) || currentKey() !== from)) S.panel = null;
+  // The side view ('side') stays: what's pinned there is from anywhere, and it's there to keep beside another chat. On a
+  // phone, where it covers the chat, going to another conversation shows that conversation instead.
+  if (S.panel === 'side' && isPhoneLayout() && currentKey() !== from) S.panel = null;
+  // A DM's profile and a member list are two choices: going from a channel to a DM or back, the panel stays open only
+  // if it's shown where you're going too.
+  if (S.panel === 'members' && (v.type === 'dm' ? !P.showDmProfile : v.type === 'channel' && !P.showMembers)) S.panel = null;
+  if (S.panel === null && (v.type === 'channel' || v.type === 'dm')) S.panel = restingPanel(v);
   document.body.classList.remove('nav-open');
   // Going somewhere draws the side panel afresh (a voice chat panel otherwise stays as it is through redraws).
   const panelEl = $('#members');
@@ -1671,6 +1974,7 @@ async function openDmWith(userId) {
   try {
     const d = await api('POST', '/dms', { userId });
     if (!S.dms.find((x) => x.id === d.id)) S.dms.unshift(d);
+    if (d.look !== undefined) LOOK.onEvent('dm:look', { dmId: d.id, look: d.look }); // its chat background (chat-look.js)
     openDm(d.id);
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -2019,9 +2323,11 @@ function globalKeys(e) {
       return;
     }
   }
-  if (e.key === 'Escape' && !document.querySelector('.modal-backdrop, .popover')) {
+  if (e.key === 'Escape' && !document.querySelector('.modal-backdrop, .popover, .sheet-backdrop')) {
     // Phones: the navigation drawer closes first, and focus goes back to the button that opened it.
     if (document.body.classList.contains('nav-open')) { document.body.classList.remove('nav-open'); const t = $('.nav-toggle'); if (t) t.focus(); }
+    // Phones: the side panel covers the conversation, so it closes next (beside the chat on wider screens, it stays).
+    else if (isPhoneLayout() && panelMode()) closePanel();
     // Picking messages to delete ends first (wherever focus is: often the bar's own buttons), and only that.
     else if (S.select) { e.preventDefault(); endSelect({ refocus: true }); }
     else if (S.editing) { S.editing = null; renderMessages(false); }
@@ -2056,7 +2362,11 @@ function stepChannel(dir) {
 // ======================================================================= render: shell
 function applyServerTheme() {
   const server = currentServer();
-  setServerTheme(server && !isGroup(server) ? server.theme : null);
+  // A DM or group chat shows the background someone there set (chat-look.js), while this device shows them (LOOK.themeFor
+  // is null otherwise). A server's own theme never passes for one: "Show server themes" is the switch for it. Not while
+  // the conversation is covered because you're sharing your screen: its background is the app's backdrop, which shows
+  // around and through the cover, so it's as private as the conversation.
+  setServerTheme(server && !isGroup(server) ? server.theme && { ...server.theme, chat: false } : hiddenWhileSharing(privateKey()) ? null : LOOK.themeFor(S.view));
 }
 function renderAll() {
   applyServerTheme();
@@ -2078,6 +2388,14 @@ function panelMode() {
   if (!['channel', 'dm'].includes(S.view.type)) return null;
   return S.panel;
 }
+// The panel a channel or DM opens with, and goes back to when nothing else is open in it: a server's or group chat's
+// member list, or a DM's profile, each as you last left it on this device. Only where it fits beside the chat: a
+// narrower window or a phone opens it when asked.
+function restingPanel(v = S.view) {
+  if (!wideEnoughForPanel()) return null;
+  if (v.type === 'dm') return P.showDmProfile ? 'members' : null;
+  return v.type === 'channel' && P.showMembers ? 'members' : null;
+}
 
 // Which way popups from the server bar should open (it can sit left, right or on top).
 function railSide() {
@@ -2091,7 +2409,8 @@ function resizeHandle(which) {
   const cfg = () => {
     const d = document.documentElement.dataset;
     if (which === 'sidebar') return { key: 'sideW', v: '--side-w', min: 200, max: 420, def: 256, dir: d.sidebarSide === 'right' ? -1 : 1, box: $('#sidebar') };
-    const thread = panelMode() === 'thread' || panelMode() === 'chat'; // conversations in the panel share one width
+    // Conversations in the panel share one width, and Photos & videos (a grid of them) and the side view take it too.
+    const thread = panelMode() === 'thread' || panelMode() === 'chat' || panelMode() === 'media' || panelMode() === 'side';
     return { key: thread ? 'threadW' : 'panelW', v: thread ? '--thread-w' : '--members-w', min: thread ? 300 : 220, max: thread ? 680 : 520, def: thread ? 400 : 272, dir: d.panelSide === 'left' ? 1 : -1, box: $('#members') };
   };
   const save = (key, w) => { const a = loadAppearance(); a.layout[key] = Math.round(w); saveAppearance(a); };
@@ -2125,8 +2444,9 @@ const updates = createUpdates({
   onUnread: () => { if (!S.view.serverId) renderSidebar(); renderRail(); },
 });
 // Study tools: Recall in a sandboxed frame, with its decks end-to-end encrypted and synced (recall-host.js).
-// Input in its frame doesn't reach this page, so the frame says when it's in use (for automatic Away).
-const study = createRecall({ S, onEnabled: () => { if (!S.view.serverId) renderSidebar(); }, onActive: () => { if (away) away.used(); } });
+// Input in its frame doesn't reach this page, so the frame says when it's in use (for automatic Away, and so an update
+// waits; while Study is open an update waits anyway: updateBlockedBy).
+const study = createRecall({ S, onEnabled: () => { if (!S.view.serverId) renderSidebar(); }, onActive: () => { if (away) away.used(); autoUpdate.input(); } });
 const folders = createFolders({
   S, servers: () => realServers(), favorites: () => new Set(P.favorites.filter((f) => f.startsWith('s:')).map((f) => f.slice(2))),
   rerender: () => renderRail(), serverUnread: (s) => serverUnread(s), setNotify: (k, v) => setNotify(k, v), railSide: () => railSide(),
@@ -2261,7 +2581,7 @@ function conversations() {
     const u = getUser(d.userId);
     return {
       key: 'd:' + d.id, fav: 'd:' + d.id, at: d.lastMessageAt, active: S.view.dmId === d.id,
-      title: displayName(u), avatar: avatarEl(u, 34, { status: true, meId: S.me.id }), preview: S.previews['d:' + d.id],
+      title: displayName(u), avatar: avatarEl(u, 34, { status: true, meId: S.me.id }),
       unreadKey: 'd:' + d.id, open: () => openDm(d.id), menu: dmMenuItems(d), userId: u.id,
     };
   });
@@ -2269,11 +2589,40 @@ function conversations() {
     const c = textChannel(g);
     out.push({
       key: 'g:' + g.id, fav: 'g:' + g.id, at: g.lastMessageAt || 0, active: S.view.serverId === g.id,
-      title: groupName(g), avatar: groupAvatar(g, 34), preview: S.previews['g:' + g.id] || `${g.memberIds.length} members`,
+      title: groupName(g), avatar: groupAvatar(g, 34),
       unreadKey: c ? 'c:' + c.id : '', open: () => openGroup(g.id), menu: groupMenuItems(g),
     });
   }
   return out.filter((c) => !c.userId || !S.blocked.has(c.userId) || c.active).sort((a, b) => (b.at || 0) - (a.at || 0));
+}
+// A conversation's last message as the lists show it ('d:<dm>' or 'g:<group>'): a group chat without one says how
+// many are in it.
+function convPreview(key) {
+  if (S.previews[key]) return S.previews[key];
+  const g = key.startsWith('g:') && S.servers.find((s) => s.id === key.slice(2));
+  return g ? `${g.memberIds.length} members` : '';
+}
+// The line under a conversation's name in the lists (the sidebar, Home's cards): its last message, or the dots and
+// "typing…" while someone is typing there, like Discord's (typingChanged keeps it up to date in place). Hidden for a
+// screen share, it stays hidden. empty: what it says before there's a message.
+function convLine(c, cls, empty) {
+  if (isSharing() && !shareAllowed.has(c.unreadKey)) return h('span', { class: cls }, 'Hidden while sharing');
+  // (unreadKey is the conversation's own key, the one typing events name: 'd:<dm>', or 'c:<the group's chat>'.)
+  const el = h('span', { class: `${cls} conv-line`, dataset: c.unreadKey ? { typingKey: c.unreadKey } : null });
+  el._text = () => convPreview(c.key) || empty;
+  return drawConvLine(el);
+}
+// Drawn again only when what it says changes, so the dots keep going while the same people go on typing.
+function drawConvLine(el) {
+  const key = el.dataset.typingKey;
+  const said = key ? typingPreview(typingNames(key), { group: key.startsWith('c:') }) : '';
+  const text = said || el._text();
+  if (el._shown === text && el._typing === !!said) return el;
+  el._shown = text; el._typing = !!said;
+  clear(el).classList.toggle('is-typing', !!said);
+  if (said) el.append(typingDots(), h('span', { class: 'conv-typing-text' }, said));
+  else el.append(text);
+  return el;
 }
 function groupName(g) {
   if (g.name) return g.name;
@@ -2294,7 +2643,7 @@ function convRow(c) {
   }, c.avatar,
   h('span', { class: 'dm-row-text' },
     h('span', { class: 'dm-row-top' }, h('span', { class: 'dm-row-name' }, c.title), c.at ? h('span', { class: 'dm-row-time' }, shortTime(c.at)) : null),
-    h('span', { class: 'dm-row-status' }, isSharing() && !shareAllowed.has(c.unreadKey) ? 'Hidden while sharing' : c.preview || '\u00a0')),
+    convLine(c, 'dm-row-status', '\u00a0')),
   mentions ? h('span', { class: 'badge', 'aria-label': `${mentions} unread` }, mentions) : unread ? h('span', { class: 'unread-dot', 'aria-label': 'Unread' }) : null);
 }
 function shortTime(ts) {
@@ -2317,6 +2666,7 @@ function dmMenuItems(d) {
     ...notifyItems('d:' + d.id),
     ...disappearItems('d:' + d.id),
     '-',
+    LOOK.menuItem('d:' + d.id), // "Chat background…" (none once they're blocked or their account is gone)
     { label: 'View profile', icon: 'user', action: () => openProfileModal(u.id) },
     { label: 'Verify encryption', icon: 'shield', action: () => openSafetyNumber(u) },
   ];
@@ -2329,6 +2679,7 @@ function groupMenuItems(g) {
     ...(c ? [{ label: 'Mark as read', icon: 'check', action: () => markConvRead('c:' + c.id) }, ...notifyItems('c:' + c.id), ...disappearItems('c:' + c.id), '-'] : []),
     { label: 'Rename group', icon: 'edit', action: () => renameGroup(g) },
     { label: 'Change group picture', icon: 'image', action: () => changeGroupIcon(g) },
+    LOOK.menuItem('g:' + g.id), // "Chat background…"
     { label: 'Add people', icon: 'userPlus', action: () => openNewConversation(g) },
     { label: 'Members', icon: 'people', action: () => manageGroup(g) },
     '-',
@@ -2388,7 +2739,7 @@ function renderServerSidebar(server, head, body) {
       next.repeat ? ` · ${repeatLabel(next).toLowerCase()}` : '')) : 'Events'),
     evs.length ? h('span', { class: 'badge inline' }, evs.length) : null));
   // Memberships this server sells (support the creator, get a role / private channels).
-  if (server.memberships) body.append(h('button', { class: 'ev-row mb-row', onclick: () => (isOwner(server) ? openServerSettings(server, 'memberships') : openMemberships(server)) }, icon('star'), h('span', { class: 'ev-row-text' }, 'Memberships')));
+  if (server.memberships && !noPayments) body.append(h('button', { class: 'ev-row mb-row', onclick: () => (isOwner(server) ? openServerSettings(server, 'memberships') : openMemberships(server)) }, icon('star'), h('span', { class: 'ev-row-text' }, 'Memberships')));
   const collapsed = P.collapsed[server.id] || [];
   const cats = orderedCategories(server);
   cats.forEach((cat, ci) => {
@@ -2759,7 +3110,7 @@ function statusMenu(anchor) {
     h('div', { class: 'menu-sep' }),
     h('button', { class: 'menu-item', onclick: () => { closePopover(); openCustomStatus(); } }, icon('smile', 'ic menu-ic'), 'Set a custom status'),
     h('button', { class: 'menu-item', onclick: () => { closePopover(); openActivityPicker(S.me.activity); } }, icon('gamepad', 'ic menu-ic'), 'Set what I\u2019m playing or listening to'),
-    S.config.funding || S.config.support ? h('button', { class: 'menu-item', onclick: () => { closePopover(); openSupport(); } }, icon('coin', 'ic menu-ic'), `Support ${S.config.name}`) : null,
+    !noPayments && (S.config.funding || S.config.support) ? h('button', { class: 'menu-item', onclick: () => { closePopover(); openSupport(); } }, icon('coin', 'ic menu-ic'), `Support ${S.config.name}`) : null,
     h('button', { class: 'menu-item', onclick: () => { closePopover(); openProfileModal(S.me.id); } }, icon('user', 'ic menu-ic'), 'View my profile'),
     h('button', { class: 'menu-item', onclick: () => { closePopover(); displayNameDialog(app); } }, icon('user', 'ic menu-ic'), 'Change display name'),
     h('button', { class: 'menu-item', onclick: () => { closePopover(); openSettings(app, 'profile'); } }, icon('edit', 'ic menu-ic'), 'Edit profile'),
@@ -2816,7 +3167,7 @@ function renderMain() {
   else if (v.type === 'people') main.append(peopleView());
   else if (v.type === 'updates') main.append(updates.view());
   else if (v.type === 'study') main.append(study.view());
-  else if (v.type === 'admin' && S.me.staffRole) main.append(S.adminEl = adminView({ role: S.me.staffRole, confirm: (fn, opts) => confirmedCall(app, fn, opts), tab: v.tab, setTab: (t) => { S.view.tab = t; }, openReports: S.adminReports, onCount: (n) => { if (S.adminReports !== n) { S.adminReports = n; renderRail(); } } }));
+  else if (v.type === 'admin' && S.me.staffRole) main.append(S.adminEl = adminView({ role: S.me.staffRole, confirm: (fn, opts) => confirmedCall(app, fn, opts), me: () => S.me, tab: v.tab, setTab: (t) => { S.view.tab = t; }, openReports: S.adminReports, onCount: (n) => { if (S.adminReports !== n) { S.adminReports = n; renderRail(); } } }));
   else if ((v.type === 'channel' || v.type === 'dm') && hiddenWhileSharing(privateKey(v))) main.append(shareCover(privateKey(v)));
   else if (v.type === 'channel' || v.type === 'dm') main.append(chatView());
   else if (v.type === 'voice') main.append(voiceRoomView());
@@ -2826,6 +3177,80 @@ function renderMain() {
   }
 }
 const navToggle = () => ibtn('menu', 'Open navigation', () => document.body.classList.toggle('nav-open'), { cls: 'nav-toggle' });
+const navOpen = () => document.body.classList.contains('nav-open');
+function closeNav() {
+  const inside = !!document.activeElement && !!document.activeElement.closest('#rail, #sidebar');
+  document.body.classList.remove('nav-open');
+  // Focus doesn't stay behind in the hidden drawer: it goes back to the button that opens it.
+  const t = inside && $('.nav-toggle');
+  if (t) t.focus({ preventScroll: true });
+}
+// What the side panel's close button does (a thread opened from the Threads list goes back to the list, as with Esc).
+function closePanel() {
+  const panel = $('#members');
+  const hadFocus = !!panel && panel.contains(document.activeElement);
+  const mode = panelMode();
+  if (mode === 'chat') toggleVoiceChat(false);
+  else if (mode === 'thread') closeThread();
+  else if (mode) togglePanel(S.panel);
+  if (hadFocus && !panelMode()) $('#main').focus({ preventScroll: true });
+}
+// Phones and tablets (phone-nav.js): Back closes the menu, picture, message actions, dialog, side panel or drawer on
+// top instead of leaving Hearth, and cancels a voice message being recorded, a message being edited or a reply (as Esc
+// does); in the phone layout a swipe from the screen's left edge opens the drawer (or closes the side panel, which
+// covers the chat there).
+function phoneNav() {
+  const viewer = () => document.querySelector('.viewer:not(.closing)');
+  const popup = () => document.querySelector('#layer > .popover');
+  const actions = () => document.querySelector('#layer > .sheet-backdrop:not(.closing)');
+  const dialog = () => [...document.querySelectorAll('#layer > .modal-backdrop:not(.closing)')].pop();
+  // What's under way in a message box or the message list, the recording first: each one's element says how it's
+  // cancelled (_cancel). The one in the side panel (a thread's) goes before the panel, the chat's after the drawer.
+  const underWay = (inPanel) => {
+    if (inPanel && !panelMode()) return null;
+    const panel = $('#members');
+    for (const sel of ['.rec-bar', '.edit-wrap', '.reply-bar']) {
+      const el = $$(sel).find((x) => x._cancel && panel.contains(x) === inPanel);
+      if (el) return el;
+    }
+    return null;
+  };
+  const enabled = () => isPhoneLayout() || isTouchUI();
+  const back = backStack({
+    // The phone layout, and touch screens (a tablet's back gesture). A desktop with a mouse adds nothing.
+    enabled,
+    layers: [
+      { open: () => !!popup(), close: closePopover }, // (a menu can sit on the picture viewer: its More)
+      { open: () => !!viewer(), close: () => viewer()._close() },
+      { open: () => !!actions(), close: () => actions()._close() },
+      { open: () => !!dialog(), close: () => dialog()._close() },
+      { open: () => !!underWay(true), close: () => underWay(true)._cancel() },
+      // Beside the chat on a wider screen, the side panel is part of the page rather than something on top of it.
+      { open: () => isPhoneLayout() && !!panelMode(), close: closePanel },
+      { open: navOpen, close: closeNav },
+      { open: () => !!underWay(false), close: () => underWay(false)._cancel() },
+    ],
+  });
+  // Whatever opens or closes them: the drawer and panel are classes on the body; pictures, menus, sheets and dialogs
+  // are added and removed. Recording, editing and replying come and go inside the chat and the side panel, which are
+  // watched only while Back is Hearth's (they change with every message).
+  const watch = new MutationObserver(() => back.sync());
+  watch.observe(document.body, { attributes: true, attributeFilter: ['class'], childList: true });
+  watch.observe($('#layer'), { childList: true });
+  const inside = new MutationObserver(() => back.sync());
+  const watchInside = () => {
+    inside.disconnect();
+    if (enabled()) for (const el of [$('#main'), $('#members')]) inside.observe(el, { childList: true, subtree: true });
+  };
+  watchInside();
+  const swipes = edgeSwipes({
+    enabled: () => isPhoneLayout() && isTouchUI(),
+    blocked: () => !!(viewer() || popup() || actions() || dialog()),
+    drawer: { isOpen: navOpen, parts: () => [$('#rail'), $('#sidebar')], scrim: () => $('.nav-scrim'), setOpen: (on) => (on ? document.body.classList.add('nav-open') : closeNav()) },
+    panel: { isOpen: () => !!panelMode(), el: () => $('#members'), close: closePanel },
+  });
+  onDeviceChange(() => { swipes.update(); watchInside(); back.sync(); });
+}
 function headTools(...items) { return h('div', { class: 'head-tools', role: 'toolbar', 'aria-label': 'Conversation tools' }, items.filter(Boolean)); }
 // The channel's Threads panel. Its badge counts pings in the channel's threads; a dot means new replies in a thread
 // this app has seen (the panel itself has the full list).
@@ -2838,6 +3263,26 @@ function threadsButton(channelId) {
   if (pings) b.append(h('span', { class: 'badge', 'aria-hidden': 'true' }, pings > 99 ? '99+' : pings));
   else if (fresh) b.append(h('span', { class: 'unread-dot', 'aria-hidden': 'true' }));
   return b;
+}
+// The side view (side-view.js): shows and hides it, with how many things are pinned there. Only once something is (the
+// ⋯ menu always has it), and not in the phone layout, whose header is full (app.css).
+function sideButton() {
+  const n = SIDE.count();
+  const open = S.panel === 'side';
+  if (!n && !open) return null;
+  const label = `${open ? 'Hide pinned to side' : 'Pinned to side'}${n ? ` (${n})` : ''}`;
+  const b = ibtn('sidebar', label, () => togglePanel('side'), { active: open, cls: 'with-badge head-side' });
+  if (n) b.append(h('span', { class: 'sv-count', 'aria-hidden': 'true' }, String(n)));
+  return b;
+}
+// A DM's profile beside the chat: shows it and folds it away (as its own fold button does), remembered on this device.
+// Lit while it's open (app.css), so it's the button to look for once it's folded. The label says what pressing it
+// does, so it says whether the panel is open with aria-expanded rather than aria-pressed ("Hide profile, pressed"
+// contradicts itself).
+function profileButton() {
+  const open = S.panel === 'members';
+  return ibtn('user', open ? 'Hide profile' : 'Show profile', () => togglePanel('members'),
+    { active: open, cls: 'head-profile', attrs: { 'aria-pressed': null, 'aria-expanded': String(open), 'aria-controls': 'members' } });
 }
 // Show or hide the chat beside a call. While it's hidden, its badge counts your pings there, and a dot means new
 // messages (when they count for you: you opened it before, or you're in the call).
@@ -2854,11 +3299,91 @@ function voiceChatButton(c) {
   return b;
 }
 function togglePanel(mode) {
+  const el = $('#members');
+  const dm = S.view.type === 'dm';
+  const shown = !!el && !el.hidden;
+  const profileShown = dm && shown && panelMode() === 'members';
+  // Still sliding shut: shown again, it turns back from where it got to (slidePanel) rather than jumping to its width.
+  const folding = dm && shown && !!sliding && sliding.shut;
+  const fromPanel = shown && el.contains(document.activeElement);
   S.panel = S.panel === mode ? null : mode;
-  if (mode === 'members') P.showMembers = S.panel === 'members';
+  // In a DM, closing something else (pinned messages, photos & videos, the side view) goes back to its profile when
+  // that's shown there.
+  if (!S.panel && dm && mode !== 'members') S.panel = restingPanel();
+  // Two choices: folding a DM's profile leaves servers' member lists as they are, and the other way round.
+  if (mode === 'members') { if (dm) P.showDmProfile = S.panel === 'members'; else P.showMembers = S.panel === 'members'; }
   if (S.panel !== 'thread') S.thread = null;
-  document.body.classList.toggle('panel-open', !!panelMode());
-  renderPanel(); renderHeader();
+  if (profileShown && !S.panel && slidesPanel()) slidePanel(el, true, () => renderPanel());
+  else {
+    if (folding && S.panel === 'members' && slidesPanel()) slidePanel(el, false);
+    document.body.classList.toggle('panel-open', !!panelMode());
+    renderPanel();
+    if (dm && !shown && S.panel === 'members' && !el.hidden && slidesPanel()) slidePanel(el, false);
+  }
+  renderHeader();
+  // Folded with its own button: the keyboard carries on from the header's profile button, which brings it back.
+  if (fromPanel && dm && mode === 'members' && !S.panel) { const b = $('#main-head .head-profile'); if (b) b.focus({ preventScroll: true }); }
+}
+// ---- the DM profile folding away and back
+// Its fold button and the header's profile button slide it shut and open (app.css #members.panel-folding): its width
+// goes to nothing and back, so the chat beside it widens and narrows with it rather than jumping, and keepPlace keeps
+// the newest message at the bottom as its lines rewrap. Only where it sits beside the chat: a narrower window
+// floats it over the chat and a phone covers the chat with it, so there it shows and hides as before, as it does with
+// Reduce motion (the app's or the system's).
+const FOLD_MS = 180;
+let sliding = null; // { shut, key, turn(done), end(finished) }
+const slidesPanel = () => wideEnoughForPanel() && !document.documentElement.classList.contains('reduce-motion') && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+// shut: folding away (done, once it's shut, closes it); otherwise coming back, drawn already.
+function slidePanel(el, shut, done = null) {
+  // Pressed again before it's done: the slide under way goes back the way it came, from where it got to, rather than
+  // the panel jumping to its full width (and the chat with it) and starting over from there.
+  if (sliding && sliding.shut !== shut && sliding.key === currentKey() && sliding.turn(done)) return;
+  if (sliding) sliding.end(false);
+  const main = $('#main');
+  // The gap between the chat and the panel, and the panel's borders (all that's left of it at the end), go and come
+  // with it: the chat reaches over them meanwhile. Only when there's nothing else between the two. (Where they're laid
+  // out, not drawn: panel-in moves the panel aside as it starts.)
+  const right = el.offsetLeft >= main.offsetLeft + main.offsetWidth;
+  const gap = right ? el.offsetLeft - main.offsetLeft - main.offsetWidth : main.offsetLeft - el.offsetLeft - el.offsetWidth;
+  if (gap >= 0 && gap <= (parseFloat(getComputedStyle($('#app')).columnGap) || 0) + 1) main.style.setProperty(right ? '--fold-mr' : '--fold-ml', `${-(gap + el.offsetWidth - el.clientWidth)}px`);
+  // What's in it keeps its width and slides out under the edge, rather than squeezing.
+  el.style.setProperty('--fold-w', `${el.clientWidth}px`);
+  const cls = shut ? 'panel-folding' : 'panel-unfolding';
+  el.classList.add(cls); main.classList.add(cls);
+  // Folding away, it's out of reach at once (togglePanel then hands the focus its button had to the header's).
+  if (shut) el.inert = true;
+  let timer = 0;
+  const onEnd = (e) => { if (e.target === el && /^panel-(un)?fold$/.test(e.animationName)) s.end(true); };
+  const s = {
+    shut, key: currentKey(),
+    // The panel's slide and the chat's, played backwards from where they are. They keep their classes (a new animation
+    // would start over from its own beginning), and each is held where it ends up until the slide's over: the panel at
+    // nothing until done closes it, as a fold is.
+    turn(then) {
+      if (!el.getAnimations) return false;
+      const runs = [el, main].flatMap((x) => x.getAnimations()).filter((a) => /^(panel|main)-(un)?fold$/.test(a.animationName));
+      if (runs.length !== 2 || runs.some((a) => a.playState !== 'running')) return false;
+      for (const a of runs) { a.effect.updateTiming({ fill: 'both' }); a.reverse(); }
+      s.shut = !s.shut; done = then; el.inert = s.shut;
+      clearTimeout(timer);
+      timer = setTimeout(() => s.end(true), FOLD_MS + 150);
+      return true;
+    },
+    end(finished) {
+      if (sliding !== s) return;
+      sliding = null;
+      clearTimeout(timer);
+      el.removeEventListener('animationend', onEnd);
+      el.classList.remove(cls); main.classList.remove(cls);
+      main.style.removeProperty('--fold-mr'); main.style.removeProperty('--fold-ml'); el.style.removeProperty('--fold-w');
+      el.inert = false;
+      if (finished && done) done();
+    },
+  };
+  sliding = s;
+  el.addEventListener('animationend', onEnd);
+  // In case the animation's end never comes (a tab in the background).
+  timer = setTimeout(() => s.end(true), FOLD_MS + 150);
 }
 
 function renderHeader() {
@@ -2877,8 +3402,16 @@ function drawHeader(head) {
   const key = currentKey();
   const server = currentServer();
   const PIN_ITEM = { label: S.panel === 'pins' ? 'Hide pinned messages' : 'Pinned messages', icon: 'pin', action: () => togglePanel('pins') };
+  // Photos & videos: in the ⋯ menu everywhere (the way in on a phone, whose header is full), and a header button of
+  // their own in DMs and group chats on wider screens (app.css hides it in the phone layout).
+  const MEDIA_ITEM = { label: S.panel === 'media' ? 'Hide photos & videos' : 'Photos & videos', icon: 'images', action: () => togglePanel('media') };
+  const mediaButton = () => ibtn('images', S.panel === 'media' ? 'Hide photos & videos' : 'Photos & videos', () => togglePanel('media'), { active: S.panel === 'media', cls: 'head-media' });
   // Counted when the menu opens, so it's never out of date.
   const SCHED_ITEM = () => { const n = key ? SCHED.forKey(key).length : 0; return { label: 'Scheduled messages', icon: 'clock', hint: n ? String(n) : null, action: () => SCHED.openList(key) }; };
+  // Pinned to side (side-view.js): in the ⋯ menu of every chat, with how many (the header's button, sideButton, is for
+  // wider screens).
+  const sideCount = SIDE.count();
+  const SIDE_ITEM = { label: S.panel === 'side' ? 'Hide pinned to side' : 'Pinned to side', icon: 'sidebar', hint: sideCount ? String(sideCount) : null, action: () => togglePanel('side') };
   if (v.type === 'channel' && server && !isGroup(server)) {
     const c = server.channels.find((x) => x.id === v.channelId);
     if (!c) return;
@@ -2892,8 +3425,9 @@ function drawHeader(head) {
         // Notification options live in the ⋯ menu; the bell only shows up as a reminder when it's muted.
         isMuted(key) ? ibtn('bellOff', 'Muted. Click to change.', (e) => menu(e.currentTarget, notifyMenu(key), { align: 'end' }), { attrs: { 'data-pop-anchor': '' } }) : null,
         threadsButton(c.id),
+        sideButton(),
         ibtn('people', S.panel === 'members' ? 'Hide members' : 'Show members', () => togglePanel('members'), { active: S.panel === 'members' }),
-        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, SCHED_ITEM(), ...channelMenuItems(c, server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
+        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), SIDE_ITEM, ...channelMenuItems(c, server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' || S.panel === 'media' })));
   } else if (v.type === 'channel' && isGroup(server)) {
     const call = server.channels.find((c) => c.type === 'voice');
     const inCall = voice && call && voice.channelId === call.id;
@@ -2909,8 +3443,10 @@ function drawHeader(head) {
           icon(inCall ? 'phoneOff' : 'phone'), inCall ? 'Leave call' : callers ? `Join call (${callers})` : 'Call') : null,
         ibtn('search', 'Search (Ctrl+K)', () => openSearch({ scope: key })),
         threadsButton(v.channelId),
+        mediaButton(),
+        sideButton(),
         ibtn('people', 'Members', () => togglePanel('members'), { active: S.panel === 'members' }),
-        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, SCHED_ITEM(), ...groupMenuItems(server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
+        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), SIDE_ITEM, ...groupMenuItems(server)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
   } else if (v.type === 'dm') {
     const d = S.dms.find((x) => x.id === v.dmId);
     if (!d) return;
@@ -2918,7 +3454,7 @@ function drawHeader(head) {
     const p = presenceOf(u, S.me.id);
     head.append(
       h('div', { class: 'head-title' }, avatarEl(u, 26, { status: true, meId: S.me.id }), h('h1', null, displayName(u)),
-        h('span', { class: 'head-topic' }, STATUS_LABEL[p] || '')),
+        h('span', { class: 'head-topic', 'data-presence-of': u.id }, STATUS_LABEL[p] || '')),
       headTools(
         sec.keyChanged(u)
           ? h('button', { class: 'head-badge warn', 'data-tip': 'This person\u2019s security key changed. Click to verify.', onclick: () => openSafetyNumber(u) }, icon('shield'), 'Key changed')
@@ -2935,8 +3471,10 @@ function drawHeader(head) {
           return [ibtn('phone', live ? 'Join the call' : 'Start a voice call', () => startDmCall(d.id)), ibtn('video', live ? 'Join with video' : 'Start a video call', () => startDmCall(d.id, true))];
         })(),
         ibtn('search', 'Search (Ctrl+K)', () => openSearch({ scope: key })),
-        ibtn('user', S.panel === 'members' ? 'Hide profile' : 'Show profile', () => togglePanel('members'), { active: S.panel === 'members' }),
-        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, SCHED_ITEM(), ...dmMenuItems(d), '-', blockItem(u)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
+        mediaButton(),
+        sideButton(),
+        profileButton(),
+        ibtn('more', 'More', (e) => menu(e.currentTarget, [PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), SIDE_ITEM, ...dmMenuItems(d), '-', blockItem(u)], { align: 'end' }), { attrs: { 'data-pop-anchor': '' }, active: S.panel === 'pins' })));
   } else if (v.type === 'voice' && server) {
     const c = server.channels.find((x) => x.id === v.channelId);
     const ck = 'c:' + v.channelId;
@@ -2987,10 +3525,10 @@ function notifyMenu(key) {
 
 // ---- Home: a quick launchpad, not a wall of content
 // "Keep this server running": the owner's monthly cost, how much is covered, and where to chip in.
-// No ads, no tracking: just an honest number. It can be hidden for a month.
+// No ads, no tracking: just an honest number. It can be hidden for a month. Never in the Android app (no way to pay there).
 function fundingCard() {
   const f = S.config.funding;
-  if (!f || !f.enabled || !f.url) return null;
+  if (noPayments || !f || !f.enabled || !f.url) return null;
   const hidKey = `hearth.fundHidden.${S.me.id}`;
   if (+(localStorage.getItem(hidKey) || 0) > Date.now()) return null;
   const money = (n) => { try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: f.currency || 'USD', maximumFractionDigits: 0 }).format(n); } catch { return `${n} ${f.currency}`; } };
@@ -3007,8 +3545,9 @@ function fundingCard() {
   return card;
 }
 // The Support window: perks, the person's own support code, and the ways to pay (Stripe / Ko-fi / the
-// owner's own link). Payments with the code turn on the supporter badge by themselves.
+// owner's own link). Payments with the code turn on the supporter badge by themselves. Not in the Android app.
 async function openSupport() {
+  if (noPayments) return;
   let d;
   try { d = await api('GET', '/me/support'); } catch (e) { return toast(e.message, 'error'); }
   const f = S.config.funding || {};
@@ -3091,7 +3630,7 @@ function onlineFriendsSection() {
 function convCard(c) {
   const unread = c.unreadKey && S.unread.has(c.unreadKey) && !isMuted(c.unreadKey);
   return h('button', { class: `conv-card${unread ? ' unread' : ''}`, onclick: c.open, oncontextmenu: (e) => contextMenu(e, c.menu) },
-    c.avatar, h('span', { class: 'conv-card-text' }, h('strong', null, c.title), h('span', null, isSharing() && !shareAllowed.has(c.unreadKey) ? 'Hidden while sharing' : c.preview || 'No messages yet')),
+    c.avatar, h('span', { class: 'conv-card-text' }, h('strong', null, c.title), convLine(c, 'conv-card-sub', 'No messages yet')),
     c.at ? h('span', { class: 'conv-card-time' }, shortTime(c.at)) : null);
 }
 
@@ -3254,12 +3793,142 @@ function editSavedNote(it) {
 }
 
 // ======================================================================= conversation view
+// ---- keeping your place in the message list
+// The list has overflow-anchor: none (app.css): the app decides where it sits. Putting it there once isn't enough. A
+// GIF, a video or a picture link only gets its size once it has loaded (a photo's size comes with it), a page of older
+// or newer messages comes in, the message box or the window changes height: each of these moved what you were looking
+// at after it was put on screen. Reopening a conversation left you somewhere above the newest message, and a jump (a
+// pin, a search result, a reply…) left the message pushed down out of sight by the pictures loading above it. So the
+// list keeps one of two places through such changes:
+//  - the newest message at the bottom, as long as you're there (opening a conversation and sending put you there);
+//  - a message it was sent to, until the pictures on screen are in and nothing has moved for a moment, or until you
+//    scroll yourself.
+const PLACE_QUIET = 1200; // a message's place is let go once nothing has moved for this long (ms)…
+const PLACE_MAX = 10000; // …or after this long at most
+const NEAR_NEWEST = 8; // px from the bottom that still counts as being at the newest message
+const MARKER_GAP = 80; // the "New messages" line goes this far below the top (clear of the unread bar over the list)
+const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+function keepPlace(sc) {
+  let stuck = true; // at the newest message: stays there
+  let held = null; // { find: () => element, block: 'center' | 'start', offset, found, quiet, max }
+  let lastTop = 0;
+  let shown = false;
+  let ro = null;
+  let mo = null;
+  const fromBottom = () => sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+  const release = () => {
+    if (!held) return;
+    clearTimeout(held.quiet); clearTimeout(held.max);
+    held = null;
+    stuck = sc.isConnected && fromBottom() < NEAR_NEWEST;
+  };
+  const place = () => {
+    // Gone with its conversation: nothing more to keep.
+    if (!sc.isConnected) { if (shown) { release(); if (ro) ro.disconnect(); if (mo) mo.disconnect(); } return; }
+    shown = true;
+    if (held) {
+      const el = held.find();
+      if (!el || !el.isConnected) return;
+      held.found = true;
+      const box = sc.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      // In the middle (its top at the top when it's taller than the list), or a set distance below the top.
+      const want = held.block === 'start' ? box.top + held.offset : box.top + Math.max(0, (box.height - r.height) / 2);
+      if (Math.abs(r.top - want) >= 1) sc.scrollTop += r.top - want;
+    } else if (stuck && fromBottom() > 1) sc.scrollTop = sc.scrollHeight;
+    lastTop = sc.scrollTop;
+  };
+  // A message's place is let go once it's on screen and has settled: nothing moved for a moment, and no picture still
+  // loading. (Not drawn yet, its page still on the way: it's waited for, up to PLACE_MAX.)
+  const settle = () => {
+    const now = held;
+    if (!now || !now.found) return;
+    clearTimeout(now.quiet);
+    now.quiet = setTimeout(() => { if (held === now) { if (sc.querySelector('.att-media.loading')) settle(); else release(); } }, PLACE_QUIET);
+  };
+  // At the newest message, the list moving up can mean two things: you (or something) scrolled it, and the newest
+  // message is let go; or it got shorter under you (a video that turned out smaller, a message deleted) and the
+  // browser pulled it up, and it stays. Scrolled by you (a wheel, a finger, the keyboard, the scrollbar) is clear at
+  // once. Otherwise it's the second when a size change comes with it (by the next frame), else the first.
+  let unsure = 0;
+  const changed = () => { unsure = 0; place(); settle(); };
+  // Watched: the list's own size (the message box, the keyboard on a phone, the window) and each row's (a picture
+  // coming in), and rows coming and going (a page loading, a redraw).
+  if (typeof ResizeObserver === 'function') { ro = new ResizeObserver(changed); ro.observe(sc); }
+  if (typeof MutationObserver === 'function') {
+    mo = new MutationObserver((records) => {
+      if (ro) for (const r of records) { for (const n of r.addedNodes) if (n.nodeType === 1) ro.observe(n); for (const n of r.removedNodes) if (n.nodeType === 1) ro.unobserve(n); }
+      changed();
+    });
+    mo.observe(sc, { childList: true });
+  }
+  let lastInput = 0;
+  let downAt = 0; // a mouse button, finger or pen down on the list (or its scrollbar) since then
+  const byYou = () => (downAt && Date.now() - downAt < 30000) || Date.now() - lastInput < 1000;
+  sc.addEventListener('scroll', () => {
+    if (fromBottom() < NEAR_NEWEST) { stuck = true; unsure = 0; } else if (!held && stuck && sc.scrollTop < lastTop - 1) {
+      if (byYou()) stuck = false;
+      else {
+        const mark = ++unsure;
+        requestAnimationFrame(() => requestAnimationFrame(() => { if (unsure === mark) { unsure = 0; stuck = false; } }));
+      }
+    }
+    lastTop = sc.scrollTop;
+  }, { passive: true });
+  // Scrolling yourself also lets go of a message's place.
+  const yours = (upward) => { lastInput = Date.now(); release(); if (upward) stuck = false; };
+  sc.addEventListener('wheel', (e) => yours(e.deltaY < 0), { passive: true });
+  sc.addEventListener('touchstart', () => yours(false), { passive: true });
+  sc.addEventListener('touchmove', () => { lastInput = Date.now(); }, { passive: true });
+  const lifted = () => { downAt = 0; lastInput = Date.now(); };
+  sc.addEventListener('pointerdown', (e) => {
+    downAt = lastInput = Date.now();
+    window.addEventListener('pointerup', lifted, { once: true });
+    window.addEventListener('pointercancel', lifted, { once: true });
+    if (e.target === sc) release(); // its scrollbar
+  });
+  sc.addEventListener('keydown', (e) => {
+    // (Not keys typed into a message being edited, or a poll's field.)
+    if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+    if (SCROLL_KEYS.has(e.key)) yours(['ArrowUp', 'PageUp', 'Home'].includes(e.key)); else lastInput = Date.now();
+  });
+  sc._place = {
+    // The newest message at the bottom, and staying there (smoothly: Jump to latest).
+    newest(smooth = false) {
+      release();
+      stuck = true;
+      if (smooth) sc.scrollTo({ top: sc.scrollHeight, behavior: 'smooth' }); else sc.scrollTop = sc.scrollHeight;
+      lastTop = sc.scrollTop;
+    },
+    // What find() returns, in the middle (block 'start': `offset` below the top), now and as things around it move.
+    hold(find, { block = 'center', offset = 0 } = {}) {
+      if (held) { clearTimeout(held.quiet); clearTimeout(held.max); }
+      stuck = false;
+      const now = held = { find, block, offset, found: false, quiet: 0, max: 0 };
+      now.max = setTimeout(() => { if (held === now) release(); }, PLACE_MAX);
+      changed();
+    },
+    release,
+  };
+}
+// The newest message at the bottom of the list, and kept there while you stay (keepPlace).
+function toNewest(sc, smooth = false) {
+  if (!sc) return;
+  if (sc._place) sc._place.newest(smooth); else sc.scrollTop = sc.scrollHeight;
+}
+// A message in the list (by id) held in place as it's drawn and while what's around it settles (keepPlace).
+function holdMessage(sc, id, opts) {
+  if (sc && sc._place) sc._place.hold(() => sc.querySelector(`.msg[data-mid="${id}"]`), opts);
+}
 function chatView() {
   const wrap = h('div', { class: 'chat' });
   const scroller = h('div', { class: 'messages', id: 'messages', tabindex: '0', 'aria-label': 'Messages', role: 'log' });
   scroller.addEventListener('scroll', onMessagesScroll);
   scroller.addEventListener('click', onMessageAreaClick);
   messageListKeys(scroller);
+  // Where it stays as things load (keepPlace). On a phone, too: the keyboard coming up (or the phone turning) makes the
+  // list shorter, and the newest messages stay in view instead of sliding down behind the message box.
+  keepPlace(scroller);
   const jump = h('button', { class: 'jump-latest', id: 'jump-latest', hidden: true, onclick: () => jumpToLatest() }, icon('arrowDown'), 'Jump to latest');
   const unreadBar = h('div', { class: 'unread-bar', id: 'unread-bar', role: 'status', hidden: true });
   const selectBar = h('div', { class: 'select-bar', id: 'select-bar', role: 'region', 'aria-label': 'Selected messages', hidden: true });
@@ -3273,7 +3942,19 @@ function chatView() {
   wrap.addEventListener('dragover', (e) => { e.preventDefault(); wrap.classList.add('dropping'); });
   wrap.addEventListener('dragleave', (e) => { if (!wrap.contains(e.relatedTarget)) wrap.classList.remove('dropping'); });
   wrap.addEventListener('drop', (e) => { e.preventDefault(); wrap.classList.remove('dropping'); comp.addFiles(e.dataTransfer.files); });
-  queueMicrotask(() => { comp.renderExtras(); if (S.view.jumpTo) { const id = S.view.jumpTo; S.view.jumpTo = null; jumpToMessage(key, id); } else loadMessages(key); });
+  queueMicrotask(() => {
+    comp.renderExtras();
+    if (S.view.jumpTo) { const id = S.view.jumpTo; S.view.jumpTo = null; jumpToMessage(key, id); }
+    // Back after an update's reload, where you'd scrolled to: that message at the top, quietly (and kept there while
+    // the pictures around it load).
+    else if (S.view.restoreAt) {
+      const id = S.view.restoreAt; S.view.restoreAt = null;
+      holdMessage(scroller, id, { block: 'start' });
+      loadMessages(key, { around: id }).then(() => {
+        if (!scroller.querySelector(`.msg[data-mid="${id}"]`) && scroller.isConnected) { if (scroller._place) scroller._place.release(); loadMessages(key, 'open'); }
+      }).catch(() => {});
+    } else loadMessages(key, 'open');
+  });
   return wrap;
 }
 function onMessageAreaClick(e) {
@@ -3296,14 +3977,17 @@ function openChannelMention(el) {
 }
 
 const msgUrl = (key) => (key.startsWith('c:') ? `/channels/${encodeURIComponent(key.slice(2))}/messages` : `/dms/${encodeURIComponent(key.slice(2))}/messages`);
-// mode: 'latest' | 'older' | 'newer' | { around: id }
+// mode: 'latest' | 'open' | 'older' | 'newer' | { around: id }
+// ('open': the latest, as the conversation opens. renderMessages puts a server channel at its "New messages" line.)
 async function loadMessages(key, mode = 'latest') {
+  const stick = mode === 'open' ? 'open' : true;
+  if (mode === 'open') mode = 'latest';
   let store = S.msgs[key];
   if (mode === 'latest' && store && store.loaded && !store.hasNewer) {
     trimStore(store, 120);
     await decryptAll(key);
     dropExpired(store);
-    return renderMessages(true);
+    return renderMessages(stick);
   }
   if (!store || (mode === 'latest' && store.hasNewer) || typeof mode === 'object') store = S.msgs[key] = { list: [], hasMore: true, hasNewer: false, loaded: false, loading: false };
   if (store.loading || (mode === 'older' && !store.hasMore) || (mode === 'newer' && !store.hasNewer)) return;
@@ -3325,7 +4009,7 @@ async function loadMessages(key, mode = 'latest') {
     if (mode !== 'newer' && !res.hasMore) store.hidden = !!res.hidden;
     if (mode !== 'older') store.hasNewer = !!res.hasNewer;
     store.loaded = true;
-    const newLines = mergeTimerEvents(store, res.timerEvents);
+    const newLines = mergeTimerEvents(store, res.timerEvents) + mergeLookEvents(store, res.lookEvents);
     await decryptAll(key);
     // The timer inside a message can say it's gone before the server has deleted it.
     const hid = dropExpired(store);
@@ -3341,7 +4025,7 @@ async function loadMessages(key, mode = 'latest') {
       // Coming back down: let go of the oldest ones instead, and keep what you're reading where it is.
       if (store.list.length > HISTORY_WINDOW) { store.list.splice(0, store.list.length - HISTORY_WINDOW); store.hasMore = true; }
       keepAnchor(sc, () => renderMessages(false));
-    } else renderMessages(typeof mode !== 'object');
+    } else renderMessages(typeof mode === 'object' ? false : stick);
     if (!store.hasNewer) markRead(key);
   } catch (e) {
     toast(e.message, 'error');
@@ -3433,7 +4117,7 @@ function jumpToLatest() {
   const key = currentKey();
   const store = S.msgs[key];
   if (store && store.hasNewer) { delete S.msgs[key]; loadMessages(key); }
-  else { const sc = $('#messages'); if (sc) sc.scrollTo({ top: sc.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); }
+  else toNewest($('#messages'), !matchMedia('(prefers-reduced-motion: reduce)').matches);
 }
 
 // ---- decryption (DMs and channels are both end-to-end encrypted)
@@ -3450,10 +4134,16 @@ const versions = createVersions({ getItem: (k) => localStorage.getItem(k), setIt
   () => (S.me && S.me.id ? 'hearth.msgv.' + S.me.id : ''));
 const copies = createCopies();
 // Called for every message as it's decrypted (binding.js noteMessage): a second id for the same message, or a newer
-// edit, redraws the other copies too, so each of them carries the flag.
+// edit, redraws the other copies too, so each of them carries the flag. The side view's too: it holds one of them, or
+// a copy of this very message it fetched itself (the older edit now), which none of the chat's lists have.
 function noteBinding(m) {
-  for (const id of noteMessage(m, keyOfMessage(m), { versions, copies })) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  const ids = noteMessage(m, keyOfMessage(m), { versions, copies });
+  for (const id of ids) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  if (SIDE.messages().some((x) => ids.includes(x.id) || (x.id === m.id && x !== m))) later(redrawSide);
 }
+// The side view drawn again (side-view.js refresh: only the cards whose flags changed are drawn anew), once a frame
+// however many ask.
+const redrawSide = () => SIDE.refresh();
 // A message loaded anywhere in this conversation: its list, a thread, a thread's first message.
 function loadedMessage(id) {
   for (const st of Object.values(S.msgs)) { const m = st && st.list && st.list.find((x) => x.id === id); if (m) return m; }
@@ -3477,10 +4167,13 @@ const originals = createOriginals(async (id) => {
     throw e;
   }
 });
-// The loaded replies to that message, drawn again (it turned out to be still there: they're flagged now).
+// The loaded replies to that message, drawn again (it turned out to be still there: they're flagged now), and the
+// side view's cards of replies to it (often copies it fetched itself, so in none of these lists).
 function redrawRepliesTo(id) {
   const all = [...Object.values(S.msgs).flatMap((st) => (st && st.list) || []), ...Object.values(S.threads).flatMap((th) => [th.root, ...(th.list || [])])];
-  for (const x of all) if (x && x.dec && x.dec.b && x.dec.b.r === id) later(() => replaceMessageEl(x));
+  const replies = (x) => !!x && !!x.dec && !!x.dec.b && x.dec.b.r === id;
+  for (const x of all) if (replies(x)) later(() => replaceMessageEl(x));
+  if (SIDE.messages().some(replies)) later(redrawSide);
 }
 // { issues, notes, … } for a message (binding.js bindingState), or null when it carries nothing to check. A reply
 // shown without its original, which isn't loaded here, says "no longer available" until the server is asked whether
@@ -3491,9 +4184,12 @@ function bindingOfMessage(m) {
   if (st && st.notes.includes('replyGone')) originals.ask(st.b.r, () => redrawRepliesTo(st.b.r));
   return st;
 }
-// Messages deleted or disappeared no longer count as copies of another: what's left of them is drawn again.
+// Messages deleted or disappeared no longer count as copies of another: what's left of them is drawn again, in the
+// side view too.
 function forgetBindings(key, gone) {
-  for (const id of copies.drop(key, gone)) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  const ids = copies.drop(key, gone);
+  for (const id of ids) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  if (SIDE.messages().some((x) => ids.includes(x.id))) later(redrawSide);
 }
 // The one small flag for a message the server may have moved, repeated or rolled back, naming what didn't match.
 function bindingFlag(m, st) {
@@ -3546,7 +4242,12 @@ async function onKeysChanged(serverId, added, heldChanged) {
   // them, the header's badge.
   if (heldChanged && S.view.serverId === serverId && S.panel === 'members') later(renderPanel);
   if (heldChanged && S.view.type === 'dm') { later(renderHeader); if (composers.main) composers.main.renderExtras(); }
+  // A group chat's background that was waiting for a key, or that's sealed with an older key than the group's now. Also
+  // when nothing was added: a key this app made itself (secure.js rotate) is held before the state that names it comes
+  // back, so it never counts as added, and this app may be the only one here to seal the background again with it.
+  LOOK.onKeys(serverId);
   if (added) {
+    NOTES.onKeys(serverId); // photo tags that were waiting for this key
     const server = S.servers.find((s) => s.id === serverId);
     for (const c of server ? server.channels : []) {
       const store = S.msgs['c:' + c.id];
@@ -3565,6 +4266,9 @@ async function onKeysChanged(serverId, added, heldChanged) {
         if (sc && !atBottom) sc.scrollTop = top;
       }
     }
+    // Photos & videos: what was waiting for this key shows there now (its own copies are opened; the chat's just were).
+    MEDIA.onKeys(serverId);
+    SIDE.onKeys(serverId); // (and in the side view)
     if (server && isGroup(server)) { await previewGroup(server); if (!S.view.serverId) renderSidebar(); }
   }
   if (S.view.serverId === serverId && composers.main) { composers.main.renderExtras(); renderHeader(); }
@@ -3609,6 +4313,8 @@ function hookFace(author, m) {
   if (!w || (!w.name && !w.avatar)) return author;
   return { id: `hook:${author.id}`, username: author.username, bot: true, profile: { displayName: w.name || displayName(author) }, avatar: (w.avatarSrc && mediaSrc(w.avatarSrc)) || author.avatar || null };
 }
+// DMs and group chats open at their newest message, whatever is unread (renderMessages).
+const opensAtNewest = () => S.view.type === 'dm' || isGroup(currentServer());
 function renderMessages(stick) {
   const sc = $('#messages');
   if (!sc) return;
@@ -3641,10 +4347,14 @@ function renderMessages(stick) {
     prev = m;
   }
   while (li < lines.length) line();
+  // stick: true for the newest message at the bottom; 'open' as the conversation opens. Opening a server channel with
+  // more than a screenful unread starts at its "New messages" line. A DM or group chat always opens at the newest
+  // message: the line, and the bar's "Jump to first unread", are there to go up to. Either place is kept while the
+  // pictures load (keepPlace).
   if (stick) {
-    const marker = sc.querySelector('.new-div');
-    if (marker && marker.offsetTop > sc.clientHeight * 0.6) sc.scrollTop = marker.offsetTop - 80;
-    else sc.scrollTop = sc.scrollHeight;
+    const marker = stick === 'open' && !opensAtNewest() && sc.querySelector('.new-div');
+    if (marker && sc._place && marker.offsetTop > sc.clientHeight * 0.6) sc._place.hold(() => sc.querySelector('.new-div'), { block: 'start', offset: MARKER_GAP });
+    else toNewest(sc);
   }
   if (!store.hasNewer) redrawPendingSends(key);
   const jl = $('#jump-latest');
@@ -3675,10 +4385,13 @@ async function jumpToFirstUnread() {
   if (S.unreadMarker !== key) return;
   const store = S.msgs[key];
   const loadedFrom = store && store.list.length ? store.list[0].id : null;
+  // Straight to the line, just under the bar, and kept there while the pictures around it load (keepPlace).
+  const sc = $('#messages');
+  if (!sc || !sc._place) return;
+  sc._place.hold(() => sc.querySelector('.new-div'), { block: 'start', offset: MARKER_GAP });
   // The first unread message isn't loaded yet (lots of new messages): load the page around the marker.
   if (!loadedFrom || loadedFrom > S.markerId) await loadMessages(key, { around: S.markerId });
-  const div = $('#new-div');
-  if (div) div.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  if (!sc.querySelector('.new-div')) sc._place.release();
 }
 // The top of a conversation once its first message is loaded: the welcome, and in a server that keeps what came before
 // from new members, one line saying so when the server left messages out for you (store.hidden), instead of a row
@@ -3767,8 +4480,13 @@ function messageEl(m, prev, ctx = 'main') {
   const el = h('div', {
     class: `msg${isGrouped ? ' grouped' : ''}${mentioned ? ' mentioned' : ''}${replying ? ' replying' : ''}${m.pinnedAt ? ' pinned' : ''}`,
     dataset: { mid: m.id, ctx, wf: filterState(m, prev) }, tabindex: '-1',
-    oncontextmenu: (e) => { if (!e.target.closest('a, .md-code, .md-pre') || e.shiftKey) contextMenu(e, messageMenuItems(m, ctx)); },
+    oncontextmenu: (e) => {
+      // On a touch screen this is a long press (Android reports one this way): the actions sheet instead.
+      if (isTouchUI() && e.pointerType !== 'mouse') { e.preventDefault(); longPressed(el, e.target); return; }
+      if (!e.target.closest('a, .md-code, .md-pre') || e.shiftKey) contextMenu(e, messageMenuItems(m, ctx));
+    },
   });
+  el._actions = (target) => messageSheet(m, ctx, el, target);
   if (S.blocked.has(m.authorId) && !el._reveal) {
     el.classList.add('blocked');
     el.append(h('div', { class: 'msg-gutter' }), h('div', { class: 'msg-body' }, h('div', { class: 'blocked-note' }, icon('ban'), 'Message from someone you blocked. ',
@@ -3801,6 +4519,7 @@ function revealFiltered(m) {
 // While a hidden message is drawn out of sight (filteredEl): what its pictures would load, instead of waiting for them
 // to come on screen themselves.
 let lazyLoads = null;
+let lazyRow = null; // (and the row on screen in its place)
 const loadWhenVisible = (el, fn) => (lazyLoads ? lazyLoads.push(fn) : whenVisible(el, fn));
 // A message the word filter hides: one row that says so, with Show. The message is still drawn behind it, out of
 // sight, and loads what it would have shown (its pictures, a poll's votes) when its row comes near the screen like any
@@ -3809,7 +4528,8 @@ function filteredEl(el, m, prev, ctx, wf, o) {
   const loads = [];
   lazyLoads = loads;
   let shadow;
-  try { shadow = fillMessage(h('div'), m, prev, ctx, { ...o, mine: false }); } finally { lazyLoads = null; }
+  lazyRow = el;
+  try { shadow = fillMessage(h('div'), m, prev, ctx, { ...o, mine: false }); } finally { lazyLoads = null; lazyRow = null; }
   for (const img of shadow.querySelectorAll('img[loading="lazy"]')) {
     const src = img.getAttribute('src') || '';
     if (src && !src.startsWith('data:')) loads.push(() => { const i = new Image(); i.referrerPolicy = 'no-referrer'; i.src = src; });
@@ -3936,24 +4656,116 @@ function postFlag(m, author) {
   if (d.legacy) return { label: 'Older message \u2014 not end-to-end encrypted, sender not verified', tip: 'Sent before end-to-end encryption was turned on. Protected by the server\u2019s encryption only, and nothing proves who wrote it: the server could have.' };
   return null;
 }
+// What a message's row says about who wrote it, besides the words: the name and picture it goes by (a webhook post's
+// own, hookFace), the BOT tag, and its flags (a bot's or an older message's, postFlag; a key that isn't the person's
+// current trusted one; a signature that doesn't match; the server having moved, repeated or rolled it back,
+// bindingFlag). The chat's rows (fillMessage) and the side view's cards both take it from here, so a message never
+// shows anywhere with less said about it than in the chat: else a server could serve it there instead, under its
+// author's name with nothing to say it may not be theirs.
+//   flags({ warnings: true }): only the warnings, which stay on a row even when the word filter hides it (filteredEl).
+//   sig: all of it in one string, so something drawn from it is drawn again when it changes (a copy of the message
+//   loaded elsewhere can turn up a binding issue, say).
+// bind: bindingOfMessage(m), when the caller has it already.
+function messageTrust(m, author, bind = bindingOfMessage(m)) {
+  const d = m.dec;
+  const notes = [];
+  const flag = postFlag(m, author);
+  if (flag) notes.push({ label: flag.label, tip: flag.tip });
+  // Opened or signed with a key that isn't the person's current, trusted one (secure.js keysOf).
+  else if (d && d.keyNote === 'listed') notes.push({ warn: true, label: '\u26a0 Older key \u2014 not verified', tip: 'Written with a key the server says this person had before they reset their password. This device never saw that key as theirs and it can\u2019t be checked with safety numbers, so the server could have written this.' });
+  else if (d && d.keyNote === 'new') notes.push({ warn: true, label: '\u26a0 New key \u2014 not verified yet', tip: 'This person\u2019s security key changed and you haven\u2019t verified the new one yet. Compare safety numbers from their profile.' });
+  else if (d && d.keyNote === 'pinned') notes.push({ label: 'Written with an older key', tip: 'Written with a key this person had before they changed keys. This device trusted that key back then.' });
+  else if (d && d.verified === false && !m.dmId) notes.push({ warn: true, label: '\u26a0 Sender could not be verified', tip: 'The signature on this message does not match the sender\u2019s key.' });
+  if (bind && bind.issues.length) notes.push({ warn: true, bind });
+  // The first DM format bound nothing in (not even who wrote it): say so, quietly.
+  else if (m.dmId && d && d.legacyFormat) notes.push({ label: 'Older encryption format', tip: 'Encrypted by an early version of Hearth that didn\u2019t bind the conversation or the sender into the message, so the server could show it as written by either of you.' });
+  const bot = isBotPost(author, m);
+  return {
+    face: hookFace(author, m),
+    bot,
+    sig: [bot ? 'bot' : '', ...notes.map((n) => (n.bind ? `bind:${n.bind.issues.join(',')}:${n.bind.copies}:${n.bind.top}` : n.label))].join('|'),
+    flags: ({ warnings = false } = {}) => notes.filter((n) => n.warn || !warnings)
+      .map((n) => (n.bind ? bindingFlag(m, n.bind) : h('div', { class: `msg-flag${n.warn ? ' bad' : ''}`, 'data-tip': n.tip }, n.label))),
+  };
+}
 function messageElRevealed(m, prev, ctx) {
   const el = h('div', { class: 'msg', dataset: { mid: m.id, ctx }, tabindex: '-1' });
   return fillMessage(el, m, prev, ctx, { author: getUser(m.authorId), mine: false, isGrouped: false, text: textOf(m) });
+}
+// The quote of a comment on one photo (photo-notes.js): "<name>’s photo" with a small thumbnail of that very photo, in
+// place of the quoted words. null when the message isn't such a comment, or names a photo the quoted message doesn't
+// have (then it's quoted as any reply). Without the quoted message's files at hand (one the server left out for its
+// size and that isn't loaded here, or one that can't be opened), it still says whose photo, without the picture.
+// Clicking it opens that photo in the viewer when its message is on screen here, otherwise it jumps there.
+function photoQuote(m, server, ru) {
+  const ph = readable(m) && m.dec.ph;
+  if (!ph || !m.reply) return null;
+  const rd = m.reply.dec;
+  const opened = !!rd && !rd.error && !rd.pending && !rd.big;
+  const f = opened ? (rd.f || [])[ph.i] : null;
+  if (opened && (!f || f.url !== ph.u)) return null;
+  const kind = f ? mediaKind(f.type || '', f.name) : null;
+  const what = kind === 'video' ? 'video' : 'photo';
+  const name = nameInServer(server, ru);
+  const thumb = h('span', { class: `pn-quote-thumb${f && f.sp ? ' spoiler' : ''}` }, icon(f && f.sp ? 'eyeOff' : what === 'video' ? 'video' : 'image'));
+  // The small picture: its thumbnail, or a small picture itself, decrypted like the chat's (never a spoiler's, nor one
+  // from someone you blocked: those keep the icon).
+  const src = f && kind === 'img' && !f.sp && !S.blocked.has(m.reply.authorId) && (f.k || m.dmId)
+    ? (f.th ? { ...f.th, type: 'image/webp', thumb: true } : f.size > 0 && f.size <= MANY_AUTOLOAD_MAX ? f : null) : null;
+  if (src) {
+    const qm = { ...m.reply, dmId: m.dmId, channelId: m.channelId, serverId: m.serverId };
+    const show = (u) => { thumb.replaceChildren(h('img', { class: 'pn-quote-img', src: u, alt: '' })); thumb.classList.add('loaded'); };
+    const hit = fileUrls.get(src.url); // already decrypted: drawn at once, so a redraw doesn't blink
+    if (hit) show(hit);
+    else loadWhenVisible(thumb, () => loadQueue(() => decryptedUrl(qm, src)).then(show).catch(() => {}));
+  }
+  return h('button', { class: 'msg-reply pn-reply', 'aria-label': `Replying to ${name}’s ${what}. Open it.`, onclick: () => openQuotedPhoto(m, ph) },
+    h('span', { class: 'reply-spine' }), avatarEl(ru, 16), thumb,
+    h('span', { class: 'reply-text pn-reply-text' }, h('strong', { class: 'pn-reply-name' }, name), `’s ${what}`));
+}
+function openQuotedPhoto(m, ph) {
+  const el = $$('#messages .att-img, #messages .att-video, .thread-list .att-img, .thread-list .att-video').find((x) => x._item && x._item.m.id === m.reply.id
+    && x._item.fi === ph.i && x._item.f.url === ph.u && !x.closest('.att-spoiler:not(.revealed)'));
+  if (el) return openPhotoViewer(el, true);
+  // Not on screen: to the message (in its thread if it's a thread reply).
+  return m.threadId ? jumpToMessageId(m.reply.id) : jumpToMessage(keyOfMessage(m), m.reply.id);
+}
+// The viewer on one photo or video of the chat (el: its <img> or <video>, which carries el._item), with its side panel
+// of comments and tags (side: true, or 'comment' for its comment box too). A video goes on its own: the chat's list is
+// its pictures.
+function openPhotoViewer(el, side) {
+  const it = el._item;
+  const download = () => downloadAttachment(it.m, it.f);
+  if (el.tagName !== 'VIDEO') return openViewer(el, { name: it.f.name, download, side });
+  return openViewer(null, { items: [{ ...it, kind: 'video', thumb: () => null, full: () => decryptedUrl(it.m, it.f), name: it.f.name || 'Video', alt: it.f.alt || '', download }], side });
 }
 function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = null }) {
   // In a server, people go by their nicknames there (none in DMs and group chats).
   const server = msgServer(m);
   const bind = bindingOfMessage(m);
+  const trust = messageTrust(m, author, bind);
   if (m.reply) {
     const ru = getUser(m.reply.authorId);
+    // A quote the server left out for its size (big: the owner's, with many files): the original says what it was,
+    // when it's loaded here (in the conversation, or the thread).
+    // Only that message: the one the reply names, by the author the reply names, in this conversation, opened as theirs
+    // (the server can mark any quote big; it mustn't be able to put someone's words under someone else's name).
+    if (m.reply.dec && m.reply.dec.big) {
+      const here = [...(S.msgs[keyOfMessage(m)] || { list: [] }).list, ...(S.thread && m.channelId && S.thread.channelId === m.channelId ? threadList() : [])];
+      const o = here.find((x) => x.id === m.reply.id && x.id === m.replyTo && x.authorId === m.reply.authorId && keyOfMessage(x) === keyOfMessage(m));
+      if (o && o.dec && !o.dec.error && !o.dec.pending && !o.dec.forged) m.reply.dec = o.dec;
+    }
     const rd = m.reply.dec;
     const rtext = rd && !rd.error && !rd.pending ? rd.t : '';
     // The quoted message goes through the word filter too (it's someone's words shown here).
     const rwf = veiledQuote(m);
-    el.append(h('button', { class: 'msg-reply', 'aria-label': `Replying to ${nameInServer(server, ru)}. Jump to original.`, onclick: () => jumpToMessage(keyOfMessage(m), m.reply.id) },
+    // A comment on one of its photos (photo-notes.js) quotes that photo instead of its words.
+    const pq = rwf ? null : photoQuote(m, server, ru);
+    if (pq) el.append(pq);
+    else el.append(h('button', { class: 'msg-reply', 'aria-label': `Replying to ${nameInServer(server, ru)}. Jump to original.`, onclick: () => jumpToMessage(keyOfMessage(m), m.reply.id) },
       h('span', { class: 'reply-spine' }), avatarEl(ru, 16), nameEl(ru, { cls: 'reply-name', server }),
       rwf ? h('span', { class: 'reply-text' }, h('em', null, previewLabel(rwf)))
-        : h('span', { class: 'reply-text', html: rtext ? md(rtext, { inline: true }) : '<em>Attachment or encrypted message</em>' })));
+        : h('span', { class: 'reply-text', html: rtext ? md(rtext, { inline: true }) : rd && rd.big ? '<em>A message with many files</em>' : '<em>Attachment or encrypted message</em>' })));
   } else if (m.replyTo || (bind && bind.notes.includes('replyGone'))) {
     // Also when its sender replied to a message that was gone by the time it was posted (the server rightly leaves
     // the reply out then): no flag for that, unless the server can still find the original (bindingOfMessage).
@@ -3962,13 +4774,13 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
   }
   const gutter = h('div', { class: 'msg-gutter', dataset: { time: fmtTime(m.createdAt) } });
   if (isGrouped) gutter.append(h('time', { class: 'msg-hover-time', datetime: new Date(m.createdAt).toISOString() }, fmtTime(m.createdAt)));
-  else gutter.append(h('button', { class: 'msg-av', 'data-pop-anchor': '', 'aria-label': `View ${nameInServer(server, author)}'s profile`, onclick: (e) => openProfilePop(e.currentTarget, author.id, 'right') }, avatarEl(hookFace(author, m), 40)));
+  else gutter.append(h('button', { class: 'msg-av', 'data-pop-anchor': '', 'aria-label': `View ${nameInServer(server, author)}'s profile`, onclick: (e) => openProfilePop(e.currentTarget, author.id, 'right') }, avatarEl(trust.face, 40)));
   const body = h('div', { class: 'msg-body' });
   if (!isGrouped) {
     const rs = roleStyle(server, author.id);
     body.append(h('div', { class: 'msg-head' },
-      h('button', { class: 'msg-name', 'data-pop-anchor': '', onclick: (e) => openProfilePop(e.currentTarget, author.id, 'right') }, nameEl(hookFace(author, m), { roleColor: rs.color, server })),
-      isBotPost(author, m) ? h('span', { class: 'bot-tag' }, 'BOT') : null,
+      h('button', { class: 'msg-name', 'data-pop-anchor': '', onclick: (e) => openProfilePop(e.currentTarget, author.id, 'right') }, nameEl(trust.face, { roleColor: rs.color, server })),
+      trust.bot ? h('span', { class: 'bot-tag' }, 'BOT') : null,
       rs.iconRole ? h('span', { class: 'role-icon', 'data-tip': rs.iconRole.name }, rs.iconRole.icon) : null,
       rs.owner ? h('span', { class: 'role-icon', 'data-tip': 'Server owner' }, '\uD83D\uDC51') : null,
       h('time', { class: 'msg-time', datetime: new Date(m.createdAt).toISOString(), title: new Date(m.createdAt).toLocaleString() }, fmtStamp(m.createdAt)),
@@ -4004,7 +4816,9 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
     if (embeds.length) out.append(h('div', { class: 'msg-embeds' }, embeds.map((u) => embedEl(u, m))));
     if (m.dec && m.dec.p) out.append(pollEl(m));
     const files = filesOf(m);
-    if (files.length) out.append(h('div', { class: 'msg-files' }, files.map((f) => attachmentEl(f, m))));
+    // More than 10 (only the server's owner sends that many): pictures as a grid of small tiles (app.css).
+    const many = files.length > MAX_FILES;
+    if (files.length) out.append(h('div', { class: `msg-files${many ? ' many' : ''}` }, files.map((f, fi) => attachmentEl(f, m, { many, fi }))));
     const wc = watchChips(text);
     if (wc) out.append(wc);
     if (embed) out.append(newsCard(embed));
@@ -4013,16 +4827,7 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
       body.append(h('div', { class: 'wf-blur', onclick: () => revealFiltered(m) }, out,
         h('button', { class: 'wf-blur-show', type: 'button' }, icon('eyeOff'), h('span', null, `${filterLabel(blur)} · Show`))));
     }
-    const flag = postFlag(m, author);
-    if (flag) body.append(h('div', { class: 'msg-flag', 'data-tip': flag.tip }, flag.label));
-    // Opened or signed with a key that isn't the person's current, trusted one (secure.js keysOf).
-    else if (m.dec && m.dec.keyNote === 'listed') body.append(h('div', { class: 'msg-flag bad', 'data-tip': 'Written with a key the server says this person had before they reset their password. This device never saw that key as theirs and it can\u2019t be checked with safety numbers, so the server could have written this.' }, '\u26a0 Older key \u2014 not verified'));
-    else if (m.dec && m.dec.keyNote === 'new') body.append(h('div', { class: 'msg-flag bad', 'data-tip': 'This person\u2019s security key changed and you haven\u2019t verified the new one yet. Compare safety numbers from their profile.' }, '\u26a0 New key \u2014 not verified yet'));
-    else if (m.dec && m.dec.keyNote === 'pinned') body.append(h('div', { class: 'msg-flag', 'data-tip': 'Written with a key this person had before they changed keys. This device trusted that key back then.' }, 'Written with an older key'));
-    else if (m.dec && m.dec.verified === false && !m.dmId) body.append(h('div', { class: 'msg-flag bad', 'data-tip': 'The signature on this message does not match the sender\u2019s key.' }, '\u26a0 Sender could not be verified'));
-    if (bind && bind.issues.length) body.append(bindingFlag(m, bind));
-    // The first DM format bound nothing in (not even who wrote it): say so, quietly.
-    else if (m.dmId && m.dec && m.dec.legacyFormat) body.append(h('div', { class: 'msg-flag', 'data-tip': 'Encrypted by an early version of Hearth that didn\u2019t bind the conversation or the sender into the message, so the server could show it as written by either of you.' }, 'Older encryption format'));
+    body.append(...trust.flags());
   }
   if (m.reactions && m.reactions.length) {
     body.append(h('div', { class: 'reactions' }, m.reactions.map((r) => {
@@ -4240,26 +5045,111 @@ function messageMenuItems(m, ctx) {
   // Pins are the channel's notice board: in servers they need Manage Messages, even for your own messages.
   const canPin = m.dmId || isGroup(server) || canModerate(m);
   return [
-    { label: 'Add reaction', icon: 'smile', action: () => { const el = $(`[data-mid="${m.id}"] .msg-tools .tool:nth-child(2)`); emojiPicker(el || $('#main'), (em) => react(m, em)); } },
-    ok ? { label: 'Reply', icon: 'reply', action: () => startReply(m, ctx) } : null,
-    ok && threadable(m) && ctx === 'main' ? { label: m.threadCount ? 'Open thread' : 'Reply in thread', icon: 'thread', action: () => openThread(m) } : null,
+    // (Beside the message's hover toolbar; on a touch screen, which has none showing, beside the message itself.)
+    { key: 'react', label: 'Add reaction', icon: 'smile', action: () => { const el = $(`[data-mid="${m.id}"] .msg-tools .tool:nth-child(2)`); emojiPicker((el && el.getClientRects().length ? el : $(`[data-mid="${m.id}"]`)) || $('#main'), (em) => react(m, em)); } },
+    ok ? { key: 'reply', label: 'Reply', icon: 'reply', action: () => startReply(m, ctx) } : null,
+    ok && threadable(m) && ctx === 'main' ? { key: 'thread', label: m.threadCount ? 'Open thread' : 'Reply in thread', icon: 'thread', action: () => openThread(m) } : null,
     ok ? { label: 'Forward', icon: 'forward', action: () => openForward(m) } : null,
     '-',
     canPin ? { label: m.pinnedAt ? 'Unpin message' : 'Pin message', icon: 'pin', action: () => togglePin(m) } : null,
     ok ? { label: saved ? 'Remove from saved' : 'Save message', icon: 'bookmark', action: () => toggleSaved(m) } : null,
+    SIDE.menuItemFor(m), // Pin to side (side-view.js): beside the chat, wherever you go next
     ctx === 'main' ? { label: 'Mark unread', icon: 'eye', action: () => markUnread(keyOfMessage(m), m.id) } : null,
-    ...(ok ? remindItems(m, keyOfMessage(m), quoteOf(m, m.dec && m.dec.p ? `Poll: ${m.dec.p.q}` : 'Attachment')) : []),
+    ...(ok ? remindItems(m, keyOfMessage(m), quoteOf(m, m.dec && m.dec.p ? `Poll: ${m.dec.p.q}` : 'Attachment')).map((it) => it && { ...it, key: 'remind' }) : []),
     '-',
     // Not while the word filter hides or blurs it: Show first.
-    ok && textOf(m) && !veiled(m) ? { label: 'Copy text', icon: 'copy', action: () => { copyText(textOf(m)); toast('Copied.'); } } : null,
+    ok && textOf(m) && !veiled(m) ? { key: 'copy', label: 'Copy text', icon: 'copy', action: () => { copyText(textOf(m)); toast('Copied.'); } } : null,
     { label: 'Copy message link', icon: 'link', action: () => { copyText(messageLink(m)); toast('Message link copied. It only works for people who can see this conversation.'); } },
-    mine && ok ? { label: 'Edit message', icon: 'edit', hint: '\u2191', action: () => { S.editing = m.id; replaceMessageEl(m); } } : null,
+    mine && ok ? { key: 'edit', label: 'Edit message', icon: 'edit', hint: '\u2191', action: () => { S.editing = m.id; replaceMessageEl(m); } } : null,
     mine || canModerate(m) ? { label: 'Delete message', icon: 'trash', danger: true, action: () => deleteMessage(m) } : null,
     canModerate(m) && ctx === 'main' && !m.threadId && !S.select && !tooOldForBulk(m) ? { label: 'Select messages to delete\u2026', icon: 'check', action: () => startSelect(m) } : null,
     !mine && readable(m) ? { label: 'Report message', icon: 'shield', danger: true, action: () => openReport({ message: m, ctx }) } : null,
   ];
 }
 const messageLink = (m) => `${location.origin}/#m/${m.id}`;
+
+// ---- a message's actions on a touch screen
+// There's no hover there, so a long press on a message opens its actions in a sheet from the bottom of the screen:
+// the quick reactions, then what its ⋯ menu offers (messageMenuItems, so the same permissions), everyday ones
+// first and the ones that delete or report last. Several reminder times wait behind one "Remind me…" row, so the
+// list stays short. target: what the finger was on (a link adds Copy link).
+function messageSheet(m, ctx, el, target) {
+  const all = messageMenuItems(m, ctx);
+  const pick = all.find((it) => it && it.key === 'react');
+  const first = ['reply', 'thread', 'copy', 'edit'].map((k) => all.find((it) => it && it.key === k)).filter(Boolean);
+  const last = all.filter((it) => it && it !== '-' && it.danger);
+  const reminders = all.filter((it) => it && it.key === 'remind');
+  const remind = reminders.length > 1 ? { label: 'Remind me\u2026', icon: 'bell', more: reminders } : null;
+  // The rest keep the menu's own groups.
+  const groups = [first, []];
+  for (const it of all) {
+    if (it === '-') groups.push([]);
+    else if (remind && it === reminders[0]) groups[groups.length - 1].push(remind);
+    else if (it && it !== pick && !(remind && reminders.includes(it)) && !first.includes(it) && !last.includes(it)) groups[groups.length - 1].push(it);
+  }
+  groups.push(last);
+  // The browser's own menu for a link (which would offer this) doesn't open over the sheet.
+  const a = target && target.closest && target.closest('a[href]:not(.mention)');
+  if (a && /^https?:/i.test(a.href)) first.unshift({ label: 'Copy link', icon: 'link', action: () => { copyText(a.href); toast('Link copied.'); } });
+  const mineR = (e) => (m.reactions || []).some((r) => r.emoji === e && r.userIds.includes(S.me.id));
+  let sh = null;
+  const run = (fn) => () => { sh.close(); fn(); };
+  // (Remind me… opens a second sheet in this one's place: the message stays marked, and focus goes back to it after.)
+  const open = (content, label) => { sh = sheet(content, { label, returnTo: el, onClose: ({ replaced }) => { if (!replaced) el.classList.remove('pressed'); } }); };
+  const rows = (list) => list.map((it) => h('button', {
+    class: `sheet-row${it.danger ? ' danger' : ''}`, 'aria-haspopup': it.more ? 'dialog' : null, 'aria-expanded': it.more ? 'false' : null,
+    onclick: it.more ? () => open(h('div', { class: 'sheet-list' }, rows(it.more)), 'Remind me') : run(it.action),
+  }, icon(it.icon), h('span', null, it.label)));
+  const reacts = h('div', { class: 'sheet-reacts', role: 'group', 'aria-label': 'Quick reactions' },
+    QUICK_REACTIONS.map((e) => h('button', { class: `sheet-react${mineR(e) ? ' mine' : ''}`, 'aria-label': `React with ${e}`, 'aria-pressed': String(mineR(e)), onclick: run(() => react(m, e)) }, e)),
+    pick ? h('button', { class: 'sheet-react more', 'aria-label': 'More reactions', onclick: run(pick.action) }, icon('plus')) : null);
+  const list = h('div', { class: 'sheet-list' }, groups.filter((g) => g.length).map((g, i) => [i ? h('div', { class: 'sheet-sep', role: 'separator' }) : null, rows(g)]));
+  el.classList.add('pressed');
+  open([reacts, list], 'Message actions');
+}
+// A finger held still on a message for a moment opens that sheet, with a short buzz where the phone can. Moving the
+// finger (a scroll, a swipe), a second finger or lifting it first cancels it, so taps on links, pictures, mentions and
+// reactions are left alone. Android also reports the long press as a right-click (messageEl's oncontextmenu):
+// whichever comes first opens the sheet, once. Only on a touch screen (device.js).
+const PRESS_MS = 450;
+let press = null; // the touch under way: { el, target, x, y, timer, done }
+function initLongPress() {
+  const stop = () => { if (press && !press.done) { clearTimeout(press.timer); press = null; } };
+  document.addEventListener('touchstart', (e) => {
+    stop();
+    press = null;
+    if (e.touches.length !== 1 || !isTouchUI() || S.select) return;
+    const el = e.target.closest && e.target.closest('.msg[data-mid]');
+    if (!el || !el._actions || e.target.closest('textarea, input, select, .edit-wrap')) return;
+    const t = e.touches[0];
+    const p = { el, target: e.target, x: t.clientX, y: t.clientY, done: false };
+    p.timer = setTimeout(() => longPressed(el, p.target), PRESS_MS);
+    press = p;
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!press || press.done) return;
+    const t = e.touches[0];
+    if (e.touches.length > 1 || Math.hypot(t.clientX - press.x, t.clientY - press.y) > 10) stop();
+  }, { passive: true });
+  // Lifting the finger after a long press doesn't also tap what's under it (now the sheet, or its backdrop).
+  document.addEventListener('touchend', (e) => {
+    if (press && press.done && e.cancelable) e.preventDefault();
+    stop();
+    press = null;
+  }, { passive: false });
+  document.addEventListener('touchcancel', () => { stop(); press = null; }, { passive: true });
+  document.addEventListener('scroll', stop, { capture: true, passive: true });
+}
+function longPressed(el, target) {
+  if (press) {
+    if (press.done) return;
+    clearTimeout(press.timer);
+    press.done = true;
+  }
+  if (!el.isConnected || !el._actions) return;
+  try { if (navigator.vibrate) navigator.vibrate(10); } catch { /* not allowed here */ }
+  el._actions(target);
+}
 
 // A word filter list changed (yours, here or on another device, or a server's): what it changes on screen is drawn
 // again. Only message rows whose filtering changed are redrawn, never one being edited, so scroll, focus and
@@ -4271,7 +5161,8 @@ function wordFilterChanged() {
 function redrawFiltered() {
   redrawFilterChanges();
   const mode = panelMode();
-  if (mode === 'pins' || mode === 'threads') renderPanel();
+  // (Photos & videos draw only the tiles whose filtering changed, and the side view only such cards.)
+  if (mode === 'side' || mode === 'pins' || mode === 'threads' || mode === 'media') renderPanel();
   if (S.view.type === 'saved') renderMain();
   loadPreviews();
 }
@@ -4295,14 +5186,33 @@ function replaceMessageEl(m) {
     const hadFocus = el.contains(document.activeElement);
     el.replaceWith(fresh);
     if (wasCurrent) setCurrentMessage(fresh.parentElement, fresh);
-    if (hadFocus) fresh.focus({ preventScroll: true });
+    // (Focus given back after a gesture stays without its ring: ui.js quietFocus.)
+    if (hadFocus) { if (el.classList.contains('quiet-focus')) quietFocus(fresh); else fresh.focus({ preventScroll: true }); }
     if (S.editing === m.id) { const ta = fresh.querySelector('textarea'); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }
   });
 }
 
-// ---- jumping to messages (replies, links, search results, notifications)
+// ---- jumping to messages (pins, replies, links, search results, Photos & videos, the side view, notifications)
+// In the chat it goes straight there rather than gliding: on the way, every picture passed would start loading and,
+// those whose size isn't known yet (GIFs, videos, picture links), push the message on down as they came in. It lands
+// in the middle and stays there while the pictures around it load (keepPlace), lit up for a moment (again, should it
+// be drawn anew meanwhile).
 function flash(el) {
-  el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  const sc = el.closest('#messages');
+  const id = el.dataset.mid;
+  if (sc && sc._place && id) {
+    const until = Date.now() + 2000;
+    let at = el;
+    sc._place.hold(() => {
+      if (at.isConnected) return at;
+      const again = sc.querySelector(`.msg[data-mid="${id}"]`);
+      if (again) { at = again; if (Date.now() < until) flashRow(again); }
+      return again;
+    });
+  } else el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  flashRow(el);
+}
+function flashRow(el) {
   el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
   setTimeout(() => el.classList.remove('flash'), 2000);
 }
@@ -4315,9 +5225,18 @@ async function jumpToMessage(key, id) {
   }
   const el = $(`#messages [data-mid="${id}"]`);
   if (el) return flash(el);
+  // Not loaded: the page around it, the list held at it from the moment it's drawn.
+  const sc = $('#messages');
+  holdMessage(sc, id);
   await loadMessages(key, { around: id });
   const again = $(`#messages [data-mid="${id}"]`);
-  if (again) flash(again); else toast('That message was deleted.');
+  if (again) flash(again);
+  else { if (sc && sc._place) sc._place.release(); toast('That message was deleted.'); }
+}
+// Jump from a side panel: on a phone the panel covers the chat, so it closes first (beside the chat, it stays).
+function jumpFromPanel(key, id) {
+  if (isPhoneLayout() && panelMode()) closePanel();
+  return jumpToMessage(key, id);
 }
 // Settings → Storage: the name and type of one of your files. The server only knows sizes and where it was posted;
 // the name is inside the encrypted message, so it comes from a message this app has open, or fetches and opens now.
@@ -4399,15 +5318,26 @@ function openCallFromLink(link) {
 }
 
 // ---- message actions
+// Spelling (Settings → Chat; spelling.js): the browser's underlines, and corrections as people type on a computer
+// (phones and tablets have their keyboard's own; on unless chosen otherwise where the browser's language is English).
+// On this device only.
+const spellcheckAttr = () => (P.chat.spellcheck !== false ? 'true' : 'false');
+const correcting = () => (P.chat.autocorrect ?? englishHere()) !== false && !isTouchUI();
+// What a box sends, its last word corrected (not a bot's /command or a word just pasted; for an edit, was: the text
+// before, only a new last word).
+const spelled = (ta, was = null) => (correcting() && !lastWordPasted(ta) ? correctSending(ta.value, { was }) : ta.value);
+// Another box people write a message in (scheduled.js): the same spelling.
+const spellBox = (ta) => { ta.spellcheck = P.chat.spellcheck !== false; autocorrect(ta, { on: correcting }); };
 function editBox(m, ctx) {
-  const ta = h('textarea', { class: 'edit-input', rows: '1', 'aria-label': 'Edit message' });
+  const ta = h('textarea', { class: 'edit-input', rows: '1', 'aria-label': 'Edit message', spellcheck: spellcheckAttr() });
   ta.value = textOf(m);
+  autocorrect(ta, { on: correcting });
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 300) + 'px'; };
   ta.addEventListener('input', autosize);
   setTimeout(autosize);
   const done = () => { S.editing = null; replaceMessageEl(m); const c = composers[ctx]; if (c) c.focus(); };
   const save = async () => {
-    const content = ta.value;
+    const content = ta.value === textOf(m) ? ta.value : spelled(ta, textOf(m));
     if (!content.trim() && !filesOf(m).length) return deleteMessage(m);
     if (content === textOf(m)) return done();
     try {
@@ -4417,9 +5347,9 @@ function editBox(m, ctx) {
       const still = linkedUrls(content, { skipSpoilers: true });
       const kept = linksOf(m).filter((x) => still.includes(x.url));
       // Where it belongs stays too (binding.js): the same id, reply, thread and time, one edit later. One sent by an
-      // app from before that stays without.
+      // app from before that stays without. So does the photo a comment is about (ph, photo-notes.js).
       const payload = { t: content, f: filesOf(m), ...(m.dec && m.dec.p ? { p: m.dec.p } : {}), ...(m.dec && m.dec.x ? { x: m.dec.x } : {}), ...(kept.length ? { l: kept } : {}),
-        ...(m.dec && m.dec.b ? bindEdit(m.dec.b) : {}) };
+        ...(m.dec && m.dec.ph ? { ph: m.dec.ph } : {}), ...(m.dec && m.dec.b ? bindEdit(m.dec.b) : {}) };
       if (m.dmId) await api('PATCH', `/dm-messages/${m.id}`, { ciphertext: await encryptFitting(payload, (p) => sec.encryptDm(m.dmId, p)) });
       else {
         await withKeyRetry(m.serverId, async () => {
@@ -4434,7 +5364,18 @@ function editBox(m, ctx) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); }
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(); }
   });
-  return h('div', { class: 'edit-wrap' }, ta, h('div', { class: 'edit-hint' }, 'Esc to ', h('button', { class: 'link-btn', onclick: done }, 'cancel'), ' \u00b7 Enter to ', h('button', { class: 'link-btn', onclick: save }, 'save')));
+  const wrap = h('div', { class: 'edit-wrap' }, ta, h('div', { class: 'edit-hint' }, 'Esc to ', h('button', { class: 'link-btn', onclick: done }, 'cancel'), ' \u00b7 Enter to ', h('button', { class: 'link-btn', onclick: save }, 'save')));
+  // Back on a phone (phoneNav) cancels too. Focus stays on the message, without a ring (it came from a gesture), and
+  // the keyboard doesn't come back up for the message box.
+  wrap._cancel = () => {
+    const had = wrap.contains(document.activeElement);
+    if (had) document.activeElement.blur();
+    S.editing = null;
+    replaceMessageEl(m);
+    const el = had && $(`[data-mid="${m.id}"][data-ctx="${ctx}"]`);
+    if (el) quietFocus(el);
+  };
+  return wrap;
 }
 async function deleteMessage(m) {
   if (!(await confirmDialog({ title: 'Delete message?', text: m.threadCount ? 'This removes the message and its thread for everyone.' : 'This removes it for everyone.', confirm: 'Delete', danger: true }))) return;
@@ -4488,9 +5429,18 @@ function openForward(m) {
         try {
           const fwd = `${note.value.trim() ? note.value.trim() + '\n' : ''}> Forwarded from ${displayName(getUser(m.authorId))}\n${textOf(m).split('\n').map((l) => '> ' + l).join('\n')}`;
           // A link preview goes along: the quoted text still has its link, so readers there keep the card.
-          await sendTo(d.key, null, { t: fwd, f: filesOf(m), ...(linksOf(m).length ? { l: linksOf(m) } : {}) }, null);
+          const all = filesOf(m);
+          const go = (f) => sendTo(d.key, null, { t: fwd, f, ...(linksOf(m).length ? { l: linksOf(m) } : {}) }, null);
+          // The server's owner can send 100 files in one message, and everyone else 10: a message of theirs too big for
+          // anyone else to send on goes with the first 10.
+          let some = 0;
+          try { await go(all); } catch (e) {
+            if (!(e.code === 'too_long' && all.length > maxFiles())) throw e;
+            some = maxFiles();
+            await go(all.slice(0, some));
+          }
           mdl.close();
-          toast(`Forwarded to ${d.label}.`);
+          toast(some ? `Forwarded to ${d.label} with the first ${some} of its ${all.length} files.` : `Forwarded to ${d.label}.`);
         } catch (e) { toast(e.message, 'error'); }
       } }, d.av.cloneNode(true), h('span', { class: 'quick-text' }, h('strong', null, d.label), h('span', null, d.sub)))));
   };
@@ -4508,6 +5458,7 @@ const fileUrls = makeUrlCache();
 const fileJobs = new Map(); // url -> { job, listeners }: downloads in progress, shared by everyone asking
 const AUTOLOAD_MAX = 20 * 1024 * 1024; // bigger videos and songs wait for a click instead of downloading by themselves
 const goneFile = () => Object.assign(new Error('This file is no longer available.'), { code: 'gone' });
+const THUMB_MAX = 2 * 1024 * 1024; // a thumbnail is 480 px (media.js): tens of KB
 function decryptedUrl(m, f) {
   if (!isUploadUrl(f.url)) return Promise.reject(new Error('This file isn\u2019t on this server.'));
   // A disappearing message's files go with it: nothing is fetched or decrypted for one whose time has passed.
@@ -4517,8 +5468,10 @@ function decryptedUrl(m, f) {
   if (!fileJobs.has(f.url)) {
     const listeners = new Set();
     const job = (async () => {
-      // f.size is the plain size; the ciphertext adds a 12-byte IV and a 16-byte tag.
-      const buf = await download(f.url, { expected: f.size ? f.size + 28 : 0, onProgress: (x) => listeners.forEach((fn) => fn(x)) });
+      // f.size is the plain size; the ciphertext adds a 12-byte IV and a 16-byte tag. Whoever sent the message wrote
+      // it (and a thumbnail has none), so the download stops past it (a thumbnail past THUMB_MAX): a message can't
+      // make everyone who scrolls past it download big files it calls small.
+      const buf = await download(f.url, { expected: f.size ? f.size + 28 : 0, max: f.thumb ? THUMB_MAX : f.size > 0 ? f.size + 28 + 4096 : AUTOLOAD_MAX, onProgress: (x) => listeners.forEach((fn) => fn(x)) });
       const plain = await sec.decryptAttachment(m, f, buf);
       if (isExpired(m, nowServer())) throw goneFile(); // it went while downloading: don't keep a copy
       return fileUrls.put(f.url, new Blob([plain], { type: f.type || 'application/octet-stream' }));
@@ -4583,7 +5536,42 @@ function mediaDownloadBtn(m, f) {
   return b;
 }
 const loadQueue = makeQueue(3);
-function attachmentEl(f, m) {
+// Phones and touch screens (device.js): the chat shows a picture's thumbnail (480 px, made for desktops), and drawn
+// much bigger than that on a sharp screen it looks soft. So once it's on screen, the full picture loads (through the
+// same queue, with the same progress bar) and takes the thumbnail's place once it's ready to draw, without a flash.
+// Not with Data Saver on or for a very big file; what's sent and stored stays the same.
+// standIn: the row a message the word filter hides is drawn as (filteredEl). Its picture isn't on screen, so it's
+// sized as it would be there (app.css: on a phone the message's width, at most 70% of the screen's height; elsewhere
+// at most 440 x 340, and 40% of the window's height) and loads the same way when the row comes on screen: the server
+// sees the same downloads either way.
+function sharpenWhenShown(el, holder, f, full, standIn) {
+  if (!(isTouchUI() || isPhoneLayout()) || !holder.classList.contains('sized')) return;
+  if ((navigator.connection && navigator.connection.saveData) || !(f.size > 0) || f.size > AUTOLOAD_MAX) return;
+  const w = Number(f.w); const h = Number(f.h);
+  const soft = () => {
+    const nw = el.naturalWidth; const nh = el.naturalHeight;
+    if (!nw || !nh || !(standIn || el).isConnected) return false;
+    const body = standIn && standIn.querySelector('.msg-body');
+    const drawn = standIn ? Math.min(body ? body.clientWidth : 0, w, isPhone() ? (0.7 * innerHeight * w) / h : Math.min(440, (340 * w) / h, (0.4 * innerHeight * w) / h))
+      : Math.min(el.clientWidth, (el.clientHeight * nw) / nh); // (the box may be letterboxed)
+    return drawn * (window.devicePixelRatio || 1) > 1.25 * nw && w > nw * 1.1;
+  };
+  const shown = el.complete ? Promise.resolve() : new Promise((resolve) => el.addEventListener('load', resolve, { once: true }));
+  shown.then(() => whenOnScreen(standIn || holder, () => {
+    if (!soft()) return;
+    loadQueue(full).then((u) => {
+      if (!el.isConnected || el.getAttribute('src') === u) return null;
+      const next = new Image();
+      next.src = u;
+      return (next.decode ? next.decode() : Promise.resolve()).then(() => { if (el.isConnected) el.src = u; });
+    }).catch(() => {}); // the thumbnail stays (the viewer still loads the full picture when it's opened)
+  }));
+}
+// many: one of more than 10 files in a message (the server's owner can send up to 100). Pictures are small tiles there,
+// so their thumbnail is sharp enough everywhere (no full picture loads by itself), and videos, songs and pictures
+// without a thumbnail over 2 MB wait for a click: a hundred of them shouldn't all download for everyone who scrolls by.
+const MANY_AUTOLOAD_MAX = 2 * 1024 * 1024;
+function attachmentEl(f, m, { many = false, fi = 0 } = {}) {
   // Unencrypted entries (older messages) load straight from this server; anything else was dropped when the
   // message was decrypted (see attachments.js), and is refused here too.
   const direct = () => (isUploadUrl(f.url) ? Promise.resolve(f.url) : Promise.reject(new Error('This file isn\u2019t on this server.')));
@@ -4596,20 +5584,26 @@ function attachmentEl(f, m) {
     const el = media === 'img'
       ? h('img', { class: 'att-img', alt: f.alt || f.name || 'Image', tabindex: '0', role: 'button', 'aria-label': `Open ${f.alt || f.name || 'image'}` })
       : h(media, { class: `att-${media}`, controls: true, preload: 'metadata', 'aria-label': f.alt || null });
+    // Which file of which message this is (the viewer, photo comments and tags work from it).
+    el._item = { m, f, fi, key: keyOfMessage(m) };
     const holder = h('div', { class: `att-media${enc ? ' locked' : ''}`, dataset: { name: f.name || '' } }, el);
+    const standIn = lazyRow;
     if (f.alt && media !== 'audio') { holder.classList.add('has-alt'); holder.append(altChip(f.alt)); }
     if (f.sp) spoilerCover(holder, el, media);
-    // Reserve the right space up front so the chat doesn't jump while images load.
-    if (media === 'img' && f.w && f.h) {
+    // Reserve the right space up front so the chat doesn't jump while images load (a tile's is its grid cell).
+    if (media === 'img' && many) holder.classList.add('tile');
+    else if (media === 'img' && Number(f.w) > 0 && Number(f.h) > 0) {
       const w = Math.min(440, f.w, Math.round(340 * f.w / f.h));
       holder.style.width = `${w}px`;
       holder.style.aspectRatio = `${f.w} / ${f.h}`;
+      // Its shape, for app.css: a short window shrinks it to fit, and a phone sizes it up to the message's width.
+      holder.style.setProperty('--att-w', String(Number(f.w))); holder.style.setProperty('--att-h', String(Number(f.h)));
       holder.classList.add('sized');
     }
     const meter = h('div', { class: 'att-meter', hidden: true }, h('i'));
     const onProgress = (x) => { meter.hidden = x >= 1; meter.firstChild.style.width = `${Math.round(x * 100)}%`; };
     const full = () => (enc ? decryptedUrl(m, f) : direct());
-    const fullWatched = () => { const p = full(); watchFile(f.url, onProgress); return p; };
+    const fullWatched = () => { const p = full(); watchFile(f.url, onProgress); const hide = () => { meter.hidden = true; }; p.then(hide, hide); return p; };
     if (media === 'img') {
       el._full = fullWatched;
       el.addEventListener('click', () => openViewer(el, { name: f.name, download: () => downloadAttachment(m, f) }));
@@ -4618,11 +5612,15 @@ function attachmentEl(f, m) {
     }
     if (media === 'audio') holder.prepend(h('div', { class: 'att-audio-name' }, icon('file', 'ic'), f.name, h('span', { class: 'att-size' }, fmtSize(f.size || 0))));
     holder.append(meter, mediaDownloadBtn(m, f));
+    // One of several photos and videos in a message (photo-notes.js): its comment and tag counts, and on hover "Comment
+    // on this photo", which opens it in the viewer with the comment box ready. Never a spoiler nobody has opened yet
+    // (the button only shows once it's open, app.css).
+    if (media !== 'audio') holder.append(...NOTES.tileExtras(m, fi, () => { if (!holder.matches('.att-spoiler:not(.revealed)')) openPhotoViewer(el, 'comment'); }));
     // Load only when it scrolls near the screen, a few at a time; images show the small thumbnail first.
     const load = () => {
       holder.classList.add('loading');
-      const want = media === 'img' && f.th ? () => decryptedUrl(m, { ...f.th, type: 'image/webp' }) : fullWatched;
-      loadQueue(want).then((u) => { el.src = u; holder.classList.remove('locked', 'loading', 'failed'); })
+      const want = media === 'img' && f.th ? () => decryptedUrl(m, { ...f.th, type: 'image/webp', thumb: true }) : fullWatched;
+      loadQueue(want).then((u) => { el.src = u; holder.classList.remove('locked', 'loading', 'failed'); if (media === 'img' && f.th) sharpenWhenShown(el, holder, f, fullWatched, standIn); })
         .catch((e) => {
           holder.classList.remove('loading');
           if (e && e.code === 'gone') return markGone(holder);
@@ -4631,16 +5629,19 @@ function attachmentEl(f, m) {
           holder.append(again);
         });
     };
-    // Big videos and songs wait for a click (with the size on the button), then download with a progress bar.
-    if (enc && media !== 'img' && (f.size || 0) > AUTOLOAD_MAX) {
+    // Big videos and songs wait for a click (with the size on the button), then download with a progress bar; among
+    // many files, every video and song, and big pictures without a thumbnail, too.
+    // (A size the sender left out is unknown, not small.)
+    const waits = media === 'img' ? many && !f.th && !((f.size || 0) > 0 && f.size <= MANY_AUTOLOAD_MAX) : many || !(f.size > 0) || f.size > AUTOLOAD_MAX;
+    if (enc && waits) {
       holder.classList.remove('locked');
       holder.classList.add('click-to-load');
       el.hidden = true;
       const play = h('button', { class: 'att-play', type: 'button', onclick: (e) => {
         e.stopPropagation(); play.remove(); el.hidden = false; holder.classList.remove('click-to-load');
-        loadQueue(fullWatched, { front: true }).then((u) => { el.src = u; if (media === 'video') el.play().catch(() => {}); })
+        loadQueue(fullWatched, { front: true }).then((u) => { el.src = u; holder.classList.remove('locked'); if (media === 'video') el.play().catch(() => {}); })
           .catch((err) => { if (err && err.code === 'gone') markGone(holder); else { toast(err.message, 'error'); holder.append(play); el.hidden = true; holder.classList.add('click-to-load'); } });
-      } }, icon(media === 'video' ? 'play' : 'music'), h('span', null, `${media === 'video' ? 'Play video' : 'Play audio'} · ${fmtSize(f.size)}`));
+      } }, icon(media === 'video' ? 'play' : media === 'img' ? 'image' : 'music'), h('span', null, `${media === 'video' ? 'Play video' : media === 'img' ? 'Show' : 'Play audio'} · ${fmtSize(f.size)}`));
       holder.append(play);
       if (media === 'video') holder.prepend(h('div', { class: 'att-audio-name' }, icon('file', 'ic'), f.name));
     } else if (enc || f.th || !isUploadUrl(f.url)) loadWhenVisible(holder, load); else el.src = f.url;
@@ -4684,52 +5685,235 @@ function spoilerCover(holder, el, media) {
   holder.append(cover);
 }
 
-function openViewer(fromImg, { name, download } = {}) {
+// A picture in the chat as an item for the viewer: which photo of which message it is (img._item, from attachmentEl),
+// or a picture link's (a message's, with nothing to decrypt).
+function chatViewerItem(img, { name: named, download } = {}) {
+  const holder = img.closest('.att-media');
+  const name = (holder ? holder.dataset.name : img.alt) || named || 'Image';
+  const shown = () => (img.src ? Promise.resolve(img.src) : null); // what the chat shows now (the thumbnail, often)
+  const it = img._item;
+  if (it) return { ...it, kind: 'img', thumb: shown, full: img._full || null, name, alt: it.f.alt || '', download: download || (() => downloadAttachment(it.m, it.f)) };
+  const row = img.closest('[data-mid]');
+  return { m: null, mid: row ? row.dataset.mid : null, key: currentKey(), kind: 'img', thumb: shown, full: img._full || null, name, alt: '', download: download || null };
+}
+// The full-screen viewer, for pictures and videos.
+//   items: what left and right go through, starting at index (the Photos & videos panel passes its list, videos too).
+//   Without it, every picture in the conversation loaded so far, as always. An item is { m, f, fi, key,
+//   kind: 'img'|'video', thumb: () => Promise<url>|null, full: () => Promise<url>, name, alt, download: () => void }.
+//   side: true opens it with the photo's side panel of comments and tags (photo-notes.js) showing; 'comment' also puts
+//   the focus in its comment box.
+function openViewer(fromImg, { name, download, items: given = null, index = 0, side = false } = {}) {
   const opener = document.activeElement;
-  // Every picture in the conversation loaded so far, including those not scrolled into view yet (they load as
-  // you reach them here). Spoilers nobody has opened yet are left out.
-  const imgs = $$('#messages .att-img, #messages .embed-img, .thread-list .att-img').filter((i) => (i.src || i._full) && !i.closest('.att-spoiler:not(.revealed)'));
-  let idx = Math.max(0, imgs.indexOf(fromImg));
+  // A tile of Photos & videos that opened it: which one, should it have been drawn anew meanwhile (an edit).
+  const openerTile = opener && opener.closest ? opener.closest('.mp-tile') : null;
+  const openerGid = openerTile ? openerTile.dataset.gid : null;
+  // A card of the side view that opened it: which one, and which of its pictures (drawn anew meanwhile: an edit, the
+  // word filter, a key that came, or unpinned and pinned again from this viewer's bar).
+  const openerCard = opener && opener.closest ? opener.closest('.sv-card') : null;
+  const openerSid = openerCard ? openerCard.dataset.sid : null;
+  const openerAt = openerCard ? [...openerCard.querySelectorAll('.sv-open')].indexOf(opener) : -1;
+  let items;
+  let idx;
+  if (Array.isArray(given) && given.length) {
+    items = given;
+    idx = Math.min(given.length - 1, Math.max(0, Math.floor(Number(index) || 0)));
+  } else {
+    // Every picture in the conversation loaded so far, including those not scrolled into view yet (they load as
+    // you reach them here). Spoilers nobody has opened yet are left out.
+    const imgs = $$('#messages .att-img, #messages .embed-img, .thread-list .att-img').filter((i) => (i.src || i._full) && !i.closest('.att-spoiler:not(.revealed)'));
+    if (fromImg && !imgs.includes(fromImg)) imgs.unshift(fromImg);
+    items = imgs.map((i) => chatViewerItem(i, i === fromImg ? { name, download } : {}));
+    idx = Math.max(0, imgs.indexOf(fromImg));
+  }
+  if (!items.length) return;
   let scale = 1; let tx = 0; let ty = 0;
+  let closed = false;
   const img = h('img', { class: 'viewer-img', alt: '' });
+  // A video plays in the stage, with the browser's own controls (no zoom). One that's big, or whose size its sender
+  // left out, waits for Play, as in the chat: going past it with the arrow keys shouldn't download it.
+  const video = h('video', { class: 'viewer-video', controls: true, playsinline: true, preload: 'metadata', hidden: true });
+  const play = h('button', { class: 'viewer-play', type: 'button', hidden: true }, icon('play'), h('span'));
+  // Fingers on them work them, rather than swiping or zooming the viewer (viewer-touch.js listens on the stage).
+  for (const el of [video, play]) el.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse') e.stopPropagation(); });
   const caption = h('span', { class: 'viewer-name' });
-  const counter = h('span', { class: 'viewer-count' });
-  const stage = h('div', { class: 'viewer-stage' }, img);
-  const apply = () => { img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; stage.classList.toggle('zoomed', scale > 1); };
-  const show = (i) => {
-    idx = (i + imgs.length) % imgs.length;
-    const src = imgs[idx];
-    if (src.src) img.src = src.src; // thumbnail (instant)…
-    else img.removeAttribute('src');
-    stage.classList.add('loading-full');
-    if (src._full) {
-      src._full().then((u) => { if (imgs[idx] === src) { img.src = u; } })
-        .catch((e) => { if (imgs[idx] === src && e && e.code === 'gone') caption.textContent = `${caption.textContent} \u2014 no longer available`; })
-        .finally(() => { if (imgs[idx] === src) stage.classList.remove('loading-full'); });
-    }
-    else stage.classList.remove('loading-full');
-    const nm = src.closest('.att-media') ? src.closest('.att-media').dataset.name : src.alt;
-    caption.textContent = nm || 'Image';
-    counter.textContent = imgs.length > 1 ? `${idx + 1} / ${imgs.length}` : '';
-    scale = 1; tx = 0; ty = 0; apply();
+  // The picture's name. On a phone it's in two parts, so it can be shortened and still show how it ends (".jpg");
+  // elsewhere it's the plain text it always was (fit() below redoes it when the screen changes over).
+  let captionText = '';
+  const setCaption = (text) => {
+    captionText = text;
+    if (!isPhoneLayout()) { caption.textContent = text; return; }
+    const parts = /^(.+?)(\.[a-z0-9]{1,8})$/i.exec(text) || [text, text, ''];
+    caption.replaceChildren(h('span', { class: 'viewer-name-base' }, parts[1]), h('span', { class: 'viewer-name-ext' }, parts[2]));
   };
-  const zoom = (f) => { scale = Math.min(6, Math.max(1, scale * f)); if (scale === 1) { tx = 0; ty = 0; } apply(); };
+  const counter = h('span', { class: 'viewer-count' });
+  const stage = h('div', { class: 'viewer-stage' }, img, video, play);
+  const isVideo = () => items[idx].kind === 'video';
+  const apply = () => { img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; stage.classList.toggle('zoomed', scale > 1); };
+  const stopVideo = () => {
+    if (!video.hasAttribute('src')) return;
+    video.pause();
+    video.removeAttribute('src');
+    video.load(); // (lets go of what it had loaded)
+  };
+  // Which show() is the current one: what an earlier one asked for and gets late is dropped.
+  let turn = 0;
+  let startOn = idx; // the item it was opened on: a video there starts playing
+  let played = null; // Play on a big video
+  const showPicture = (it, current) => {
+    video.hidden = true; play.hidden = true; img.hidden = false;
+    img.removeAttribute('src');
+    img.alt = it.alt || '';
+    let sharp = false;
+    // The thumbnail (instant)…
+    const quick = typeof it.thumb === 'function' ? it.thumb() : null;
+    if (quick) Promise.resolve(quick).then((u) => { if (current() && !sharp && u) img.src = u; }, () => {});
+    if (typeof it.full !== 'function') return;
+    // …then the full picture.
+    stage.classList.add('loading-full');
+    Promise.resolve().then(() => it.full()).then((u) => { if (current()) { sharp = true; img.src = u; } })
+      .catch((e) => { if (current() && e && e.code === 'gone') setCaption(`${captionText} \u2014 no longer available`); })
+      .finally(() => { if (current()) stage.classList.remove('loading-full'); });
+  };
+  const showVideo = (it, current, autoplay) => {
+    img.hidden = true; img.removeAttribute('src');
+    const f = it.f || {};
+    const start = (go) => {
+      play.hidden = true; video.hidden = false;
+      stage.classList.add('loading-full');
+      stage.dataset.loading = 'Loading video\u2026';
+      let p;
+      try { p = Promise.resolve(it.full()); } catch (e) { p = Promise.reject(e); }
+      if (f.url) watchFile(f.url, (x) => { if (current() && x < 1) stage.dataset.loading = `Loading video\u2026 ${Math.round(x * 100)}%`; });
+      p.then((u) => { if (!current()) return; video.src = u; if (go) video.play().catch(() => {}); })
+        .catch((e) => {
+          if (!current()) return;
+          video.hidden = true;
+          if (e && e.code === 'gone') setCaption(`${captionText} \u2014 no longer available`);
+          else { toast(e && e.message ? e.message : 'Couldn\u2019t load this video.', 'error'); play.hidden = false; }
+        })
+        .finally(() => { if (current()) { stage.classList.remove('loading-full'); delete stage.dataset.loading; } });
+    };
+    played = () => start(true);
+    if (!(Number(f.size) > 0) || f.size > AUTOLOAD_MAX) {
+      video.hidden = true;
+      play.lastChild.textContent = Number(f.size) > 0 ? `Play video \u00b7 ${fmtSize(f.size)}` : 'Play video';
+      play.hidden = false;
+    } else start(autoplay);
+  };
+  play.addEventListener('click', () => { if (played) played(); });
+  const show = (i) => {
+    idx = (i + items.length) % items.length;
+    const it = items[idx];
+    const mine = ++turn;
+    const current = () => mine === turn && !closed;
+    stopVideo();
+    played = null;
+    stage.classList.remove('loading-full');
+    delete stage.dataset.loading;
+    stage.classList.toggle('video', it.kind === 'video');
+    setCaption(it.name || (it.kind === 'video' ? 'Video' : 'Image'));
+    if (it.kind === 'video') showVideo(it, current, idx === startOn); else showPicture(it, current);
+    startOn = -1;
+    counter.textContent = items.length > 1 ? `${idx + 1} / ${items.length}` : '';
+    scale = 1; tx = 0; ty = 0; apply();
+    drawSide(it);
+    fit();
+  };
+  const zoom = (f) => { if (isVideo()) return; scale = Math.min(6, Math.max(1, scale * f)); if (scale === 1) { tx = 0; ty = 0; } apply(); };
+  // Jump to message: the viewer closes (and on a phone, the side panel it was opened from, which covers the chat).
+  const jumpable = (it) => !!it && !!it.key && !!(it.m ? it.m.id : it.mid);
+  const jump = () => {
+    const it = items[idx];
+    if (!jumpable(it)) return;
+    close();
+    if (isPhoneLayout() && panelMode()) closePanel();
+    if (it.m && it.m.threadId) jumpToMessageId(it.m.id); else jumpToMessage(it.key, it.m ? it.m.id : it.mid);
+  };
+  // The photo's comments and tags (photo-notes.js): a column on the right, or a sheet over the bottom on a phone, with
+  // a Comments button that shows and hides it. On a wider screen it starts open on a photo that already has some.
+  const sideBox = h('aside', { class: 'viewer-side', 'aria-label': 'Comments and tags', hidden: true });
+  // Whether a photo has some, as its counts say (NOTES.counts: the latest comment count, and the tags that count). Its
+  // tags only count once they've been opened, which they often aren't yet as it opens here (a photo alone in its
+  // message has no counts in the chat to open them first): until then, any on it by someone you haven't blocked do.
+  const notesOn = (it) => {
+    if (!it || !it.m || !Number.isInteger(it.fi)) return false;
+    const c = NOTES.counts(it.m, it.fi);
+    return c.comments > 0 || c.tags > 0 || NOTES.unopened(it.m, it.fi) > 0;
+  };
+  let sideOpen = !!side || (!isPhoneLayout() && notesOn(items[idx]));
+  let sideFocus = side === 'comment' ? 'comment' : null;
+  const sideBtn = ibtn('message', 'Comments', () => setSide(!sideOpen), { cls: 'viewer-side-btn with-badge' });
+  sideBtn.hidden = true;
+  const setSide = (on) => {
+    sideOpen = on;
+    const showing = on && !!sideBox.firstChild;
+    sideBox.hidden = !showing;
+    overlay.classList.toggle('side-open', showing);
+    sideBtn.classList.toggle('active', showing);
+    sideBtn.setAttribute('aria-pressed', String(showing));
+    scale = 1; tx = 0; ty = 0; apply(); // (the stage changed size)
+  };
+  const drawSide = (it) => {
+    const el = it.m && it.f ? NOTES.side(it, { close: () => setSide(false), focus: sideFocus }) : null;
+    sideFocus = null;
+    sideBox.replaceChildren(...(el ? [el] : []));
+    sideBtn.hidden = !el;
+    countSide(it);
+    setSide(sideOpen);
+  };
+  // The Comments button's count: drawn with the photo, and again when a comment on it comes or goes while it's shown
+  // (photo-notes.js tells the app, which calls overlay._photoChanged).
+  const countSide = (it) => {
+    const n = !sideBtn.hidden && it.m ? NOTES.counts(it.m, it.fi).comments : 0;
+    const label = n ? `Comments (${n})` : 'Comments';
+    sideBtn.setAttribute('aria-label', label);
+    sideBtn.dataset.tip = label;
+    const badge = sideBtn.querySelector('.badge');
+    if (n) (badge || sideBtn.appendChild(h('span', { class: 'badge', 'aria-hidden': 'true' }))).textContent = n > 99 ? '99+' : String(n);
+    else if (badge) badge.remove();
+  };
   const close = () => {
+    if (closed) return;
+    closed = true;
     overlay.classList.add('closing'); setTimeout(() => overlay.remove(), 140); document.removeEventListener('keydown', keys, true);
-    // Back to whatever opened it (the picture in the chat), like other dialogs.
-    if (opener && opener.isConnected && opener !== document.body) opener.focus({ preventScroll: true });
+    stopVideo();
+    stopFitting();
+    above.disconnect();
+    if ((morePop && morePop.isConnected) || $('#layer > .popover.over-viewer')) closePopover();
+    // Back to whatever opened it (the picture in the chat), like other dialogs: for a tile of Photos & videos drawn anew
+    // while it was open, the same photo's tile; for a side view card, the same picture on that card drawn anew. Gone
+    // from the panel (unpinned from here, or Pin to side swapped Photos & videos for the side view): the panel's first
+    // card, else its own buttons, rather than nowhere (the page).
+    const back = (() => {
+      if (!opener || opener.isConnected || (!openerGid && !openerSid)) return opener;
+      const tile = openerGid ? $$('#members .mp-tile').find((x) => x.dataset.gid === openerGid) : null;
+      if (tile) return tile.querySelector('.mp-cover') || tile.querySelector('.mp-open');
+      const card = openerSid ? $$('#members .sv-card').find((x) => x.dataset.sid === openerSid) : null;
+      if (card) return card.querySelectorAll('.sv-open')[openerAt] || card.querySelector('.sv-open, .sv-x');
+      return $('#members .sv-card button') || $('#members button') || $('#main');
+    })();
+    if (back && back.isConnected && back !== document.body) back.focus({ preventScroll: true });
   };
   const keys = (e) => {
-    if (e.key === 'Escape') { e.stopPropagation(); close(); }
+    if (morePop && morePop.isConnected) return; // the More menu (phones) takes the keys while it's open
+    // So does anything opened from inside the viewer (a menu, a popup or a question from its side panel).
+    if (document.querySelector('#layer > .over-viewer:not(.closing)')) return;
+    if (e.key === 'Escape') { e.stopPropagation(); close(); return; }
     if (e.key === 'Tab') trapTab(e, overlay);
+    // Typing in the side panel (a comment, a tag): the keys are the words'.
+    if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
+    // A video with the focus (its own controls): the arrow keys seek it, as anywhere else, rather than going on to the
+    // next item (which would stop it and lose its place).
+    if (e.target === video || (e.target && e.target.closest && e.target.closest('video'))) return;
     if (e.key === 'ArrowRight') show(idx + 1);
     if (e.key === 'ArrowLeft') show(idx - 1);
     if (e.key === '+' || e.key === '=') zoom(1.4);
     if (e.key === '-') zoom(1 / 1.4);
   };
-  const dl = async () => {
-    if (imgs[idx] === fromImg && download) return download();
-    const a = h('a', { href: img.src, download: caption.textContent || 'image', target: '_blank', rel: 'noopener noreferrer' });
+  const dl = () => {
+    const it = items[idx];
+    if (it.download) return it.download();
+    const a = h('a', { href: img.src, download: captionText || 'image', target: '_blank', rel: 'noopener noreferrer' });
     document.body.append(a); a.click(); a.remove();
   };
   const copy = async () => {
@@ -4740,26 +5924,95 @@ function openViewer(fromImg, { name, download } = {}) {
       toast('Image copied.');
     } catch { copyText(img.src.startsWith('blob:') ? '' : img.src); toast(img.src.startsWith('blob:') ? 'Your browser can\u2019t copy this image.' : 'Image link copied.'); }
   };
+  const fullscreen = () => (document.fullscreenElement ? document.exitFullscreen() : overlay.requestFullscreen().catch(() => {}));
+  // On a phone (device.js PHONE_LAYOUT) the bar keeps Download and Close, with bigger buttons (and Comments, when the
+  // photo has a side panel), and the rest goes under More, with the previous and next pictures (swipes stand in for the
+  // arrow buttons there, which screen readers can't make). It changes over if the screen does (a window narrowed, say).
+  // Zoom and Copy image are for pictures only.
+  const jumpBtn = h('button', { class: 'viewer-jump', type: 'button', onclick: jump }, icon('arrowUp'), h('span', null, 'Jump to message'));
+  const zoomOutBtn = ibtn('zoomOut', 'Zoom out (−)', () => zoom(1 / 1.4));
+  const zoomInBtn = ibtn('zoomIn', 'Zoom in (+)', () => zoom(1.4));
+  const fullBtn = ibtn('maximize', 'Fullscreen', fullscreen);
+  const copyBtn = ibtn('copy', 'Copy image', copy);
+  // Pin to side (side-view.js): the picture or video shown, which stays beside the chat once the viewer closes. In the
+  // bar, and under More on a phone; it says Unpin when it's there already.
+  const sideItem = () => { const it = items[idx]; return it && it.m && Number.isInteger(it.fi) ? SIDE.menuItemFor(it.m, it.fi) : null; };
+  const sidePin = ibtn('sidebar', 'Pin to side', () => { const p = sideItem(); if (p) p.action(); fit(); }, { cls: 'viewer-pin' });
+  let morePop = null;
+  const more = ibtn('more', 'More', () => {
+    const it = items[idx];
+    const vid = isVideo();
+    const many = items.length > 1;
+    const what = items.some((x) => x.kind === 'video') ? '' : ' picture';
+    const list = [
+      many ? { label: `Previous${what}`, icon: 'chevronLeft', action: () => show(idx - 1) } : null,
+      many ? { label: `Next${what}`, icon: 'chevronRight', action: () => show(idx + 1) } : null,
+      jumpable(it) ? { label: 'Jump to message', icon: 'arrowUp', action: jump } : null,
+      sideItem(),
+      many || jumpable(it) ? '-' : null,
+      vid ? null : { label: 'Zoom in', icon: 'zoomIn', action: () => zoom(1.4) },
+      vid ? null : { label: 'Zoom out', icon: 'zoomOut', action: () => zoom(1 / 1.4) },
+      document.fullscreenEnabled ? { label: document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen', icon: 'maximize', action: fullscreen } : null,
+      vid ? null : { label: 'Copy image', icon: 'copy', action: copy },
+    ].filter(Boolean);
+    while (list[list.length - 1] === '-') list.pop();
+    morePop = menu(more, list, { align: 'end', className: 'viewer-menu' });
+  }, { attrs: { 'data-pop-anchor': '' } });
+  const fit = () => {
+    const phone = isPhoneLayout();
+    const vid = isVideo();
+    zoomOutBtn.hidden = phone || vid; zoomInBtn.hidden = phone || vid; copyBtn.hidden = phone || vid;
+    fullBtn.hidden = phone;
+    jumpBtn.hidden = phone || !jumpable(items[idx]);
+    const pin = sideItem();
+    sidePin.hidden = phone || !pin;
+    if (pin) { sidePin.setAttribute('aria-label', pin.label); sidePin.dataset.tip = pin.label; sidePin.classList.toggle('active', pin.label !== 'Pin to side'); }
+    more.hidden = !phone;
+    setCaption(captionText);
+  };
+  const stopFitting = onDeviceChange(fit);
   const bar = h('div', { class: 'viewer-bar' }, caption, counter, h('span', { class: 'spacer' }),
-    ibtn('zoomOut', 'Zoom out (−)', () => zoom(1 / 1.4)), ibtn('zoomIn', 'Zoom in (+)', () => zoom(1.4)),
-    ibtn('maximize', 'Fullscreen', () => (document.fullscreenElement ? document.exitFullscreen() : overlay.requestFullscreen().catch(() => {}))),
-    ibtn('copy', 'Copy image', copy), ibtn('download', 'Download', dl), ibtn('close', 'Close (Esc)', close));
-  const overlay = h('div', { class: 'viewer', role: 'dialog', 'aria-label': 'Image viewer', 'aria-modal': 'true' }, bar, stage,
-    imgs.length > 1 ? h('button', { class: 'viewer-nav prev', 'aria-label': 'Previous image', onclick: () => show(idx - 1) }, icon('chevronLeft')) : null,
-    imgs.length > 1 ? h('button', { class: 'viewer-nav next', 'aria-label': 'Next image', onclick: () => show(idx + 1) }, icon('chevronRight')) : null);
-  overlay._mids = new Set(imgs.map((i) => (i.closest('[data-mid]') || {}).dataset?.mid).filter(Boolean));
+    jumpBtn, sidePin, zoomOutBtn, zoomInBtn, fullBtn, copyBtn, ibtn('download', 'Download', dl), sideBtn, more, ibtn('close', 'Close (Esc)', close));
+  const overlay = h('div', { class: 'viewer', role: 'dialog', 'aria-label': 'Image viewer', 'aria-modal': 'true' }, bar,
+    h('div', { class: 'viewer-body' }, stage, sideBox),
+    items.length > 1 ? h('button', { class: 'viewer-nav prev', 'aria-label': 'Previous image', onclick: () => show(idx - 1) }, icon('chevronLeft')) : null,
+    items.length > 1 ? h('button', { class: 'viewer-nav next', 'aria-label': 'Next image', onclick: () => show(idx + 1) }, icon('chevronRight')) : null);
+  // The messages it shows (not the rows they're in: the panel's tiles have none): when one of them disappears, the
+  // viewer closes (forgetCopies).
+  overlay._mids = new Set(items.map((it) => (it.m ? it.m.id : it.mid)).filter(Boolean));
   overlay._close = close;
-  stage.addEventListener('click', (e) => { if (e.target === stage) close(); });
+  overlay._photoChanged = (id) => { const it = items[idx]; if (it && it.m && it.m.id === id) countSide(it); };
+  // Menus, popups and questions opened from inside the viewer (its side panel's) go over it, not behind (app.css).
+  const above = new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) n.classList.add('over-viewer'); });
+  const layer = $('#layer');
+  if (layer) above.observe(layer, { childList: true });
+  // Touch screens (device.js TOUCH_UI): pinch, double tap, swipes (viewer-touch.js). The clicks a browser makes out
+  // of those taps are left to it; a mouse works as on a desktop. A video doesn't zoom.
+  const touch = isTouchUI() ? touchGestures({
+    stage, img, bar, backdrop: overlay, close, count: () => items.length, step: (d) => show(idx + d),
+    view: () => ({ scale, tx, ty }), setView: (v) => { if (isVideo()) return; ({ scale, tx, ty } = v); apply(); },
+    busy: () => { if (!morePop || !morePop.isConnected) return false; closePopover(); return true; },
+  }) : null;
+  const fromTouch = () => !!touch && touch.touchedRecently();
+  stage.addEventListener('click', (e) => { if (e.target === stage && !fromTouch()) close(); });
   stage.addEventListener('wheel', (e) => { e.preventDefault(); zoom(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: false });
-  img.addEventListener('dblclick', () => { if (scale > 1) { scale = 1; tx = 0; ty = 0; apply(); } else zoom(2.5); });
+  img.addEventListener('dblclick', () => { if (fromTouch()) return; if (scale > 1) { scale = 1; tx = 0; ty = 0; apply(); } else zoom(2.5); });
   let drag = null;
-  img.addEventListener('pointerdown', (e) => { if (scale <= 1) return; drag = { x: e.clientX - tx, y: e.clientY - ty }; img.setPointerCapture(e.pointerId); });
+  img.addEventListener('pointerdown', (e) => { if (scale <= 1 || (touch && e.pointerType !== 'mouse')) return; drag = { x: e.clientX - tx, y: e.clientY - ty }; img.setPointerCapture(e.pointerId); });
   img.addEventListener('pointermove', (e) => { if (!drag) return; tx = e.clientX - drag.x; ty = e.clientY - drag.y; apply(); });
   img.addEventListener('pointerup', () => { drag = null; });
   document.addEventListener('keydown', keys, true);
   document.body.append(overlay);
   show(idx);
   overlay.querySelector('.viewer-bar .icon-btn:last-child').focus();
+  // Opened to comment on this photo: into its comment box, once the side panel is drawn.
+  if (side === 'comment') {
+    requestAnimationFrame(() => {
+      if (closed || sideBox.hidden || sideBox.contains(document.activeElement)) return;
+      const box = sideBox.querySelector('textarea');
+      if (box) box.focus();
+    });
+  }
 }
 async function toPng(blob) {
   const bmp = await createImageBitmap(blob);
@@ -4771,18 +6024,24 @@ async function toPng(blob) {
 // ======================================================================= incoming events
 async function onNewMessage(key, m) {
   const store = S.msgs[key];
+  // In a DM or group chat it's the newest message from now on, set before decrypting: a delete or a newer message
+  // that comes meanwhile takes its place, and this one's preview is then left alone (see previewDm).
+  const conv = convOf(key);
+  const before = conv && conv.last;
+  if (conv && (!before || m.id >= before.id)) conv.last = m;
   await decryptMessage(m);
   if (m.nonce) dropPendingSend(m.nonce);
   // Already past its time (a timer shorter than the trip here, or a server that held on to it): never shown.
-  if (isExpired(m, nowServer())) return;
-  if (key.startsWith('d:')) {
-    S.previews[key] = previewText(m);
-    // The preview goes at the message's time too, by the timer inside it (the server's copy can't be decrypted there).
-    const d = S.dms.find((x) => x.id === key.slice(2));
-    if (d && d.last && d.last.id === m.id) d.last.dec = m.dec;
-  } else {
-    const s = S.servers.find((x) => x.id === m.serverId);
-    if (isGroup(s)) { s.last = m; s.lastMessageAt = m.createdAt; S.previews['g:' + s.id] = previewText(m, true); }
+  if (isExpired(m, nowServer())) { const cur = convOf(key); if (cur && cur.last === m) cur.last = before; return; }
+  MEDIA.onNew(key, m); // its pictures and videos go on top in Photos & videos, if that's open here
+  // Kept decrypted as the newest message, the preview also goes at its time by the timer inside it (the server's copy
+  // can't be decrypted there). When the server's copy of it took its place meanwhile (sent with a delete or an edit),
+  // setLast already wrote the line and the group's time from that.
+  const cur = convOf(key);
+  if (cur && cur.last === m) {
+    const group = isGroup(cur);
+    S.previews[(group ? 'g:' : 'd:') + cur.id] = previewText(m, group);
+    if (group) cur.lastMessageAt = m.createdAt;
   }
   if (store && store.loaded && !store.hasNewer && !store.list.find((x) => x.id === m.id)) {
     store.list.push(m);
@@ -4804,14 +6063,14 @@ async function onNewMessage(key, m) {
         const above = firstPending ? firstPending.previousElementSibling : sc.lastElementChild;
         put(messageEl(m, newDay || (above && above.classList.contains('sys-line')) ? null : prev, 'main'));
         ensureCurrentMessage(sc);
-        if (near || (m.authorId === S.me.id && !m.scheduled)) sc.scrollTop = sc.scrollHeight;
+        if (m.authorId === S.me.id && !m.scheduled) toNewest(sc);
+        else if (near) sc.scrollTop = sc.scrollHeight;
       }
     }
   }
   // Now that it's in the conversation and the preview: the timer looks there for the soonest deadline.
   if (disappears(m)) armClientExpiry();
-  const t = S.typing[key];
-  if (t && t.has(m.authorId)) { clearTimeout(t.get(m.authorId)); t.delete(m.authorId); if (currentKey() === key) renderTyping(); }
+  TYPING.stop(key, m.authorId); // their message is here: they've stopped typing it
   const knewUpTo = S.lastIds[key];
   if (!m.threadId && !(S.lastIds[key] && S.lastIds[key] >= m.id)) S.lastIds[key] = m.id;
   // Your own message (from here or another device) means you've read the conversation up to it. Not one the server
@@ -4878,14 +6137,17 @@ function notify(author, body, key, msgId = null) {
   } catch { /* ignore */ }
 }
 async function onUpdateMessage(key, m) {
+  SIDE.onUpdate(key, m); // (the side view decrypts it itself when it shows it, whether or not the chat has it)
+  lastEdited(key, m);
   const store = S.msgs[key];
-  if (!store) return;
-  const i = store.list.findIndex((x) => x.id === m.id);
-  if (i < 0) return;
+  const i = store ? store.list.findIndex((x) => x.id === m.id) : -1;
+  // (Photos & videos may have it when the chat doesn't: it decrypts it itself then.)
+  if (i < 0) return MEDIA.onUpdate(key, m);
   await decryptMessage(m);
   store.list[i] = m;
   if (S.editing === m.id) S.editing = null;
   replaceMessageEl(m);
+  MEDIA.onUpdate(key, m);
 }
 // Channel messages deleted (one, or a batch): thread replies leave their thread, the rest leave the channel.
 // expired: disappearing messages whose time came (this device's copies of them go too, see forgetCopies).
@@ -4910,7 +6172,9 @@ function onDeleteChannelMessages(channelId, list, { expired = false } = {}) {
   }
   if (S.thread && threads.has(S.thread.rootId)) renderPanel();
   const replies = list.filter((x) => x.threadId).map((x) => x.id);
-  if (replies.length) forgetBindings('c:' + channelId, replies);
+  if (replies.length) { forgetBindings('c:' + channelId, replies); MEDIA.onDelete('c:' + channelId, replies); }
+  if (replies.length) NOTES.onDelete('c:' + channelId, replies); // their photos' tags and comments, and as comments
+  if (replies.length) SIDE.onDelete('c:' + channelId, replies); // and in the side view, they say they're gone
   if (top.length) onDeleteMessage('c:' + channelId, top, { expired });
   if (expired && removed.length) forgetCopies(removed, new Set(removed.map((x) => x.id)), 'c:' + channelId);
 }
@@ -4926,13 +6190,29 @@ function recheckThread(rootId) {
   }, 300 + Math.floor(Math.random() * 700)));
 }
 function onDeleteMessage(key, id, { expired = false } = {}) {
-  const gone = new Set(Array.isArray(id) ? id : [id]);
+  const named = new Set(Array.isArray(id) ? id : [id]);
+  // In a channel, a thread's first message takes its replies with it: the server deletes them too, but its event names
+  // only the first. The replies this app holds go with it, wherever they are: in the thread as it was loaded here, and
+  // in Photos & videos and photo tags (which may hold older ones, or ones from a thread never opened here).
+  const threads = key.startsWith('c:') ? [...named].map((x) => S.threads[x]).filter(Boolean) : [];
+  const threadCopies = threads.flatMap((t) => [t.root, ...(t.list || [])]).filter(Boolean);
+  const gone = key.startsWith('c:')
+    ? new Set([...named, ...threadCopies.map((x) => x.id), ...MEDIA.repliesTo(named), ...NOTES.repliesTo(named, key)])
+    : named;
   forgetBindings(key, gone);
-  // Threads these messages started go with them (their counts, and their cards in the Threads panel).
-  if (key.startsWith('c:')) forgetThreads(key, gone);
+  MEDIA.onDelete(key, gone); // their tiles in Photos & videos, and the decrypted copies it had of them
+  NOTES.onDelete(key, gone); // their photos' tags (the chips, the suggestions) and comments, and as comments
+  SIDE.onDelete(key, gone); // their cards in the side view say they're gone, and its decrypted copies of them go
+  // Threads these messages started go with them (their counts, and their cards in the Threads panel), and so does
+  // what was loaded of them: nothing finds their replies any more (loadedMessage, which Photos & videos takes copies
+  // from). One open in the side panel closes.
+  if (key.startsWith('c:')) {
+    forgetThreads(key, named);
+    for (const x of named) delete S.threads[x];
+  }
   const store = S.msgs[key];
   const removed = store ? store.list.filter((x) => gone.has(x.id)) : [];
-  if (S.thread && gone.has(S.thread.rootId)) { if (expired) delete S.threads[S.thread.rootId]; closeThread(); }
+  if (S.thread && named.has(S.thread.rootId)) closeThread();
   if (store) {
     store.list = store.list.filter((x) => !gone.has(x.id));
     let quotes = false;
@@ -4946,19 +6226,45 @@ function onDeleteMessage(key, id, { expired = false } = {}) {
       if (sc) sc.scrollTop = top;
     }
   }
-  if (expired) forgetCopies(removed, gone, key);
+  // (With what was loaded of their threads: a reply never outlives its thread's first message, and the timer's pass
+  // over the threads, purgeExpired, no longer finds them.)
+  if (expired) forgetCopies([...removed, ...threadCopies.filter((x) => !removed.includes(x))], gone, key);
+  else forgetUnread(key, gone);
 }
-function renderTyping() {
+// Deleted by someone before it was read here: a notification still showing it (with its words) closes, and the
+// conversation's unread and mention counts, which may include it, are asked for again (the server counts the
+// messages still there). One older than the read marker never counted.
+function forgetUnread(key, ids) {
+  closeNotificationFor(ids);
+  const read = S.lastRead[key];
+  if ((S.unread.has(key) || S.mentions.has(key)) && [...ids].some((id) => !read || id > read)) refreshUnreadSoon();
+}
+// ---- "is typing…" (typing.js keeps who's typing where)
+// The names of who's typing in a conversation ('c:<channel>' or 'd:<dm>'), as that conversation shows them.
+function typingNames(key) {
+  if (!S.me || !key) return [];
+  const sv = key.startsWith('c:') ? serverOfChannel(key.slice(2)) : null;
+  return TYPING.who(key, S.me.id).map((id) => nameInServer(sv, getUser(id)));
+}
+function typingDots() { return h('span', { class: 'dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')); }
+// Someone started or stopped typing in a conversation: its line under the box and its line in the lists (the
+// sidebar's conversations, Home's), in place. Nothing else is drawn again: typing comes and goes all the time.
+function typingChanged(key) {
+  if (!S.me) return;
+  renderTyping(key);
+  $$('.conv-line[data-typing-key]').forEach((el) => { if (el.dataset.typingKey === key) drawConvLine(el); });
+}
+// The line under the message box (the main one and a thread's), for its conversation, or only those of `key`.
+// Drawn again only when what it says changes, so the dots keep going and screen readers (it's a polite live
+// region) hear it once rather than at every typing event.
+function renderTyping(key = null) {
   $$('.typing').forEach((el) => {
+    if (key && el.dataset.key !== key) return;
+    const text = typingLine(typingNames(el.dataset.key));
+    if (el._said === text) return;
+    el._said = text;
     clear(el);
-    const key = el.dataset.key;
-    const t = S.typing[key];
-    const ids = t ? [...t.keys()].filter((id) => id !== S.me.id) : [];
-    if (!ids.length) return;
-    const sv = key && key.startsWith('c:') ? serverOfChannel(key.slice(2)) : null;
-    const names = ids.map((id) => nameInServer(sv, getUser(id)));
-    const text = names.length === 1 ? `${names[0]} is typing\u2026` : names.length < 4 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} are typing\u2026` : 'Several people are typing\u2026';
-    el.append(h('span', { class: 'dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')), h('span', null, text));
+    if (text) el.append(typingDots(), h('span', null, text));
   });
 }
 
@@ -4990,12 +6296,16 @@ async function openThread(root, focusId, { from = null } = {}) {
     await Promise.all([t.root, ...t.list].map(decryptMessage));
     t.list = t.list.filter((x) => !isExpired(x, nowServer()));
     if (isExpired(t.root, nowServer())) throw new Error('That thread no longer exists.');
-    if ([t.root, ...t.list].some(disappears)) setTimeout(armClientExpiry, 0);
-    S.threads[root.id] = t;
-    // Where you'd read up to before this: the "New" line, which stays put while the thread is open.
-    if (S.thread && S.thread.rootId === root.id && res.state && res.state.unread > 0) S.thread.markerId = res.state.lastReadId;
     if (res.state) applyThreadState(res.state);
-    if (S.thread && S.thread.rootId === root.id) { renderPanel(); markThreadRead(root.id); }
+    // Closed while it loaded, or its first message deleted (onDeleteMessage closes it): not kept, so nothing finds the
+    // replies it had (loadedMessage).
+    if (!S.thread || S.thread.rootId !== root.id) return;
+    S.threads[root.id] = t;
+    if ([t.root, ...t.list].some(disappears)) setTimeout(armClientExpiry, 0);
+    // Where you'd read up to before this: the "New" line, which stays put while the thread is open.
+    if (res.state && res.state.unread > 0) S.thread.markerId = res.state.lastReadId;
+    renderPanel();
+    markThreadRead(root.id);
   } catch (e) { toast(e.message, 'error'); closeThread(); }
 }
 // all: the panel's close button (otherwise a thread opened from the Threads panel goes back to it).
@@ -5005,7 +6315,7 @@ function closeThread(all = false) {
   const panel = $('#members');
   const hadFocus = !!panel && panel.contains(document.activeElement);
   S.thread = null;
-  S.panel = back ? 'threads' : P.showMembers && wideEnoughForPanel() && ['channel', 'dm'].includes(S.view.type) ? 'members' : null;
+  S.panel = back ? 'threads' : restingPanel();
   document.body.classList.toggle('panel-open', !!panelMode());
   delete composers.thread;
   renderPanel(); renderHeader();
@@ -5042,6 +6352,7 @@ function markThreadRead(rootId) {
 async function onThreadMessage(m) {
   await decryptMessage(m);
   if (isExpired(m, nowServer())) return;
+  MEDIA.onNew('c:' + m.channelId, m); // (a channel's Photos & videos include its threads')
   const t = S.threads[m.threadId];
   if (t && t.hasNewer && !t.list.find((x) => x.id === m.id)) {
     // Showing an older part of the thread: a new reply doesn't belong right after it. Your own reply takes you to
@@ -5106,14 +6417,15 @@ function countThreadReply(m) {
   threadsPanelReply(m);
 }
 async function onThreadUpdate(m) {
+  SIDE.onUpdate('c:' + m.channelId, m);
   const t = S.threads[m.threadId];
-  if (!t) return;
-  const i = t.list.findIndex((x) => x.id === m.id);
-  if (i < 0) return;
+  const i = t ? t.list.findIndex((x) => x.id === m.id) : -1;
+  if (i < 0) return MEDIA.onUpdate('c:' + m.channelId, m);
   await decryptMessage(m);
   t.list[i] = m;
   if (S.editing === m.id) S.editing = null;
   replaceMessageEl(m);
+  MEDIA.onUpdate('c:' + m.channelId, m);
 }
 
 // ======================================================================= right panel (contextual)
@@ -5123,13 +6435,41 @@ function renderPanel() {
   // The Threads list keeps the card that had focus through a rebuild (server updates, people joining…).
   const was = el.querySelector(':scope > .threads-list');
   const refocus = was && was.contains(document.activeElement) ? document.activeElement.closest('[data-root]') : null;
+  // Photos & videos put the same elements back (media-panel.js), so whatever had focus in them can have it again.
+  const mediaFocus = el.dataset.mode === 'media' && el.contains(document.activeElement) ? document.activeElement : null;
   const mode = panelMode();
+  // The DM profile sliding shut (slidePanel) stays as it is until it's shut: a presence change, which redraws a DM's
+  // panel often, waits for it. Anything else to show stops a slide where it is.
+  if (sliding) {
+    if (sliding.shut && !mode && sliding.key === currentKey()) { document.body.classList.add('panel-open'); return; }
+    if (sliding.shut || mode !== 'members' || sliding.key !== currentKey()) sliding.end(false);
+  }
+  // Closed (or showing something else): it lets go of what it had, and starts from the newest when it opens again.
+  if (mode !== 'media') MEDIA.reset();
+  // The side view keeps what it loaded while it's open, though not shown in a view without a side panel (Friends,
+  // say): back in a chat, it's there as it was. Closed, it lets go of it.
+  if (S.panel !== 'side') SIDE.reset();
   // A voice channel's chat stays as it is through the panel's redraws (people joining, server updates): drawing it
   // again would lose your place in it and the focus of what you're typing. Going somewhere else draws it afresh.
   if (mode === 'chat' && el.dataset.mode === 'chat' && el.dataset.key === currentKey() && el.querySelector(':scope > .chat')) {
     if (composers.main) composers.main.renderExtras();
     return;
   }
+  // So does Photos & videos (people coming online or going Away redraw a DM's side panel often): taken out and put
+  // back, its list would stop scrolling midway. Only what changed in it is drawn again.
+  if (mode === 'media' && el.dataset.mode === 'media' && !hiddenWhileSharing(privateKey()) && MEDIA.drawn(el)) {
+    MEDIA.draw(el);
+    return;
+  }
+  // And the side view, which stays through going from one conversation to another: only cards that changed are drawn
+  // again (it covers the ones from DMs and group chats itself while you share your screen).
+  if (mode === 'side' && el.dataset.mode === 'side' && SIDE.drawn(el)) {
+    SIDE.draw(el);
+    return;
+  }
+  // A DM's profile is drawn afresh whenever anyone's status or game changes (automatic Away makes that often): what
+  // had focus in it gets it back, and it stays scrolled where it was.
+  const dmPlace = mode === 'members' && S.view.type === 'dm' ? dmProfilePlace(el) : null;
   clear(el);
   delete el.dataset.key;
   document.body.classList.toggle('panel-open', !!mode);
@@ -5137,13 +6477,43 @@ function renderPanel() {
   if (!mode || !S.me) return;
   el.dataset.mode = mode;
   queueMicrotask(() => { if (!el.querySelector(':scope > .resize-handle')) el.append(resizeHandle('panel')); });
-  if ((mode === 'thread' || mode === 'pins' || mode === 'threads') && hiddenWhileSharing(privateKey())) return el.append(h('p', { class: 'sidebar-empty' }, 'Hidden while you share your screen.'));
+  if ((mode === 'thread' || mode === 'pins' || mode === 'threads' || mode === 'media') && hiddenWhileSharing(privateKey())) return el.append(h('p', { class: 'sidebar-empty' }, 'Hidden while you share your screen.'));
   if (mode === 'thread') return threadPanel(el);
   if (mode === 'chat') return voiceChatPanel(el);
   if (mode === 'pins') return pinsPanel(el);
   if (mode === 'threads') return threadsPanel(el, refocus && refocus.dataset.root);
-  if (S.view.type === 'dm') return dmProfilePanel(el);
+  if (mode === 'side') return SIDE.draw(el);
+  if (mode === 'media') {
+    MEDIA.draw(el);
+    if (mediaFocus && mediaFocus.isConnected) mediaFocus.focus({ preventScroll: true });
+    return;
+  }
+  if (S.view.type === 'dm') {
+    dmProfilePanel(el);
+    if (dmPlace) dmPlace();
+    return;
+  }
   return membersPanel(el);
+}
+// Where you were in a DM's profile before it's drawn afresh, and a function that puts you back there once it is: the
+// control that had focus (its fold button, a link, a mutual server) and how far it was scrolled. The control is found
+// again by what it is and says, the nth of those alike, so a game showing up above it doesn't hand focus to another.
+function dmProfilePlace(el) {
+  if (el.dataset.mode !== 'members' || el.dataset.key !== currentKey()) return null;
+  const box = el.querySelector(':scope > .dm-profile');
+  const top = box ? box.scrollTop : 0;
+  const a = document.activeElement;
+  const had = a && a !== el && el.contains(a) ? a : null;
+  const like = (n) => `${n.tagName}|${n.className}|${n.getAttribute('aria-label') || ''}|${n.getAttribute('href') || ''}|${n.matches('a, button') ? n.textContent : ''}`;
+  const alike = (sig) => [...el.querySelectorAll(had.tagName)].filter((n) => like(n) === sig);
+  const sig = had ? like(had) : '';
+  const nth = had ? alike(sig).indexOf(had) : -1;
+  return () => {
+    const now = el.querySelector(':scope > .dm-profile');
+    if (now && top) now.scrollTop = top;
+    const n = nth >= 0 ? alike(sig)[nth] : null;
+    if (n && !el.contains(document.activeElement)) n.focus({ preventScroll: true });
+  };
 }
 function panelHead(title, sub, extra, close = null) {
   return h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('h2', null, title), sub ? h('span', null, sub) : null),
@@ -5354,6 +6724,12 @@ function dmProfilePanel(el) {
   if (!d) return;
   const u = getUser(d.userId);
   const mutual = realServers().filter((s) => s.memberIds.includes(u.id));
+  el.dataset.key = currentKey(); // drawn for this DM (dmProfilePlace)
+  // Its fold button sits where the panel meets the chat (app.css puts it on the other end of the row when the panel is
+  // on the left), and folds it away until the header's profile button brings it back.
+  el.append(h('div', { class: 'panel-head dm-profile-head' },
+    ibtn('panelClose', 'Hide profile', () => togglePanel('members'), { cls: 'dm-fold', side: 'bottom' }),
+    h('div', { class: 'panel-title' }, h('h2', null, 'Profile'))));
   el.append(h('div', { class: 'dm-profile' }, profileCard(u, {
     meId: S.me.id,
     mutual: mutual.length ? h('div', { class: 'pc-section' }, h('div', { class: 'pc-label' }, `Mutual servers \u2014 ${mutual.length}`),
@@ -5383,7 +6759,7 @@ async function pinsPanel(el) {
         wf ? h('div', { class: 'pin-text' }, h('em', null, previewLabel(wf)))
           : h('div', { class: 'pin-text', html: readable(m) ? md(textOf(m) || (filesOf(m).length ? '_Attachment_' : ''), { mentionName: S.me.username }) : '<em>Encrypted message</em>' }),
         h('div', { class: 'pin-actions' },
-          h('button', { class: 'btn ghost sm', onclick: () => jumpToMessage(key, m.id) }, 'Jump'),
+          h('button', { class: 'btn ghost sm', onclick: () => jumpFromPanel(key, m.id) }, 'Jump'),
           ibtn('close', 'Unpin', () => togglePin(m), { cls: 'sm' }))));
     });
   } catch (e) { clear(list).append(h('p', { class: 'sidebar-empty' }, e.message)); }
@@ -5395,7 +6771,7 @@ async function pinHistory(el, channelId) {
     if (!log.length || currentKey() !== 'c:' + channelId || panelMode() !== 'pins') return;
     el.append(h('details', { class: 'pin-history' }, h('summary', null, 'Pin history'),
       h('ul', null, log.slice(0, 20).map((x) => h('li', null, nameEl(getUser(x.userId), { server: serverOfChannel(channelId) }), ` ${x.action === 'pin' ? 'pinned' : 'unpinned'} a message \u00b7 ${fmtStamp(x.at)} `,
-        h('button', { class: 'link-btn', onclick: () => jumpToMessage('c:' + channelId, x.messageId) }, 'Jump'))))));
+        h('button', { class: 'link-btn', onclick: () => jumpFromPanel('c:' + channelId, x.messageId) }, 'Jump'))))));
   } catch { /* the pins still show */ }
 }
 function threadPanel(el) {
@@ -5657,6 +7033,8 @@ const composers = {};
 // the server holds because a key changed after you wrote them.
 const SCHED = createScheduled({
   me: () => S.me,
+  spellBox,
+  spelled: (ta, was) => spelled(ta, was),
   openDraft: (it) => openDraft(it.ref, it.dmId ? 'd:' + it.dmId : 'c:' + it.channelId, it.threadId, it.draft),
   sealFor: (key, payload, keep) => sealFor(key, payload, keep),
   withKeyRetry: (serverId, fn) => withKeyRetry(serverId, fn),
@@ -5683,6 +7061,245 @@ const SCHED = createScheduled({
     if (s) openChannel(key.slice(2), s.id);
   },
 });
+
+// Photos & videos (media-panel.js): the side panel of every picture and video in a conversation.
+// A file to show: its decrypted copy, or (an older unencrypted channel file) the file on this server as it is.
+const mediaCopy = (m, f) => ((f.k || m.dmId) ? decryptedUrl(m, f)
+  : isUploadUrl(f.url) ? Promise.resolve(f.url) : Promise.reject(new Error('This file isn\u2019t on this server.')));
+const MEDIA = createMediaPanel({
+  key: () => currentKey(),
+  get: (path) => api('GET', path),
+  decrypt: (m) => decryptMessage(m),
+  // The chat's own copy, when it has one: nothing is decrypted twice, and changes to it (tags) show in both.
+  known: (id) => { const m = loadedMessage(id); return m && m.dec ? m : null; },
+  files: (m) => filesOf(m),
+  readable: (m) => readable(m),
+  expired: (m) => isExpired(m, nowServer()),
+  disappears: (m) => disappears(m),
+  blocked: (id) => S.blocked.has(id),
+  veiled: (m) => veiled(m),
+  filterLabel: (wf) => filterLabel(wf),
+  reveal: (m) => revealFiltered(loadedMessage(m.id) || m),
+  thumb: (m, f) => decryptedUrl(m, { ...f.th, type: 'image/webp', thumb: true }),
+  full: (m, f) => mediaCopy(m, f),
+  queue: (fn) => loadQueue(fn),
+  // Its tiles are small, so they load like the tiles of a message with many files: a picture without a thumbnail
+  // (a GIF, say) by itself only up to 2 MB; videos never.
+  autoloadMax: MANY_AUTOLOAD_MAX,
+  open: (tile, opts) => openViewer(tile, opts),
+  download: (m, f) => downloadAttachment(m, f),
+  badges: (m, fi) => NOTES.badges(m, fi),
+  tagIndex: (key) => NOTES.tagIndex(key),
+  panelHead: (title) => panelHead(title, null),
+  forget: (msgs, ids, key) => forgetCopies(msgs, ids, key),
+  drop: (urls) => urls.forEach((u) => fileUrls.drop(u, true)),
+  armExpiry: () => armClientExpiry(),
+});
+// Disappearing messages that went from wherever else they were loaded go from the panel too.
+expiryListeners.add((ids) => MEDIA.onDelete(null, ids));
+
+// Comments on one photo and tags on photos (photo-notes.js).
+const NOTES = createPhotoNotes({
+  me: () => S.me,
+  where: (key) => {
+    if (key.startsWith('d:')) return S.dms.some((d) => d.id === key.slice(2)) ? { dmId: key.slice(2) } : null;
+    const s = serverOfChannel(key.slice(2));
+    return s ? { serverId: s.id, channelId: key.slice(2) } : null;
+  },
+  encryptTag: (where, tag) => sec.encryptTag(where, tag),
+  openTag: (t) => sec.openTag(t),
+  withKeyRetry: (serverId, fn) => withKeyRetry(serverId, fn),
+  // (What it fetches and decrypts for its tag index, Photos & videos takes when a tag is picked: not fetched twice.)
+  decrypt: (m) => decryptMessage(m).then(() => MEDIA.offer(m)),
+  readable: (m) => readable(m),
+  filesOf: (m) => filesOf(m),
+  expired: (m) => isExpired(m, nowServer()),
+  blocked: (id) => S.blocked.has(id),
+  getUser: (id) => getUser(id),
+  nameOf: (m, u) => nameInMsg(m, u),
+  avatar: (u, size) => avatarEl(u, size),
+  // A comment's words as the chat shows them, through the word filter too. (A click shows a spoiler in them; what
+  // else a click does in the chat, such as a profile card, would open behind the viewer.)
+  textEl: (m) => {
+    const wf = veiled(m);
+    if (wf) return h('div', { class: 'pn-c-text' }, h('em', null, previewLabel(wf)));
+    return h('div', { class: 'pn-c-text md', html: md(textOf(m) || '_Attachment_', { mentionName: S.me.username }),
+      onclick: (e) => { const sp = e.target.closest('.md-spoiler'); if (sp) sp.classList.add('revealed'); } });
+  },
+  canPost: (key, threadId) => photoPostBlock(key, threadId),
+  canManage: (key) => { const c = key.startsWith('c:') ? channelById(key.slice(2)) : null; return !!c && canIn(c, PERMS.MANAGE_MESSAGES); },
+  sendComment: (item, text) => sendComment(item, text),
+  enterSends: () => P.chat.enterToSend !== false, // as the message box (Settings → "Enter sends the message")
+  spellBox: (ta) => spellBox(ta),
+  spelled: (ta) => spelled(ta),
+  spellcheck: () => spellcheckAttr(),
+  copies: (id) => loadedCopies(id),
+  loaded: (id) => loadedMessage(id),
+  onMeta: (key, id) => {
+    MEDIA.onMeta(key, id);
+    const v = $('.viewer:not(.closing)');
+    if (v && v._photoChanged) v._photoChanged(id);
+  },
+  // (MEDIA.onMeta about no message in particular: only its tag chips again.)
+  onIndex: (key) => MEDIA.onMeta(key, null),
+  // A comment, from the viewer's side panel: the viewer closes (and on a phone the side panel it may have been opened
+  // from, which covers the chat), then the chat goes to it.
+  openMessage: (m) => {
+    const v = $('.viewer:not(.closing)');
+    if (v && v._close) v._close();
+    if (isPhoneLayout() && panelMode()) closePanel();
+    return m.dmId ? jumpToMessage('d:' + m.dmId, m.id) : jumpToMessageId(m.id);
+  },
+  // (Comments and tagged messages it loads that disappear: the timer counts them in, NOTES.messages.)
+  armExpiry: () => armClientExpiry(),
+});
+
+// Chat backgrounds (chat-look.js): a background for a DM or group chat, set by someone in it.
+const LOOK = createChatLook({
+  me: () => S.me,
+  dms: () => S.dms,
+  server: (id) => S.servers.find((s) => s.id === id),
+  getUser: (id) => getUser(id),
+  blocked: (id) => S.blocked.has(id),
+  title: (key) => {
+    if (key.startsWith('d:')) return convTitle(key);
+    const g = S.servers.find((s) => s.id === key.slice(2));
+    return g ? groupName(g) : 'this group chat';
+  },
+  encryptLook: (where, look) => sec.encryptLook(where, look),
+  openLook: (look) => sec.openLook(look),
+  withKeyRetry: (serverId, fn) => withKeyRetry(serverId, fn),
+  // The group key this device would seal with now, if it has it: a background sealed with an older one is sealed again.
+  currentEpoch: (serverId) => { const ck = sec.currentKey(serverId); return ck ? ck.epoch : null; },
+  // Another background passed off as the same one sealed again: drawn in the group chat as the change it is.
+  changedQuietly: (serverId, event) => onLookEvent('group:look', { serverId, event }),
+  // Covered while you share your screen (a group chat by its chat's key, as the cover goes): no dialog for it then.
+  covered: (key) => {
+    const g = key.startsWith('g:') ? S.servers.find((s) => s.id === key.slice(2)) : null;
+    const c = g && textChannel(g);
+    return hiddenWhileSharing(g && c ? 'c:' + c.id : key);
+  },
+  // A picture is made ready like a photo (at most 2560 px, re-encoded), and goes up the way attachments do.
+  prepareImage: (file) => prepareImage(file, { compress: true }),
+  upload: (bytes) => (bytes.byteLength > CHUNKED_ABOVE ? uploadResumable(bytes) : uploadSimple(bytes)),
+  download: (url, opts) => download(url, opts),
+  // Settings → Appearance → "Show backgrounds people set for chats" (on this device).
+  enabled: () => loadAppearance().chatLooks !== false,
+  changed: () => applyServerTheme(),
+});
+
+// The side view (side-view.js): messages and pictures pinned to a panel that stays open while you chat.
+// Where a conversation is, for a card ("#general · Indie Game Club", "DM with maya", a group's name), or null when it's
+// not one you're in any more. private: a DM or a group chat (covered while you share your screen).
+function sidePlace(key) {
+  if (key.startsWith('d:')) {
+    const d = S.dms.find((x) => x.id === key.slice(2));
+    return d ? { kind: 'dm', private: true, label: sidePlaceLabel({ dm: displayName(getUser(d.userId)) }) } : null;
+  }
+  const c = channelById(key.slice(2));
+  const s = c && serverOfChannel(c.id);
+  if (!c || !s) return null;
+  if (isGroup(s)) return { kind: 'group', private: true, label: sidePlaceLabel({ group: groupName(s) }) };
+  return { kind: 'channel', private: false, label: sidePlaceLabel({ channel: chanLabel(c), server: s.name }) };
+}
+const SIDE = createSideView({
+  userId: () => (S.me ? S.me.id : null),
+  get: (path) => api('GET', path),
+  decrypt: (m) => decryptMessage(m),
+  // The chat's own copy, when it has one: nothing is decrypted twice.
+  known: (id) => { const m = loadedMessage(id); return m && m.dec ? m : null; },
+  keyOf: (m) => keyOfMessage(m),
+  files: (m) => filesOf(m),
+  readable: (m) => readable(m),
+  expired: (m) => isExpired(m, nowServer()),
+  disappears: (m) => disappears(m),
+  blocked: (id) => S.blocked.has(id),
+  veiled: (m) => veiled(m),
+  filterLabel: (wf) => previewLabel(wf),
+  reveal: (m) => revealFiltered(loadedMessage(m.id) || m),
+  place: (key) => sidePlace(key),
+  // DMs and group chats while you share your screen, unless you chose to show that one (Show while sharing).
+  hidden: (key) => { const p = sidePlace(key); return !!p && p.private && hiddenWhileSharing(key); },
+  // Who wrote it, and what's said about that, as on its row in the chat (messageTrust): a webhook post's own name and
+  // picture with BOT, and the flags for a bot's or an older message, a key or signature that doesn't check out, or the
+  // server having moved, repeated or rolled it back. A card is often a copy the side view fetched by itself, so a
+  // server could serve it there instead of in the chat: it must say no less.
+  author: (m) => { const t = messageTrust(m, getUser(m.authorId)); return [avatarEl(t.face, 20), nameEl(t.face, { server: msgServer(m) }), t.bot ? h('span', { class: 'bot-tag' }, 'BOT') : null]; },
+  trust: (m) => messageTrust(m, getUser(m.authorId)),
+  stamp: (ts) => fmtStamp(ts),
+  // Its words as the chat draws them (Markdown unless that's off, mentions, @everyone only from someone allowed to use
+  // it, spoilers a click shows), or a poll's question.
+  textEl: (m) => {
+    const t = textOf(m);
+    if (t) {
+      return h('div', { class: 'sv-text md', html: P.chat.markdown ? md(t, { mentionName: S.me.username, everyone: senderMayPingEveryone(m) }) : escapeText(t),
+        onclick: (e) => { const sp = e.target.closest('.md-spoiler'); if (sp) sp.classList.add('revealed'); } });
+    }
+    return m.dec && m.dec.p ? h('div', { class: 'sv-text' }, h('em', null, `Poll: ${m.dec.p.q}`)) : null;
+  },
+  thumb: (m, f) => decryptedUrl(m, { ...f.th, type: 'image/webp', thumb: true }),
+  full: (m, f) => mediaCopy(m, f),
+  queue: (fn, opts) => loadQueue(fn, opts),
+  autoloadMax: AUTOLOAD_MAX, // a picture pinned on its own, as in the chat
+  thumbMax: MANY_AUTOLOAD_MAX, // a message's pictures, small: like the tiles of a message with many files
+  open: (from, opts) => openViewer(from, opts),
+  download: (m, f) => downloadAttachment(m, f),
+  // Jump: the chat goes to it. Beside the chat the panel stays; on a phone, which it covers, it closes first.
+  jump: (it, m) => {
+    if (isPhoneLayout() && panelMode()) closePanel();
+    if (m && m.threadId) jumpToMessageId(m.id); else jumpToMessage(it.key, it.messageId);
+  },
+  panelHead: (title, sub) => panelHead(title, sub),
+  // Pinning opens the panel. Somewhere it can't show (Friends, say), or under the picture viewer, a toast says so.
+  show: () => {
+    if (S.panel !== 'side') togglePanel('side');
+    if (panelMode() !== 'side' || $('.viewer:not(.closing)')) toast('Pinned to the side.');
+  },
+  changed: () => { if (S.me) renderHeader(); },
+  toast: (text) => toast(text),
+  forget: (msgs, ids, key) => forgetCopies(msgs, ids, key),
+  drop: (urls) => urls.forEach((u) => fileUrls.drop(u, true)),
+  armExpiry: () => armClientExpiry(),
+});
+// Disappearing messages that went from wherever else they were loaded: their side view cards say they're gone.
+expiryListeners.add((ids) => SIDE.onDelete(null, ids));
+// Disappearing messages that went from wherever else they were loaded: their tags and comments go too.
+expiryListeners.add((ids) => NOTES.onDelete(null, ids));
+// Why you can't add a comment or a tag here (a sentence), or null when you can: the same rules as the message box.
+function photoPostBlock(key, threadId) {
+  if (key.startsWith('d:')) {
+    const d = S.dms.find((x) => x.id === key.slice(2));
+    if (!d) return 'This conversation isn’t available.';
+    const u = getUser(d.userId);
+    if (S.blocked.has(d.userId)) return `You blocked ${displayName(u)}.`;
+    if (u.deleted) return 'This account was deleted, so nobody can read anything new here.';
+    if (sec.keyChanged(u)) return `${displayName(u)}’s security key changed. Verify it before you add anything here.`;
+    return null;
+  }
+  const ch = channelById(key.slice(2));
+  if (!ch) return 'You can’t post here.';
+  if (canIn(ch, threadId ? PERMS.CREATE_THREADS : PERMS.SEND_MESSAGES)) return null;
+  const to = (serverOfChannel(ch.id) || {}).timeout;
+  return to && to.until > Date.now() ? `You’re timed out until ${fmtStamp(to.until)}. You can still read.` : 'You don’t have permission to post here.';
+}
+// A comment on one photo, from the picture viewer's side panel (photo-notes.js): sent like a reply from the message box
+// (the same encryption, binding, disappearing timer, key retry and errors), in the thread the photo is in, with which
+// photo it is about inside it. Resolves to the message as the server took it.
+async function sendComment({ m, f, fi, key }, text) {
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join('');
+  const msg = await underWay(sendTo(key, m.threadId || null, { t: text, f: [], ph: { i: fi, u: f.url } }, m.id, nonce));
+  playSound('sent');
+  // Normally the live connection delivers it first; this covers a slow or dropped connection.
+  if (msg && msg.id) { if (msg.threadId) onThreadMessage(msg); else onNewMessage(key, msg); }
+  return msg;
+}
+// Every loaded copy of a message: in its conversation's list, and in threads (as a reply or as the first message).
+function loadedCopies(id) {
+  const out = [];
+  for (const st of Object.values(S.msgs)) for (const x of (st && st.list) || []) if (x.id === id) out.push(x);
+  for (const th of Object.values(S.threads)) for (const x of [th.root, ...(th.list || [])]) if (x && x.id === id && !out.includes(x)) out.push(x);
+  return out;
+}
 // Bots' slash commands (bots.js). Answers only you can see live in memory and show above the main composer.
 const SLASH = createSlash({
   getSocketId: () => (socket && socket.id) || null,
@@ -5691,14 +7308,22 @@ const SLASH = createSlash({
 });
 // What you were typing, per conversation (and thread): kept on this device across reloads (see usability.js).
 let drafts = createDrafts('signed-out');
-let lastTypingSent = 0;
+// When this app last said you're typing, per conversation: at most every 3 seconds while you type there (the
+// others' apps keep showing it for 6, typing.js). Typing somewhere else, or again after sending, says so at the next
+// key, but never within a second of the last time anywhere: the server would drop that one (it passes one person's
+// typing on at most once a second), and the next key tries again instead.
+const typingSent = new Map();
+let typingSentAny = 0;
 function createComposer({ id, key, threadId, placeholder }) {
   // link: the link preview being offered or built for the link in the box (see checkLink below).
   const state = { replyTo: null, pending: [], link: null };
   const k = key();
-  const ta = h('textarea', { class: 'composer-input', rows: '1', maxlength: '4000', 'aria-label': 'Message', id: id === 'main' ? 'composer-input' : null });
+  const ta = h('textarea', { class: 'composer-input', rows: '1', maxlength: '4000', 'aria-label': 'Message', id: id === 'main' ? 'composer-input' : null, spellcheck: spellcheckAttr() });
+  autocorrect(ta, { on: () => correcting() && !isCommand(ta.value), pasteKey: () => k + (threadId() || '') }); // (pastes: as the draft)
+  ta.addEventListener('focus', () => { ta.spellcheck = P.chat.spellcheck !== false; }); // (changed in Settings meanwhile)
   ta.placeholder = placeholder || placeholderFor(k);
   ta.value = drafts.get(k + (threadId() || '')) || '';
+  let synced = ta.value; // what this box last read from or wrote to the drafts
   const extras = h('div', { class: 'composer-extras' });
   // Upload progress for the message being sent: kept across redraws of the extras, with a Cancel button.
   const upText = h('span', { class: 'upload-text' });
@@ -5707,6 +7332,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     h('div', { class: 'upload-progress' }, h('div', { class: 'bar' })), h('div', { class: 'upload-line' }, upText, upCancel));
   let uploading = null; // the AbortController of the upload in progress
   upCancel.addEventListener('click', () => { if (uploading) uploading.abort(); });
+  const convId = () => (key() || '') + (threadId() || '');
   const typing = h('div', { class: 'typing', 'aria-live': 'polite', dataset: { key: k } });
   const fileIn = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => { addFiles(fileIn.files); fileIn.value = ''; } });
   const sendBtn = h('button', { class: 'send-btn', 'data-tip': P.chat.enterToSend ? 'Send (Enter)' : 'Send (Ctrl+Enter)', 'aria-label': 'Send message', onclick: () => send() }, icon('send'));
@@ -5715,18 +7341,43 @@ function createComposer({ id, key, threadId, placeholder }) {
   sendBtn.addEventListener('contextmenu', (e) => { if (sendBtn.disabled || laterBtn.hidden) return; e.preventDefault(); sendLater(sendBtn); });
   const suggest = h('div', { class: 'suggest', role: 'listbox', hidden: true });
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 260) + 'px'; };
-  const update = () => { sendBtn.disabled = !ta.value.trim() && !state.pending.length; laterBtn.disabled = sendBtn.disabled; };
+  // A video still being looked at (checkShrink) can't go yet: whether it fits isn't known.
+  const checking = () => state.pending.some((p) => p.shrink === 'checking');
+  const update = () => { sendBtn.disabled = (!ta.value.trim() && !state.pending.length) || checking(); laterBtn.disabled = sendBtn.disabled; };
+  const openGifs = (anchor) => gifPicker(anchor, (url) => send(url), { onEmoji: (em) => insertAtCursor(ta, em) });
+  const gifBtn = (S.config.features || {}).gifs === false ? null : h('button', { class: 'icon-btn composer-more', 'aria-label': 'GIFs', 'data-tip': 'GIFs', 'data-pop-anchor': '', onclick: (e) => openGifs(e.currentTarget) }, icon('gif'));
+  const micBtn = voiceButton(() => box, (file, dur) => send('', { files: [{ file, voice: true, dur }] }));
+  micBtn.classList.add('composer-more');
+  laterBtn.classList.add('composer-more');
+  let canAttach = true; // here (renderExtras)
+  // The + menu. On a phone it also has GIFs, voice messages and Send later, whose buttons beside the box are hidden
+  // there (app.css) so the box has room to type in.
+  const attachItems = () => {
+    const more = isPhoneLayout() ? [
+      gifBtn ? { label: 'GIFs', icon: 'gif', action: () => openGifs(attachBtn) } : null,
+      { label: 'Voice message', icon: 'mic', action: () => micBtn.click() },
+      laterBtn.hidden ? null : { label: 'Send later', icon: 'clock', action: () => (sendBtn.disabled ? toast(checking() ? 'Still checking the video\u2026' : 'Write your message first, then choose when it goes.') : sendLater(attachBtn)) },
+    ].filter(Boolean) : [];
+    return [
+      canAttach ? { label: 'Upload a file', icon: 'file', action: () => fileIn.click() } : null,
+      canAttach ? { label: 'Create a poll', icon: 'check', action: () => openPollCreator((poll) => send('', { poll })) } : null,
+      canAttach && more.length ? '-' : null,
+      ...more,
+    ];
+  };
+  const attachBtn = h('button', { class: 'icon-btn attach', 'aria-label': 'Attach a file or create a poll', 'data-tip': 'Attach or poll', 'data-pop-anchor': '', onclick: (e) => menu(e.currentTarget, attachItems(), { side: 'top' }) }, icon('plus'));
+  // On a phone the + stays without permission to attach files: GIFs, voice messages and Send later are in it there.
+  const fitAttach = () => {
+    const phone = isPhoneLayout();
+    attachBtn.hidden = !canAttach && !phone;
+    attachBtn.setAttribute('aria-label', phone ? 'Attach, GIFs, voice message and more' : 'Attach a file or create a poll');
+  };
   const box = h('div', { class: 'composer' },
-    h('button', { class: 'icon-btn attach', 'aria-label': 'Attach a file or create a poll', 'data-tip': 'Attach or poll', 'data-pop-anchor': '', onclick: (e) => menu(e.currentTarget, [
-      { label: 'Upload a file', icon: 'file', action: () => fileIn.click() },
-      { label: 'Create a poll', icon: 'check', action: () => openPollCreator((poll) => send('', { poll })) },
-    ], { side: 'top' }) }, icon('plus')),
+    attachBtn,
     ta,
     h('div', { class: 'composer-tools' },
       h('button', { class: 'icon-btn', 'aria-label': 'Emoji', 'data-tip': 'Emoji', 'data-pop-anchor': '', onclick: (e) => emojiPicker(e.currentTarget, (em) => insertAtCursor(ta, em), { keepOpen: true }) }, icon('smile')),
-      voiceButton(() => box, (file, dur) => send('', { files: [{ file, voice: true, dur }] })),
-      (S.config.features || {}).gifs === false ? null : h('button', { class: 'icon-btn', 'aria-label': 'GIFs', 'data-tip': 'GIFs', 'data-pop-anchor': '', onclick: (e) => gifPicker(e.currentTarget, (url) => send(url), { onEmoji: (em) => insertAtCursor(ta, em) }) }, icon('gif')),
-      laterBtn, sendBtn),
+      micBtn, gifBtn, laterBtn, sendBtn),
     fileIn);
   const slowNote = h('div', { class: 'slow-note', hidden: true });
   const disNote = h('div', { class: 'dis-note', hidden: true });
@@ -5851,7 +7502,7 @@ function createComposer({ id, key, threadId, placeholder }) {
       ta.value = `/${c.cmd.name} ` + ta.value.slice(ta.selectionStart).trimStart();
       const at = c.cmd.name.length + 2;
       ta.setSelectionRange(at, at);
-      closeSuggest(); update(); renderCmdBar(); ta.focus();
+      keepDraft(); closeSuggest(); update(); renderCmdBar(); ta.focus();
       return;
     }
     const insert = c.chan ? `<#${c.chan.id}>` : c.emoji ? (c.custom ? emojiToken(c.custom) : c.emoji) : c.role ? `<@&${c.role.id}>` : '@' + (c.special || c.username);
@@ -5859,7 +7510,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     ta.value = ta.value.slice(0, sugg.start) + insert + ' ' + ta.value.slice(ta.selectionStart);
     const at = sugg.start + insert.length + 1;
     ta.setSelectionRange(at, at);
-    closeSuggest(); update(); ta.focus();
+    keepDraft(); closeSuggest(); update(); ta.focus();
   };
 
   // ---- link previews
@@ -5972,12 +7623,15 @@ function createComposer({ id, key, threadId, placeholder }) {
     linkBox.append(chip);
   }
 
+  // What's in the box is its draft (kept across channels and reloads), also when it was changed by the app.
+  const keepDraft = () => { const k = key(); if (k) { drafts.set(k + (threadId() || ''), ta.value); synced = ta.value; } };
   ta.addEventListener('input', () => {
     autosize(); update(); checkSuggest(); renderCmdBar(); onTypeForLink();
-    drafts.set(key() + (threadId() || ''), ta.value);
+    keepDraft();
     const kk = key();
-    if (ta.value && Date.now() - lastTypingSent > 3000 && !threadId()) {
-      lastTypingSent = Date.now();
+    const now = Date.now();
+    if (ta.value && kk && !threadId() && now - (typingSent.get(kk) || 0) > 3000 && now - typingSentAny > 1000) {
+      typingSent.set(kk, now); typingSentAny = now;
       socket.emit('typing', kk.startsWith('c:') ? { channelId: kk.slice(2) } : { dmId: kk.slice(2) });
     }
   });
@@ -6011,13 +7665,43 @@ function createComposer({ id, key, threadId, placeholder }) {
   });
 
   function addFiles(list) {
-    const max = (S.config.maxUploadMb || 25) * 1024 * 1024;
+    const mb = S.config.maxUploadMb || 25;
+    const max = mb * 1024 * 1024;
+    const most = maxFiles();
     for (const f of list) {
-      if (f.size > max) { toast(`${f.name} is larger than ${S.config.maxUploadMb || 25} MB.`, 'error'); continue; }
-      if (state.pending.length >= 10) { toast('You can attach up to 10 files at once.', 'error'); break; }
-      state.pending.push({ file: f, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : null });
+      if (state.pending.length >= most) { toast(`You can attach up to ${most} files at once.`, 'error'); break; }
+      // A video over the limit (a phone's, usually) is made smaller to fit when it's sent (video-shrink.js).
+      const video = mediaKind(f.type || '', f.name) === 'video';
+      if (f.size > max && !(video && canShrink())) {
+        toast(video ? `${f.name} is ${fmtSize(f.size)}, and files here can be up to ${mb} MB. This browser can\u2019t make videos smaller, so trim it first, or send it from a phone or another browser.`
+          : `${f.name} is ${fmtSize(f.size)}, and files here can be up to ${mb} MB.`, 'error');
+        continue;
+      }
+      if (f.size > max && state.pending.filter((x) => x.shrink).length >= MAX_SHRINK) {
+        toast(`Up to ${MAX_SHRINK} videos that need making smaller can go in one message. Send ${f.name} in the next one.`, 'error');
+        continue;
+      }
+      const p = { file: f, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : null };
+      state.pending.push(p);
+      if (f.size > max) checkShrink(p, max, mb);
     }
     renderExtras(); update(); ta.focus();
+  }
+  // Can this video be made small enough? Its length decides: a long one would be mush, so it's turned down now.
+  // (The same room as when it's sent: uploadEncryptedFiles.) No picture to read means this browser can't show it.
+  async function checkShrink(p, max, mb) {
+    p.shrink = 'checking';
+    const room = budgetFor(max);
+    const info = await probeVideo(p.file);
+    const fits = info && shrinkPlan({ ...info, maxBytes: room });
+    if (!state.pending.includes(p)) return;
+    if (fits) { p.shrink = 'yes'; p.shrinkTo = Math.round((fits.videoBps + fits.audioBps) * info.duration / 8); }
+    else {
+      state.pending.splice(state.pending.indexOf(p), 1);
+      toast(info ? `${p.file.name} is too long to send here, even made smaller: about ${fitsText(longestFitting(room))} of video fits in ${mb} MB. Trim it first.`
+        : `${p.file.name} can\u2019t be opened here, so it can\u2019t be made smaller to fit the ${mb} MB limit.`, 'error');
+    }
+    renderExtras(); update();
   }
   // A file's Edit button: a description (alt text) for pictures and videos, and "Mark as spoiler" for any file.
   // Both go inside the encrypted message with the file (uploadEncryptedFiles), so the server never sees them.
@@ -6057,7 +7741,22 @@ function createComposer({ id, key, threadId, placeholder }) {
     if (old) replaceMessageEl(old);
     if (m) { replaceMessageEl(m); ta.focus(); }
   }
+  // A send that stopped gives its files back (always: the uploads that went up are kept for the next Send, p.sent),
+  // and its words unless something new was typed here meanwhile.
+  function takeBack({ files, text, link }) {
+    if (!ta.value.trim() && !(drafts.get(convId()) || '').trim()) {
+      ta.value = text; drafts.set(convId(), text); synced = text; autosize();
+      if (link && !state.link) state.link = link; // and its preview
+    }
+    // All of them, even past what one message takes: Send says so (send()), and nothing is dropped.
+    state.pending = [...files.filter((p) => !state.pending.includes(p)), ...state.pending];
+    // A video that was still being looked at when it was sent is looked at again.
+    const mb = S.config.maxUploadMb || 25;
+    for (const p of files) if (p.shrink === 'checking') checkShrink(p, mb * 1024 * 1024, mb);
+  }
   function renderExtras() {
+    const back = givenBack.get(convId());
+    if (back) { givenBack.delete(convId()); takeBack(back); }
     // Keyboard focus on the link chip outlives its redraw (a preview arriving, a note going away): it stays on
     // the same button if there still is one, else it goes back to the box, never to the page.
     const chipFocus = linkBox.contains(document.activeElement) ? document.activeElement.getAttribute('data-act') || '' : null;
@@ -6065,10 +7764,12 @@ function createComposer({ id, key, threadId, placeholder }) {
     if (id === 'main') { const notice = keyNotice(); if (notice) extras.append(notice); }
     if (state.replyTo) {
       const ru = getUser(state.replyTo.authorId);
-      extras.append(h('div', { class: 'reply-bar' }, icon('reply', 'ic'),
+      const bar = h('div', { class: 'reply-bar' }, icon('reply', 'ic'),
         h('span', { class: 'reply-bar-text' }, 'Replying to ', h('strong', null, nameInMsg(state.replyTo, ru)),
           h('span', { class: 'reply-bar-quote' }, quoteOf(state.replyTo).slice(0, 120))),
-        ibtn('close', 'Cancel reply (Esc)', () => setReply(null), { cls: 'sm' })));
+        ibtn('close', 'Cancel reply (Esc)', () => setReply(null), { cls: 'sm' }));
+      bar._cancel = () => setReply(null); // (Back on a phone: phoneNav)
+      extras.append(bar);
     }
     // A preview belongs to the conversation it was made in, and goes when previews stop being allowed here.
     if (state.link && (state.link.key !== convKey() || !linksAllowedHere())) { linkGen++; clearTimeout(linkHide); state.link = null; }
@@ -6077,20 +7778,23 @@ function createComposer({ id, key, threadId, placeholder }) {
     if (chipFocus !== null) ((chipFocus && linkBox.querySelector(`[data-act="${chipFocus}"]`)) || ta).focus();
     if (state.pending.length) {
       extras.append(h('div', { class: 'pending-files' }, state.pending.map((p, i) => h('div', { class: `pending${p.spoiler ? ' is-spoiler' : ''}` },
-        p.url ? h('img', { src: p.url, alt: '' }) : h('div', { class: 'pending-ic' }, icon('file')),
+        p.url ? h('img', { src: p.url, alt: '', loading: 'lazy', decoding: 'async' }) : h('div', { class: 'pending-ic' }, icon('file')),
         p.spoiler || p.alt ? h('span', { class: 'pending-tags' }, p.spoiler ? h('span', { class: 'pending-tag' }, 'SPOILER') : null, p.alt ? h('span', { class: 'pending-tag' }, 'ALT') : null) : null,
         h('span', { class: 'pending-name', title: p.file.name }, p.file.name),
-        h('span', { class: 'pending-size' }, fmtSize(p.file.size)),
+        h('span', { class: 'pending-size' }, p.shrink ? (p.shrinkTo ? `${fmtSize(p.file.size)} \u2192 about ${fmtSize(p.shrinkTo)}` : fmtSize(p.file.size)) : fmtSize(p.file.size)),
+        p.shrink ? h('span', { class: 'pending-note' }, p.shrink === 'checking' ? 'Checking the video\u2026' : 'Made smaller when you send it') : null,
         h('button', { class: 'pending-edit', type: 'button', 'aria-label': `Edit ${p.file.name} (description, spoiler)`, 'data-tip': 'Edit', 'data-pending': String(i), onclick: () => editPending(p) }, icon('edit')),
         h('button', { class: 'pending-x', 'aria-label': `Remove ${p.file.name}`, 'data-tip': 'Remove', onclick: () => { if (p.url) URL.revokeObjectURL(p.url); state.pending.splice(i, 1); renderExtras(); update(); } }, icon('close'))))));
     }
-    extras.append(upStatus);
+    const going = sendingUi.get(convId()) || new Set();
+    extras.append(...going, ...(going.has(upStatus) ? [] : [upStatus]));
     const blockedNote = blockedDmNotice();
     const kk = key();
     const ch = kk && kk.startsWith('c:') ? channelById(kk.slice(2)) : null;
     const noSend = ch && !canIn(ch, threadId() ? PERMS.CREATE_THREADS : PERMS.SEND_MESSAGES);
     ta.disabled = !!blockedNote || !!noSend;
-    box.querySelector('.attach').hidden = !!ch && !canIn(ch, PERMS.ATTACH_FILES);
+    canAttach = !ch || canIn(ch, PERMS.ATTACH_FILES);
+    fitAttach();
     laterBtn.hidden = !kk || !!blockedNote || !!noSend;
     // This conversation's scheduled messages (on the main composer only: the list covers its threads too).
     const schedBar = id === 'main' && kk ? SCHED.bar(kk) : null;
@@ -6113,11 +7817,19 @@ function createComposer({ id, key, threadId, placeholder }) {
   // extra: { poll } for a poll, { files } for a voice message; the typed text stays in the box for those.
   // { sendAt } schedules what's in the box for then (Send later) instead of sending it now.
   function send(overrideText, extra = {}) {
-    const text = overrideText != null ? overrideText : ta.value;
+    // (Typed: its last word is corrected as it goes, as phones do: spelling.js correctSending.)
+    const text = overrideText != null ? overrideText : spelled(ta);
     const files = extra.files || (overrideText != null ? [] : state.pending.slice());
     const poll = extra.poll || null;
     const sendAt = extra.sendAt || null;
     if (!text.trim() && !files.length && !poll) return;
+    if (overrideText == null && !extra.files && checking()) { toast('Still checking the video\u2026 It can go in a moment.'); return; }
+    // (More than may go: the server was handed to someone else since they were added, or files came back to the box.)
+    if (overrideText == null && !extra.files && files.length > maxFiles()) { toast(`You can send up to ${maxFiles()} files in one message. Remove some first.`, 'error'); return; }
+    if (overrideText == null && !extra.files && files.filter((p) => p.shrink && !sentFresh(p)).length > MAX_SHRINK) {
+      toast(`Up to ${MAX_SHRINK} videos that need making smaller can go in one message. Remove some first.`, 'error');
+      return;
+    }
     // A bot's slash command goes to the bot (after the warning), not into the channel.
     const slashIn = overrideText == null && !poll && slashChannel();
     const cmd = slashIn && SLASH.match(slashIn, text.trim());
@@ -6125,7 +7837,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     if (cmd) {
       SLASH.run(slashIn, cmd, text.trim(), serverOfChannel(slashIn)).then((sent) => {
         if (!sent || ta.value.trim() !== text.trim()) return;
-        ta.value = ''; drafts.delete(key()); autosize(); update(); renderCmdBar();
+        ta.value = ''; synced = ''; drafts.delete(key()); autosize(); update(); renderCmdBar();
       });
       return;
     }
@@ -6136,8 +7848,10 @@ function createComposer({ id, key, threadId, placeholder }) {
     // one), and only if its link is still in the text. GIFs, polls and voice messages never carry one.
     const linkState = overrideText == null ? state.link : null;
     const links = linkState && linkState.status === 'ready' && !poll && !extra.files && linkedUrls(text, { skipSpoilers: true }).includes(linkState.url) ? [linkState.entry] : null;
+    // A message going out ends your "typing…" on the others' screens as it arrives, so typing on says so again at once.
+    if (!tid && !sendAt) typingSent.delete(kk);
     if (overrideText == null) {
-      ta.value = '';
+      ta.value = ''; synced = '';
       drafts.delete(kk + (tid || ''));
       state.pending = [];
       linkGen++; clearTimeout(linkHide); state.link = null; linkDismissed.clear();
@@ -6146,12 +7860,14 @@ function createComposer({ id, key, threadId, placeholder }) {
     state.replyTo = null;
     if (old) replaceMessageEl(old);
     renderExtras(); autosize(); update();
+    // A video to make smaller starts in this tap: phones only let it play (to record it smaller) after one.
+    for (const p of files) if (p.shrink && !p.session && !sentFresh(p)) p.session = startShrink(p.file);
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join('');
     if (id === 'main' && !tid && !sendAt) showPendingSend(kk, nonce, poll ? `\uD83D\uDCCA ${poll.q}` : files.some((f) => f.voice) ? '\uD83C\uDFA4 Voice message' : text, files.some((f) => f.voice) ? 0 : files.length, replyTo);
     // The disappearing timer they wrote it under (the note above the box): a weaker one by the time it goes out asks
     // first. A scheduled message is encrypted now, for the timer in force now, like one sent now.
     const wrote = convSecs(kk);
-    queue = queue.then(() => deliver({ kk, tid, text, files, replyTo, nonce, poll, links, linkState, wrote, sendAt }));
+    queue = queue.then(() => underWay(deliver({ kk, tid, text, files, replyTo, nonce, poll, links, linkState, wrote, sendAt })));
     return queue;
   }
   // Send later: when, from the quick picks or a date and time; then it goes like a send, scheduled.
@@ -6163,21 +7879,40 @@ function createComposer({ id, key, threadId, placeholder }) {
     const bar = upStatus.querySelector('.bar');
     const totalBytes = files.reduce((a, p) => a + (p.file ? p.file.size : 0), 0);
     let retrying = null;
+    let shrunk = false; // a video was made smaller: its size isn't what was picked any more
     const setProgress = (f) => {
       upStatus.hidden = !files.length || f >= 1;
       bar.style.width = Math.round(f * 100) + '%';
-      if (!retrying) upText.textContent = `Uploading ${files.length === 1 ? files[0].file.name : `${files.length} files`} — ${fmtSize(Math.round(f * totalBytes))} of ${fmtSize(totalBytes)} (${Math.round(f * 100)}%)`;
+      const what = files.length === 1 ? files[0].file.name : `${files.length} files`;
+      const stay = files.length > MAX_FILES ? ' (keep Hearth on screen)' : ''; // a big send takes a while (keepAwake)
+      if (!retrying) upText.textContent = shrunk ? `Uploading ${what} (${Math.round(f * 100)}%)${stay}` : `Uploading ${what} — ${fmtSize(Math.round(f * totalBytes))} of ${fmtSize(totalBytes)} (${Math.round(f * 100)}%)${stay}`;
     };
-    const onStatus = ({ retrying: r, wait }) => {
+    const onStatus = ({ retrying: r, wait, rate, shrinking }) => {
+      if (shrinking != null) {
+        shrunk = true;
+        upStatus.hidden = false;
+        bar.style.width = Math.round(shrinking * 100) + '%';
+        upText.textContent = `Making the video smaller to send\u2026 ${Math.round(shrinking * 100)}% (keep Hearth on screen)`;
+        return;
+      }
       retrying = r ? wait : null;
       upStatus.classList.toggle('retrying', !!r);
-      if (r) upText.textContent = `Connection lost. Trying again in ${Math.max(1, Math.round(wait / 1000))} s… (nothing sent so far is lost)`;
+      if (r) upText.textContent = rate ? `The server takes only so many files at a time: going on in ${Math.max(1, Math.round(wait / 1000))} s… (nothing sent so far is lost)`
+        : `Connection lost. Trying again in ${Math.max(1, Math.round(wait / 1000))} s… (nothing sent so far is lost)`;
     };
     const ctl = files.length ? new AbortController() : null;
     uploading = ctl;
+    const conv = kk + (tid || '');
+    if (files.length) { if (!sendingUi.has(conv)) sendingUi.set(conv, new Set()); sendingUi.get(conv).add(upStatus); }
+    const awake = files.length > MAX_FILES ? keepAwake() : null;
+    let posting = false;
     try {
       const f = await uploadEncryptedFiles(kk, files, setProgress, { signal: ctl && ctl.signal, onStatus });
+      // The server was handed to someone else meanwhile: it would keep only the first 10 of these.
+      if (f.length > maxFiles()) throw new Error(`You can send up to ${maxFiles()} files in one message now. They\u2019re back in the box: send them in parts.`);
+      posting = true;
       const msg = await sendTo(kk, tid, { t: text, f, ...(poll ? { p: poll } : {}), ...(links ? { l: links } : {}) }, replyTo, nonce, { wrote, sendAt });
+      posting = false;
       files.forEach((p) => p.url && URL.revokeObjectURL(p.url));
       if (sendAt) { SCHED.added(msg); toast(`Scheduled for ${SCHED.whenPhrase(msg.sendAt)}.`); return; }
       playSound('sent');
@@ -6187,24 +7922,39 @@ function createComposer({ id, key, threadId, placeholder }) {
       const sch = kk.startsWith('c:') ? channelById(kk.slice(2)) : null;
       if (sch && sch.slowmode > 0 && !canIn(sch, PERMS.MANAGE_MESSAGES)) startSlow(sch.slowmode);
     } catch (e) {
+      // Videos still waiting to be made smaller let go of what they'd started; sending again starts afresh.
+      files.forEach((p) => { if (p.session) { p.session.stop(); p.session = null; } });
+      // The message may have got there after all when its answer was lost (the request failed on the way: fetch's
+      // TypeError, or the server failing): then sending again uploads the files again, rather than share them with a
+      // message that has them (the server links a file to the first message only). Anything refused before or by
+      // the server (a changed key, too long, slow mode…) keeps them.
+      if (posting && (e instanceof TypeError || e.status >= 500)) files.forEach((p) => { delete p.sent; });
       dropPendingSend(nonce);
       const wait = /in (\d+)s/.exec(e.message || '');
       if (e.code === 'slowmode' && wait) startSlow(+wait[1]);
       if (e.cancelled) toast('Upload cancelled. Your message and files are back in the box.');
       else toast(e.message, 'error');
-      // Give the words back so nothing is lost (unless they've already typed something new).
-      if (!poll && !files.some((f) => f.voice) && !ta.value.trim() && key() === kk) {
-        ta.value = text; if (!state.pending.length) state.pending = files;
-        if (linkState && !state.link && linkState.status === 'ready') state.link = linkState; // and its preview
-        renderExtras(); autosize(); update();
+      // Give the files and words back so nothing is lost: to this box if it still shows the conversation, else to the
+      // one that shows it now or next (takeBack, renderExtras).
+      if (!poll && !files.some((f) => f.voice)) {
+        const prev = givenBack.get(conv); // an earlier send there that stopped too, not picked up yet
+        const link = linkState && linkState.status === 'ready' ? linkState : null;
+        givenBack.set(conv, prev ? { files: [...prev.files, ...files.filter((p) => !prev.files.includes(p))], text: [prev.text, text].filter((t) => t && t.trim()).join('\n'), link: prev.link || link }
+          : { files, text, link });
+        const here = ta.isConnected && convId() === conv ? null : Object.values(composers).find((c) => c && c.showing && c.showing() === conv);
+        if (here) here.renderExtras();
+        else if (ta.isConnected && convId() === conv) { renderExtras(); update(); }
       }
     } finally {
       if (uploading === ctl) uploading = null;
+      const going = sendingUi.get(conv);
+      if (going) { going.delete(upStatus); if (!going.size) sendingUi.delete(conv); }
+      if (awake) awake();
       setProgress(1);
     }
   }
   setTimeout(() => { autosize(); update(); renderEph(); }, 0);
-  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph };
+  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph, fitAttach, showing: () => (ta.isConnected ? convId() : null), keepDraft: () => { if (ta.isConnected && ta.value !== synced) keepDraft(); } };
 }
 const fmtDuration = (sec) => (sec >= 3600 ? `${Math.round(sec / 3600)}h` : sec >= 60 ? `${Math.round(sec / 60)}m` : `${sec}s`);
 function placeholderFor(k) {
@@ -6267,37 +8017,82 @@ function blockedDmNotice() {
     h('button', { class: 'btn sm ghost', onclick: () => toggleBlock(d.userId, false) }, 'Unblock'));
 }
 
+// How many files one message may carry: 10, or 100 for the server's owner (attachments.js, server/index.js maxFilesOf).
+const maxFiles = () => maxFilesFor(S.me && S.me.staffRole);
+// A file that went up for a message that then couldn't be sent isn't sent again when it's tried again (p.sent): the
+// server keeps a file that no message uses for a day (server/index.js uploads.unlinked_cleanup).
+const SENT_KEEP_MS = 6 * 3600 * 1000;
+const sentFresh = (p) => !!p.sent && p.sent.at > Date.now() - SENT_KEEP_MS;
+// Videos made smaller on the device in one message: each plays (into the recording) in its own player, so not too many.
+const MAX_SHRINK = 10;
+// The sends still going in a conversation (key + thread): their progress bars, with their Cancel, from the boxes that
+// started them. A box drawn again meanwhile (another conversation and back, a setting that changed) shows those too.
+// And what sends that stopped give back (their files, and words), for the box that shows the conversation.
+const sendingUi = new Map();
+const givenBack = new Map();
+// Keeps a phone's screen on while a long send uploads (a phone puts away an app whose screen goes off, and its uploads
+// stop with it). Returns what lets it go.
+function keepAwake() {
+  if (!navigator.wakeLock) return () => {};
+  let lock = null; let done = false;
+  const take = () => {
+    if (done || lock || document.hidden) return;
+    navigator.wakeLock.request('screen').then((l) => {
+      if (done) { l.release().catch(() => {}); return; }
+      lock = l; l.addEventListener('release', () => { if (lock === l) lock = null; });
+    }, () => {});
+  };
+  const onVisible = () => { if (!document.hidden) take(); };
+  document.addEventListener('visibilitychange', onVisible);
+  take();
+  return () => { done = true; document.removeEventListener('visibilitychange', onVisible); if (lock) lock.release().catch(() => {}); lock = null; };
+}
+
 // ---- sending (every file gets its own random key, carried inside the encrypted message)
 // Small files go up in one request; bigger ones (CHUNKED_ABOVE) in resumable chunks that survive a dropped
-// connection (files.js). onStatus reports "connection lost, retrying"; signal cancels.
+// connection (files.js). onStatus reports "connection lost (or too many at once), retrying"; signal cancels.
+// One file at a time: made ready (big photos made smaller, a thumbnail), encrypted and uploaded before the next, so a
+// message with many photos never holds them all in memory. Progress counts the files by their size as picked.
 async function uploadEncryptedFiles(key, files, onProgress, { signal, onStatus } = {}) {
   if (!files.length) return [];
   if (key.startsWith('c:')) await sec.ready(serverOfChannel(key.slice(2)).id);
   const compress = P.chat.compressImages !== false;
-  // Optimize images first (resize big photos, make thumbnails), then encrypt and upload.
-  const prepared = [];
-  for (const p of files) prepared.push({ ...(p.voice ? { file: p.file } : await prepareImage(p.file, { compress })), orig: p.file, voice: p.voice, dur: p.dur, alt: p.alt, spoiler: p.spoiler });
-  const total = prepared.reduce((a, p) => a + p.file.size + (p.thumb ? p.thumb.size : 0), 0) || 1;
-  let done = 0;
-  onProgress(0);
+  const total = files.reduce((a, p) => a + (p.file.size || 1), 0);
+  // What went up for an earlier try counts as done.
+  let done = files.reduce((a, p) => a + (sentFresh(p) ? p.file.size || 1 : 0), 0);
+  onProgress(done / total);
   const send = async (blobLike, weight) => {
     if (signal && signal.aborted) throw Object.assign(new Error('Upload cancelled.'), { cancelled: true });
     const { blob, k } = await E2EE.encryptFile(await blobLike.arrayBuffer());
     const progress = (x) => onProgress((done + x * weight) / total);
-    const url = blob.byteLength > CHUNKED_ABOVE ? await uploadResumable(blob, { onProgress: progress, onStatus, signal }) : await uploadSimple(blob, { onProgress: progress, signal });
+    const url = blob.byteLength > CHUNKED_ABOVE ? await uploadResumable(blob, { onProgress: progress, onStatus, signal }) : await uploadSimple(blob, { onProgress: progress, onStatus, signal });
     done += weight;
     return { url, k };
   };
-  const out = [];
-  for (const p of prepared) {
-    const th = p.thumb ? await send(p.thumb, p.thumb.size) : null;
-    const main = await send(p.file, p.file.size);
-    out.push({ url: main.url, name: p.file.name, type: p.file.type, size: p.file.size, k: main.k, ...(p.w ? { w: p.w, h: p.h } : {}), ...(th ? { th: { url: th.url, k: th.k } } : {}),
-      ...(p.voice ? { voice: true, dur: p.dur } : {}),
-      // Set from the file's Edit button in the box; like the rest, it's inside the encrypted message.
-      ...(p.spoiler ? { sp: 1 } : {}), ...(p.alt ? { alt: String(p.alt).slice(0, ALT_MAX) } : {}) });
+  // Set from the file's Edit button in the box (also after a send that failed); like the rest, inside the message.
+  const tags = (p) => ({ ...(p.spoiler ? { sp: 1 } : {}), ...(p.alt ? { alt: String(p.alt).slice(0, ALT_MAX) } : {}) });
+  // One file: made ready, encrypted and uploaded. What went up is kept for a next try (p.sent).
+  const upload = async (p, file) => {
+    const weight = p.file.size || 1;
+    const r = p.voice ? { file } : await prepareImage(file, { compress });
+    const both = r.file.size + (r.thumb ? r.thumb.size : 0) || 1;
+    const th = r.thumb ? await send(r.thumb, (weight * r.thumb.size) / both) : null;
+    const main = await send(r.file, weight - (th ? (weight * r.thumb.size) / both : 0));
+    // (Names and types as long as readers keep them: attachments.js cleanFiles.)
+    p.sent = { base: { url: main.url, name: String(r.file.name || '').slice(0, 255), type: String(r.file.type || '').slice(0, 100), size: r.file.size, k: main.k, ...(r.w ? { w: r.w, h: r.h } : {}), ...(th ? { th: { url: th.url, k: th.k } } : {}),
+      ...(p.voice ? { voice: true, dur: p.dur } : {}) }, at: Date.now() };
+  };
+  // Videos over the limit go first, each made smaller (video-shrink.js; started in the tap that sent them) and
+  // uploaded before the next: it takes as long as they last, with "keep Hearth on screen" up from the start, their
+  // players don't wait behind the rest, and only one smaller copy is in memory at a time.
+  for (const p of files) {
+    if (!p.session) continue;
+    const s = p.session; p.session = null;
+    if (sentFresh(p)) { s.stop(); continue; } // made smaller and uploaded already
+    await upload(p, await s.run({ maxBytes: budgetFor((S.config.maxUploadMb || 25) * 1024 * 1024), signal, onProgress: (x) => onStatus && onStatus({ shrinking: x }) }));
   }
-  return out;
+  for (const p of files) if (!sentFresh(p)) await upload(p, p.file);
+  return files.map((p) => ({ ...p.sent.base, ...tags(p) }));
 }
 
 function mentionedIds(server, text) {
@@ -6311,23 +8106,27 @@ function mentionedIds(server, text) {
 
 // The longest ciphertext the server takes (validCipher in server/index.js; keep the two the same).
 const CIPHER_MAX = 64000;
+const OWNER_CIPHER_MAX = 262144; // the owner's messages may carry 100 files (maxFiles)
+const cipherMax = () => (S.me && S.me.staffRole === 'owner' ? OWNER_CIPHER_MAX : CIPHER_MAX);
 // Encrypts the payload, or if that comes out too long, the same message with less of its link preview: first
-// without the picture, then without the card (linkpreview.js payloadVariants). A message too long even then
-// goes as it is, and the server's usual "too big" answer applies. Everything else in it (the disappearing timer
-// x among them) stays in every variant.
+// without the picture, then without the card (linkpreview.js payloadVariants). A message too long even then isn't
+// sent: it says what to make shorter. Everything else in it (the disappearing timer x among them) stays in every
+// variant.
 async function encryptFitting(payload, encrypt) {
   let out;
   const variants = payloadVariants(payload);
-  // Ten long image descriptions on top of a long message can be too much as well: then they're cut short.
+  // Many long image descriptions on top of a long message can be too much as well: then they're cut short.
   const last = variants[variants.length - 1];
   if (Array.isArray(last.f) && last.f.some((f) => f && typeof f.alt === 'string' && f.alt.length > 200)) {
     variants.push({ ...last, f: last.f.map((f) => (f && typeof f.alt === 'string' ? { ...f, alt: f.alt.slice(0, 200) } : f)) });
   }
   for (const p of variants) {
     out = await encrypt(p);
-    if ((typeof out === 'string' ? out : out.ciphertext).length <= CIPHER_MAX) return out;
+    if ((typeof out === 'string' ? out : out.ciphertext).length <= cipherMax()) return out;
   }
-  return out;
+  const n = Array.isArray(payload.f) ? payload.f.length : 0;
+  throw Object.assign(new Error(n > 1 ? `This message is too long to send with ${n} files. Shorten the text, the file descriptions or the file names, or send fewer files at once.`
+    : 'This message is too long to send. Shorten it and try again.'), { code: 'too_long' });
 }
 // Disappearing messages: the conversation's timer goes inside the encrypted message (x, so readers' apps hide it on
 // time even if the server doesn't delete it) and alongside it (ttl, so the server stamps the same one). If someone
@@ -6406,6 +8205,9 @@ async function sendOnce(key, threadId, payload0, replyTo, nonce, sendAt = null) 
   const payload = { ...payload0, ...bindNew({ replyTo, threadId, at: sendAt || nowServer(), scheduled: !!sendAt }) };
   const files = (payload.f || []).flatMap((x) => [x.url, x.th && x.th.url]).filter(Boolean);
   const where = key.startsWith('c:') ? `/channels/${key.slice(2)}` : `/dms/${key.slice(2)}`;
+  // A comment on one photo (photo-notes.js) says which one inside it (ph); the server is told the index beside it
+  // (replyFile), only so it can count each photo's comments.
+  const photo = replyTo && payload.ph ? { replyFile: payload.ph.i } : {};
   // A scheduled one gets an id of this app's choosing for its own copy (sealFor's keep).
   const ref = sendAt ? Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) => x.toString(16).padStart(2, '0')).join('') : null;
   if (key.startsWith('c:')) {
@@ -6413,13 +8215,13 @@ async function sendOnce(key, threadId, payload0, replyTo, nonce, sendAt = null) 
     if (!server) throw new Error('Channel not found.');
     return withKeyRetry(server.id, async () => {
       const sealed = await sealFor(key, payload, sendAt ? { ref, threadId } : null);
-      return sendAt ? bindScheduled(await api('POST', `${where}/scheduled-messages`, { ...sealed, ref, replyTo, threadId, files, sendAt }), sealed, key, ref, threadId)
-        : api('POST', `${where}/messages`, { ...sealed, replyTo, threadId, files, nonce });
+      return sendAt ? bindScheduled(await api('POST', `${where}/scheduled-messages`, { ...sealed, ref, replyTo, ...photo, threadId, files, sendAt }), sealed, key, ref, threadId)
+        : api('POST', `${where}/messages`, { ...sealed, replyTo, ...photo, threadId, files, nonce });
     });
   }
   const sealed = await sealFor(key, payload, sendAt ? { ref, threadId: null } : null);
-  return sendAt ? bindScheduled(await api('POST', `${where}/scheduled-messages`, { ...sealed, ref, replyTo, files, sendAt }), sealed, key, ref, null)
-    : api('POST', `${where}/messages`, { ...sealed, replyTo, files, nonce });
+  return sendAt ? bindScheduled(await api('POST', `${where}/scheduled-messages`, { ...sealed, ref, replyTo, ...photo, files, sendAt }), sealed, key, ref, null)
+    : api('POST', `${where}/messages`, { ...sealed, replyTo, ...photo, files, nonce });
 }
 // A scheduled message's own copy can't name it when it's made (the server picks its id), so as soon as the server
 // answers, the copy is sealed again naming it (sid) and goes back with the very same ciphertext. From then on any of
@@ -6451,7 +8253,7 @@ function showPendingSend(key, nonce, text, files, replyTo) {
   const p = { key, nonce, text, files, replyTo };
   pendingSends.set(nonce, p);
   const sc = $('#messages');
-  if (sc && currentKey() === key) { p.el = pendingEl(p); sc.append(p.el); sc.scrollTop = sc.scrollHeight; }
+  if (sc && currentKey() === key) { p.el = pendingEl(p); sc.append(p.el); toNewest(sc); }
 }
 function dropPendingSend(nonce) {
   const p = pendingSends.get(nonce);
@@ -7157,6 +8959,7 @@ async function toggleBlock(userId, on) {
   try {
     await api(on ? 'POST' : 'DELETE', `/blocks/${userId}`);
     if (on) S.blocked.add(userId); else S.blocked.delete(userId);
+    NOTES.onBlock(); // (their photo tags in the chips and suggestions)
     toast(on ? `${displayName(u)} is blocked.` : `${displayName(u)} is unblocked.`);
     renderAll();
   } catch (e) { toast(e.message, 'error'); }
@@ -7274,7 +9077,9 @@ async function openSafetyNumber(u) {
     const groupsN = await E2EE.safetyNumber(S.me, user);
     const changed = sec.keyChanged(user);
     // They're waiting to be verified, and you may be the one to do it (the server checks you knew them before).
-    const vouch = user.id !== S.me.id && sec.awaitingVerify(user) && !sec.awaitingVerify(S.me);
+    // Not keys from a reset link you made yourself (the owner): someone else has to vouch for those.
+    const madeTheLink = !!user.keysResetBy && user.keysResetBy === S.me.id;
+    const vouch = user.id !== S.me.id && sec.awaitingVerify(user) && !sec.awaitingVerify(S.me) && !madeTheLink;
     const name = displayName(user);
     modal({
       title: changed ? 'Security key changed' : 'Verify encryption',
@@ -7282,6 +9087,7 @@ async function openSafetyNumber(u) {
       body: h('div', { class: 'stack' },
         changed ? h('p', { class: 'key-bar bad' }, icon('shield'), h('span', null, `${name}'s keys are different from the ones this browser saw before. That happens if someone \u2014 including whoever runs this server \u2014 tries to listen in. Only continue once the numbers match on both screens.`)) : null,
         vouch ? h('p', { class: 'key-bar bad' }, icon('shield'), h('span', null, `${name} reset their password without their recovery key, so their keys are new. Anyone who got into their email could have done that, so nobody\u2019s app shares a server\u2019s or group\u2019s keys with them until someone there who knew them before verifies them. Verifying them shares the keys of the servers and groups you\u2019re both in.`)) : null,
+        madeTheLink && sec.awaitingVerify(user) ? h('p', { class: 'key-bar' }, icon('shield'), h('span', null, `${name}\u2019s keys came from a password reset link you made, so someone else has to verify them: a member who knew them before, or another admin.`)) : null,
         sec.awaitingVerify(S.me) && user.id !== S.me.id ? h('p', { class: 'key-bar' }, icon('shield'), h('span', null, `To get verified, ask ${name} to open your profile (\u22ef \u2192 Verify encryption), check these same numbers and press \u201cNumbers match \u2014 verify and share keys\u201d.`)) : null,
         h('p', { class: 'muted-p' }, `Compare these numbers with ${name} in person or on a call. If they match on both screens, nobody \u2014 not even the server \u2014 can read or fake your messages.`),
         h('div', { class: 'safety' }, groupsN.map((g) => h('span', null, g)))),
@@ -7290,6 +9096,8 @@ async function openSafetyNumber(u) {
         { label: vouch ? 'Numbers match \u2014 verify and share keys' : changed ? 'Numbers match \u2014 trust new key' : 'Numbers match', kind: 'primary', action: async () => {
           sec.acceptKeys(user);
           SCHED.onKeys(); // a scheduled DM waiting for their new key
+          NOTES.onTrust(user.id); // photo tags only their new key vouches for
+          LOOK.onTrust(user.id); // and a chat background
           if (vouch) {
             // Tells the server too, with the key compared: everyone's apps share the keys of the servers and groups
             // you're both in with them again (and of all theirs, once each one they were in has been verified).
@@ -7370,6 +9178,7 @@ function backFromStripe() {
   const what = q.get('membership');
   if (!what) return;
   history.replaceState(null, '', '/' + location.hash);
+  if (noPayments) return;
   const sv = S.servers.find((x) => x.id === q.get('server'));
   if (what === 'thanks') toast('\u2B50 Thanks! Your membership starts as soon as Stripe confirms the payment (a few seconds).');
   else if (what === 'cancelled') toast('No payment was made.');
@@ -7392,7 +9201,7 @@ function serverMenuItems(server) {
     { label: 'Members', icon: 'people', action: () => { if (S.view.serverId !== server.id) openServer(server.id); S.panel = 'members'; S.thread = null; delete composers.thread; P.showMembers = true; renderAll(); } },
     pickableRoles(server, S.me.id).length ? { label: 'Pick your roles', icon: 'at', action: () => pickRoles(server) } : null,
     mayNickname(server, S.me) ? { label: 'Change nickname', icon: 'edit', action: () => openNickname(server, S.me) } : null,
-    server.memberships && !isOwner(server) ? { label: 'Memberships', icon: 'star', action: () => openMemberships(server) } : null,
+    server.memberships && !isOwner(server) && !noPayments ? { label: 'Memberships', icon: 'star', action: () => openMemberships(server) } : null,
     { label: fav ? 'Remove from favorites' : 'Add to favorites', icon: 'star', action: () => toggleFavorite('s:' + server.id) },
     ...folders.serverMenuExtras(server),
     '-',
@@ -7688,7 +9497,7 @@ function openServerSettings(server, startTab = 'overview') {
     ['audit', 'Audit log', 'file', (s) => !isGroup(s) && can(s, PERMS.VIEW_AUDIT_LOG)],
     ['invites', 'Invites', 'link', (s) => !isGroup(s) && can(s, PERMS.MANAGE_SERVER)],
     ['wordfilter', 'Word filter', 'eyeOff', (s) => !isGroup(s) && can(s, PERMS.MANAGE_SERVER)],
-    ['memberships', 'Memberships', 'star', (s) => !isGroup(s) && isOwner(s) && s.membershipsOn],
+    ['memberships', 'Memberships', 'star', (s) => !noPayments && !isGroup(s) && isOwner(s) && s.membershipsOn],
     ['danger', 'Danger zone', 'trash', (s) => isOwner(s)],
   ];
   const add = (el, ...kids) => el.append(...kids.filter((k) => k != null && k !== false));
@@ -8311,30 +10120,23 @@ function setupServiceWorker() {
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
   hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('/sw.js').then((reg) => {
-    const offer = (w) => {
-      // A new version finished installing in the background: offer to switch.
-      if (S.autoUpdating) { w.postMessage('skipWaiting'); return; }
-      if (document.querySelector('.update-bar')) return;
-      const bar = h('div', { class: 'update-bar', role: 'status' }, icon('arrowUp'), h('span', null, 'A new version of Hearth is ready.'),
-        h('button', { class: 'btn primary sm', onclick: () => { wantReload = true; w.postMessage('skipWaiting'); } }, 'Reload'),
-        ibtn('close', 'Later', () => bar.remove(), { cls: 'sm' }));
-      document.body.append(bar);
-    };
-    if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
+    // A new version finished installing in the background: it takes over by itself (sw.js does that as soon as it
+    // has installed; a browser that kept it waiting is told to). The page then switches to it (controllerchange).
+    const takeOver = (w) => w.postMessage('skipWaiting');
+    if (reg.waiting && navigator.serviceWorker.controller) takeOver(reg.waiting);
     reg.addEventListener('updatefound', () => {
       const w = reg.installing;
-      if (w) w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) offer(w); });
+      if (w) w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) takeOver(w); });
     });
     setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
   }).catch(() => {});
-  // Only reload when the person asked for the update — the very first install also fires this event.
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (wantReload) { wantReload = false; location.reload(); return; }
-    // A new version took over in the background: the next reload uses it. Let people do it when it suits them.
-    if (S.me && !document.querySelector('.update-bar') && hadController) {
-      document.body.append(h('div', { class: 'update-bar', role: 'status' }, icon('arrowUp'), h('span', null, 'Hearth was updated.'),
-        h('button', { class: 'btn primary sm', onclick: () => location.reload() }, 'Reload'), ibtn('close', 'Later', (e) => e.currentTarget.closest('.update-bar').remove(), { cls: 'sm' })));
-    }
+    // A new version took over in the background, while this page still runs the one it opened with: it reloads
+    // into the new one by itself when that interrupts nothing (autoUpdate). The very first install also fires
+    // this event, with nothing to switch from (and the page runs that version already).
+    if (hadController) autoUpdate.due();
+    hadController = true;
   });
   navigator.serviceWorker.addEventListener('message', (e) => {
     if (e.data && e.data.type === 'open' && e.data.url) {
@@ -8957,7 +10759,8 @@ if (window.hearthDesktop && window.hearthDesktop.onPickScreen) {
 // ======================================================================= updates without the fuss
 // When the server restarts (an update), it tells everyone first. We show "Updating…", wait for it to
 // come back, then either carry on (same version) or switch to the new version, landing right where
-// you were with any unsent message kept. During a call we don't interrupt you.
+// you were with any unsent message kept. A new version is never something to click: every open Hearth
+// switches to it by itself (auto-update.js), at a moment that interrupts nothing (never during a call).
 let updatingTimer = null;
 function showUpdating(text = 'Updating Hearth\u2026', sub = 'You\u2019ll be right back \u2014 this usually takes a few seconds.') {
   S.restarting = S.restarting || Date.now();
@@ -8983,23 +10786,86 @@ function hideUpdating() {
   if (el) { el.classList.add('done'); setTimeout(() => el.remove(), 250); }
 }
 function onNewVersion(version) {
-  if (voice && voice.channelId) {
-    // Don't cut off a call: offer the update for when they're done.
-    hideUpdating();
-    loadBootstrap().catch(() => {});
-    if (!document.querySelector('.update-bar')) {
-      const bar = h('div', { class: 'update-bar', role: 'status' }, icon('arrowUp'), h('span', null, `Hearth ${version} is ready. Reload after your call.`),
-        h('button', { class: 'btn primary sm', onclick: () => updateAndReload() }, 'Reload now'), ibtn('close', 'Later', () => bar.remove(), { cls: 'sm' }));
-      document.body.append(bar);
-    }
-    return;
-  }
-  showUpdating('Updated!', `Loading Hearth ${version}\u2026`);
-  updateAndReload();
+  // Something under way (a call, say) carries on with this version for now; it switches by itself once that's done.
+  if (updateBlockedBy()) { hideUpdating(); loadBootstrap().catch(() => {}); }
+  autoUpdate.due(version, { soon: true });
 }
+// What a reload would cut off or lose. Words typed in a message box aren't on the list: their drafts are kept
+// across the reload (saveResume); files attached to one, or a reply being set up, are.
+function updateBlockedBy() {
+  // A call that failed (and didn't come back by itself within a few minutes) has nothing left to cut off.
+  if (voice && (voice.joinPromise || (voice.channelId && (voice.state !== 'failed' || Date.now() - (voice.stateSince || 0) < 5 * 60 * 1000)))) return 'call';
+  if (ringing.size) return 'ringing';
+  if (pendingSends.size || jobsUnderWay()) return 'sending';
+  if ($('.rec-bar, .edit-wrap, .pending-files, .reply-bar')) return 'composing';
+  if (S.select && S.select.ids.size) return 'selecting';
+  if ($$('.upload-status, .att-meter').some((x) => !x.hidden) || $('.att-dl.busy, .att-file .btn.busy')) return 'transfer';
+  // A video, song or voice message playing (calls' own live streams, srcObject, are the call check's business).
+  if ($$('video, audio').some((m) => !m.paused && !m.ended && !m.error && !m.srcObject && m.networkState !== HTMLMediaElement.NETWORK_NO_SOURCE)
+    || voicePlaying() || songPlaying() || (wtDock.el && !wtDock.el.hidden)) return 'playing';
+  if (choosingFile) return 'choosing';
+  // Study (its rounds and timer live in its frame) and the admin dashboard (forms without a save bar).
+  if (S.view && (S.view.type === 'study' || S.view.type === 'admin')) return S.view.type;
+  if ($('.viewer:not(.closing), .settings')) return 'open';
+  // Any dialog, except the ones that only tell you something and come back by themselves after the reload (What's
+  // new, the terms to accept), or one left open would hold every later update up.
+  if ($$('#layer > .modal-backdrop:not(.closing)').some((d) => !d.querySelector('.modal.whatsnew, .modal.terms-modal'))) return 'dialog';
+  if ($$('.save-bar').some((x) => !x.hidden)) return 'unsaved';
+  // Signing in or up, partly filled in (or being checked).
+  const auth = $('#auth');
+  if (!S.me && auth && !auth.hidden && ((authTyped && $$('#auth input:not([type=checkbox]):not([type=hidden])').some((i) => i.value)) || $('#auth button[type=submit]:disabled'))) return 'signing-in';
+  const a = document.activeElement;
+  if (a && a.matches('input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button]), textarea, [contenteditable="true"]')
+    && !a.closest('.composer') && String(a.value ?? a.textContent ?? '').trim()) return 'typing';
+  return null;
+}
+const autoUpdate = createUpdater({
+  hidden: () => document.hidden,
+  blockedBy: updateBlockedBy,
+  lastApplied: () => { try { return Number(sessionStorage.getItem('hearth.updatedAt')) || 0; } catch { return 0; } },
+  apply: (version) => {
+    try { sessionStorage.setItem('hearth.updatedAt', String(Date.now())); } catch { /* ignore */ }
+    if (!document.hidden) showUpdating('Updated!', version ? `Loading Hearth ${version}\u2026` : 'Loading the new version of Hearth\u2026');
+    updateAndReload();
+  },
+});
+for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart', 'input']) addEventListener(type, () => autoUpdate.input(), { capture: true, passive: true });
+document.addEventListener('visibilitychange', () => autoUpdate.poke());
+// A phone's file picker or camera covers the page while it's open: that isn't "out of sight", and a reload would
+// lose the files being picked. File inputs are mostly opened from code (input.click()), often off the page.
+let choosingFile = false;
+let choosingTimer = 0;
+let choosingSeq = 0;
+const choosing = (input) => {
+  if (!input || input.type !== 'file') return;
+  const me = ++choosingSeq; // only the latest picker's answer (or its time running out) counts
+  choosingFile = true;
+  clearTimeout(choosingTimer);
+  const done = () => { if (me !== choosingSeq) return; choosingFile = false; clearTimeout(choosingTimer); };
+  choosingTimer = setTimeout(done, 10 * 60 * 1000);
+  input.addEventListener('change', done, { once: true });
+  input.addEventListener('cancel', done, { once: true });
+};
+// Sign-in fields only count once someone has typed in them (a browser filling them in by itself isn't someone
+// half-way through signing in).
+let authTyped = false;
+for (const type of ['keydown', 'paste', 'input']) $('#auth').addEventListener(type, (e) => { if (e.isTrusted) authTyped = true; }, true);
+const inputClick = HTMLInputElement.prototype.click;
+HTMLInputElement.prototype.click = function () { choosing(this); return inputClick.call(this); };
+addEventListener('click', (e) => { if (e.isTrusted && e.target instanceof HTMLInputElement) choosing(e.target); }, true);
 // Remember where you were (and unsent messages) across the reload.
 function saveResume() {
-  try { sessionStorage.setItem('hearth.resume', JSON.stringify({ view: S.view, drafts: [...drafts.entries()].filter(([, v]) => v) })); } catch { /* ignore */ }
+  for (const c of Object.values(composers)) c.keepDraft();
+  // Scrolled up into older messages: come back to the one at the top of the screen.
+  let at;
+  const sc = $('#messages');
+  if (sc && !$('#jump-latest[hidden]') && $('#jump-latest')) {
+    const top = sc.getBoundingClientRect().top;
+    const first = [...sc.querySelectorAll(':scope > .msg[data-mid]')].find((m) => m.getBoundingClientRect().bottom > top + 8);
+    if (first) at = first.dataset.mid;
+  }
+  const thread = S.panel === 'thread' && S.thread ? { id: S.thread.rootId, channelId: S.thread.channelId, serverId: S.thread.serverId } : null;
+  try { sessionStorage.setItem('hearth.resume', JSON.stringify({ view: { ...S.view, jumpTo: at }, thread, drafts: [...drafts.entries()].filter(([, v]) => v) })); } catch { /* ignore */ }
 }
 function restoreResume() {
   let r = null;
@@ -9007,11 +10873,14 @@ function restoreResume() {
   if (!r) return;
   for (const [k, v] of r.drafts || []) drafts.set(k, v);
   const v = r.view || {};
-  if ((v.type === 'channel' && channelById(v.channelId)) || (v.type === 'dm' && S.dms.some((d) => d.id === v.dmId)) || ['home', 'friends', 'saved'].includes(v.type)) setView({ ...v, jumpTo: undefined });
+  const ok = ((v.type === 'channel' || v.type === 'voice') && channelById(v.channelId)) || (v.type === 'dm' && S.dms.some((d) => d.id === v.dmId))
+    || ['home', 'friends', 'saved', 'updates', 'people'].includes(v.type) || (v.type === 'study' && S.me.studyEnabled) || (v.type === 'admin' && S.me.staffRole);
+  if (!ok) return;
+  setView({ ...v, jumpTo: undefined, restoreAt: typeof v.jumpTo === 'string' ? v.jumpTo : undefined });
+  if (r.thread && r.thread.channelId === v.channelId && channelById(r.thread.channelId)) openThread({ id: r.thread.id, channelId: r.thread.channelId, serverId: r.thread.serverId }).catch(() => {});
 }
 async function updateAndReload() {
   saveResume();
-  S.autoUpdating = true;
   wantReload = true;
   const fallback = setTimeout(() => location.reload(), 8000);
   try {

@@ -642,7 +642,7 @@ test('metrics: Prometheus text with instance-level numbers only, no names, ids, 
   assert.ok(!samples.some((s) => Number.isNaN(s.value)), 'no NaN anywhere');
   assert.ok(one(samples, 'hearth_job_failures_total', { job: 'alerts.check' }));
   assert.ok(one(samples, 'hearth_messages', { kind: 'channel' }) && one(samples, 'hearth_messages', { kind: 'direct' }));
-  assert.equal(one(samples, 'hearth_info').labels.schema, '19');
+  assert.equal(one(samples, 'hearth_info').labels.schema, /const SCHEMA_VERSION = (\d+);/.exec(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'db.js'), 'utf8'))[1]);
   assert.equal(one(samples, 'hearth_registered_users').value, srv.sql('SELECT COUNT(*) n FROM users WHERE is_bot = 0 AND deleted_at IS NULL')[0].n);
   assert.ok(one(samples, 'hearth_disk_total_bytes').value > 0);
   assert.match(text, /# TYPE hearth_http_requests_total counter/);

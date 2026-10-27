@@ -100,14 +100,25 @@ export async function startServer() {
     ALERT_PRIVATE_HOSTS: `${site.host}:${site.port}`,
   };
   let log = '';
-  const child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  child.stdout.on('data', (d) => { log += d; });
-  child.stderr.on('data', (d) => { log += d; });
-  for (let i = 0; ; i++) {
-    try { const r = await fetch(base + '/api/config'); if (r.ok) break; } catch { /* not up yet */ }
-    if (i > 300 || child.exitCode !== null) { await sink.close(); await site.close(); throw new Error(`Hearth didn't start:\n${log}`); }
-    await sleep(100);
-  }
+  let child;
+  const launch = async () => {
+    child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.on('data', (d) => { log += d; });
+    child.stderr.on('data', (d) => { log += d; });
+    for (let i = 0; ; i++) {
+      try { const r = await fetch(base + '/api/config'); if (r.ok) break; } catch { /* not up yet */ }
+      if (i > 300 || child.exitCode !== null) { await sink.close(); await site.close(); throw new Error(`Hearth didn't start:\n${log}`); }
+      await sleep(100);
+    }
+  };
+  const halt = async () => {
+    if (child.exitCode !== null) return;
+    child.kill('SIGTERM');
+    for (let i = 0; i < 60 && child.exitCode === null; i++) await sleep(50);
+    if (child.exitCode === null) child.kill('SIGKILL');
+    for (let i = 0; i < 60 && child.exitCode === null; i++) await sleep(50);
+  };
+  await launch();
   return {
     base, dir, port, site, get log() { return log; },
     // Every email the server has sent so far, oldest first: { to, subject, text }. Waits until mail has stopped
@@ -134,12 +145,16 @@ export async function startServer() {
       }
       throw new Error(`No email to ${to} matching ${match} arrived.`);
     },
+    // Stops the server and starts it again on the same address and data, as installing an update does. With
+    // newVersion the app counts as changed, so open pages find a new service worker, as after a real update (its
+    // version is a hash of the app's files, and of TEST_BUILD_SALT in a test).
+    async restart({ newVersion = false } = {}) {
+      await halt();
+      if (newVersion) env.TEST_BUILD_SALT = String(Number(env.TEST_BUILD_SALT || 0) + 1);
+      await launch();
+    },
     async stop({ keep = false } = {}) {
-      if (child.exitCode === null) {
-        child.kill('SIGTERM');
-        for (let i = 0; i < 60 && child.exitCode === null; i++) await sleep(50);
-        if (child.exitCode === null) child.kill('SIGKILL');
-      }
+      await halt();
       await sink.close(); await site.close();
       if (!keep) fs.rmSync(dir, { recursive: true, force: true });
     },
@@ -169,8 +184,9 @@ export class Person {
     page.on('requestfailed', (r) => { if (r.url().startsWith(this.base)) this.log.push(`${stamp()} [requestfailed] ${r.method()} ${r.url().replace(this.base, '')} ${r.failure() ? r.failure().errorText : ''}`); });
   }
 
-  static async open(browser, base, name) {
-    const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, acceptDownloads: true, permissions: ['microphone', 'camera'] });
+  // device: other browser settings for this person (PHONE below), instead of a desktop window.
+  static async open(browser, base, name, device = {}) {
+    const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, acceptDownloads: true, permissions: ['microphone', 'camera'], ...device });
     // Nothing leaves this machine: outside requests are refused (fast and the same every run). A flow that needs an
     // outside site answers for it with its own page.route, which takes precedence over this one.
     await context.route((url) => !url.href.startsWith(base), (route) => route.abort());
@@ -322,6 +338,12 @@ export class Person {
   }
 }
 
+// A phone: Android Chrome's screen, touch and user agent (Person.open's device).
+export const PHONE = {
+  viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
+  userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+};
+
 // A regular expression matching exactly this text (Playwright's hasText is a substring match otherwise).
 export function exact(text) { return new RegExp(`^\\s*${String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`); }
 
@@ -359,4 +381,25 @@ export function makePng(w = 64, h = 48) {
   }
   const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+// A small real GIF (a checkerboard of 128 colours). GIFs are sent as they are, so a message doesn't carry their size
+// the way it does a photo's: the chat only learns it once the picture has loaded. Its picture data is 8-bit codes
+// with a clear code every 120 pixels, so the code table never grows (uncompressed, but any size works).
+export function makeGif(w = 64, h = 48) {
+  const u16 = (n) => [n & 255, (n >> 8) & 255];
+  const head = [...Buffer.from('GIF89a'), ...u16(w), ...u16(h), 0xf6, 0, 0]; // a global table of 128 colours
+  for (let i = 0; i < 128; i++) head.push((i * 2) & 255, (255 - i * 2) & 255, 120);
+  head.push(0x2c, ...u16(0), ...u16(0), ...u16(w), ...u16(h), 0, 7); // the image, then its minimum code size
+  const codes = [];
+  for (let y = 0, n = 0; y < h; y++) {
+    for (let x = 0; x < w; x++, n++) {
+      if (n % 120 === 0) codes.push(128);
+      codes.push(((x >> 4) + (y >> 4)) & 127);
+    }
+  }
+  codes.push(129);
+  const blocks = [];
+  for (let i = 0; i < codes.length; i += 255) { const part = codes.slice(i, i + 255); blocks.push(part.length, ...part); }
+  return Buffer.from([...head, ...blocks, 0, 0x3b]);
 }

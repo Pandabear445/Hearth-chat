@@ -230,6 +230,8 @@ function publicUser(row) {
     // crypto-2: when a reset without the recovery key gave them new keys that nobody who knew them has verified yet
     // (only while that's so; apps drop it when a full user object comes without it).
     keysReset: row.keys_reset_at || undefined,
+    // …and whose reset link made them, when it was the owner's (that owner's app doesn't offer to verify them).
+    keysResetBy: (row.keys_reset_at && row.keys_reset_by) || undefined,
     activity: row.deleted_at ? undefined : ACT.activityFor(row) || undefined,
     recentGames: ACT.recentFor(row),
     createdAt: row.created_at,
@@ -392,6 +394,8 @@ function serverCommon(s) {
     const last = groupLastRow(channels);
     out.last = groupLastOut(last);
     out.lastMessageAt = last ? last.created_at : s.created_at;
+    // Its chat background (server/looks.js), sealed, or null.
+    out.look = LOOKS ? LOOKS.lookOf('g:' + s.id) : null;
   }
   return out;
 }
@@ -409,6 +413,15 @@ function groupLastRow(channels) {
 }
 const groupLastOut = (m) => (m ? { id: m.id, authorId: m.author_id, channelId: m.channel_id, ciphertext: m.ciphertext, createdAt: m.created_at, expiresAt: m.expires_at || null } : null);
 const groupLast = (s) => groupLastOut(groupLastRow(db.prepare('SELECT * FROM channels WHERE server_id = ?').all(s.id)));
+// What a delete event in a group chat carries besides the message: the group's newest message now, which the apps
+// show (decrypted) as its line in the conversation list, and the time the list places and dates it by (lastMessageAt,
+// as serverCommon has it: the group's own start when no message is left). Nothing for a server's channels, which
+// have no such line.
+const lastIfGroup = (s) => {
+  if (!s || s.kind !== 'group') return {};
+  const last = groupLast(s);
+  return { last, lastMessageAt: last ? last.createdAt : s.created_at };
+};
 // What one member sees of a server: channels they can view (with their permissions), roles, emoji, theme.
 // ev: permissions already worked out for many members at once (perms.forServer), when there is one.
 function serializeServer(s, uid, common = serverCommon(s), ev = null) {
@@ -435,7 +448,7 @@ function serializeServer(s, uid, common = serverCommon(s), ev = null) {
   if (out.kind !== 'group') out.hideHistory = !!s.hide_history;
   // Whether invite link previews show this server's name and member count (server/invitepreview.js).
   if (out.kind !== 'group') out.invitePreview = !!s.invite_preview;
-  if (out.kind === 'group') { out.last = common.last; out.lastMessageAt = common.lastMessageAt; }
+  if (out.kind === 'group') { out.last = common.last; out.lastMessageAt = common.lastMessageAt; out.look = common.look ?? null; }
   const to = USE && out.kind !== 'group' ? USE.timeoutOf(s.id, uid) : null;
   if (to) out.timeout = { until: to.until, reason: to.reason };
   // People a moderator server-muted, for those who can lift it (the member menu offers "Remove server mute" even
@@ -517,10 +530,75 @@ function reactionsFor(ids) {
   }
   return map;
 }
+// v21 (photos): how many comments each photo of these messages has: { [messageId]: { [fileIdx]: n } }, counting only
+// replies that haven't disappeared. A comment is an ordinary reply that also says which photo it's about (reply_file),
+// so the count is one range of the partial index per message. table: 'messages' or 'dm_messages' (null: both, for a
+// search page that mixes them). The count includes a comment the reader can't open (a reply in a thread from before
+// their history starts, server/joinhistory.js): it says only that someone commented, and the comments themselves
+// are never handed out to them (photos.js).
+function fileRepliesFor(table, ids, t = now()) {
+  const map = {};
+  if (!ids.length) return map;
+  for (const tb of table ? [table] : ['messages', 'dm_messages']) {
+    for (let i = 0; i < ids.length; i += 500) {
+      const part = ids.slice(i, i + 500);
+      for (const r of db.prepare(`SELECT reply_to, reply_file, COUNT(*) AS n FROM ${tb} INDEXED BY idx_${tb}_reply_file
+        WHERE reply_to IN (${part.map(() => '?').join(',')}) AND reply_file IS NOT NULL AND ${LIVE} GROUP BY reply_to, reply_file`).iterate(...part, t)) {
+        (map[r.reply_to] ||= {})[r.reply_file] = r.n;
+      }
+    }
+  }
+  return map;
+}
+// A tag as it travels with its message (the photos.js routes add messageId when it travels alone).
+const tagOut = (r) => ({ id: r.id, fileIdx: r.file_idx, authorId: r.author_id, ciphertext: r.ciphertext, epoch: r.epoch == null ? null : r.epoch, createdAt: r.created_at });
+// v21 (photos): the encrypted tags on these messages' photos, oldest first: { [messageId]: [tag] }. In slices of 500 like
+// reactionsFor (a message has at most 300, photos.js).
+function tagsFor(ids) {
+  const map = {};
+  if (!ids.length) return map;
+  for (let i = 0; i < ids.length; i += 500) {
+    const part = ids.slice(i, i + 500);
+    for (const r of db.prepare(`SELECT id, message_id, file_idx, author_id, ciphertext, epoch, created_at FROM media_tags
+      WHERE message_id IN (${part.map(() => '?').join(',')}) ORDER BY created_at, id`).iterate(...part)) {
+      (map[r.message_id] ||= []).push(tagOut(r));
+    }
+  }
+  return map;
+}
+// Everything a page of messages carries besides the messages themselves, read once for the whole page instead of once
+// per message: reactions, photo comment counts and photo tags. serializeMessage and serializeDmMessage take it (and
+// read what's missing from it one message at a time, which is fine for a single message).
+const extrasFor = (ids, table = null) => ({ reactions: reactionsFor(ids), fileReplies: fileRepliesFor(table, ids), tags: tagsFor(ids) });
+// What serializeMessage and serializeDmMessage add from those, for one row.
+function extrasOf(row, table, x) {
+  const fr = x && x.fileReplies ? x.fileReplies[row.id] : fileRepliesFor(table, [row.id])[row.id];
+  const tags = x && x.tags ? x.tags[row.id] : tagsFor([row.id])[row.id];
+  return {
+    reactions: x && x.reactions ? x.reactions[row.id] || [] : reactionsFor([row.id])[row.id] || [],
+    // How many uploads it listed (messages.files): only a photo below that can have comments (replyFileIn) or tags
+    // (photos.js), so the apps offer neither past it. 0 for a forward from before v21 (db.js), whose photos the
+    // panel can't list either.
+    files: row.files || 0,
+    // Which photo of the message it replies to this reply comments on (null for any other message).
+    replyFile: row.reply_file == null ? null : row.reply_file,
+    ...(fr ? { fileReplies: fr } : {}),
+    ...(tags && tags.length ? { tags } : {}),
+  };
+}
 
 // since: the reader's history start in this server (server/joinhistory.js startOf), when it has one: a quote of a
 // message from before it isn't sent (replyHidden: true, so the app can say why instead of "no longer available").
-function serializeMessage(row, channel, reactions, since = null) {
+// A reply carries the message it quotes. One longer than anyone but the owner may send (up to 262,144 characters,
+// with many files: validCipher) goes without its ciphertext (big): every reply to it would carry it again, to
+// everyone, in every page. The app shows the quote from the original when it has it (app.js fillMessage).
+function quoteOf(r, enc) {
+  const base = { id: r.id, authorId: r.author_id, createdAt: r.created_at, expiresAt: r.expires_at || null };
+  return r.ciphertext && r.ciphertext.length > CIPHER_MAX ? { ...base, big: true } : { ...base, ...enc };
+}
+// extras: what extrasFor() read for the whole page (reactions, photo comment counts and tags), or nothing for a single
+// message.
+function serializeMessage(row, channel, extras, since = null) {
   let reply = null;
   let replyHidden = false;
   if (row.reply_to) {
@@ -528,7 +606,7 @@ function serializeMessage(row, channel, reactions, since = null) {
     let r = db.prepare('SELECT * FROM messages WHERE id = ?').get(row.reply_to);
     if (since && alive(r) && !HIST.visible(r, since)) { r = null; replyHidden = true; }
     // createdAt: apps only check a reply against keys its author had when it was written.
-    if (alive(r) && r.ciphertext) reply = { id: r.id, authorId: r.author_id, ciphertext: r.ciphertext, epoch: r.epoch, createdAt: r.created_at, expiresAt: r.expires_at || null };
+    if (alive(r) && r.ciphertext) reply = quoteOf(r, { ciphertext: r.ciphertext, epoch: r.epoch });
     else if (alive(r)) {
       const rd = unseal(r.body);
       reply = { id: r.id, authorId: r.author_id, content: (rd.content || '').slice(0, 140), hasAttachments: (rd.attachments || []).length > 0, createdAt: r.created_at, expiresAt: r.expires_at || null, ...(rd.bot ? { bot: true } : {}) };
@@ -552,8 +630,18 @@ function serializeMessage(row, channel, reactions, since = null) {
     createdAt: row.created_at,
     editedAt: row.edited_at,
     expiresAt: row.expires_at || null,
-    reactions: reactions ? reactions[row.id] || [] : reactionsFor([row.id])[row.id] || [],
+    ...channelExtras(row, extras, since),
   };
+}
+// A channel message's extras for a reader whose history starts at since (server/joinhistory.js): no tag locked with a
+// key from before theirs (they couldn't open it; tags come after their photo, so there are normally none).
+function channelExtras(row, extras, since) {
+  const out = extrasOf(row, 'messages', extras);
+  if (since && out.tags) {
+    const tags = out.tags.filter((t) => t.epoch == null || t.epoch >= since.epoch);
+    if (tags.length) out.tags = tags; else delete out.tags;
+  }
+  return out;
 }
 // files-10: a news post's picture and a webhook post's avatar come with a signed proxy link (imageSrc, avatarSrc),
 // made fresh each time a message is sent to an app, so older posts get working links too. The app loads only those.
@@ -578,11 +666,11 @@ function threadInfo(row) {
   return t.n ? { threadCount: t.n, threadLastAt: t.last } : {};
 }
 
-function serializeDmMessage(row, reactions) {
+function serializeDmMessage(row, extras) {
   let reply = null;
   if (row.reply_to) {
     const r = db.prepare('SELECT id, author_id, ciphertext, created_at, expires_at FROM dm_messages WHERE id = ?').get(row.reply_to);
-    if (alive(r)) reply = { id: r.id, authorId: r.author_id, ciphertext: r.ciphertext, createdAt: r.created_at, expiresAt: r.expires_at || null };
+    if (alive(r)) reply = quoteOf(r, { ciphertext: r.ciphertext });
   }
   return {
     id: row.id,
@@ -595,17 +683,24 @@ function serializeDmMessage(row, reactions) {
     createdAt: row.created_at,
     editedAt: row.edited_at,
     expiresAt: row.expires_at || null,
-    reactions: reactions ? reactions[row.id] || [] : reactionsFor([row.id])[row.id] || [],
+    ...extrasOf(row, 'dm_messages', extras),
   };
 }
 
+// A DM's newest message that hasn't disappeared, as the apps show it in the conversation list (decrypted there).
+// Sent with the DM and again with each delete, since a delete can take the newest one away.
+function dmLast(dmId) {
+  const m = db.prepare(`SELECT id, author_id, ciphertext, created_at, expires_at FROM dm_messages WHERE dm_id = ? AND ${LIVE} ORDER BY id DESC LIMIT 1`).get(dmId, now());
+  return m ? { id: m.id, authorId: m.author_id, ciphertext: m.ciphertext, createdAt: m.created_at, expiresAt: m.expires_at || null } : null;
+}
 // disappear: the conversation's timer in seconds (0 = off). last: the newest message that hasn't disappeared.
+// look: its chat background (server/looks.js), sealed, or null.
 function serializeDm(row, userId) {
-  const last = db.prepare(`SELECT id, author_id, ciphertext, created_at, expires_at FROM dm_messages WHERE dm_id = ? AND ${LIVE} ORDER BY id DESC LIMIT 1`).get(row.id, now());
   return {
     id: row.id, userId: row.user_a === userId ? row.user_b : row.user_a, lastMessageAt: row.last_message_at, region: row.rtc_region || null, regionVersion: row.rtc_region_v || 0,
     disappear: row.disappear_secs || 0,
-    last: last ? { id: last.id, authorId: last.author_id, ciphertext: last.ciphertext, createdAt: last.created_at, expiresAt: last.expires_at || null } : null,
+    last: dmLast(row.id),
+    look: LOOKS ? LOOKS.lookOf('d:' + row.id) : null,
   };
 }
 
@@ -701,11 +796,43 @@ function emitChannelMessage(c, row, event, msg, { skip = null } = {}) {
   const rooms = quoted.filter((u) => ev.channel(c, u) & PM.VIEW_CHANNEL).map((u) => `user:${u}`);
   if (rooms.length) io.to(rooms).emit(event, { ...msg, reply: null, replyHidden: true });
 }
+// v21 (photos): the photos of these messages got or lost a comment (one was posted, deleted or disappeared). Each one's
+// new counts go to whoever hears about that message's reactions: both people in a DM; in a channel, everyone who can
+// see it except members it's from before (server/joinhistory.js). Messages that are gone themselves are skipped.
+// table: 'messages' or 'dm_messages'.
+function emitFileReplies(table, messageIds) {
+  const ids = [...new Set(messageIds.filter(Boolean))];
+  if (!ids.length) return;
+  const t = now();
+  const counts = fileRepliesFor(table, ids, t);
+  const convs = new Map(); // channel or DM rows, read once each
+  const convOf = (sql, id) => { if (!convs.has(id)) convs.set(id, db.prepare(sql).get(id) || null); return convs.get(id); };
+  for (const id of ids) {
+    if (table === 'messages') {
+      // What toChannelAbout needs to tell who it's from before, without the ciphertext itself.
+      const m = db.prepare('SELECT id, channel_id, thread_id, created_at, ciphertext IS NOT NULL AS ciphertext, epoch, expires_at FROM messages WHERE id = ?').get(id);
+      const c = alive(m, t) && convOf('SELECT * FROM channels WHERE id = ?', m.channel_id);
+      if (c) toChannelAbout(c, m).emit('message:file-replies', { id, channelId: c.id, threadId: m.thread_id || null, fileReplies: counts[id] || {} });
+    } else {
+      const m = db.prepare('SELECT id, dm_id, expires_at FROM dm_messages WHERE id = ?').get(id);
+      const d = alive(m, t) && convOf('SELECT * FROM dm_channels WHERE id = ?', m.dm_id);
+      if (d) io.to([`user:${d.user_a}`, `user:${d.user_b}`]).emit('dm:file-replies', { id, dmId: d.id, fileReplies: counts[id] || {} });
+    }
+  }
+}
+// The messages that the comments among these rows are about (rows with reply_file set), for emitFileReplies once the
+// comments are gone. sql selects reply_to and reply_file from the rows that go, with args.
+const commentedIn = (sql, ...args) => db.prepare(sql).all(...args).filter((r) => r.reply_file != null && r.reply_to).map((r) => r.reply_to);
 const isBlocked = (a, b) => !!db.prepare('SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)').get(a, b, b, a);
 // outsideImages: what your apps do with an image link to another site in a message (xss-8). Loading it shows that
 // site your IP address, so by default they ask first ('ask' | 'always' | 'never'). Only your own apps read it.
-const PRIVACY_DEFAULTS = { dms: 'everyone', friendRequests: 'everyone', outsideImages: 'ask' };
+// memberRelays: 'avoid' = your apps never use, measure or connect through a call relay run by a member (Settings →
+// Help host), and ignore the other side's addresses on one ('use' | 'avoid'); GET /ice then gives you no login for one,
+// only where they all are. The others in a call are told (voice:join marks you, and so do your offers and answers),
+// so their apps leave member relays out of their connection with you too.
+const PRIVACY_DEFAULTS = { dms: 'everyone', friendRequests: 'everyone', outsideImages: 'ask', memberRelays: 'use' };
 const OUTSIDE_IMAGES = ['ask', 'always', 'never'];
+const MEMBER_RELAY_CHOICES = ['use', 'avoid'];
 const privacyOf = (row) => { try { return { ...PRIVACY_DEFAULTS, ...JSON.parse(row.privacy || '{}') }; } catch { return { ...PRIVACY_DEFAULTS }; } };
 function requireChannel(channelId, userId) {
   const c = db.prepare('SELECT * FROM channels WHERE id = ?').get(channelId);
@@ -874,6 +1001,15 @@ function removeUpload(url) {
 // quotaMb: total storage per person · dailyMb: uploads per person per 24 hours. 0 = no limit.
 // Admins and the owner aren't limited by quota/daily (per-file limits still apply).
 const LIMIT_DEFAULTS = { fileMb: MAX_UPLOAD_MB, imageMb: 12, songMb: 10, quotaMb: 1000, dailyMb: 500 };
+// Files in one message: up to 10, or 100 for the server's owner. A picture goes up with a thumbnail, so twice as many
+// uploads are linked to a message (attachBlobs). The owner's bigger messages also get more room for their ciphertext
+// (validCipher) and more uploads a minute (limited, storage.js). The app has the same numbers (attachments.js).
+const MAX_FILES = 10;
+const OWNER_MAX_FILES = 100;
+const isOwner = (uid) => !!uid && staffRole(uid) === 'owner';
+const maxFilesOf = (uid) => (isOwner(uid) ? OWNER_MAX_FILES : MAX_FILES);
+// How many times the usual number of uploads a minute (and an hour) someone may send files for messages with.
+const uploadPace = (uid) => (isOwner(uid) ? 10 : 1);
 function uploadLimits() {
   let v = {};
   try { v = JSON.parse(getSetting('uploadLimits') || '{}') || {}; } catch { /* defaults */ }
@@ -954,12 +1090,17 @@ function limited(kind, base, field) {
   const perFile = { file: 'fileMb', image: 'imageMb', song: 'songMb' }[kind];
   const label = { file: 'Files', image: 'Images', song: 'Songs', gif: 'GIFs for the library' }[kind];
   return (req, res, next) => {
-    // Counted before the file is received, so a flood never reaches the disk.
+    // Counted before the file is received, so a flood never reaches the disk. The owner's messages may carry 100
+    // files (200 uploads with their thumbnails), so each of their files for messages counts a tenth (their pictures,
+    // icons and songs, which share these limits, still count whole: a big message doesn't hold those up), and doesn't
+    // use up the share of the network they're on (everyone there has it).
     try {
-      rateLimit(`up:user:${req.userId}`, 60, 60000);
-      rateLimit(`up:userh:${req.userId}`, 600, 3600000);
-      rateLimit(`up:session:${req.session.id}`, 40, 60000);
-      limitNet(req, 'up', 150, 60000);
+      // (Counted in tenths, in whole numbers: 0.1 + 0.1 + … drifts.)
+      const pace = kind === 'file' ? uploadPace(req.userId) : 1;
+      rateLimit(`up:user:${req.userId}`, 600, 60000, 10 / pace);
+      rateLimit(`up:userh:${req.userId}`, 6000, 3600000, 10 / pace);
+      rateLimit(`up:session:${req.session.id}`, 400, 60000, 10 / pace);
+      if (pace === 1) limitNet(req, 'up', 150, 60000);
     } catch (e) { return next(e); }
     const q = quotaOf(req.userId);
     if (q.blocked) return next(new HttpError(403, 'Uploads are turned off for your account. Ask an admin if you think that\u2019s a mistake.'));
@@ -1041,12 +1182,23 @@ function requireUnlocked(uid) {
 // Encrypted attachments are opaque blobs. The sender lists the blob URLs (not their contents) when
 // posting, so only the uploader can attach a blob and deleting a message removes its files.
 // expiresAt: the message's deadline (disappearing messages), copied so /uploads/ can check a file on its own.
+// Never a chat background's picture (v22, look_conv: server/looks.js): deleting the message would delete the
+// background's file, and changing the background the message's.
 function attachBlobs(files, userId, messageId, expiresAt = null) {
   if (!Array.isArray(files)) return;
-  const stmt = db.prepare('UPDATE blobs SET message_id = ?, expires_at = ? WHERE name = ? AND uploader_id = ? AND message_id IS NULL');
-  files.slice(0, 20).forEach((u) => { // up to 10 attachments, each with a thumbnail
+  const stmt = db.prepare('UPDATE blobs SET message_id = ?, expires_at = ? WHERE name = ? AND uploader_id = ? AND message_id IS NULL AND look_conv IS NULL');
+  [...new Set(files)].slice(0, 2 * maxFilesOf(userId)).forEach((u) => { // each attachment may have a thumbnail
     if (typeof u === 'string' && /^\/uploads\/[a-z0-9]+\.bin$/.test(u)) stmt.run(messageId, expiresAt, path.basename(u), userId);
   });
+}
+// v21 (photos): how many uploads a message lists (messages.files and dm_messages.files, which the Photos & videos pages
+// go by): the distinct well-formed addresses its sender posted, files and thumbnails alike, up to what one message may
+// carry (as attachBlobs takes them). What was posted, not what attachBlobs linked: a forward lists the original's
+// uploads, which stay the original's blobs, and is in the panel all the same.
+function fileCountOf(files, userId) {
+  if (!Array.isArray(files)) return 0;
+  const n = new Set(files.filter((u) => typeof u === 'string' && /^\/uploads\/[a-z0-9]+\.bin$/.test(u))).size;
+  return Math.min(n, 2 * maxFilesOf(userId));
 }
 function removeMessageFiles(messageIds) {
   if (!messageIds.length) return;
@@ -1060,21 +1212,28 @@ function removeMessageFiles(messageIds) {
       .forEach((m) => (unseal(m.body).attachments || []).forEach((a) => removeUpload(a.url)));
   }
 }
-// Everything that hangs off messages: their files, reactions and poll votes. These tables have no foreign key to
-// the messages (channel and DM messages share them), so every way of deleting messages calls this first.
+// The tables besides blobs that hang off messages by message_id: reactions, poll votes and closings, mention marks and
+// (v21) photo tags. They have no foreign key to the messages (channel and DM messages share them), so every way of
+// deleting messages clears them: forgetMessages, deleteMessageTree, purgeChannelMessages and sweepOrphans here, and
+// the disappearing sweep (server/disappear.js, whose list also has saved entries and the pin history).
+const MESSAGE_SIDE_TABLES = ['reactions', 'poll_votes', 'poll_closed', 'mention_marks', 'media_tags'];
+// Everything that hangs off messages: their files, reactions, poll votes and photo tags. Every way of deleting messages
+// calls this first (or deletes the same, as the ones below do).
 function forgetMessages(messageIds) {
   if (!messageIds.length) return;
   removeMessageFiles(messageIds);
   for (let i = 0; i < messageIds.length; i += 500) {
     const ids = messageIds.slice(i, i + 500);
     const q = ids.map(() => '?').join(',');
-    for (const t of ['reactions', 'poll_votes', 'poll_closed', 'mention_marks']) db.prepare(`DELETE FROM ${t} WHERE message_id IN (${q})`).run(...ids);
+    for (const t of MESSAGE_SIDE_TABLES) db.prepare(`DELETE FROM ${t} WHERE message_id IN (${q})`).run(...ids);
   }
 }
 // Before a server or group is deleted: its messages' files, reactions and votes, and its own pictures (icon,
-// banner, background, emoji). The database cascade removes the rows, but not files or quota bookkeeping.
+// banner, background, emoji), and a group chat's chat background with its picture and log (server/looks.js). The
+// database cascade removes the rows, but not files or quota bookkeeping.
 function purgeServerContent(s) {
   forgetMessages(db.prepare('SELECT m.id FROM messages m JOIN channels c ON c.id = m.channel_id WHERE c.server_id = ?').all(s.id).map((r) => r.id));
+  if (s.kind === 'group' && LOOKS) LOOKS.forget('g:' + s.id);
   const th = themeOf(s);
   [s.icon, th.banner, th.background && th.background.image, ...db.prepare('SELECT url FROM emojis WHERE server_id = ?').all(s.id).map((e) => e.url)]
     .forEach((u) => { if (typeof u === 'string') removeUpload(u); });
@@ -1089,12 +1248,15 @@ function deleteMessageTree(id) {
   // Older, server-encrypted messages keep their attachment list in the sealed body.
   db.prepare('SELECT body FROM messages WHERE (id = ? OR thread_id = ?) AND ciphertext IS NULL').all(id, id)
     .forEach((m) => (unseal(m.body).attachments || []).forEach((a) => files.push(a.url)));
+  // Comments on photos among them: the messages they're about lose one each.
+  const commented = commentedIn('SELECT reply_to, reply_file FROM messages WHERE (id = ? OR thread_id = ?) AND reply_file IS NOT NULL', id, id);
   db.transaction(() => {
     db.prepare(`DELETE FROM blobs WHERE message_id IN (${tree})`).run(id, id);
-    for (const x of ['reactions', 'poll_votes', 'poll_closed', 'mention_marks']) db.prepare(`DELETE FROM ${x} WHERE message_id IN (${tree})`).run(id, id);
+    for (const x of MESSAGE_SIDE_TABLES) db.prepare(`DELETE FROM ${x} WHERE message_id IN (${tree})`).run(id, id);
     db.prepare('DELETE FROM messages WHERE id = ? OR thread_id = ?').run(id, id);
   })();
   files.forEach((u) => removeUpload(u));
+  emitFileReplies('messages', commented);
 }
 // Many channel messages at once (bulk delete, a ban's cleanup), deleted the way deleteMessageTree deletes one:
 // thread replies go with the message that starts the thread, and so do files, reactions and poll votes. One
@@ -1115,21 +1277,25 @@ function purgeChannelMessages(rows, actorId) {
   }
   const every = slices([...all]);
   const files = [];
+  const commented = [];
   for (const part of every) {
     db.prepare(`SELECT name FROM blobs WHERE message_id IN (${marks(part.length)})`).all(...part).forEach((b) => files.push('/uploads/' + b.name));
     // Older, server-encrypted messages keep their attachment list in the sealed body.
     db.prepare(`SELECT body FROM messages WHERE id IN (${marks(part.length)}) AND ciphertext IS NULL`).all(...part)
       .forEach((m) => (unseal(m.body).attachments || []).forEach((a) => files.push(a.url)));
+    // Comments on photos among them: the messages they're about (those that stay) lose one each.
+    commented.push(...commentedIn(`SELECT reply_to, reply_file FROM messages WHERE id IN (${marks(part.length)}) AND reply_file IS NOT NULL`, ...part));
   }
   db.transaction(() => {
     for (const part of every) {
       const q = marks(part.length);
       db.prepare(`DELETE FROM blobs WHERE message_id IN (${q})`).run(...part);
-      for (const t of ['reactions', 'poll_votes', 'poll_closed', 'mention_marks']) db.prepare(`DELETE FROM ${t} WHERE message_id IN (${q})`).run(...part);
+      for (const t of MESSAGE_SIDE_TABLES) db.prepare(`DELETE FROM ${t} WHERE message_id IN (${q})`).run(...part);
       db.prepare(`DELETE FROM messages WHERE id IN (${q})`).run(...part);
     }
   })();
   files.forEach((u) => removeUpload(u));
+  emitFileReplies('messages', commented.filter((id) => !all.has(id)));
   const byChannel = new Map();
   for (const r of rows) { if (!byChannel.has(r.channel_id)) byChannel.set(r.channel_id, []); byChannel.get(r.channel_id).push(r); }
   for (const [chId, list] of byChannel) {
@@ -1137,7 +1303,7 @@ function purgeChannelMessages(rows, actorId) {
     if (!c) continue;
     const room = toChannel(c);
     // Open apps drop them all and redraw once (the batched form of message:delete).
-    room.emit('message:delete-bulk', { channelId: c.id, messages: list.map((r) => ({ id: r.id, threadId: r.thread_id || null })) });
+    room.emit('message:delete-bulk', { channelId: c.id, messages: list.map((r) => ({ id: r.id, threadId: r.thread_id || null })), ...lastIfGroup(serverOf(c)) });
     // Threads that are still there but lost replies: their reply counts.
     // Not to members the thread is from before (server/joinhistory.js): they never got it.
     for (const rootId of new Set(list.filter((r) => r.thread_id && !all.has(r.thread_id)).map((r) => r.thread_id))) {
@@ -1206,12 +1372,17 @@ async function purgeRecentBy(s, userId, since, actorId) {
   }
   return out;
 }
-// Blobs uploaded but never attached to a message (abandoned sends) are removed after a day.
-jobs.every('uploads.unlinked_cleanup', 3600 * 1000, () => {
-  const old = db.prepare('SELECT name FROM blobs WHERE message_id IS NULL AND created_at < ?').all(Date.now() - 24 * 3600 * 1000);
+// Blobs uploaded but never attached to a message (abandoned sends) are removed after a day. A chat background's
+// picture (v22, look_conv: server/looks.js) isn't attached to a message either, and stays while it's the background.
+// Hourly (the first run UNLINKED_SWEEP_DELAY_MS after start, an hour by default).
+function sweepUnlinked() {
+  const cutoff = Date.now() - 24 * 3600 * 1000;
+  const old = db.prepare('SELECT name FROM blobs WHERE message_id IS NULL AND look_conv IS NULL AND created_at < ?').all(cutoff);
   old.forEach((b) => removeUpload('/uploads/' + b.name));
-  if (old.length) db.prepare('DELETE FROM blobs WHERE message_id IS NULL AND created_at < ?').run(Date.now() - 24 * 3600 * 1000);
-});
+  if (old.length) db.prepare('DELETE FROM blobs WHERE message_id IS NULL AND look_conv IS NULL AND created_at < ?').run(cutoff);
+  return old.length;
+}
+jobs.every('uploads.unlinked_cleanup', 3600 * 1000, sweepUnlinked, { firstDelay: +(process.env.UNLINKED_SWEEP_DELAY_MS || 3600 * 1000) });
 // Leftovers whose message is gone: from before the cleanup above existed (groups that emptied out, for example).
 // Once shortly after start, then daily.
 function sweepOrphans() {
@@ -1221,7 +1392,9 @@ function sweepOrphans() {
   const blobs = db.prepare(`SELECT name FROM blobs WHERE ${gone('blobs')}`).all();
   blobs.forEach((b) => removeUpload('/uploads/' + b.name));
   if (blobs.length) db.prepare(`DELETE FROM blobs WHERE ${gone('blobs')}`).run();
-  for (const t of ['reactions', 'poll_votes', 'poll_closed', 'mention_marks']) db.prepare(`DELETE FROM ${t} WHERE ${gone(t)}`).run();
+  for (const t of MESSAGE_SIDE_TABLES) db.prepare(`DELETE FROM ${t} WHERE ${gone(t)}`).run();
+  // Chat backgrounds (server/looks.js) whose conversation is gone, with their pictures and logs.
+  if (LOOKS) LOOKS.sweep();
   return blobs.length;
 }
 jobs.every('uploads.orphan_sweep', 24 * 3600 * 1000, sweepOrphans, { firstDelay: +(process.env.ORPHAN_SWEEP_DELAY_MS || 2 * 60 * 1000) });
@@ -1289,7 +1462,9 @@ function walk(dir, base = '') {
 const CORE_FONTS = /^fonts\/(fonts\.css|(figtree|bricolage-grotesque)-[\w-]+\.woff2)$/;
 const APP_ASSETS = ['/', '/manifest.webmanifest', '/vendor/argon2.js', '/socket.io/socket.io.js',
   ...walk(PUBLIC_DIR).filter((f) => /^(js|css|icons)\//.test(f) || f === 'favicon.svg' || CORE_FONTS.test(f)).map((f) => '/' + f)];
-const BUILD = crypto.createHash('sha256').update(walk(PUBLIC_DIR).sort().map((f) => f + fs.readFileSync(path.join(PUBLIC_DIR, f)).length + fs.statSync(path.join(PUBLIC_DIR, f)).mtimeMs).join('|')).digest('hex').slice(0, 12);
+// (The end-to-end tests restart the server as a new version with TEST_BUILD_SALT, without touching the files.)
+const BUILD = crypto.createHash('sha256').update(walk(PUBLIC_DIR).sort().map((f) => f + fs.readFileSync(path.join(PUBLIC_DIR, f)).length + fs.statSync(path.join(PUBLIC_DIR, f)).mtimeMs).join('|')
+  + (process.env.NODE_ENV === 'test' && process.env.TEST_BUILD_SALT ? `|${process.env.TEST_BUILD_SALT}` : '')).digest('hex').slice(0, 12);
 app.get('/sw.js', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
@@ -1301,6 +1476,15 @@ let appPage = null;
 app.get(['/', '/index.html'], (req, res, next) => (appPage ? appPage(req, res) : next()));
 app.get('/download', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'download.html')));
 app.get('/terms', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'terms.html')));
+// This server's privacy policy, a page the operator publishes somewhere (https only). The app links to it at sign-up
+// and in Settings; it's given out as privacyUrl in /api/config.
+const PRIVACY_URL = (() => {
+  const v = String(process.env.PRIVACY_URL || '').trim();
+  if (!v) return null;
+  try { const u = new URL(v); if (u.protocol === 'https:' && !u.username && !u.password) return u.href; } catch { /* below */ }
+  log.warn('config', 'privacy_url_ignored', { msg: 'PRIVACY_URL must be an https:// address; it is ignored.' });
+  return null;
+})();
 // Android App Links: with this file, a phone that has a Hearth app built for this server (HEARTH_SERVER in the
 // apps workflow) opens https://this-server/invite/... links straight in the app instead of the browser. Android
 // only believes it for apps signed with a key listed here: ANDROID_CERT_SHA256 is that key's SHA-256
@@ -1780,6 +1964,7 @@ let PRES = null; // server/presence.js
 let SCHED = null; // server/scheduled.js
 let NICK = null; // server/nicknames.js
 let WFILTER = null; // server/wordfilter.js
+let LOOKS = null; // server/looks.js: chat backgrounds
 // What someone is called in a server's notifications: their nickname there, else their display name.
 const nameIn = (serverId, uid) => (NICK && NICK.nicknameOf(serverId, uid)) || nameOf(uid);
 function pushTo(userIds, payload, what = { kind: 'other' }) {
@@ -1890,6 +2075,7 @@ api.get('/config', (req, res) => {
     registrationOpen: regMode() !== 'closed',
     registrationRequiresCode: regMode() === 'code',
     termsVersion: termsInfo().version || 0,
+    privacyUrl: PRIVACY_URL,
     gifsEnabled: true, // the server's own library always works
     gifLibraryOnly: !gifKey(),
     gifProvider: gifProvider(),
@@ -1996,7 +2182,12 @@ function knownNetwork(uid, ip) {
   return db.prepare("SELECT ip FROM user_ips WHERE user_id = ? AND ip LIKE '%:%' ORDER BY last_seen DESC LIMIT 1000").all(uid).some((r) => netOf(r.ip) === net);
 }
 api.post('/auth/login', wrap(async (req, res) => {
+  // Two limits per network. 'login' slows guessing: 20 every 10 minutes, and a right password gives its try back
+  // (below). 'loginall' counts every password check and gives nothing back, because each one is slow on purpose
+  // (bcrypt, on the main thread): one account signing in over and over with its right password can't keep the
+  // server busy. 100 still lets a school or an office in.
   limitNet(req, 'login', 20, 10 * 60 * 1000);
+  limitNet(req, 'loginall', 100, 10 * 60 * 1000);
   // The robot check comes before every shared limit: a request without a solved one is turned away here, so
   // junk can't use up the instance-wide limit or an account's own (which would lock real people out).
   verifyCaptcha((req.body || {}).captcha, 'login', req.ip);
@@ -2023,6 +2214,12 @@ api.post('/auth/login', wrap(async (req, res) => {
   if (!ok || !row || row.is_bot || row.deleted_at) { noteAuthFailure(req.ip); secEvent('failed_login', req.ip, name); fail(401, 'Wrong username or password.'); }
   if (maintenance() && !isStaff(row.id)) fail(503, maintenance(), 'maintenance');
   if (stillSuspended(row)) fail(403, suspendedMsg(row), 'suspended');
+  // The right password of an account that may sign in isn't a guess: it gives its try back to the network's 'login'
+  // limit, which is there to slow guessing. Otherwise a school, an office or a family behind one address is locked
+  // out once 20 people sign in within ten minutes. Wrong passwords from the network are still capped at 20 (the limit
+  // is checked before the password is), and every check still counts toward 'loginall'. (Not for a suspended
+  // account, which would otherwise keep sending right passwords at no cost.)
+  refundNet(req, 'login');
   // Two-factor sign-in: the right password isn't enough on its own.
   ACCT.require2fa(row, req.body, req);
   const token = createSession(req, row.id, { mfa: !!row.totp_enabled });
@@ -2202,7 +2399,7 @@ api.post('/me/password', auth, wrap(async (req, res) => {
   res.json({ ok: true, token: rotateToken(req) });
 }));
 
-// Deleting your account. Needs your password (and a two-factor code when it's on). What happens:
+// Deleting your account. Needs your password (and a two-factor code when it's on). What happens (eraseAccount):
 //   - you're signed out everywhere, and the account can never sign in again; the username is freed
 //   - your private keys, email, two-factor, recovery key, profile, pictures, friends, blocks and push devices are
 //     erased. Your PUBLIC keys stay: the people you talked to need them to keep reading your old direct
@@ -2210,18 +2407,30 @@ api.post('/me/password', auth, wrap(async (req, res) => {
 //   - you leave every server and group (the others switch to a new server key, as when anyone leaves)
 //   - messages you sent stay where they are (still end-to-end encrypted) and show "Deleted user"
 // Owners first hand over or delete their servers; the instance owner first hands over ownership.
+// Staff can do the same to someone else's account (DELETE /admin/users/:id, below).
 api.delete('/me', auth, wrap(async (req, res) => {
   rateLimit('deleteme:' + req.userId, 5, 60 * 60 * 1000);
   const mayGo = (row) => {
     if ((req.body || {}).confirm !== row.username) fail(400, 'Type your username to confirm.', 'confirm');
     if (ownerId() === row.id) fail(400, 'You own this Hearth server. Hand ownership to someone else first (Admin → Team & roles).', 'is_owner');
-    const owned = db.prepare("SELECT id, name FROM servers WHERE owner_id = ? AND COALESCE(kind, 'server') != 'group'").all(row.id);
+    const owned = ownedServers(row.id);
     if (owned.length) fail(400, `First delete or hand over the servers you own: ${owned.map((x) => x.name).join(', ')}.`, 'owns_servers');
   };
   // Before the password and code too (a server still owned mustn't use up a two-factor code), and again after.
   mayGo(getUserRow(req.userId));
   const row = await stepUp(req, req.body, 'authKey', { ticket: 'delete-account' });
   mayGo(row);
+  eraseAccount(row);
+  auditLog(req, 'account_deleted', row.id, row.username);
+  ACCT.notify(row, 'your account was deleted', `The account ${row.username} was deleted. This can't be undone.`);
+  res.json({ ok: true });
+}));
+// The servers an account owns (group chats aren't: they pass to the next person in them).
+const ownedServers = (uid) => db.prepare("SELECT id, name FROM servers WHERE owner_id = ? AND COALESCE(kind, 'server') != 'group'").all(uid);
+// What deleting an account does, whoever asked (the account itself, or staff). `row` is the users row from before.
+// The account row stays, emptied, so the messages it sent keep an author. delete-account.html on the website lists
+// what goes and what stays: change it when this changes.
+function eraseAccount(row) {
   // Who has them on screen, worked out before their servers and friendships go: they all see "Deleted user".
   const audience = userAudience(row.id);
   revokeSessions(row.id, { reason: 'account_deleted' });
@@ -2239,27 +2448,40 @@ api.delete('/me', auth, wrap(async (req, res) => {
   }
   const files = [row.avatar, row.banner, row.background, row.song, row.page_bg];
   const friends = db.prepare('SELECT requester_id, addressee_id FROM friendships WHERE requester_id = ? OR addressee_id = ?').all(row.id, row.id);
+  // Bots they made stop: nobody can look after them any more, and their events would keep going to the maker's
+  // own server. An admin can turn one back on (Admin → Bots) or remove it.
+  const bots = db.prepare('SELECT id FROM bots WHERE owner_id = ? AND disabled = 0').all(row.id).map((b) => b.id);
+  const botServers = bots.length ? db.prepare(`SELECT DISTINCT server_id FROM bot_installations WHERE bot_id IN (${bots.map(() => '?').join(',')})`).all(...bots).map((r) => r.server_id) : [];
   db.transaction(() => {
     db.prepare(`UPDATE users SET username = ?, auth_hash = '!', enc_private_key = '', enc_sign_private_key = NULL,
       enc_private_key_recovery = NULL, recovery_salt = NULL, email = NULL, email_verified = 0, totp_enabled = 0, totp_secret = NULL, backup_codes = '[]',
       avatar = NULL, banner = NULL, background = NULL, song = NULL, page = NULL, page_bg = NULL, profile = ?, status = 'offline', activity_cfg = '{}',
-      last_ip = NULL, support_code = NULL, deleted_at = ? WHERE id = ?`)
+      last_ip = NULL, support_code = NULL, stripe_customer = NULL, deleted_at = ? WHERE id = ?`)
       .run(`deleted-${crypto.randomBytes(5).toString('hex')}`, JSON.stringify(sanitizeProfile({ displayName: 'Deleted user' })), now(), row.id);
     for (const t of ['friendships WHERE requester_id = ? OR addressee_id = ?', 'blocks WHERE blocker_id = ? OR blocked_id = ?']) db.prepare(`DELETE FROM ${t}`).run(row.id, row.id);
-    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(row.id);
+    // Their settings and bookmarks (saved messages with their notes, read positions, mention counts, notification
+    // choices, folders and other preferences), and which servers they were in (former_members only matters to
+    // someone who could come back).
+    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters',
+      'saved_messages', 'read_states', 'mention_marks', 'notify_prefs', 'user_prefs', 'former_members']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(row.id);
+    db.prepare('DELETE FROM profile_comments WHERE profile_id = ?').run(row.id); // the comments on their profile page go with it
+    // Call relays they offered (Settings → Help host) leave everyone's calls and backups (everyone's apps are told to
+    // fetch their relay list again); their machines are told they're gone from the next check-in on and switch
+    // themselves off after a day.
+    REG.memberChanged(row.id);
+    REG.removeMemberRelaysOf(row.id);
     db.prepare("UPDATE users SET rail_layout = '', study_enabled = 0, status_expires_at = NULL WHERE id = ?").run(row.id);
+    if (bots.length) db.prepare('UPDATE bots SET disabled = 1 WHERE owner_id = ?').run(row.id);
     const roles = staffRoles();
     if (roles[row.id]) { delete roles[row.id]; saveStaffRoles(roles); }
   })();
   files.forEach((f) => removeUpload(f));
   SCHED.forgetUser(row.id); // messages they scheduled never go out
   friends.forEach((f) => emitRelationship(null, f.requester_id, f.addressee_id));
+  botServers.forEach((s) => emitServer(s));
   broadcastUser(row.id, audience);
   closeWindows(row.id, 'account_deleted');
-  auditLog(req, 'account_deleted', row.id, row.username);
-  ACCT.notify(row, 'your account was deleted', `The account ${row.username} was deleted. This can't be undone.`);
-  res.json({ ok: true });
-}));
+}
 
 // One-time upload of the user's message-signing key. Its private half is encrypted by the
 // browser with a key only the account's own identity key can derive.
@@ -3193,7 +3415,7 @@ api.post('/servers/:id/keys/self', auth, (req, res) => {
 // it the hold in servers they joined since. An instance admin can lift it everywhere at once from Admin → Users. All
 // of it goes in the audit log.
 function markVerified(target, byId) {
-  if (db.prepare('UPDATE users SET keys_reset_at = NULL, keys_vouched_by = ?, keys_vouched_at = ? WHERE id = ? AND keys_reset_at = ?')
+  if (db.prepare('UPDATE users SET keys_reset_at = NULL, keys_reset_by = NULL, keys_vouched_by = ?, keys_vouched_at = ? WHERE id = ? AND keys_reset_at = ?')
     .run(byId, now(), target.id, target.keys_reset_at).changes !== 1) return false;
   db.prepare('DELETE FROM key_vouches WHERE user_id = ?').run(target.id);
   return true;
@@ -3211,6 +3433,8 @@ function vouchDone(target, serverIds, everywhere) {
   serverIds.forEach((sid) => emitKeyState(sid));
 }
 const resetDay = (t) => new Date(t).toISOString().slice(0, 10);
+// Keys that came from a reset link the owner made can't be verified by that owner (they could have opened it).
+const MADE_THE_LINK = 'You made the reset link that gave them these keys, so someone else has to verify them: a member who knew them before, or another admin.';
 function vouchTarget(id) {
   const target = getUserRow(String(id || ''));
   if (!target || target.deleted_at || target.is_bot) fail(404, 'User not found.');
@@ -3221,6 +3445,7 @@ api.post('/users/:id/keys/verify', auth, (req, res) => {
   const target = vouchTarget(req.params.id);
   if (target.id === req.userId) fail(403, 'Someone else has to verify you: ask a member who knew you before to compare safety numbers with you.', 'self');
   if (!target.keys_reset_at) return res.json({ ok: true, verified: false, released: [], everywhere: true });
+  if (target.keys_reset_by === req.userId) fail(403, MADE_THE_LINK, 'made_the_link');
   if (keysUnverified(req.userId)) fail(403, 'Your own password was reset without your recovery key, so a member has to verify you before you can verify anyone.', 'keys_unverified');
   if ((req.body || {}).publicKey !== target.public_key) fail(409, `${target.username}\u2019s keys changed again. Compare safety numbers with them once more.`, 'stale_keys');
   const r = target.keys_reset_at;
@@ -3266,11 +3491,11 @@ api.get('/me/verifiers', auth, (req, res) => {
   const by = new Map();
   if (where.length) {
     db.prepare(`SELECT x.user_id, x.server_id FROM members x JOIN users u ON u.id = x.user_id
-        WHERE x.server_id IN (${where.map(() => '?').join(',')}) AND x.user_id != ? AND u.keys_reset_at IS NULL
+        WHERE x.server_id IN (${where.map(() => '?').join(',')}) AND x.user_id != ? AND x.user_id != ? AND u.keys_reset_at IS NULL
           AND u.deleted_at IS NULL AND u.suspended_at IS NULL AND u.is_bot = 0
           AND EXISTS (SELECT 1 FROM members a JOIN members b ON b.server_id = a.server_id AND b.user_id = ?
             WHERE a.user_id = x.user_id AND a.joined_at < ? AND b.joined_at < ?)
-        LIMIT 1000`).all(...where, me.id, me.id, r, r)
+        LIMIT 1000`).all(...where, me.id, me.keys_reset_by || '', me.id, r, r)
       .forEach((x) => { if (!by.has(x.user_id)) by.set(x.user_id, []); by.get(x.user_id).push(x.server_id); });
   }
   const ids = [...by.keys()].slice(0, 50);
@@ -3289,6 +3514,7 @@ api.post('/admin/users/:id/keys/verify', auth, wrap(async (req, res) => {
   rateLimit('adminkeysverify:' + req.userId, 30, 60 * 60 * 1000);
   const target = vouchTarget(req.params.id);
   if (target.id === req.userId) fail(403, 'Another admin, or a member who knew you before, has to verify you.', 'self');
+  if (target.keys_reset_at && target.keys_reset_by === req.userId) fail(403, MADE_THE_LINK, 'made_the_link');
   if (keysUnverified(req.userId)) fail(403, 'Your own password was reset without your recovery key, so a member has to verify you before you can verify anyone.', 'keys_unverified');
   if (!target.keys_reset_at) fail(400, 'Their keys don\u2019t need verifying.');
   await stepUp(req, req.body);
@@ -3513,8 +3739,12 @@ function pageRows(table, col, containerId, q, extra = '', since = null) {
 // The timer changes inside a history page (the apps draw them between the messages). A ?before= page ends where the
 // page after it began, and an ?after= page begins where the page before it ended, so no change falls between two.
 // since: the reader's history start in the server (server/joinhistory.js): no change from before it.
-const timerEvents = (conv, page, q, since = null) => DIS.eventsBetween(conv, page.rows, { hasMore: page.hasMore, hasNewer: page.hasNewer,
+const pageSpan = (page, q, since) => ({ hasMore: page.hasMore, hasNewer: page.hasNewer,
   before: q.before && !q.around && !q.after ? String(q.before) : null, afterAt: !q.around && q.after ? page.afterAt : null, from: since ? since.at : null });
+const timerEvents = (conv, page, q, since = null) => DIS.eventsBetween(conv, page.rows, pageSpan(page, q, since));
+// v22 (chat backgrounds): the changes to a DM's or group chat's background inside a history page, by the same rules
+// (server/looks.js). conv: 'd:<dm>' or 'g:<group>'.
+const lookEvents = (conv, page, q, since = null) => (LOOKS ? LOOKS.eventsBetween(conv, page.rows, pageSpan(page, q, since)) : []);
 
 api.get('/channels/:id/messages', auth, (req, res) => {
   const c = requireChannel(req.params.id, req.userId);
@@ -3525,12 +3755,15 @@ api.get('/channels/:id/messages', auth, (req, res) => {
   // Thread replies live in their thread, not the main channel.
   const page = pageRows('messages', 'channel_id', c.id, req.query, 'AND thread_id IS NULL', since);
   const { rows, hasMore, hasNewer } = page;
-  const reactions = reactionsFor(rows.map((r) => r.id));
-  const messages = rows.map((r) => serializeMessage(r, c, reactions, since));
+  const extras = extrasFor(rows.map((r) => r.id), 'messages');
+  const messages = rows.map((r) => serializeMessage(r, c, extras, since));
   // Your own unread and ping counts for the threads these messages start ("2 new replies" on each).
   const threads = USE ? USE.threadStates(req.userId, c, messages.filter((m) => m.threadCount).map((m) => m.id)) : {};
   const hidden = !!since && !hasMore && !req.query.after && hiddenBefore(c, since, rows[0]);
-  res.json({ messages, hasMore, hasNewer, threads, timerEvents: timerEvents('c:' + c.id, page, req.query, since), ...(hidden ? { hidden: true } : {}) });
+  // A group chat's chat also has the changes to its background (v22, server/looks.js).
+  const srv = c.type === 'text' ? serverOf(c) : null;
+  const looks = srv && srv.kind === 'group' ? { lookEvents: lookEvents('g:' + srv.id, page, req.query, since) } : {};
+  res.json({ messages, hasMore, hasNewer, threads, timerEvents: timerEvents('c:' + c.id, page, req.query, since), ...looks, ...(hidden ? { hidden: true } : {}) });
 });
 // Whether a channel has top-level messages this reader doesn't get (server/joinhistory.js) before the first one they
 // do (or at all): one step in the channel index for those from before they joined, and a look through the few written
@@ -3603,8 +3836,13 @@ function followsVoiceChat(c, u) {
 // call has none: the group's own conversation is its chat.
 const hasChat = (c, srv = serverOf(c)) => c.type === 'text' || (c.type === 'voice' && !!srv && srv.kind !== 'group');
 
-const validCipher = (c) => {
-  if (typeof c !== 'string' || c.length < 20 || c.length > 64000) fail(400, 'Bad encrypted payload. Reload the page.');
+// The longest ciphertext a message may have: 64,000 characters is 10 files with long names and descriptions and 4,000
+// characters of text. The owner's messages may carry 100 files: 262,144. The app has the same numbers (app.js).
+const CIPHER_MAX = 64000;
+const OWNER_CIPHER_MAX = 262144;
+const cipherMax = (uid) => (isOwner(uid) ? OWNER_CIPHER_MAX : CIPHER_MAX);
+const validCipher = (c, uid) => {
+  if (typeof c !== 'string' || c.length < 20 || c.length > cipherMax(uid)) fail(400, 'Bad encrypted payload. Reload the page.');
 };
 function requireCurrentEpoch(serverId, epoch) {
   const s = db.prepare('SELECT key_epoch, needs_rotation FROM servers WHERE id = ?').get(serverId);
@@ -3630,7 +3868,7 @@ api.post('/channels/:id/messages', auth, (req, res) => {
   if ((req.body || {}).threadId && c.type !== 'text') fail(400, 'Threads are only in text channels.');
   limitMessages(req);
   const { ciphertext, epoch, files } = req.body || {};
-  validCipher(ciphertext);
+  validCipher(ciphertext, req.userId);
   const cp = perms.channel(srvRow, c, req.userId);
   if (!(cp & PM.SEND_MESSAGES)) fail(403, 'You don\u2019t have permission to send messages here.');
   if (Array.isArray(files) && files.length && !(cp & PM.ATTACH_FILES)) fail(403, 'You don\u2019t have permission to attach files here.');
@@ -3645,19 +3883,44 @@ api.post('/channels/:id/messages', auth, (req, res) => {
   const ep = requireCurrentEpoch(c.server_id, epoch);
   // The disappearing timer the app encrypted for must be the one in force (it's inside the message too).
   DIS.checkTtl(req.body, c.disappear_secs);
+  const fileAsked = parseReplyFile((req.body || {}).replyFile);
   const replyTo = replyIn(c, (req.body || {}).replyTo);
   let threadId = (req.body || {}).threadId || null;
   if (threadId) {
     threadId = threadRootIn(c, threadId, req.userId);
     if (!threadId) fail(404, 'That thread no longer exists.');
   }
-  const msg = postChannelMessage(c, req.userId, { ciphertext, epoch: ep, files, replyTo, threadId, mentions: (req.body || {}).mentions, everyone: (req.body || {}).everyone }, req.body);
+  const replyFile = replyFileIn('messages', replyTo, fileAsked, { uid: req.userId, serverId: c.server_id });
+  const msg = postChannelMessage(c, req.userId, { ciphertext, epoch: ep, files, replyTo, replyFile, threadId,
+    mentions: (req.body || {}).mentions, everyone: (req.body || {}).everyone }, req.body);
   // Replying to a message from before your history here starts (by its id) doesn't hand you its quote.
   res.json(msgFor(msg, c.server_id, req.userId));
 });
 // The message a new one replies to, if it's really in this channel and hasn't disappeared (else none, as a reply to
 // a deleted message).
 const replyIn = (c, replyTo, t = now()) => (replyTo && alive(db.prepare('SELECT expires_at FROM messages WHERE id = ? AND channel_id = ?').get(String(replyTo), c.id), t) ? String(replyTo) : null);
+// v21 (photos): a reply that comments on one photo of the message it replies to says which (replyFile, its place in
+// that message's file list). Anything but a whole number from 0 to 99 is refused; null when it isn't given.
+function parseReplyFile(v) {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > 99) fail(400, 'That photo isn\u2019t in the message. Reload the page.', 'bad_reply_file');
+  return v;
+}
+// The photo a reply comments on, kept only when the reply is (replyIn / dmReplyIn kept replyTo) and the message it
+// replies to lists that many uploads (messages.files); otherwise it's a plain reply. table: 'messages' or 'dm_messages'.
+// In a channel, uid (who posts it) and serverId must be given: a message from before their history in the server
+// starts (server/joinhistory.js) is one they can't see, so it's a plain reply there too. Otherwise the replyFile they
+// got back would tell them how many uploads it has (a few posts would count them), and each one would add to the
+// comment counts that those who can see it get.
+function replyFileIn(table, replyTo, fileIdx, { uid = null, serverId = null } = {}) {
+  if (fileIdx == null || !replyTo) return null;
+  // What HIST.hidden reads (created_at, ciphertext as 1 or 0, epoch, thread_id), never the ciphertext itself.
+  const p = table === 'messages'
+    ? db.prepare('SELECT files, created_at, ciphertext IS NOT NULL AS ciphertext, epoch, thread_id FROM messages WHERE id = ?').get(replyTo)
+    : db.prepare('SELECT files FROM dm_messages WHERE id = ?').get(replyTo);
+  if (!p || p.files <= fileIdx) return null;
+  return table === 'messages' && uid && HIST.hidden(serverId, uid, p) ? null : fileIdx;
+}
 // The stored id of a thread's first message in this channel (whatever shape the request gave it in), or null: none
 // there, or one that has disappeared. uid: who's replying, when it's someone the thread is closed to (it was started
 // before their history in the server starts, server/joinhistory.js) it's as if there were none.
@@ -3678,15 +3941,18 @@ const sendSecs = (secs, ttl = null) => (ttl > 0 ? (secs > 0 ? Math.min(secs, ttl
 // scheduled message hands over its row and files). scheduled: posted at its time while its author may well be away,
 // so their read marker stays where it was (what others wrote meanwhile stays unread for them), and their own apps get
 // their copy marked scheduled: true so they don't take it as "read up to here" either.
-function postChannelMessage(c, authorId, { ciphertext, epoch, files, replyTo, threadId, mentions, everyone, ttl = null }, body, { within = null, scheduled = false } = {}) {
+// fileCount: how many uploads it lists, when files isn't that list (a scheduled message's files are handed over in
+// within; it kept the count). replyFile: the photo of replyTo it comments on (replyFileIn), or null.
+function postChannelMessage(c, authorId, { ciphertext, epoch, files, replyTo, threadId, mentions, everyone, ttl = null, fileCount = null, replyFile = null }, body, { within = null, scheduled = false } = {}) {
   const id = newId();
   const t = now();
+  const nFiles = fileCount != null ? fileCount : fileCountOf(files, authorId);
   // A thread reply never outlives the message that starts the thread.
   const root = threadId ? db.prepare('SELECT id, expires_at FROM messages WHERE id = ?').get(threadId) : null;
   const expiresAt = DISAPPEAR.stamp({ secs: sendSecs(c.disappear_secs, ttl), t, root });
   db.transaction(() => {
-    db.prepare('INSERT INTO messages (id, channel_id, author_id, body, ciphertext, epoch, reply_to, created_at, thread_id, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, c.id, authorId, '', ciphertext, epoch, replyTo, t, threadId, expiresAt);
+    db.prepare('INSERT INTO messages (id, channel_id, author_id, body, ciphertext, epoch, reply_to, created_at, thread_id, expires_at, files, reply_file) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, c.id, authorId, '', ciphertext, epoch, replyTo, t, threadId, expiresAt, nFiles, replyTo ? replyFile : null);
     // A reply moves its thread to the top of the channel's Threads list (deleting one is handled in db.js).
     if (threadId) {
       db.prepare(`INSERT INTO thread_activity (root_id, channel_id, last_reply_id) VALUES (?, ?, ?)
@@ -3713,6 +3979,8 @@ function postChannelMessage(c, authorId, { ciphertext, epoch, files, replyTo, th
   // Bots get who, where and when: never the text, which is end-to-end encrypted.
   BOTS.event('message.created', c.server_id, { messageId: id, channelId: c.id, authorId, authorIsBot: false, createdAt: msg.createdAt, editedAt: null, threadId: threadId || null, replyTo: replyTo || null, expiresAt }, { channel: c, actorId: authorId });
   if (threadId) toChannelAbout(c, visibilityOf(threadId)).emit('thread:update', { rootId: threadId, channelId: c.id, ...threadInfo({ id: threadId }) });
+  // A comment on one photo: that photo's count changed.
+  if (replyTo && replyFile != null) emitFileReplies('messages', [replyTo]);
   return msg;
 }
 
@@ -3723,7 +3991,7 @@ api.patch('/messages/:id', auth, (req, res) => {
   const c = requireMessageChannel(m, req.userId);
   if (perms.timedOut(c.server_id, req.userId)) fail(403, 'You\u2019re timed out in this server for now.', 'timed_out');
   const { ciphertext, epoch } = req.body || {};
-  validCipher(ciphertext);
+  validCipher(ciphertext, req.userId);
   const ep = requireCurrentEpoch(c.server_id, epoch);
   // Editing an older server-encrypted message: drop its readable text, keep the file list for cleanup.
   const body = m.ciphertext ? m.body : seal({ content: '', attachments: unseal(m.body).attachments || [] });
@@ -3746,7 +4014,7 @@ api.delete('/messages/:id', auth, (req, res) => {
   deleteMessageTree(m.id);
   // Someone else's message: the server's audit log says whose and where, never what it said.
   if (m.author_id !== req.userId) serverAudit(s, req.userId, 'message_delete', m.author_id, { channel: chanRef(s, c), thread: m.thread_id ? true : undefined }, c.id);
-  toChannel(c).emit('message:delete', { id: m.id, channelId: c.id, threadId: m.thread_id || null });
+  toChannel(c).emit('message:delete', { id: m.id, channelId: c.id, threadId: m.thread_id || null, ...lastIfGroup(s) });
   if (m.thread_id) toChannelAbout(c, visibilityOf(m.thread_id)).emit('thread:update', { rootId: m.thread_id, channelId: c.id, threadCount: 0, ...threadInfo({ id: m.thread_id }) });
   BOTS.event('message.deleted', c.server_id, { messageId: m.id, channelId: c.id, authorId: m.author_id, threadId: m.thread_id || null, deletedBy: req.userId }, { channel: c, actorId: req.userId });
   res.json({ ok: true });
@@ -3801,10 +4069,10 @@ api.get('/messages/:id/thread', auth, (req, res) => {
   const since = HIST.startOf(c.server_id, req.userId);
   // Paged like a channel (newest replies first, ?before=id for older ones): a thread can be any size.
   const { rows, hasMore, hasNewer } = pageRows('messages', 'thread_id', root.id, { limit: '100', ...req.query }, '', since);
-  const reactions = reactionsFor([root.id, ...rows.map((r) => r.id)]);
+  const extras = extrasFor([root.id, ...rows.map((r) => r.id)], 'messages');
   // state: where you'd read up to (the app's "New" line), before opening it marks the thread read, and the channel's
   // thread pings (threadMentions), which set its badge right whenever a thread is opened.
-  res.json({ root: serializeMessage(root, c, reactions, since), messages: rows.map((r) => serializeMessage(r, c, reactions, since)), hasMore, hasNewer,
+  res.json({ root: serializeMessage(root, c, extras, since), messages: rows.map((r) => serializeMessage(r, c, extras, since)), hasMore, hasNewer,
     state: USE ? USE.threadStateWithBadge(req.userId, root.id, c) : null });
 });
 
@@ -3871,14 +4139,14 @@ api.get('/channels/:id/pins', auth, (req, res) => {
   const since = HIST.startOf(c.server_id, req.userId);
   const hist = HIST.where(since, { alias: 'messages.', threads: true });
   const rows = db.prepare(`SELECT * FROM messages INDEXED BY idx_messages_pins WHERE channel_id = ? AND pinned_at IS NOT NULL${hist.sql} AND ${LIVE} ORDER BY pinned_at DESC LIMIT 50`).all(c.id, ...hist.args, now());
-  const reactions = reactionsFor(rows.map((r) => r.id));
-  res.json(rows.map((r) => serializeMessage(r, c, reactions, since)));
+  const extras = extrasFor(rows.map((r) => r.id), 'messages');
+  res.json(rows.map((r) => serializeMessage(r, c, extras, since)));
 });
 api.get('/dms/:id/pins', auth, (req, res) => {
   const d = requireDm(req.params.id, req.userId);
   const rows = db.prepare(`SELECT * FROM dm_messages WHERE dm_id = ? AND pinned_at IS NOT NULL AND ${LIVE} ORDER BY pinned_at DESC LIMIT 50`).all(d.id, now());
-  const reactions = reactionsFor(rows.map((r) => r.id));
-  res.json(rows.map((r) => serializeDmMessage(r, reactions)));
+  const extras = extrasFor(rows.map((r) => r.id), 'dm_messages');
+  res.json(rows.map((r) => serializeDmMessage(r, extras)));
 });
 
 // Reactions work for both server messages and DMs.
@@ -3939,8 +4207,9 @@ api.get('/dms/:id/messages', auth, (req, res) => {
   const d = requireDm(req.params.id, req.userId);
   const page = pageRows('dm_messages', 'dm_id', d.id, req.query);
   const { rows, hasMore, hasNewer } = page;
-  const reactions = reactionsFor(rows.map((r) => r.id));
-  res.json({ messages: rows.map((r) => serializeDmMessage(r, reactions)), hasMore, hasNewer, timerEvents: timerEvents('d:' + d.id, page, req.query) });
+  const extras = extrasFor(rows.map((r) => r.id), 'dm_messages');
+  res.json({ messages: rows.map((r) => serializeDmMessage(r, extras)), hasMore, hasNewer, timerEvents: timerEvents('d:' + d.id, page, req.query),
+    lookEvents: lookEvents('d:' + d.id, page, req.query) });
 });
 
 api.post('/dms/:id/messages', auth, (req, res) => {
@@ -3950,20 +4219,24 @@ api.post('/dms/:id/messages', auth, (req, res) => {
   // A deleted account keeps its public key (so old messages stay readable), but nobody can read new ones.
   if ((getUserRow(d.user_a === req.userId ? d.user_b : d.user_a) || {}).deleted_at) fail(403, 'This account was deleted.', 'deleted');
   const { ciphertext, files } = req.body || {};
-  validCipher(ciphertext);
+  validCipher(ciphertext, req.userId);
+  const fileAsked = parseReplyFile((req.body || {}).replyFile);
   DIS.checkTtl(req.body, d.disappear_secs);
-  res.json(postDmMessage(d, req.userId, { ciphertext, files, replyTo: dmReplyIn(d, (req.body || {}).replyTo) }, req.body));
+  const replyTo = dmReplyIn(d, (req.body || {}).replyTo);
+  res.json(postDmMessage(d, req.userId, { ciphertext, files, replyTo, replyFile: replyFileIn('dm_messages', replyTo, fileAsked) }, req.body));
 });
 // The DM a new one replies to, if it's really in this DM and hasn't disappeared.
 const dmReplyIn = (d, replyTo, t = now()) => (replyTo && alive(db.prepare('SELECT expires_at FROM dm_messages WHERE id = ? AND dm_id = ?').get(String(replyTo), d.id), t) ? String(replyTo) : null);
 // Posts a DM that passed its checks (see postChannelMessage: scheduled DMs end here too, with the same options, and
 // get their deadline from the DM's timer when they're posted).
-function postDmMessage(d, authorId, { ciphertext, files, replyTo, ttl = null }, body, { within = null, scheduled = false } = {}) {
+function postDmMessage(d, authorId, { ciphertext, files, replyTo, ttl = null, fileCount = null, replyFile = null }, body, { within = null, scheduled = false } = {}) {
   const id = newId();
   const t = now();
   const expiresAt = DISAPPEAR.stamp({ secs: sendSecs(d.disappear_secs, ttl), t });
+  const nFiles = fileCount != null ? fileCount : fileCountOf(files, authorId);
   db.transaction(() => {
-    db.prepare('INSERT INTO dm_messages (id, dm_id, author_id, ciphertext, reply_to, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, d.id, authorId, ciphertext, replyTo, t, expiresAt);
+    db.prepare('INSERT INTO dm_messages (id, dm_id, author_id, ciphertext, reply_to, created_at, expires_at, files, reply_file) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, d.id, authorId, ciphertext, replyTo, t, expiresAt, nFiles, replyTo ? replyFile : null);
     if (within) within(id);
     if (within && expiresAt != null) db.prepare('UPDATE blobs SET expires_at = ? WHERE message_id = ?').run(expiresAt, id);
   })();
@@ -3978,6 +4251,7 @@ function postDmMessage(d, authorId, { ciphertext, files, replyTo, ttl = null }, 
     const dm = serializeDm({ ...d, last_message_at: t }, uid);
     io.to(`user:${uid}`).emit('dm:message', { dm, message: scheduled && uid === authorId ? { ...msg, scheduled: true } : msg, user: publicUser(getUserRow(dm.userId)) });
   }
+  if (replyTo && replyFile != null) emitFileReplies('dm_messages', [replyTo]);
   return msg;
 }
 
@@ -3988,7 +4262,7 @@ api.patch('/dm-messages/:id', auth, (req, res) => {
   // Editing is sending new words: a block stops it like it stops new messages (deleting your own still works).
   if (isBlocked(d.user_a, d.user_b)) fail(403, 'You can\u2019t message this person.');
   const { ciphertext } = req.body || {};
-  validCipher(ciphertext);
+  validCipher(ciphertext, req.userId);
   db.prepare('UPDATE dm_messages SET ciphertext = ?, edited_at = ? WHERE id = ?').run(ciphertext, now(), m.id);
   const msg = serializeDmMessage(db.prepare('SELECT * FROM dm_messages WHERE id = ?').get(m.id));
   io.to([`user:${d.user_a}`, `user:${d.user_b}`]).emit('dm:update', msg);
@@ -4001,14 +4275,16 @@ api.delete('/dm-messages/:id', auth, (req, res) => {
   const d = requireDm(m.dm_id, req.userId);
   forgetMessages([m.id]);
   db.prepare('DELETE FROM dm_messages WHERE id = ?').run(m.id);
-  io.to([`user:${d.user_a}`, `user:${d.user_b}`]).emit('dm:delete', { id: m.id, dmId: d.id });
+  io.to([`user:${d.user_a}`, `user:${d.user_b}`]).emit('dm:delete', { id: m.id, dmId: d.id, last: dmLast(d.id) });
+  // A comment on a photo: that photo has one fewer.
+  if (m.reply_file != null) emitFileReplies('dm_messages', [m.reply_to]);
   res.json({ ok: true });
 });
 
 // Encrypted attachment blobs. The client encrypts each file with its own random key before upload.
 api.post('/upload/encrypted', auth, limited('file', uploadEncrypted, 'file'), (req, res) => {
   if (!req.file) fail(400, 'No file.');
-  rateLimit('blob:' + req.userId, 120, 60 * 1000);
+  rateLimit('blob:' + req.userId, 120 * uploadPace(req.userId), 60 * 1000);
   db.prepare('INSERT INTO blobs (name, uploader_id, created_at) VALUES (?, ?, ?)').run(req.file.filename, req.userId, now());
   res.json({ url: '/uploads/' + req.file.filename });
 });
@@ -4587,6 +4863,7 @@ api.patch('/me/privacy', auth, (req, res) => {
   if (['everyone', 'friends'].includes(b.dms)) p.dms = b.dms;
   if (['everyone', 'mutual', 'nobody'].includes(b.friendRequests)) p.friendRequests = b.friendRequests;
   if (OUTSIDE_IMAGES.includes(b.outsideImages)) p.outsideImages = b.outsideImages;
+  if (MEMBER_RELAY_CHOICES.includes(b.memberRelays)) p.memberRelays = b.memberRelays;
   db.prepare('UPDATE users SET privacy = ? WHERE id = ?').run(JSON.stringify(p), req.userId);
   // Your other devices follow right away (an image link they show switches to asking, or stops asking).
   io.to(`user:${req.userId}`).emit('user:update', selfUser(getUserRow(req.userId)));
@@ -4749,7 +5026,8 @@ const requireInstanceAdmin = (uid) => { if (!isInstanceAdmin(uid)) fail(403, 'On
 // Email, recovery key and two-factor sign-in (server/accounts.js).
 ACCT = require('./accounts')({ api, auth, db, fail, wrap, rateLimit, countHit, limitNet, getSetting, setSetting, getUserRow, selfUser, broadcastUser, bcrypt, seal, unseal,
   tokenId, requireInstanceAdmin: (uid) => requireInstanceAdmin(uid), requireOutranks: (req, id) => requireOutranks(req, id), auditLog, secEvent: (...a) => secEvent(...a), cleanIp,
-  emitKeyState: (sid) => emitKeyState(sid), brandName: () => brand().name, isB64ish, isSalt, atRestKey, stepUp, createSession, revokeSessions, rotateToken, hitsSoFar, refundHit, refundNet, verifyCaptcha: (...a) => verifyCaptcha(...a) });
+  emitKeyState: (sid) => emitKeyState(sid), brandName: () => brand().name, isB64ish, isSalt, atRestKey, stepUp, createSession, revokeSessions, rotateToken, hitsSoFar, refundHit, refundNet, verifyCaptcha: (...a) => verifyCaptcha(...a),
+  staffRole: (uid) => staffRole(uid) });
 // The key saved in the app wins over .env, so the admin never has to edit files. Keys saved in the app are
 // sealed with data/secret.key (sealSecret in db.js), like the SMTP password.
 const giphyKey = () => openSecret(getSetting('giphyKey')) || GIPHY_API_KEY;
@@ -5188,32 +5466,78 @@ if (process.env.MAIL_OUTBOX_DIR) log.warn('mail', 'outbox_removed', { msg: 'MAIL
 if (process.env.TURN_USERNAME && !turnSecret()) log.warn('turn', 'static_password', { msg: 'TURN_USERNAME/TURN_CREDENTIAL hand everyone the same relay password that never expires. Use TURN_SECRET instead (sudo bash scripts/setup-turn.sh sets it all up).' });
 // Relays: this server's own (if set up) plus every linked region that's up (server/regions.js). Each is its own
 // entry with a region name, so the app can measure which answer fastest and use those.
-const REG = require('./regions')({ api, app, auth, db, fail, wrap, rateLimit, getSetting, setSetting, requireInstanceAdmin, newId, DATA_DIR, ROOT: path.join(__dirname, '..'), stepUp, auditLog });
+const REG = require('./regions')({ api, app, auth, db, fail, wrap, rateLimit, getSetting, setSetting, requireInstanceAdmin, newId, DATA_DIR, ROOT: path.join(__dirname, '..'), stepUp, auditLog,
+  sealSecret, openSecret, getIo: () => io, keyed: (s) => crypto.createHmac('sha256', atRestKey).update(String(s)).digest('hex'), mainTurnUrls: turnUrls, netOf });
 const TURN_STEP = 6 * 3600; // seconds
+// Member relays (Settings → Help host, server/regions.js) that the owner approved, that are up, and whose member can
+// still use this server. Each has a TURN secret of its own, so its logins are made here, relay by relay: a member's
+// machine never holds the main secret and can't make a login that works anywhere else. The login names the person
+// by a pseudonym keyed with this server's own key and different on every member relay, so members comparing their
+// relays' logs can't tell they saw the same person (one relay can still link one person's logins over time), and
+// never by the user id or the access log's pseudonym. Each person gets at most 8, in an order keyed the same way:
+// steady per person (calls don't hop between relays), spread over the relays (which limits how many members see any
+// one person's address), and nobody can work out ahead of time whose list a relay lands in.
+// The name a member gave their relay ("Maya's Pi, Chicago") stays with the owner and that member: next to the relay's
+// address it could say whose home it is, so apps get "Member relay".
+const MEMBER_RELAYS_EACH = 8;
+const MEMBER_RELAY_LABEL = 'Member relay';
+const memberPseudonym = (relayId, uid) => crypto.createHmac('sha256', atRestKey).update(`member-relay|${relayId}|${uid}`).digest('base64url').slice(0, 22);
+function memberIceFor(uid, exp) {
+  const order = (id) => crypto.createHmac('sha256', atRestKey).update(`member-relay-order|${uid}|${id}`).digest('hex');
+  const picked = REG.memberRelays().map((r) => ({ r, k: order(r.id) })).sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0)).slice(0, MEMBER_RELAYS_EACH).map(({ r }) => r);
+  // Where these logins work, until they run out: someone who avoids member relays is told about every one of those
+  // addresses, even after the relay is paused or removed (REG.memberHosts).
+  REG.noteHosts(picked.flatMap((r) => r.ips), exp * 1000);
+  const withLogins = picked.map((r) => {
+    const login = `${exp}:${memberPseudonym(r.id, uid)}`;
+    return { urls: r.urls, username: login, credential: crypto.createHmac('sha1', r.secret).update(login).digest('base64'), region: MEMBER_RELAY_LABEL, regionId: r.id, expiresAt: exp * 1000, community: true };
+  });
+  // And where every other approved one is, with no login (the app never uses or measures those): a relay that's offline
+  // for a few minutes, or that's no longer among this person's 8, stays in the list, so the app can tell it from one that
+  // left calls, and only a call set up with one that left starts over (REG.memberListed).
+  const have = new Set(picked.map((r) => r.id));
+  return [...withLogins, ...REG.memberListed().filter((r) => !have.has(r.id)).map((r) => hostOnly(r.ip))];
+}
+// A member relay by its address only, with no login.
+const hostOnly = (ip) => {
+  const host = ip.includes(':') ? `[${ip}]` : ip;
+  return { urls: [`turn:${host}:3478?transport=udp`, `turn:${host}:3478?transport=tcp`], region: MEMBER_RELAY_LABEL, community: true };
+};
+// Someone who avoids member relays (Settings → Privacy & safety) gets no login for any of them. Their app still has to
+// know where every one is: the other person in a call may use any approved member relay, not only the 8 in someone's
+// list, and the avoider's app ignores the other side's addresses on these machines (relays.js memberRelayHosts). So
+// they get all of them, by address only: every one that's up, and every address any login still running out was
+// handed out for (a relay paused, removed or offline since still takes those).
+const memberHostsFor = () => REG.memberHosts().map(hostOnly);
 function iceServersFor(uid) {
   const list = [iceServers[0]];
   const urls = turnUrls();
   const relays = [...(urls.length ? [{ id: 'main', region: 'Main server', urls }] : []), ...REG.liveRelays().map((r) => ({ id: r.id, region: r.name, urls: r.urls }))];
+  // Relay logins run out 12 to 18 hours from now, at a 6-hour boundary, so a person has at most three logins
+  // alive at once. (The relay's per-login limits then work per person, not per request.) expiresAt tells the
+  // app when to fetch new ones (GET /api/ice): an app left open for days keeps working calls.
+  const exp = (Math.floor(Date.now() / 1000 / TURN_STEP) + 3) * TURN_STEP;
   if (relays.length && turnSecret()) {
-    // Relay logins run out 12 to 18 hours from now, at a 6-hour boundary, so a person has at most three logins
-    // alive at once. (The relay's per-login limits then work per person, not per request.) expiresAt tells the
-    // app when to fetch new ones (GET /api/ice): an app left open for days keeps working calls.
     // Relays log every login, and a region may run on someone else's machine, so the login names the person by
     // the same keyed pseudonym the access log uses, never by their user id: steady per person, so the per-login
     // limits still work, and an admin can match relay logs to access logs, but the login alone doesn't tell a relay
     // who it is. (It never changes, though, so a relay can link one person's logins over time.)
     // The password is coturn's shared-secret scheme (HMAC-SHA1 of the login), which every relay checks.
-    const exp = (Math.floor(Date.now() / 1000 / TURN_STEP) + 3) * TURN_STEP;
     const login = `${exp}:${log.userHash(uid)}`;
     const credential = crypto.createHmac('sha1', turnSecret()).update(login).digest('base64');
     for (const r of relays) list.push({ urls: r.urls, username: login, credential, region: r.region, regionId: r.id, expiresAt: exp * 1000 });
   } else if (urls.length && process.env.TURN_USERNAME) {
     list.push({ urls, username: process.env.TURN_USERNAME, credential: process.env.TURN_CREDENTIAL || '' });
   }
+  // After the owner's relays, and even when this server has no relay of its own.
+  const row = getUserRow(uid);
+  const avoid = !!row && privacyOf(row).memberRelays === 'avoid';
+  list.push(...(avoid ? memberHostsFor() : memberIceFor(uid, exp)));
   return list;
 }
 api.get('/ice', auth, (req, res) => {
-  rateLimit('ice:' + req.userId, 60, 3600000);
+  // (Apps fetch it again when a member relay comes or goes, ice:changed, and every 10 minutes while they hold one.)
+  rateLimit('ice:' + req.userId, 120, 3600000);
   res.json(iceServersFor(req.userId));
 });
 
@@ -5226,7 +5550,9 @@ api.post('/calls/region', auth, (req, res) => {
   const room = String(b.room || '');
   const want = b.region === null || b.region === 'auto' || b.region === undefined ? null : String(b.region);
   if (want !== null) {
-    const known = want === 'main' ? turnUrls().length > 0 : !!db.prepare('SELECT 1 FROM regions WHERE id = ?').get(want);
+    // Only the owner's relays: a member relay is never forced on everyone in a call (someone who avoids member relays
+    // couldn't connect, and it would hand that member everyone's address).
+    const known = want === 'main' ? turnUrls().length > 0 : !!db.prepare("SELECT 1 FROM regions WHERE id = ? AND kind = 'region'").get(want);
     if (!known) fail(400, 'No such region.');
   }
   const me = req.userId;
@@ -5408,6 +5734,7 @@ function suspendUser(uid, reason, hours = 0) {
   db.prepare('UPDATE users SET suspended_at = ?, suspend_reason = ?, suspended_until = ? WHERE id = ?').run(now(), String(reason || '').slice(0, 300), until, uid);
   revokeSessions(uid, { reason: 'suspended' });
   closeWindows(uid, 'suspended');
+  REG.memberChanged(uid); // call relays they run leave everyone's calls
 }
 const ipsOf = (uid) => db.prepare('SELECT ip, first_seen AS firstSeen, last_seen AS lastSeen FROM user_ips WHERE user_id = ? ORDER BY last_seen DESC LIMIT 20').all(uid);
 // Placeholder until the Support account exists (phase 2): every new account will get it as a friend.
@@ -5450,7 +5777,7 @@ api.post('/reports', auth, (req, res) => {
     for (const e of (Array.isArray(b.evidence) ? b.evidence : []).slice(0, 25)) {
       const row = inConvo(String(e.id || ''));
       if (!row) continue;
-      evidence.push({ id: e.id, authorId: row.author_id, createdAt: row.created_at, text: String(e.text || '').slice(0, 4000), files: (Array.isArray(e.files) ? e.files : []).slice(0, 10).map((f) => String(f).slice(0, 200)), reported: e.id === id });
+      evidence.push({ id: e.id, authorId: row.author_id, createdAt: row.created_at, text: String(e.text || '').slice(0, 4000), files: (Array.isArray(e.files) ? e.files : []).slice(0, maxFilesOf(row.author_id)).map((f) => String(f).slice(0, 200)), reported: e.id === id });
     }
     if (!evidence.some((e) => e.reported)) fail(400, 'Include the reported message.');
   }
@@ -5568,6 +5895,9 @@ api.get('/admin/users/:id', auth, staffOnly, (req, res) => {
     storage: quotaOf(r.id), quotaOverride: r.upload_quota_mb, profileLocked: !!r.profile_locked, supporter: !!r.supporter,
     emailMasked: ACCT ? ACCT.mask(r.email) : '', totpEnabled: !!r.totp_enabled, hasRecovery: !!r.enc_private_key_recovery,
     keysResetAt: r.keys_reset_at || null, keysWaiting: r.keys_reset_at ? stillWaiting(r).length : 0, keysVouched: r.keys_vouched_at ? { at: r.keys_vouched_at, by: brief(r.keys_vouched_by) } : null, self: r.id === req.userId,
+    keysResetByMe: !!r.keys_reset_at && r.keys_reset_by === req.userId,
+    resetLinkUntil: staffRole(req.userId) === 'owner' && ACCT ? ACCT.ownerLinkUntil(r.id, req.userId) : null,
+    deletedAt: r.deleted_at || null,
     commentsWritten: db.prepare('SELECT COUNT(*) n FROM profile_comments WHERE author_id = ?').get(r.id).n,
     notes: db.prepare('SELECT id, author_id, text, created_at FROM staff_notes WHERE user_id = ? ORDER BY created_at DESC LIMIT 100').all(r.id)
       .map((n) => ({ id: n.id, text: n.text, createdAt: n.created_at, author: brief(n.author_id), mine: n.author_id === req.userId })),
@@ -5607,6 +5937,7 @@ api.post('/admin/users/:id/unsuspend', auth, staffOnly, (req, res) => {
   requireOutranks(req, req.params.id);
   db.prepare('UPDATE users SET suspended_at = NULL, suspend_reason = NULL, suspended_until = NULL WHERE id = ?').run(req.params.id);
   adminLog(req, 'unsuspend', req.params.id);
+  REG.memberChanged(req.params.id); // call relays they run come back
   res.json({ ok: true });
 });
 // Private notes about an account, shared between staff ("warned on 3 May about spam").
@@ -5644,6 +5975,32 @@ api.post('/admin/users/:id/logout', auth, staffOnly, (req, res) => {
   adminLog(req, 'sign_out_everywhere', req.params.id);
   res.json({ ok: true });
 });
+// Deleting someone else's account, the same way Settings → Delete account does (eraseAccount), without their
+// password: for an account that belongs to a child under 13, or for someone who asked by email and can't sign in
+// (delete-account.html and child-safety.html on the website promise both). Admins and the owner only, on accounts
+// ranked below them; it takes the staff member's own password (and two-factor code), and the account's username
+// typed out. Like the account itself, staff first deal with servers it owns (Admin → Servers).
+api.delete('/admin/users/:id', auth, adminOnly, wrap(async (req, res) => {
+  const b = req.body || {};
+  const mayGo = () => {
+    const r = requireOutranks(req, req.params.id);
+    if (r.deleted_at) fail(400, 'That account is already deleted.', 'deleted');
+    if (r.is_bot) fail(400, 'That’s a bot or webhook account, not a person’s. Remove the bot or the webhook instead.', 'bot');
+    if (b.confirm !== r.username) fail(400, `Type ${r.username} to confirm.`, 'confirm');
+    const owned = ownedServers(r.id);
+    if (owned.length) fail(400, `${r.username} owns ${owned.map((x) => x.name).join(', ')}. Delete those servers or give them to someone else first (Admin → Servers).`, 'owns_servers');
+    return r;
+  };
+  mayGo(); // before the password and code too, so a refusal doesn't use up a two-factor code
+  await stepUp(req, b);
+  const row = mayGo();
+  const reason = String(b.reason || '').trim().slice(0, 300);
+  eraseAccount(row);
+  adminLog(req, 'account_deleted_by_staff', row.id, `${row.username}${reason ? ` — ${reason}` : ''}`);
+  // No "reset your password" advice: there's no account left to sign in to.
+  ACCT.notify(row, 'your account was deleted', `The account ${row.username} was deleted by the server's staff. This can't be undone.`, { footer: '' });
+  res.json({ ok: true });
+}));
 api.get('/admin/reports', auth, staffOnly, (req, res) => {
   const st = ['open', 'reviewing', 'resolved', 'dismissed', 'all'].includes(req.query.status) ? req.query.status : 'open';
   const rows = st === 'all' ? db.prepare('SELECT * FROM reports ORDER BY created_at DESC LIMIT 200').all()
@@ -5698,13 +6055,14 @@ api.delete('/admin/messages/:id', auth, staffOnly, (req, res) => {
     if (above) fail(403, `This thread has replies by ${staffRole(above) === 'owner' ? 'the owner' : 'staff at your level or above'}, so someone ranked above them has to remove it.`);
     deleteMessageTree(m.id);
     if (c && !group) { const srv = serverOf(c); serverAudit(srv, null, 'message_delete', m.author_id, { channel: chanRef(srv, c), thread: m.thread_id ? true : undefined, staff: true }, c.id); }
-    if (c) toChannel(c).emit('message:delete', { id: m.id, channelId: c.id, threadId: m.thread_id || null });
+    if (c) toChannel(c).emit('message:delete', { id: m.id, channelId: c.id, threadId: m.thread_id || null, ...lastIfGroup(serverOf(c)) });
     if (c) BOTS.event('message.deleted', c.server_id, { messageId: m.id, channelId: c.id, authorId: m.author_id, threadId: m.thread_id || null, deletedBy: req.userId }, { channel: c, actorId: req.userId });
   } else {
     const dm = db.prepare('SELECT * FROM dm_channels WHERE id = ?').get(d.dm_id);
     forgetMessages([d.id]);
     db.prepare('DELETE FROM dm_messages WHERE id = ?').run(d.id);
-    if (dm) io.to([`user:${dm.user_a}`, `user:${dm.user_b}`]).emit('dm:delete', { id: d.id, dmId: dm.id });
+    if (dm) io.to([`user:${dm.user_a}`, `user:${dm.user_b}`]).emit('dm:delete', { id: d.id, dmId: dm.id, last: dmLast(dm.id) });
+    if (d.reply_file != null) emitFileReplies('dm_messages', [d.reply_to]);
   }
   adminLog(req, 'delete_message', req.params.id);
   res.json({ ok: true });
@@ -5865,6 +6223,8 @@ api.put('/admin/announcement', auth, adminOnly, (req, res) => {
   adminLog(req, a ? 'announcement' : 'announcement_cleared', null, text);
   res.json({ ok: true, announcement: a });
 });
+// Update notes ("What's new"): only the owner writes and publishes them; the app comes with none (server/updatenotes.js).
+require('./updatenotes')({ api, auth, ownerOnly, fail, rateLimit, newId, now, getSetting, setSetting, auditLog, getIo: () => io });
 // Maintenance mode: only admins can use the app until it's turned off.
 api.put('/admin/maintenance', auth, adminOnly, (req, res) => {
   const text = String((req.body || {}).text || '').trim().slice(0, 300);
@@ -6388,9 +6748,17 @@ const MEMB = require('./memberships')({ api, auth, db, fail, wrap, rateLimit, ge
   mailPublicUrl: () => { let v = {}; try { v = JSON.parse(getSetting('mail') || '{}') || {}; } catch { /* none */ } return String(v.publicUrl || process.env.PUBLIC_URL || '').replace(/\/+$/, ''); } });
 // Resumable uploads, storage reports and orphan cleanup (server/storage.js).
 STORE = require('./storage')({ api, auth, db, fail, wrap, rateLimit, limitNet, HttpError, quotaOf, overLimit, uploadLimits, fmtMb, MB, getUserRow,
-  removeUpload, fileName, UPLOAD_DIR, DATA_DIR, unseal, auditLog, stepUp, adminOnly, brief });
+  removeUpload, fileName, UPLOAD_DIR, DATA_DIR, unseal, auditLog, stepUp, adminOnly, brief, uploadPace });
 // Message search (server/search.js): filters by where, who and when; the search words stay in the app.
-require('./search')({ api, auth, db, fail, rateLimit, canIn, PM, requireServer, requireChannel, requireDm, serializeMessage, serializeDmMessage, reactionsFor, history: HIST });
+require('./search')({ api, auth, db, fail, rateLimit, canIn, PM, requireServer, requireChannel, requireDm, serializeMessage, serializeDmMessage, extrasFor, history: HIST });
+// Photos & videos (server/photos.js, v21): a conversation's messages with files, comments on one photo, and photo tags
+// (sealed on the device; the server never sees their words).
+require('./photos')({ api, auth, db, fail, rateLimit, now, perms, PM, isMember, serverOf, requireChannel, requireDm, isBlocked, getUserRow, history: HIST, alive, LIVE,
+  serializeMessage, serializeDmMessage, extrasFor, tagsFor, tagOut, toChannelAbout, getIo: () => io, requireCurrentEpoch, b64Len });
+// Chat backgrounds (server/looks.js, v22): a DM's or group chat's background, sealed on the device; the server never
+// sees which one.
+LOOKS = require('./looks')({ api, auth, db, fail, rateLimit, newId, now, requireDm, requireServer, isBlocked, getUserRow, requireCurrentEpoch, removeUpload,
+  getIo: () => io, b64Len });
 // Bots and integrations (server/bots.js): installs, scopes, the bot API, signed webhooks, slash commands.
 BOTS = require('./bots')({ api, express, db, fail, HttpError, wrap, rateLimit, newId, seal, unseal, sealSecret, openSecret, auth, stepUp, auditLog, serverAudit, checkWords,
   perms, PM, getUserRow, publicUser, requireServer, requireChannel, serializeMessage, toChannel, toChannelAbout, emitChannelMessage, reactionsFor, deleteMessageTree, emitServer: (id) => emitServer(id),
@@ -6405,16 +6773,18 @@ require('./webhooks')({ api, express, db, fail, HttpError, rateLimit, limitNet, 
 // Saved messages, read state, notification preferences, pin history, timeouts, data export (server/usability.js).
 USE = require('./usability')({ api, auth, db, fail, wrap, rateLimit, stepUp, auditLog, serverAudit, perms, PM, ALL: ALL_PERMS, newId, now, brandName: () => brand().name,
   emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), emitServer: (sid) => io && emitServer(sid),
-  requireServer, requirePerm, requireChannel, requireDm, isMember, serverOf, serializeMessage, serializeDmMessage, reactionsFor, getUserRow, selfUser, nameOf, history: HIST });
+  requireServer, requirePerm, requireChannel, requireDm, isMember, serverOf, serializeMessage, serializeDmMessage, extrasFor, getUserRow, selfUser, nameOf, history: HIST });
 // Disappearing messages (server/disappear.js): the timer routes, and the job that deletes messages whose time has
 // passed (it runs once right here, before anyone can connect).
 DIS = require('./disappear')({ api, auth, db, fail, rateLimit, newId, now, requireChannel, requireDm, requireManageableChannel, serverOf, isBlocked, getUserRow,
   // (io is declared further down: during the start-up sweep it doesn't exist yet, and there's nobody to tell.)
-  toChannel: (c) => toChannel(c), getIo: () => { try { return io || null; } catch { return null; } }, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), removeUpload, unseal, threadInfo, groupLast,
+  toChannel: (c) => toChannel(c), getIo: () => { try { return io || null; } catch { return null; } }, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), removeUpload, unseal, threadInfo, lastIfGroup, dmLast,
   bots: () => BOTS, serverAudit, chanRef,
   // "New members can't read messages from before they joined" (server/joinhistory.js): thread counts of a thread from
   // before someone joined don't reach them, nor do timer changes from before.
-  toChannelAbout: (c, row) => toChannelAbout(c, row), visibilityOf, historyStart: (c, uid) => HIST.startOf(c.server_id, uid) });
+  toChannelAbout: (c, row) => toChannelAbout(c, row), visibilityOf, historyStart: (c, uid) => HIST.startOf(c.server_id, uid),
+  // v21 (photos): photos that lost a comment that disappeared get their new counts (only once io is there).
+  emitFileReplies });
 // Away after inactivity and custom statuses that clear themselves (server/presence.js).
 PRES = require('./presence')({ api, auth, db, fail, rateLimit, limitNet, now, getUserRow, parseProfile, sanitizeProfile, checkWords, requireUnlocked,
   broadcastUser, broadcastPresence, presenceFor, selfUser });
@@ -6427,12 +6797,14 @@ SA = require('./serveraudit')({ api, auth, db, fail, rateLimit, perms, PM, ALL: 
 require('./imports')({ api, auth, db, fail, rateLimit, limitNet, countHit, hitsSoFar, newId, now, features, isStaff, ALL: ALL_PERMS, CHANNEL_SCOPED, PM,
   serializeServer, keyState, getIo: () => io, auditLog, requirePerm });
 // Scheduled messages, "Send later" (server/scheduled.js): ciphertext held until its time, then posted as if sent then.
-SCHED = require('./scheduled')({ api, auth, db, fail, rateLimit, limitMessages, newId, now, perms, PM, requireChannel, requireDm, isMember, serverOf,
-  isBlocked, getUserRow, stillSuspended, validCipher, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,
+SCHED = require('./scheduled')({ api, auth, db, fail, rateLimit, limitMessages, newId, now, perms, PM, requireChannel, requireDm, isMember, serverOf, msgFor,
+  isBlocked, getUserRow, stillSuspended, validCipher, cipherMax, maxFilesOf, requireCurrentEpoch, attachBlobs, removeUpload, replyIn, threadRootIn, dmReplyIn,
   postChannelMessage, postDmMessage, pushTo, maintenance, nameOf, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data), ready: () => !!io,
   // Voice channels' chats take scheduled messages like text channels; the disappearing timer a message was encrypted
   // for is checked when it's scheduled, as when it's sent (server/disappear.js).
-  hasChat, checkTtl: (body, secs) => DIS.checkTtl(body, secs) });
+  hasChat, checkTtl: (body, secs) => DIS.checkTtl(body, secs),
+  // v21 (photos): a scheduled reply may comment on one photo, checked as when it's sent.
+  parseReplyFile, replyFileIn });
 // Per-server nicknames (server/nicknames.js).
 NICK = require('./nicknames')({ api, auth, db, fail, rateLimit, limitNet, requireServer, isMember, perms, PM, ALL: ALL_PERMS, checkWords, requireUnlocked,
   serverAudit, getIo: () => io });
@@ -6605,7 +6977,7 @@ function makeEncryptedBackup() {
   return encBusy;
 }
 const backupInfo = () => ({ backups: listBackups(), encrypted: listEncBackups(), offsite: (process.env.BACKUP_RCLONE_REMOTE || '').trim() || null, keyFrom: process.env.BACKUP_KEY ? 'env' : 'file',
-  regionCopies: db.prepare('SELECT name, stats FROM regions').all().map((r) => { try { const b = JSON.parse(r.stats || '{}').backup; return b && b.ready ? r.name : null; } catch { return null; } }).filter(Boolean) });
+  regionCopies: REG.copyNames() }); // (member relays that may get copies as "<name> (member)")
 api.post('/admin/backups', auth, ownerOnly, wrap(async (req, res) => {
   rateLimit('backup:' + req.userId, 6, 3600000);
   let b;
@@ -7048,6 +7420,9 @@ function setupSockets(server) {
       }
     }));
 
+    // Who in the call avoids member relays (Settings → Privacy & safety): the app joining builds its connection with
+    // them without member relays (voice.js), so a member relay of its own is never told their address.
+    const avoidFlag = (id) => { const row = getUserRow(id); return row && privacyOf(row).memberRelays === 'avoid' ? { avoid: true } : {}; };
     socket.on('voice:join', guard((p = {}) => {
       const roomId = String(p.channelId || '');
       let room; let vp = PM.CONNECT | PM.SPEAK; let serverMuted = false;
@@ -7094,7 +7469,7 @@ function setupSockets(server) {
         Object.assign(prev, { socketId: socket.id, reconnecting: false, grace: null, speak, serverMuted, muted: !!p.muted || !speak, deafened: !!p.deafened, video: !!p.video, screen: !!p.screen });
         socket.join(`voice:${room}`);
         const m = voiceChannels.get(room);
-        const peers = [...m.entries()].filter(([userId]) => userId !== uid).map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting }));
+        const peers = [...m.entries()].filter(([userId]) => userId !== uid).map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId) }));
         // Everyone else points their connection to this person at the new socket (and renegotiates if needed).
         socket.to(`voice:${room}`).emit('voice:peer-joined', { userId: uid, socketId: socket.id, resumed: true });
         emitVoiceState(room);
@@ -7107,7 +7482,7 @@ function setupSockets(server) {
       }
       if (!voiceChannels.has(c.id)) voiceChannels.set(c.id, new Map());
       const m = voiceChannels.get(c.id);
-      const peers = [...m.entries()].map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting }));
+      const peers = [...m.entries()].map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId) }));
       // speak: whether they may talk here (the app keeps the mic off without it; recheckVoice keeps it current).
       const speak = !!(vp & PM.SPEAK);
       m.set(uid, { socketId: socket.id, sid: socket.data.sid, muted: !!p.muted || !speak, deafened: !!p.deafened, video: false, screen: false, speak, serverMuted, reconnecting: false, grace: null });

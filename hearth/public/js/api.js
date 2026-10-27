@@ -68,6 +68,7 @@ export async function api(method, path, body) {
     e.code = data.code;
     e.codeUsed = data.codeUsed === true; // turned down after a two-factor code was checked: that code is spent
     e.retryAfter = Number(r.headers.get('Retry-After')) || 0; // seconds, on 429
+    e.body = data; // the whole answer, for refusals that say what is there now (chat-look.js: 409 stale_look)
     throw e;
   }
   return data;

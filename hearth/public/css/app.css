@@ -588,6 +588,11 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 .conv-card-text span { font-size: 13px; color: var(--muted); }
 .conv-card.unread strong { color: var(--text); }
 .conv-card.unread .conv-card-text span { color: var(--text-2); }
+/* "typing…" in place of a conversation's last message (the sidebar's rows, Home's cards), with the chat's dots */
+.conv-line.is-typing { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-2); }
+.conv-line.is-typing .dots { flex: none; overflow: visible; }
+.conv-line.is-typing .dots i { width: 4px; height: 4px; background: currentColor; }
+.conv-line.is-typing .conv-typing-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
 .conv-card-time { font-size: 11.5px; color: var(--muted); flex: none; align-self: flex-start; }
 .friend-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .friend-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; border-radius: 999px; background: var(--hover); border: 1px solid var(--line); font-size: 13.5px; font-weight: 600; }
@@ -859,7 +864,7 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .att-media { position: relative; border-radius: 12px; overflow: hidden; max-width: min(440px, 100%); background: var(--hover); border: 1px solid var(--line); }
 .att-media.locked { min-width: 220px; min-height: 150px; }
 .att-media.locked::after { content: ''; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 30%, rgb(var(--text-rgb) / .06) 50%, transparent 70%) 0 0 / 200% 100%; animation: shimmer 1.4s linear infinite; }
-.att-img { max-width: 100%; max-height: 340px; cursor: zoom-in; object-fit: contain; display: block; }
+.att-img { max-width: 100%; max-height: 340px; max-height: min(340px, 40vh); cursor: zoom-in; object-fit: contain; display: block; }
 .att-video { max-width: 100%; max-height: 360px; display: block; background: #000; }
 .att-audio { width: 340px; max-width: 100%; display: block; }
 .att-audio-name { display: flex; align-items: center; gap: 6px; padding: 8px 10px 0; font-size: 13px; font-weight: 600; }
@@ -950,6 +955,7 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .pending-ic .ic { width: 34px; height: 34px; }
 .pending-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
 .pending-size { font-size: 11px; color: var(--muted); }
+.pending-note { font-size: 11px; color: var(--accent-ink); line-height: 1.25; }
 .pending-x { position: absolute; top: -6px; right: -6px; width: 24px; height: 24px; border-radius: 50%; background: rgb(var(--elev)); border: 1px solid var(--line-2); color: var(--text-2); display: grid; place-items: center; }
 .pending-x:hover { background: var(--danger-fill); color: #fff; }
 .pending-x .ic { width: 13px; height: 13px; }
@@ -1049,6 +1055,29 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .key-warn .ic { width: 13px; height: 13px; }
 .dm-profile { padding: 10px; overflow-y: auto; }
 .dm-profile .pcard { width: 100%; }
+/* The DM profile's own row: its fold button where the panel meets the chat, so on the far end when the panel is on
+   the left of it (and pointing that way). */
+.dm-profile-head { padding: 0 16px 0 8px; }
+[data-panel-side='left'] .dm-profile-head { flex-direction: row-reverse; padding: 0 8px 0 16px; }
+[data-panel-side='left'] .dm-fold .ic { transform: scaleX(-1); }
+/* The DM header's profile button, lit while the profile is open beside the chat: the one to look for once it's
+   folded away. */
+#main-head .head-profile.active { color: var(--text); background: rgb(var(--accent-rgb) / .16); box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / .45); }
+/* Folding the DM profile away and back (app.js slidePanel): the panel's width goes to nothing and back, the chat
+   reaching over the gap and the panel's borders meanwhile (--fold-ml/--fold-mr), so the chat widens and narrows with
+   it rather than jumping, even by a few pixels at the end. What's inside keeps its width (--fold-w) and slides out
+   under the edge. panel-in stays in the list so it isn't played again when the slide's class goes. Only beside the
+   chat (app.js), and the reduced-motion rules below cover it. */
+#members.panel-folding { animation: panel-in .18s var(--ease), panel-fold .18s var(--ease) forwards; }
+#members.panel-unfolding { animation: panel-in .18s var(--ease), panel-unfold .18s var(--ease); }
+#members.panel-folding > :not(.resize-handle), #members.panel-unfolding > :not(.resize-handle) { width: var(--fold-w); }
+[data-panel-side='left'] #members.panel-folding, [data-panel-side='left'] #members.panel-unfolding { align-items: flex-end; }
+#main.panel-folding { animation: main-fold .18s var(--ease) forwards; }
+#main.panel-unfolding { animation: main-unfold .18s var(--ease); }
+@keyframes panel-fold { to { width: 0; opacity: 0; } }
+@keyframes panel-unfold { from { width: 0; opacity: 0; } }
+@keyframes main-fold { to { margin-left: var(--fold-ml, 0px); margin-right: var(--fold-mr, 0px); } }
+@keyframes main-unfold { from { margin-left: var(--fold-ml, 0px); margin-right: var(--fold-mr, 0px); } }
 .pc-mutuals { display: flex; flex-direction: column; gap: 2px; }
 .pc-mutual { display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 8px; font-size: 13.5px; text-align: left; }
 .pc-mutual:hover { background: rgb(255 255 255 / .07); }
@@ -1285,7 +1314,7 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .search-foot .ic { width: 12px; height: 12px; }
 .search-foot kbd { font-size: 10.5px; padding: 0 5px; }
 /* phones: search takes the whole screen, with a close button instead of the Esc hint */
-@media (max-width: 760px) {
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   .modal-backdrop:has(.modal-search) { padding: 0; grid-template-columns: minmax(0, 1fr); }
   .modal.modal-search { max-width: none; min-width: 0; height: 100vh; height: 100dvh; max-height: none; margin: 0; border-radius: 0; border: 0; }
   .search-modal .modal-body { flex: 1; min-height: 0; }
@@ -1308,7 +1337,9 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .viewer-bar .icon-btn:hover { background: rgb(255 255 255 / .1); color: #fff; }
 .viewer-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
 .viewer-count { font-size: 13px; color: #a39bb4; margin-left: 10px; }
-.viewer-stage { flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; padding: 0 64px 32px; }
+/* The picture fits the screen however tall or wide it is: the grid's one cell is the stage's size (an auto-sized row
+   grew to the picture, so a tall photo was drawn at the window's width and cut off below). */
+.viewer-stage { flex: 1; min-height: 0; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; overflow: hidden; padding: 0 64px 32px; }
 .viewer-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; transition: transform .12s ease; animation: viewer-in .2s var(--ease); cursor: zoom-in; user-select: none; }
 .viewer-stage.zoomed .viewer-img { cursor: grab; transition: none; }
 @keyframes viewer-in { from { opacity: 0; transform: scale(.96); } }
@@ -1676,13 +1707,16 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
 .grad-colors { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .grad-preview { height: 90px; border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line-2); }
 /* ------------------------------------------------------------------ responsive */
+/* The phone layout (one column, servers and channels in a drawer) is for narrow windows and for phones held sideways:
+   (max-width: 760px), (pointer: coarse) and (max-height: 500px). js/device.js has the same query: change them together.
+   Rules for wider screens use its opposite: (min-width: 761px) with a fine pointer, no pointer, or more height. */
 /* Laptops: the right panel floats over the conversation instead of squeezing it. */
 @media (max-width: 1240px) {
   #members { position: absolute; right: var(--gap); top: var(--gap); bottom: var(--gap); z-index: 20; box-shadow: var(--pop-shadow); background: rgb(var(--s1)); }
   [data-panel-side='left'] #members { right: auto; left: var(--gap); }
   body #app, body:not(.panel-open) #app { grid-template-columns: var(--cols-np, var(--rail-w) var(--side-w) minmax(0, 1fr)); }
 }
-@media (max-width: 760px) {
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   :root { --gap: 0px; --island-r: 0px; }
   body #app, body:not(.panel-open) #app { grid-template-columns: minmax(0, 1fr); padding: 0; }
   #rail, #sidebar, #main { order: 0; }
@@ -1726,18 +1760,64 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   .emoji-picker, .gif-picker { width: calc(100vw - 16px); }
   .safety { grid-template-columns: repeat(3, 1fr); font-size: 15px; }
   #toasts { top: 62px; left: 12px; right: 12px; align-items: center; }
-  .viewer-stage { padding: 0 8px 20px; }
-  .viewer-nav { display: none; }
   .modal-search { margin-top: 0; }
+}
+/* Phones: notches, rounded corners and the home bar (index.html's viewport-fit=cover lets the page draw under them)
+   keep their distance from the header, drawer, composer and panels; the keyboard covers the home bar when it's up. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  body #app, body:not(.panel-open) #app { padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+  #main { padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  html.kb-open #main { padding-bottom: 0; }
+  #rail { width: calc(var(--rail-w) + env(safe-area-inset-left)); padding: calc(10px + env(safe-area-inset-top)) 0 calc(10px + env(safe-area-inset-bottom)) env(safe-area-inset-left); }
+  #sidebar {
+    left: calc(var(--rail-w) + env(safe-area-inset-left)); padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    width: min(var(--side-w), calc(100vw - var(--rail-w) - env(safe-area-inset-left) - 36px));
+    transform: translateX(calc(-100% - var(--rail-w) - env(safe-area-inset-left) - 16px));
+  }
+  #members { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  html.kb-open #members { padding-bottom: 0; }
+  .settings { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  .set-close { top: calc(8px + env(safe-area-inset-top)); right: calc(8px + env(safe-area-inset-right)); }
+  .modal.modal-search { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  #toasts { top: calc(62px + env(safe-area-inset-top)); }
+  /* The drawer or side panel follows the finger while it's swiped (js/phone-nav.js), with the chat dimmed behind the drawer. */
+  body.nav-swiping #rail, body.nav-swiping #sidebar, body.panel-swiping #members { transition: none; }
+  body.nav-swiping .nav-scrim { display: block; position: fixed; inset: 0; z-index: 25; background: var(--scrim); }
+  /* Messages: a narrower avatar column, so the text gets the width (follow-up messages line up with it). */
+  .msg { grid-template-columns: 40px minmax(0, 1fr); padding-left: 6px; }
+  .msg-av { height: 32px; }
+  .msg-av .av { --size: 32px !important; }
+  .msg-hover-time { font-size: 9.5px; }
+  .msg-reply { padding-left: 48px; }
+  .reply-spine { left: 23px; width: 21px; }
+  .sending-note { padding-left: 50px; }
+}
+/* Touch screens: a sideways swipe in the chat doesn't take the browser back out of Hearth (Back still works, and
+   closes what's open first: js/phone-nav.js). */
+@media (pointer: coarse) {
+  html { overscroll-behavior-x: none; }
+  /* A phone held sideways (the short half of the phone layout): a slimmer header leaves more of the short screen to
+     the chat, and none while the keyboard is up (the header comes back with the keyboard gone). Android makes the page
+     shorter for the keyboard; iOS covers it (html.kb-open, js/viewport.js). */
+  @media (max-height: 500px) {
+    :root { --head-h: 44px; }
+    html.kb-open #main-head, html.kb-open #members > .panel-head { display: none; }
+    body .chat > .call-stage { height: 130px; } /* a call going on above the chat (240px upright) */
+  }
+  @media (max-height: 260px) {
+    #main-head, #members > .panel-head { display: none; }
+  }
 }
 
 /* ------------------------------------------------------------------ reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *:not(.spinner), *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
   .pfx { display: none; }
+  .dots i { animation: none; opacity: .8; } /* "is typing…": three dots that hold still */
 }
 html.reduce-motion *:not(.spinner), html.reduce-motion *::before, html.reduce-motion *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 html.reduce-motion .pfx { display: none; }
+html.reduce-motion .dots i { animation: none; opacity: .8; }
 
 /* ------------------------------------------------------------------ encryption states */
 .key-bar {
@@ -1805,10 +1885,10 @@ img.cropped { width: 100%; height: 100%; object-fit: cover; transform: translate
 .media-thumb.mask-square { border-radius: 12%; }
 .media-thumb.mask-hexagon { border-radius: 0; clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0 50%); }
 button.media-thumb:hover { outline: 2px solid var(--accent); outline-offset: 2px; }
-@media (max-width: 760px) { .crop-stage.crop-avatar { width: 240px !important; height: 240px !important; } .crop-stage.crop-banner { width: 300px !important; height: 106px !important; } }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) { .crop-stage.crop-avatar { width: 240px !important; height: 240px !important; } .crop-stage.crop-banner { width: 300px !important; height: 106px !important; } }
 
 /* ------------------------------------------------------------------ custom layouts (wider than phones) */
-@media (min-width: 761px) {
+@media (min-width: 761px) and (pointer: fine), (min-width: 761px) and (pointer: none), (min-width: 761px) and (min-height: 501px) {
   [data-rail='top'] #app { grid-template-rows: auto minmax(0, 1fr); padding-top: 0; }
   [data-rail='top'] #rail { grid-column: 1 / -1; grid-row: 1; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 6px 2px; }
   [data-rail='top'] .rail-item { width: auto; }
@@ -1982,7 +2062,7 @@ img.cemoji.big { width: 40px; height: 40px; }
 .tri-btn.on { background: var(--active); color: var(--text); }
 .tri-btn.deny.on { background: rgb(239 84 102 / .9); color: #fff; }
 .tri-btn.allow.on { background: rgb(63 207 131 / .9); color: #0b1f14; }
-@media (max-width: 760px) { .roles-layout, .ov-layout { grid-template-columns: 1fr; } .role-list { position: static; } }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) { .roles-layout, .ov-layout { grid-template-columns: 1fr; } .role-list { position: static; } }
 
 /* ------------------------------------------------------------------ GIFs */
 .gif-picker { width: 420px; max-width: calc(100vw - 16px); }
@@ -2039,6 +2119,7 @@ img.cemoji.big { width: 40px; height: 40px; }
 .pcard.pc-no-banner .pc-av { margin-top: 0; }
 .tos-check { display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; color: var(--text-2); margin: 4px 0 2px; cursor: pointer; }
 .tos-check input { margin-top: 3px; accent-color: var(--accent); }
+.tos-privacy { margin: -10px 0 0; }
 
 /* ------------------------------------------------------------------ admin */
 .admin { flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -2209,7 +2290,7 @@ img.cemoji.big { width: 40px; height: 40px; }
 .cam-row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
 .cam-row .stack { flex: 1; min-width: 200px; }
 .cam-preview { width: 240px; aspect-ratio: 16 / 9; border-radius: 12px; background: rgb(var(--field)); object-fit: cover; transform: scaleX(-1); border: 1px solid var(--line); }
-@media (max-width: 760px) {
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   .cs-spot { flex-direction: column; } .cs-strip { width: auto; flex-direction: row; overflow-x: auto; } .cs-strip .cs-tile { width: 140px; }
   .chat > .call-stage { height: 240px; margin: 6px 6px 0; }
   .ring-card { right: 12px; bottom: 12px; }
@@ -2255,6 +2336,12 @@ img.cemoji.big { width: 40px; height: 40px; }
 .att-retry { position: absolute; inset: auto 0 0 0; margin: auto; top: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text-2); }
 .att-retry .ic { width: 15px; height: 15px; }
 .att-media.sized .att-img { width: 100%; height: 100%; object-fit: cover; max-height: none; }
+/* A short window (a small laptop's screen) keeps a picture to 40% of its height, so one never fills the chat; it
+   shrinks in its shape (app.js attachmentEl gives it --att-w and --att-h). From 850px tall it's the usual 340px. While
+   it loads, the box already has the picture's size (so it doesn't jump), and a box made wider than that (a spoiler's,
+   one that failed to load) is still no taller. */
+.att-media.sized { max-width: min(440px, 100%, calc(40vh * var(--att-w) / var(--att-h))); max-height: max(150px, min(340px, 40vh)); }
+.att-media.sized.locked { min-width: 0; min-height: 0; }
 /* Download progress for big files, a "no longer available" state, and click-to-load for big videos and songs. */
 .att-meter { position: absolute; left: 10px; right: 10px; bottom: 10px; height: 4px; border-radius: 2px; background: rgb(0 0 0 / .35); overflow: hidden; z-index: 2; }
 .att-meter[hidden] { display: none; }
@@ -2273,6 +2360,65 @@ img.cemoji.big { width: 40px; height: 40px; }
 .att-kind::before { content: '\00b7'; margin-right: 8px; }
 .viewer-stage.loading-full::after { content: 'Loading full size\2026'; position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); padding: 4px 10px; border-radius: 8px; background: rgb(0 0 0 / .55); color: #fff; font-size: 12px; }
 .viewer-stage { position: relative; }
+
+/* ------------------------------------------------------------------ phones and touch screens: pictures and the viewer
+   The same media queries as device.js. PHONE LAYOUT: (max-width: 760px), (pointer: coarse) and (max-height: 500px),
+   a narrow window or a phone held sideways. TOUCH UI: (pointer: coarse), phones and tablets. A PHONE is both at once.
+   A desktop with a mouse matches none and looks as it always has. */
+/* A message with more than 10 files (only the server's owner sends that many; app.js attachmentEl many): pictures are
+   square tiles in a grid, cropped to fill them (the viewer shows the whole picture), and everything else (files,
+   videos, songs) takes a row of its own (dense: later pictures fill the gaps rows like that leave). On every screen: it comes after the rules for one picture. */
+.msg-files.many { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); grid-auto-flow: row dense; gap: 6px; width: min(560px, 100%); }
+.msg-files.many > :not(.tile) { grid-column: 1 / -1; }
+.msg-files.many .att-media.tile { width: auto !important; max-width: none; aspect-ratio: 1; min-width: 0; min-height: 0; max-height: none; border-radius: 10px; }
+.msg-files.many .att-media.tile .att-img { width: 100%; height: 100%; max-height: none; object-fit: cover; }
+.msg-files.many .att-media.tile.click-to-load { padding: 0; display: grid; place-items: center; }
+.msg-files.many .att-media.tile .att-play { font-size: 12px; padding: 6px 8px; margin: 0; }
+.msg-files.many .att-media.tile .att-dl { top: 4px; right: 4px; width: 28px; height: 28px; }
+.msg-files.many .att-media.tile .att-alt { left: 4px; bottom: 4px; }
+/* A PHONE (PHONE LAYOUT and TOUCH UI at once): a picture in the chat takes the message's whole width when its shape
+   allows, and a tall one up to about 70% of the screen's height instead of 340px, so a phone screenshot can be read.
+   The box keeps the picture's shape (app.js attachmentEl gives it --att-w and --att-h), so nothing jumps while it
+   loads, and the picture is never cropped: should the box ever disagree with it, it's letterboxed. A computer keeps
+   the usual size, a narrow window or a touch screen too (sized like this, one filled a laptop's whole chat). */
+@media (max-width: 760px) and (pointer: coarse), (pointer: coarse) and (max-height: 500px) {
+  .att-media { max-width: 100%; }
+  .att-media.sized { max-width: 100%; max-height: none; width: min(100%, calc(var(--att-w) * 1px), calc(560px * var(--att-w) / var(--att-h))) !important; }
+  @supports (height: 1svh) {
+    .att-media.sized { width: min(100%, calc(var(--att-w) * 1px), calc(70svh * var(--att-w) / var(--att-h))) !important; }
+  }
+  .att-media.sized .att-img { object-fit: contain; }
+  .att-img { max-height: 560px; max-height: 70svh; }
+  .msg-files.many .att-media.tile .att-img { max-height: none; }
+}
+/* TOUCH UI: the viewer takes the fingers itself (viewer-touch.js: pinch, double tap, swipes), so the page never zooms
+   or scrolls underneath. The picture follows a finger directly and glides when it's let go. */
+@media (pointer: coarse) {
+  .viewer { touch-action: none; }
+  .viewer-stage.touching .viewer-img { transition: none; }
+  .viewer-stage.easing .viewer-img { transition: transform .2s var(--ease); }
+}
+/* PHONE LAYOUT or TOUCH UI (a tablet's too): the viewer bar's buttons are 44px, for a finger. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px), (pointer: coarse) {
+  .viewer-bar .icon-btn { width: 44px; height: 44px; border-radius: 12px; }
+  .viewer-bar .icon-btn .ic { width: 22px; height: 22px; }
+}
+/* PHONE LAYOUT: the viewer goes edge to edge on an opaque backdrop, clear of the notch and the home bar. Its bar keeps
+   the name, the count on one line, Download, More (app.js openViewer) and Close; swipes stand in for the arrow
+   buttons. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  .viewer { background: rgb(8 7 11); }
+  .viewer-bar { gap: 2px; padding: max(4px, env(safe-area-inset-top)) max(4px, env(safe-area-inset-right)) 4px max(14px, env(safe-area-inset-left)); }
+  .viewer-name { display: flex; min-width: 0; max-width: none; }
+  .viewer-name-base { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .viewer-name-ext { flex: none; }
+  .viewer-count { flex: none; white-space: nowrap; margin-left: 8px; }
+  .viewer-stage { padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  .viewer-stage.loading-full::after { bottom: calc(14px + env(safe-area-inset-bottom)); }
+  .viewer-img { border-radius: 0; }
+  .viewer-nav { display: none; }
+  #layer > .viewer-menu { z-index: 85; }
+}
 .adm-srv-ic { width: 30px; height: 30px; border-radius: 9px; object-fit: cover; background: var(--active); display: grid; place-items: center; font-size: 11px; font-weight: 700; flex: none; }
 .ip-chip.static { cursor: default; }
 .row.gap.tight { gap: 4px; align-items: center; }
@@ -2443,7 +2589,7 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 .wt-dock.mini .wt { gap: 0; }
 .wt-dock.mini .wt-stage { border-radius: 0; min-height: 0; max-height: none; }
 .wt-dock.mini .wt-bar, .wt-dock.mini .wt-queue { display: none; }
-@media (max-width: 760px) { .wt-dock.mini { width: min(62vw, 280px); right: 10px; bottom: 84px; } }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) { .wt-dock.mini { width: min(62vw, 280px); right: 10px; bottom: 84px; } }
 .wt { display: flex; flex-direction: column; gap: 8px; }
 .wt-stage { position: relative; width: 100%; aspect-ratio: 16 / 9; max-height: min(62vh, calc(100vh - 380px)); min-height: 200px; background: #000; border-radius: 12px; overflow: hidden; }
 .wt-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
@@ -2655,6 +2801,13 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 .rpill.warn { background: rgb(242 165 65 / .16); color: var(--accent); }
 .rpill.bad { background: rgb(239 84 102 / .16); color: var(--danger); }
 .adm-row.region-row { grid-template-columns: minmax(110px, 1fr) minmax(110px, 1fr) auto minmax(180px, 2fr) auto; }
+.adm-row.member-row { grid-template-columns: minmax(130px, 1.2fr) minmax(100px, 1fr) auto minmax(180px, 2fr) auto; }
+.member-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.member-actions { flex-wrap: wrap; justify-content: flex-end; }
+/* Settings → Help host: a member's own relays */
+.relay-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 12px; border-radius: 10px; background: var(--hover); border: 1px solid var(--line); }
+.relay-text { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 3px; }
+.relay-text strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; }
 .adm-row.pay-row { grid-template-columns: 90px 90px minmax(120px, 1fr) minmax(150px, 1.2fr) minmax(0, 1.5fr); }
 .price-table .adm-row.three { grid-template-columns: minmax(150px, 1fr) 100px 3fr; }
 .warn-box { margin: 0; padding: 10px 12px; border-radius: 10px; background: rgb(242 165 65 / .12); border: 1px solid rgb(242 165 65 / .3); font-size: 13.5px; }
@@ -2662,7 +2815,8 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 .perk-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 3px; color: var(--text-2); }
 .stack.tight { gap: 6px; }
 @media (max-width: 700px) {
-  .adm-row.region-row, .adm-row.pay-row, .price-table .adm-row.three { grid-template-columns: 1fr 1fr; }
+  .adm-row.region-row, .adm-row.member-row, .adm-row.pay-row, .price-table .adm-row.three { grid-template-columns: 1fr 1fr; }
+  .member-actions { justify-content: flex-start; }
 }
 
 /* ---------------------------------------------------------------- GIF picker, Discord-style */
@@ -3024,3 +3178,367 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 .sc-row dd { margin: 0; color: var(--text-2); font-size: 13.5px; }
 .sc-combo { display: inline-flex; align-items: center; gap: 2px; }
 .sc-plus, .sc-or, .sc-none { color: var(--muted); font-size: 12px; }
+
+/* ------------------------------------------------------------------ phones and tablets
+   The same two media queries as device.js, so the styles and the code agree:
+     (max-width: 760px), (pointer: coarse) and (max-height: 500px)   the phone layout: a narrow window, or a phone held sideways
+     (pointer: coarse)                                                the touch UI: a finger is the main pointer
+   A desktop with a mouse matches neither, so nothing below changes it. */
+
+/* Bottom sheets (ui.js sheet): a message's actions after a long press (app.js messageSheet). Only touch screens open them. */
+@media (pointer: coarse) {
+  .sheet-backdrop { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; background: var(--scrim); animation: fade .16s ease; }
+  .sheet-backdrop.closing { animation: fadeout .18s ease forwards; pointer-events: none; }
+  .sheet {
+    width: min(100%, 560px); max-height: 85vh; max-height: 85dvh; overflow-y: auto; overscroll-behavior: contain;
+    padding: 0 max(8px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    background: rgb(var(--elev)); border: 1px solid var(--line-2); border-bottom: 0; border-radius: 20px 20px 0 0; box-shadow: var(--pop-shadow);
+    animation: sheet-up .22s var(--ease); transition: transform .2s var(--ease);
+  }
+  .sheet:focus { outline: none; }
+  .sheet.dragging { transition: none; }
+  .sheet-backdrop.closing .sheet { animation: sheet-down .18s ease forwards; }
+  @keyframes sheet-up { from { transform: translateY(100%); } }
+  @keyframes sheet-down { to { transform: translateY(100%); } }
+  .sheet-grip { width: 40px; height: 5px; margin: 8px auto 4px; border-radius: 3px; background: var(--line-2); }
+  .sheet-reacts { display: flex; justify-content: space-between; gap: 6px; padding: 8px 4px 12px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+  .sheet-react { flex: 1 1 0; max-width: 52px; min-height: 44px; aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center; font-size: 24px; background: var(--hover); transition: transform .1s; }
+  .sheet-react:active { transform: scale(.92); }
+  .sheet-react.mine { background: rgb(var(--accent-rgb) / .2); box-shadow: inset 0 0 0 2px rgb(var(--accent-rgb) / .6); }
+  .sheet-react.more { color: var(--text-2); }
+  .sheet-react.more .ic { width: 22px; height: 22px; }
+  .sheet-list { display: flex; flex-direction: column; }
+  .sheet-row { display: flex; align-items: center; gap: 14px; min-height: 48px; padding: 0 12px; border-radius: 12px; font-size: 16px; font-weight: 500; text-align: left; color: var(--text); }
+  .sheet-row:active, .sheet-row:focus-visible { background: var(--active); }
+  .sheet-row .ic { width: 20px; height: 20px; flex: none; color: var(--text-2); }
+  .sheet-row.danger, .sheet-row.danger .ic { color: var(--danger); }
+  .sheet-sep { height: 1px; margin: 4px 8px; background: var(--line); }
+  .msg.pressed { background: var(--active); }
+}
+
+/* PHONE LAYOUT or TOUCH UI: the message box's buttons are 44px, for a finger (a tablet keeps all of them beside the
+   box), and focus handed back after a gesture shows no ring (ui.js quietFocus: the next key press brings it back). */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px), (pointer: coarse) {
+  .composer .attach, .composer-tools .icon-btn, .send-btn { width: 44px; height: 44px; border-radius: 11px; }
+  .composer-tools .icon-btn .ic { width: 22px; height: 22px; }
+  .composer textarea { min-height: 44px; padding: 11px 6px; }
+  .send-btn .ic { width: 20px; height: 20px; }
+  .quiet-focus:focus-visible { outline: none; }
+}
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  /* The message box gets the room: GIFs, voice messages and Send later are in the + menu (app.js createComposer). */
+  .composer .composer-more { display: none; }
+  .composer { padding: 3px; gap: 0; }
+  .send-btn:disabled { background: var(--hover); opacity: 1; }
+}
+
+@media (pointer: coarse) {
+  /* Nothing hovers on a touch screen: a long press opens a message's actions instead (app.js messageSheet). Holding a
+     finger on a message doesn't select its words or open the browser's own menu; Copy text is in the sheet. */
+  .msg-tools { display: none; }
+  .msg { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .msg textarea, .msg input { -webkit-user-select: text; user-select: text; }
+  .msg img, .msg a { -webkit-user-drag: none; }
+  .reaction.add-r { opacity: .75; }
+  /* Room for a finger: 44px to tap. */
+  #main-head .icon-btn, .panel-head .icon-btn, .modal-x, .set-close, .me-actions .icon-btn, .rec-bar .icon-btn, .pc-actions .icon-btn,
+  .icon-btn.search-close { width: 44px; height: 44px; }
+  .btn { min-height: 44px; }
+  .reply-bar { padding: 0 0 0 12px; }
+  .reply-bar .icon-btn { width: 44px; height: 44px; }
+  .ch-main, .nav-row, .server-head, .find-btn, .panel-search .input, .emoji-search { height: 44px; }
+  .dm-row, .member, .ev-row, .me-btn, .set-nav-btn, .set-subtab, .ss-tab, .seg-btn, .tab, .chip, .menu-item, .toggle-row, .cat-toggle,
+  .pc-mutual { min-height: 44px; }
+  .search-clear { display: inline-flex; align-items: center; min-height: 44px; padding: 0 10px; }
+  .seg-btn, .chip.search-chip { min-width: 44px; justify-content: center; }
+  /* (A min-height would let a row with more on it shrink below its content in a scrolling column: they keep it.) */
+  .ev-row, .member, .set-nav-btn, .set-subtab, .ss-tab, .menu-item, .toggle-row, .pc-mutual { flex-shrink: 0; }
+  .vm { padding: 6px 12px 6px 6px; }
+  .vm-play { width: 44px; height: 44px; font-size: 14px; }
+  /* A call's own buttons above it: their room reaches past the line they sit on, which stays as low as it was. */
+  .cs-head-tools .icon-btn { width: 44px; height: 44px; margin: -11px 0; }
+  /* Where the look stays small, the room to tap is bigger than what's drawn (the ::before): reactions under a message
+     (their rows a little further apart, and from the next message, so the rooms don't overlap), the voice message
+     player's speed, the × that removes a filter or a role, and Download on a picture. */
+  .reactions { gap: 8px 6px; margin-bottom: 2px; }
+  .reaction { height: 36px; min-width: 44px; justify-content: center; padding: 0 10px; }
+  .vm-speed { min-width: 36px; min-height: 30px; }
+  .chip-x { width: 28px; height: 28px; }
+  .chip.active.search-chip { padding-right: 8px; }
+  .att-dl { width: 36px; height: 36px; }
+  :where(.reaction, .vm-speed, .chip-x) { position: relative; }
+  .reaction::before, .vm-speed::before, .chip-x::before, .att-dl::before { content: ''; position: absolute; }
+  .reaction::before { inset: -5px 0; } /* (measured from inside its border: 4px past it) */
+  .vm-speed::before { inset: -7px -4px; }
+  .chip-x::before { inset: -8px; }
+  .att-dl::before { inset: -4px; }
+  /* (Taller items: a long menu scrolls rather than running off a short screen.) */
+  .menu { max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; }
+  /* 16px or more in text boxes: iOS zooms the page in when a smaller one gets focus. */
+  input:where(:not([type=checkbox], [type=radio], [type=range], [type=color], [type=file])), textarea, select { font-size: max(16px, 1em); }
+  .input.mono, .hex-in, .panel-search .input, .xp-input, .edit-input { font-size: 16px; }
+}
+
+/* ======================================================================= Photos & videos panel (media-panel.js) */
+/* The side panel: as wide as a thread (the same resize handle sets it), its filters, then the tiles, newest first under
+   their months, three to a row at the panel's usual width. */
+#members[data-mode='media'] { width: var(--thread-w); }
+.mp-filters { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 8px; border-bottom: 1px solid var(--line); }
+.mp-kinds { align-self: flex-start; }
+.mp-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip.mp-tag { height: 28px; padding: 0 10px; gap: 6px; font-size: 12.5px; max-width: 100%; min-width: 0; }
+.chip.active.mp-tag { padding: 0 4px 0 0; }
+.mp-tag-name { display: inline-flex; align-items: center; gap: 6px; align-self: stretch; min-width: 0; padding: 0 2px 0 10px; color: inherit; font: inherit; }
+.mp-tag-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-tag-n { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.mp-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 2px 10px 16px; }
+.mp-month-name { margin: 12px 2px 6px; font-family: var(--font); font-size: 12px; font-weight: 700; letter-spacing: .02em; color: var(--muted); }
+.mp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 4px; }
+.mp-tile { position: relative; aspect-ratio: 1; min-width: 0; overflow: hidden; border-radius: 8px; background: var(--hover); }
+.mp-tile.loading { background: var(--active); }
+.mp-open { position: absolute; inset: 0; display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: inherit; background: none; color: inherit; cursor: pointer; }
+.mp-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mp-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* A video has no poster: a dark square with a play sign and its size. */
+.mp-tile.video { background: #16131c; color: #f2eff7; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .08); }
+.mp-ph { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 6px; text-align: center; font-size: 11.5px; color: var(--muted); }
+.mp-tile.video .mp-ph { color: #d8d3e2; }
+.mp-ph .ic { width: 24px; height: 24px; }
+.mp-ph .ic.mp-play { width: 34px; height: 34px; padding: 8px; border-radius: 50%; background: rgb(255 255 255 / .14); color: #fff; }
+.mp-size { font-variant-numeric: tabular-nums; }
+.mp-gif { position: absolute; top: 4px; left: 4px; padding: 1px 5px; border-radius: 5px; background: rgb(0 0 0 / .6); color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .05em; pointer-events: none; }
+/* The counts over the tile let a click or a tap through to it (they're only words), as the chat's do; a real button in
+   them would still take its own. Always there, so they can change in place: empty, nothing shows. */
+.mp-badges { position: absolute; left: 4px; bottom: 4px; z-index: 1; display: flex; gap: 4px; max-width: calc(100% - 8px); pointer-events: none; }
+.mp-badges:empty { display: none; }
+.mp-badges :is(button, a) { pointer-events: auto; }
+/* A spoiler, or a photo the word filter blurs: blurred under a cover until it's clicked (it loads behind it all the same). */
+.mp-tile.spoiler:not(.revealed) > :not(.mp-cover), .mp-tile.veiled > :not(.mp-cover) { filter: blur(14px); }
+.mp-cover { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 5px; background: rgb(0 0 0 / .3); color: #fff; font-size: 12px; font-weight: 700; }
+.mp-cover:hover { background: rgb(0 0 0 / .42); }
+.mp-cover .ic { width: 15px; height: 15px; }
+/* (Always there, even with nothing in it: thumbnails the word filter hides load as it comes near the screen.) */
+.mp-foot { min-height: 1px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 4px; }
+.mp-loading { display: flex; align-items: center; gap: 8px; padding: 16px; color: var(--muted); font-size: 13px; }
+.mp-foot .panel-empty { padding-top: 24px; }
+/* The header button is for wider screens: a phone's header is full, and the ⋯ menu has Photos & videos too. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  #main-head .head-media { display: none; }
+}
+
+/* The viewer (app.js openViewer), around the picture: videos play in the stage (a big one waits for Play), Jump to
+   message is in the bar, and a photo's comments and tags (photo-notes.js) are a column on the right that the
+   next-picture button keeps clear of. */
+.viewer-body { flex: 1; min-height: 0; display: flex; position: relative; }
+.viewer-body > .viewer-stage { flex: 1; min-width: 0; }
+.viewer-video { max-width: 100%; max-height: 100%; border-radius: 6px; background: #000; }
+.viewer-play { display: inline-flex; align-items: center; gap: 8px; padding: 12px 18px; border-radius: 999px; background: rgb(255 255 255 / .12); color: #fff; font-size: 14px; font-weight: 600; }
+.viewer-play:hover { background: rgb(255 255 255 / .2); }
+.viewer-play .ic { width: 20px; height: 20px; }
+.viewer-stage.loading-full[data-loading]::after { content: attr(data-loading); }
+.viewer-bar .viewer-jump { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; margin-right: 4px; border-radius: 8px; background: rgb(255 255 255 / .08); color: #d8d3e2; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.viewer-bar .viewer-jump:hover { background: rgb(255 255 255 / .16); color: #fff; }
+.viewer-bar .viewer-jump .ic { width: 15px; height: 15px; }
+.viewer-bar .viewer-side-btn.active { background: rgb(255 255 255 / .14); color: #fff; }
+.viewer-side-btn .badge { background: var(--accent); }
+.viewer-side { flex: none; width: 340px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; background: #17141d; border-left: 1px solid rgb(255 255 255 / .08); color: #f2eff7; }
+.viewer.side-open .viewer-nav.next { right: 354px; }
+/* Opened from inside the viewer (its More menu, its side panel's menus, popups and questions) and toasts: over it. */
+#layer > .over-viewer { z-index: 85; }
+body:has(> .viewer:not(.closing)) #toasts { z-index: 86; }
+/* PHONE LAYOUT: the side panel is a sheet along the bottom, and it scrolls with a finger. It takes its own room: the
+   picture fits in what's left above it rather than going on under it. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  .viewer-body { flex-direction: column; }
+  .viewer-side { position: relative; flex: none; z-index: 3; width: auto; max-height: 60%; border-left: 0; border-top: 1px solid rgb(255 255 255 / .1); border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -10px 30px rgb(0 0 0 / .5); touch-action: pan-y; }
+  /* The sheet keeps clear of the home bar itself: the picture above it doesn't have to, nor does its loading label. */
+  .viewer.side-open .viewer-stage { padding-bottom: 0; }
+  .viewer.side-open .viewer-stage.loading-full::after { bottom: 14px; }
+  .viewer-video { border-radius: 0; }
+}
+/* (end of the Photos & videos panel) */
+
+
+
+/* ======================================================================= Photo comments and tags (photo-notes.js) */
+/* On each photo or video of a message with several: its counts in the top-left corner (left free by the download button
+   and the ALT chip), and on hover or focus a "Comment on this photo" button beside the download button. Under an
+   unopened spoiler the counts are blurred like everything else on it, and the button isn't there at all (no key or
+   screen reader can reach it): it would open the picture without the reveal. */
+.pn-slot { position: absolute; top: 8px; left: 8px; z-index: 2; pointer-events: none; }
+.pn-slot:empty { display: none; }
+.pn-badges { display: inline-flex; align-items: center; gap: 6px; padding: 2px 7px; border-radius: 999px; background: rgb(0 0 0 / .62); color: #fff; font-size: 11.5px; font-weight: 700; line-height: 18px; }
+.pn-badges[hidden] { display: none; }
+.pn-badge { display: inline-flex; align-items: center; gap: 3px; }
+.pn-badge .ic, .pn-badge svg { width: 12px; height: 12px; }
+.pn-comment-btn { position: absolute; top: 8px; right: 46px; z-index: 2; width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; background: rgb(0 0 0 / .55); color: #fff; opacity: 0; transition: opacity .15s; }
+.pn-comment-btn .ic, .pn-comment-btn svg { width: 17px; height: 17px; }
+.pn-comment-btn:hover { background: rgb(0 0 0 / .75); }
+.att-media:hover .pn-comment-btn, .att-media:focus-within .pn-comment-btn { opacity: 1; }
+.att-media.gone .pn-comment-btn, .att-media.gone .pn-slot { display: none; }
+.att-spoiler:not(.revealed) .pn-comment-btn { display: none; }
+/* A video (or a big picture) waiting for a click shows its name along the top: the counts go under its button. */
+.att-media.click-to-load:not(.tile) .pn-slot { position: static; display: block; margin: 6px 12px 0; }
+.msg-files.many .att-media.tile .pn-slot { top: 4px; left: 4px; }
+.msg-files.many .att-media.tile .pn-badges { padding: 1px 5px; gap: 4px; font-size: 10.5px; line-height: 16px; }
+.msg-files.many .att-media.tile .pn-comment-btn { top: 4px; right: 36px; width: 28px; height: 28px; }
+
+/* The quote of a comment on one photo: a thumbnail of it, big enough to tell which photo it was, and "<name>’s photo". */
+.pn-quote-thumb { flex: none; width: 32px; height: 32px; border-radius: 6px; overflow: hidden; display: grid; place-items: center; background: var(--hover); border: 1px solid var(--line-2); color: var(--muted); }
+.pn-quote-thumb .ic, .pn-quote-thumb svg { width: 12px; height: 12px; }
+.pn-quote-thumb.loaded { border-color: transparent; }
+.pn-quote-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pn-reply-name { font-weight: 600; color: var(--text-2); }
+.msg-reply.pn-reply:hover .pn-reply-name { color: var(--text); }
+
+/* The picture viewer's side panel for one photo (the viewer gives it a place: a column about 340px wide beside the
+   picture, or a bottom sheet on a phone). Its comment list scrolls between the tags and the box when the panel has a
+   height of its own (the column); in a sheet that grows with what's in it, the sheet scrolls instead. */
+/* The viewer is dark in every theme, so is the panel: the dark theme's colours, whatever the app's. */
+.pn-side {
+  --field: 17 15 24; --text-rgb: 237 233 245; --text: rgb(var(--text-rgb)); --text-2: #b6afc6; --muted: #8c849d; --msg-text: #dcd7e7;
+  --line: rgb(255 255 255 / .065); --line-2: rgb(255 255 255 / .12); --hover: rgb(255 255 255 / .045); --active: rgb(255 255 255 / .085);
+  --accent-ink: var(--accent); color-scheme: dark;
+  display: flex; flex-direction: column; gap: 14px; height: 100%; min-height: 0; padding: 14px; color: var(--text); font-size: 14px; touch-action: pan-y; overflow-wrap: anywhere;
+}
+.pn-sec { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pn-tags { flex: none; }
+.pn-comments { flex: 1 1 auto; min-height: 0; }
+.pn-h { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 700; letter-spacing: .02em; color: var(--muted); }
+.pn-h .ic, .pn-h svg { width: 14px; height: 14px; }
+.pn-count { color: var(--text-2); }
+.pn-count:empty { display: none; }
+.pn-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* A label is someone's words: kept apart from the text around it (unicode-bidi), so it can't turn that around. */
+.pn-chip { height: 28px; padding: 0 4px 0 10px; font-size: 13px; color: var(--text); max-width: 100%; }
+.pn-chip:not(:has(.chip-x)) { padding-right: 10px; }
+.pn-chip-text, .pn-suggestion { unicode-bidi: isolate; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pn-add { display: flex; gap: 6px; align-items: center; }
+.pn-add .input { height: 36px; }
+.pn-add .btn { flex: none; }
+.pn-suggest { display: flex; flex-wrap: wrap; gap: 6px; }
+.pn-suggest[hidden] { display: none; }
+.chip.pn-suggestion { height: 26px; padding: 0 10px; font-size: 12.5px; font-weight: 600; max-width: 100%; display: inline-block; line-height: 24px; }
+.pn-note { margin: 0; font-size: 12.5px; color: var(--muted); }
+.pn-note[role=status]:not(:empty) { color: var(--danger); }
+/* "Removed the tag …": said to screen readers only (the chips show it). */
+.pn-said { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.pn-empty { color: var(--muted); font-size: 13px; list-style: none; }
+.pn-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 48px; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
+.pn-c { display: grid; grid-template-columns: 28px 1fr auto; gap: 8px; align-items: start; }
+.pn-c-body { min-width: 0; }
+.pn-c-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.pn-c-name { font-size: 13.5px; }
+.pn-c-time { font-size: 11.5px; color: var(--muted); }
+.pn-c-text { color: var(--msg-text); font-size: 14px; line-height: 1.4; margin-top: 1px; }
+.pn-c-jump { color: var(--muted); opacity: .7; }
+.pn-c:hover .pn-c-jump, .pn-c-jump:focus-visible { opacity: 1; }
+.pn-more { align-self: flex-start; font-size: 13px; }
+.pn-more[hidden] { display: none; }
+.pn-compose { flex: none; display: flex; align-items: flex-end; gap: 6px; }
+textarea.pn-box { flex: 1; min-height: 38px; max-height: 140px; padding: 8px 11px; resize: none; line-height: 1.4; }
+
+@media (pointer: coarse) {
+  /* Nothing hovers on a touch screen: tapping a picture opens the viewer, whose side panel has the comments. */
+  .pn-comment-btn { display: none; }
+  .pn-chip .chip-x { width: 32px; height: 32px; }
+  .pn-add .input { height: 44px; }
+  .pn-c-jump { opacity: 1; width: 40px; height: 40px; }
+}
+
+/* (end of photo comments and tags) */
+
+
+
+/* ======================================================================= Chat backgrounds (chat-look.js) */
+/* The "Chat background" dialog: a preview of what's picked (with two sample bubbles, to judge how readable it is), the
+   presets in the same tiles as Settings → Appearance, your own picture, and Dim for a picture. */
+.cl-dialog { display: grid; gap: 12px; }
+.cl-preview { position: relative; height: 150px; border-radius: 14px; overflow: hidden; background: rgb(var(--bg)); box-shadow: inset 0 0 0 1px var(--line-2); }
+.cl-preview .cl-sw, .cl-preview .cl-shade { position: absolute; inset: 0; }
+.cl-preview .cl-shade { background: rgb(var(--dim-rgb)); opacity: 0; transition: opacity .15s; }
+.cl-none { position: absolute; inset: 0; display: grid; place-items: center; padding: 12px; text-align: center; font-size: 13px; color: var(--text-2); }
+.cl-bubbles { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.cl-preview.empty .cl-bubbles { display: none; }
+.cl-bubble { max-width: 70%; padding: 6px 11px; border-radius: 12px; font-size: 13px; color: var(--text); background: rgb(var(--s1) / .88); box-shadow: 0 1px 2px rgb(0 0 0 / .18); }
+.cl-bubble.mine { align-self: flex-end; color: var(--on-accent); background: var(--accent); }
+.cl-dialog .bg-tile:disabled { opacity: .6; transform: none; cursor: default; }
+.cl-status { margin: 0; font-size: 13px; color: var(--text-2); }
+.cl-status:empty { display: none; }
+.cl-note { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: 13px; color: var(--text-2); }
+.cl-note .ic { flex: none; width: 15px; height: 15px; margin-top: 2px; }
+@media (max-width: 760px) {
+  .cl-preview { height: 120px; }
+}
+
+/* (end of chat backgrounds) */
+
+
+
+/* ======================================================================= The side view (side-view.js) */
+/* "Pinned to side": as wide as a thread (the same resize handle sets it), its cards newest first, each saying who, when
+   and where; a picture pinned on its own as wide as the panel, a message's pictures small. */
+#members[data-mode='side'] { width: var(--thread-w); }
+.sv-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px 10px 16px; }
+.sv-list { display: flex; flex-direction: column; gap: 10px; }
+.sv-card { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--hover); }
+.sv-meta { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--muted); }
+.sv-meta .uname { min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-when { flex: none; white-space: nowrap; }
+.sv-where { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 12px; color: var(--muted); }
+.sv-where .ic { width: 13px; height: 13px; flex: none; }
+.sv-where span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sv-text { font-size: 14px; color: var(--msg-text); overflow-wrap: anywhere; max-height: 50vh; overflow-y: auto; }
+.sv-veil { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0; font-size: 13.5px; color: var(--muted); }
+.sv-veil .ic { width: 15px; height: 15px; }
+/* Its flags, as on its row in the chat (a bot's, an older message, a key or signature that doesn't check out, the
+   server having moved it): each as wide as its words, not the card. */
+.sv-flags { display: flex; flex-wrap: wrap; gap: 4px; }
+.sv-flags .msg-flag { margin-top: 0; }
+.sv-meta .bot-tag { flex: none; }
+/* A card with nothing in it but a line (loading, gone, hidden while sharing your screen): the × in its corner. */
+.sv-note { display: flex; align-items: center; gap: 8px; min-height: 26px; padding-right: 30px; font-size: 13.5px; color: var(--muted); }
+.sv-note .ic { width: 16px; height: 16px; flex: none; }
+.sv-card > .sv-x { position: absolute; top: 8px; right: 8px; }
+.sv-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sv-actions .btn .ic { width: 14px; height: 14px; }
+/* The picture pinned on its own: the panel's width, never taller than most of the screen. */
+.sv-pic { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; max-height: 70vh; min-height: 48px; overflow: hidden; border-radius: 10px; background: var(--active); }
+.sv-pic .sv-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: inherit; background: none; color: inherit; cursor: zoom-in; }
+.sv-pic .sv-img { display: block; width: 100%; height: 100%; max-height: 70vh; object-fit: contain; }
+.sv-pic.video { min-height: 140px; background: #16131c; }
+.sv-video { display: block; width: 100%; max-height: 70vh; background: #000; }
+.sv-play { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px; background: rgb(255 255 255 / .14); color: #fff; font-size: 13.5px; font-weight: 600; }
+.sv-play:hover { background: rgb(255 255 255 / .22); }
+.sv-play .ic { width: 18px; height: 18px; }
+/* A message's pictures and videos: small squares, as in Photos & videos. */
+.sv-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 4px; }
+.sv-thumbs.one { grid-template-columns: minmax(0, 200px); }
+.sv-tile { position: relative; aspect-ratio: 1; min-width: 0; overflow: hidden; border-radius: 8px; background: var(--active); }
+.sv-tile .sv-open { position: absolute; inset: 0; display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: inherit; background: none; color: inherit; cursor: pointer; }
+.sv-tile .sv-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sv-tile.video { background: #16131c; color: #d8d3e2; }
+.sv-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sv-ph { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 6px; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sv-tile.video .sv-ph { color: #d8d3e2; }
+.sv-ph .ic { width: 22px; height: 22px; }
+/* A spoiler: blurred under a cover until it's clicked (it loads behind it all the same). */
+.sv-pic.spoiler > :not(.sv-cover), .sv-tile.spoiler > :not(.sv-cover) { filter: blur(14px); }
+.sv-cover { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 5px; background: rgb(0 0 0 / .3); color: #fff; font-size: 12px; font-weight: 700; }
+.sv-cover:hover { background: rgb(0 0 0 / .42); }
+.sv-cover .ic { width: 15px; height: 15px; }
+.sv-files { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.sv-file { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
+.sv-file > .ic { width: 15px; height: 15px; flex: none; color: var(--muted); }
+.sv-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-size { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sv-empty[hidden] { display: none; }
+/* The header button's count: how many things are pinned, not something new, so not in the alert colour. */
+.icon-btn.with-badge .sv-count { position: absolute; top: -3px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: rgb(var(--s1)); box-shadow: inset 0 0 0 1px var(--line); color: var(--text); font: 700 10px/16px var(--font); text-align: center; pointer-events: none; }
+/* The header button is for wider screens: a phone's header is full, and the ⋯ menu has Pinned to side too. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  #main-head .head-side { display: none; }
+}
+
+/* (end of the side view) */

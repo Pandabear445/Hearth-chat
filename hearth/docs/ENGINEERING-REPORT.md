@@ -716,7 +716,7 @@ Built from `docs/design/ANDROID-PUSH.md` (NEXT.md picks 1 and 12). No schema cha
   Java), the e2e flow with a simulated bridge, and a local type-check of all native Java against the real
   Android 16 framework jar, the connector 3.3.5 classes and kotlin-stdlib (AndroidX/Capacitor stubbed), plus the
   JUnit tests. **Not checked here:** a Gradle build and anything on a device (mobile/README.md).
-- **After review.** Any new page load (*Reload now*, switching server, an error page) stops the call service, and
+- **After review.** Any new page load (a reload, switching server, an error page) stops the call service, and
   the page also sends `callEnd` on `pagehide`. Opening Hearth while a call push rings cancels it (it's insistent)
   and opens that call. Deviation from the design: *Change* no longer calls `removeDistributor` first (backing out
   lost the registration) and no longer goes through Android's `unifiedpush://link` resolution, which answers

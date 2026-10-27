@@ -12,13 +12,19 @@ Tests: `test/storage.test.js`, plus `test/files-hardening.test.js` for the older
 
 | | Server sees | Server never sees |
 |---|---|---|
-| Attachments (E2EE) | that a blob exists, its size, who uploaded it, when, and which message (so which channel/DM) it is attached to | its contents, name, type, dimensions, its key |
+| Attachments (E2EE) | that a blob exists, its size, who uploaded it, when, and which message (so which channel/DM) it is attached to; how many uploads each message listed when it was sent (`files`, thumbnails and forwards included) | its contents, name, type, dimensions, its key; which of them are photos or videos |
+| Photo comments and tags | which photo of a message a comment is about (`reply_file`, its place in the file list); that a photo has a tag, who added it and when (`media_tags`) | the comment (an encrypted reply), the tag's words (sealed with the conversation's key, padded to one size) |
 | Uploads in progress | declared size, bytes received so far, timestamps, the SHA-256 of the ciphertext | anything about the plaintext |
 | Public media (avatars, banners, icons, emoji, profile songs, GIF library) | everything: these are stored as uploaded (pictures have their metadata stripped first, and profile songs their tags, except OGG's) | |
 
 Every attachment is encrypted in the app with its own random AES-256-GCM key before upload (`E2EE.encryptFile`:
 `blob = iv(12) ‖ ciphertext ‖ tag(16)`). The key, name and type travel inside the encrypted message (`f[]`).
-The server only links blob names to message ids (`blobs` table) so that deleting a message deletes its files.
+The server links blob names to message ids (`blobs` table) so that deleting a message deletes its files. Each message
+also keeps how many distinct uploads its sender listed when posting it (`messages.files` / `dm_messages.files`, v21):
+a forward lists the original's uploads, which stay the original's blobs, so the count comes from what was posted, not
+from `blobs`. The Photos & videos panel pages through the messages with a count above 0 (`GET …/media`,
+`server/photos.js`); the app decrypts them and keeps the photos and videos, since the server can't tell them apart
+from other files.
 
 Names, types and sizes the app shows come from the encrypted message. Settings → Storage shows names only for
 files in conversations the device can open; the server's `/me/storage/files` returns sizes, dates and locations.
@@ -46,6 +52,7 @@ unattached `blobs` row. Old apps keep using the one-request route; it isn't goin
 | Storage per person (`quotaMb`) | 1000 MB | same; per-person override on the user's admin page |
 | Uploads per person per day (`dailyMb`) | 500 MB | same |
 | Admins and the owner | no quota or daily limit (the per-file limit still applies) | |
+| Files in one message | 10; 100 for the server's owner (the server links twice that many uploads: thumbnails) | `maxFilesOf` in `server/index.js`, `maxFilesFor` in `public/js/attachments.js` |
 | Unfinished resumable uploads per person | 4 | `MAX_SESSIONS` in `server/storage.js` |
 | Chunk size | 4 MiB (`UPLOAD_CHUNK_BYTES`) | returned by `POST /api/uploads` |
 | Idle time before an unfinished upload expires | 24 h (`UPLOAD_SESSION_IDLE_MS`) | |
@@ -55,6 +62,10 @@ unattached `blobs` row. Old apps keep using the one-request route; it isn't goin
 Rate limits (per minute unless noted): start an upload 20 per person (200 per hour) and 100 per network;
 chunks 600 per person, 600 per session, 1200 per network; status 240; finish 60; cancel 120. The one-request
 route keeps its own limits (60/min, 600/h per person, 40/min per session, 150/min per network, 4 at once).
+The server's owner, whose messages may carry 100 files: each of their uploads of files for messages counts a tenth
+against the one-request limits (which their pictures, icons and songs share), they may start, and finish, ten times as
+many resumable uploads, and their uploads don't count against their network (`uploadPace`). The app waits and tries
+again when told "too many" (as long as the server asks, up to 2 minutes).
 
 ## 3. Resumable upload protocol
 
@@ -123,6 +134,18 @@ All decryption happens in the app; the server only ever sends ciphertext.
 
 - **Pictures**: thumbnail first (when the sender made one), full size on demand. Clicking opens the gallery: every
   picture in the conversation's loaded messages, ← → keys and buttons, wraps around, zoom, download, copy image.
+- **Pictures on phones and touch screens** (`device.js`): drawn as wide as the message, a tall one up to about 70% of
+  the screen's height, never cropped. One drawn much bigger than its 480 px thumbnail on a sharp screen loads full size
+  once it's on screen, through the same queue (not with Data Saver on, nor over 20 MB); a picture in a message the word
+  filter hides does the same when its row is on screen, so the server sees the same downloads. Nothing changes in what
+  is sent or stored. The gallery pinches and double-taps to zoom, swipes between pictures and down to close
+  (`viewer-touch.js`).
+- **Photos & videos panel** (v21, `server/photos.js`): a conversation's pictures and videos in one grid, newest
+  first. The server hands out 30 messages with files at a time (`GET /dms/:id/media`, `GET /channels/:id/media`,
+  thread replies included; `?ids=` for the photos of one tag) serialized like history, with each photo's comment
+  count (`fileReplies`) and encrypted tags (`tags`); the app decrypts them and keeps the photos and videos. Voice
+  messages, audio and other files aren't shown. Nothing new is stored for it but the per-message count above, the
+  photo a comment is about, and the encrypted tags.
 - **Video and audio**: played from a decrypted `blob:` URL with the browser's controls. Encrypted videos and songs
   over 20 MB show "Play video · size" and download (with a progress bar) only when pressed.
 - **Other files**: a card with the name, size, kind ("PDF document", "ZIP archive", "XYZ file"), "Encrypted"

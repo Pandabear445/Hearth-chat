@@ -84,13 +84,20 @@ export function makeQueue(limit = 3) {
   return (fn, { front = false } = {}) => new Promise((resolve, reject) => { (front ? waiting.unshift.bind(waiting) : waiting.push.bind(waiting))({ fn, resolve, reject }); next(); });
 }
 
-// Run `cb` once when `el` comes near the screen.
-const seen = new WeakMap();
-const io = typeof IntersectionObserver !== 'undefined' ? new IntersectionObserver((entries) => {
-  for (const e of entries) if (e.isIntersecting) { const cb = seen.get(e.target); if (cb) { seen.delete(e.target); io.unobserve(e.target); cb(); } }
-}, { rootMargin: '600px 0px' }) : null;
-export function whenVisible(el, cb) {
-  if (!io) return cb();
-  seen.set(el, cb);
-  io.observe(el);
+// Run `cb` once when `el` comes near the screen (whenVisible), or once it's really on it (whenOnScreen). Several
+// can wait for the same element (the pictures of one message).
+function once(rootMargin) {
+  const seen = new WeakMap();
+  const io = typeof IntersectionObserver !== 'undefined' ? new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) { const cbs = seen.get(e.target); if (cbs) { seen.delete(e.target); io.unobserve(e.target); cbs.forEach((cb) => cb()); } }
+  }, { rootMargin }) : null;
+  return (el, cb) => {
+    if (!io) return cb();
+    const cbs = seen.get(el);
+    if (cbs) { cbs.push(cb); return; }
+    seen.set(el, [cb]);
+    io.observe(el);
+  };
 }
+export const whenVisible = once('600px 0px');
+export const whenOnScreen = once('0px');

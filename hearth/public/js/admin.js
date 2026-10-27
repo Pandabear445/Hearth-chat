@@ -1,10 +1,12 @@
 // Admin dashboard (server administrators only). Everything here is also enforced by the server.
-import { h, clear, icon, toast, fmtStamp, fmtSize, copyText } from './util.js';
+import { h, clear, icon, toast, fmtTime, fmtStamp, fmtSize, copyText } from './util.js';
 import { api } from './api.js';
 import { avatarEl } from './profile-ui.js';
 import { modal, confirmDialog, field, menu } from './ui.js';
 import { renderDoc, render as md } from './markdown.js';
-import { rankRelays, relayTime } from './relays.js';
+import { rankRelays, relayTime, usableIce, avoidsMemberRelays } from './relays.js';
+import { underWay } from './auto-update.js';
+import { markNotesSeen } from './whatsnew.js';
 
 // [key, label, icon, lowest role that sees it]. The server enforces the same rules.
 const TABS = [['overview', 'Overview', 'home', 1], ['online', 'Online', 'people', 1], ['reports', 'Reports', 'shield', 1], ['users', 'Users', 'user', 1], ['servers', 'Servers', 'compass', 2], ['bots', 'Bots', 'bot', 2], ['security', 'Security', 'lock', 2], ['admins', 'Team & roles', 'star', 1], ['registration', 'Registration & Terms', 'book', 2], ['log', 'Audit log', 'file', 1], ['regions', 'Regions', 'globe', 2], ['health', 'Health', 'chart', 2], ['money', 'Money', 'coin', 2], ['owner', 'Owner', 'flame', 3]];
@@ -58,7 +60,43 @@ const userCell = (b, onOpen) => h('button', { class: 'adm-user', onclick: () => 
   b && b.bot ? h('span', { class: 'bot-tag' }, 'BOT') : null,
   b && b.suspended ? h('span', { class: 'badge-tag bad' }, 'Suspended') : null, b ? roleTag(b.role) : null);
 
-export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, role = 'admin', confirm = null } = {}) {
+// An install (or uninstall) command in a dialog with a Copy button: for the owner's regions below, and for a member's
+// own relay in Settings → Help host. steps say what to do before pasting it, notes what it does and what comes next.
+export function showCommand(title, command, { steps = [], notes = [] } = {}) {
+  return modal({
+    title, size: 'lg',
+    body: h('div', { class: 'stack' },
+      steps.length ? h('ol', { class: 'steps' }, steps.map((s) => h('li', null, s))) : null,
+      h('div', { class: 'cmd-box' }, h('code', null, command), h('button', { class: 'btn sm', onclick: () => { copyText(command); toast('Copied.'); } }, icon('copy'), 'Copy')),
+      notes.map((n) => h('p', { class: 'field-hint' }, n))),
+  });
+}
+// "3:12 PM" today, "Oct 24, 3:12 PM" before.
+const sinceText = (ts) => (!ts ? 'a while' : new Date(ts).toDateString() === new Date().toDateString() ? fmtTime(ts)
+  : `${new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${fmtTime(ts)}`);
+// What a member relay is doing, as a pill ({ kind: 'ok' | 'warn' | 'bad', label }): the same words in Admin → Regions
+// and on the member's own Settings → Help host page (member: true says who paused it). Calls use a relay only while
+// it's approved, checking in (the server drops one after 3 minutes without) and its relay program is running.
+export function relayStatus(r, { member = false } = {}) {
+  if (r.status === 'paused') return { kind: 'bad', label: member ? 'Paused by the owner' : 'Paused' };
+  if (r.waitingForInstall) return { kind: 'warn', label: r.installOpen ? 'Waiting for install' : 'Install link expired' };
+  if (r.status === 'pending') return { kind: 'warn', label: 'Waiting for approval' };
+  if (!r.alive) return { kind: 'bad', label: `Offline since ${sinceText(r.lastSeen)}` };
+  if (r.relayUp === false) return { kind: 'bad', label: 'Relay stopped' };
+  return { kind: 'ok', label: 'Relaying calls' };
+}
+// Backup copies on a member's relay, as its member reads them: it keeps copies only if they offered it and the
+// owner turned it on when approving (or later).
+export function relayBackupText(r) {
+  if (!r.offersBackups) return 'No backups';
+  if (r.status === 'pending') return 'Backups: waiting for approval';
+  if (!r.backups) return 'No backups: the owner kept them off';
+  if (!r.backup || !r.backup.ready) return 'Backups: no backup space yet (needs SSH reachable from the internet)';
+  return `${r.backup.files} backup cop${r.backup.files === 1 ? 'y' : 'ies'}`;
+}
+
+// me: the signed-in user, read when it's needed (their privacy choices can change while the dashboard is open).
+export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, role = 'admin', confirm = null, me = () => null } = {}) {
   const myRank = RANK[role] || 0;
   confirmPw = confirm;
   const tabs = TABS.filter((t) => myRank >= t[3]);
@@ -70,6 +108,8 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
   const nav = h('nav', { class: 'admin-tabs', role: 'tablist' });
   const body = h('div', { class: 'admin-body' });
   let timer = null;
+  // Admin → Regions' "Measure from this device" results: kept across the page's redraws.
+  let measuredBox = null;
   // Health redraws replace every button. The one last pressed there gets focus back afterwards when a password dialog
   // or a disabled button lost it meanwhile (see healthPage), so keyboard and screen-reader users stay where they were.
   let pressed = null;
@@ -693,18 +733,19 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
   }
 
   async function regions() {
-    const d = await api('GET', '/admin/regions');
-    const showCommand = (title, command) => modal({
-      title, size: 'lg',
-      body: h('div', { class: 'stack' },
-        h('ol', { class: 'steps' },
-          h('li', null, 'Rent the cheapest VPS in that part of the world (1 CPU and 1 GB is plenty; Ubuntu or Debian). See the price guide below.'),
-          h('li', null, 'Log in to it as root (ssh root@its-ip) and paste this one line:'),
-        ),
-        h('div', { class: 'cmd-box' }, h('code', null, command), h('button', { class: 'btn sm', onclick: () => { copyText(command); toast('Copied.'); } }, icon('copy'), 'Copy')),
-        h('p', { class: 'field-hint' }, 'The link works for 24 hours. It installs the call relay with this server\u2019s secret and a tiny check-in that reports here every minute. Within a minute of finishing, the region shows as online and calls start using it.'),
-        h('p', { class: 'field-hint' }, 'The line checks the download against the SHA-256 it carries before running anything. If that says FAILED, nothing ran: make a new command here.'),
-        h('p', { class: 'field-hint' }, 'If the VPS provider has a firewall in its control panel, open UDP + TCP 3478 and UDP 49160\u201349400 there.')),
+    let d = await api('GET', '/admin/regions');
+    // A redraw keeps keyboard focus on the button it was on (each has a data-focus key).
+    const had = body.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.focus : null;
+    const regionCommand = (title, command) => showCommand(title, command, {
+      steps: [
+        'Rent the cheapest VPS in that part of the world (1 CPU and 1 GB is plenty; Ubuntu or Debian). See the price guide below.',
+        'Log in to it as root (ssh root@its-ip) and paste this one line:',
+      ],
+      notes: [
+        'The link works for 24 hours. It installs the call relay with this server\u2019s secret and a tiny check-in that reports here every minute. Within a minute of finishing, the region shows as online and calls start using it.',
+        'The line checks the download against the SHA-256 it carries before running anything. If that says FAILED, nothing ran: make a new command here.',
+        'If the VPS provider has a firewall in its control panel, open UDP + TCP 3478 and UDP 49160\u201349400 there.',
+      ],
     });
     // An install command carries this server's relay secret, so making one asks for your password again.
     const withPassword = (fn) => (confirm ? confirm(fn, { title: 'Confirm it\u2019s you', text: 'The install command carries this server\u2019s relay secret.' }) : fn({}));
@@ -715,13 +756,14 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
           if (!name.value.trim()) throw new Error('Give the region a name, like "Frankfurt" or "US West".');
           const r = await withPassword((x) => api('POST', '/admin/regions', { name: name.value.trim(), origin: location.origin, ...x }));
           if (!r) return false;
-          regions(); setTimeout(() => showCommand(`Set up ${r.region.name}`, r.command), 150);
+          regions(); setTimeout(() => regionCommand(`Set up ${r.region.name}`, r.command), 150);
         } }] });
     };
-    const measured = h('div', { class: 'stack' });
+    const measured = measuredBox || (measuredBox = h('div', { class: 'stack' }));
     const measure = async (btn) => {
       btn.disabled = true; clear(measured).append(h('span', { class: 'spinner' }));
-      const ice = await api('GET', '/ice');
+      // Someone who avoids members' relays (Privacy & safety) never contacts one, here either: they aren't measured or listed.
+      const ice = usableIce(await api('GET', '/ice'), avoidsMemberRelays(me()));
       const ranks = await rankRelays(ice, { force: true });
       clear(measured);
       const relays = ice.filter((e) => [].concat(e.urls || []).some((u) => /^turns?:/.test(u)));
@@ -730,6 +772,10 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       btn.disabled = false;
     };
     const status = (r) => r.alive ? h('span', { class: 'rpill ok' }, 'Online') : r.waitingForInstall ? h('span', { class: 'rpill warn' }, r.installOpen ? 'Waiting for install' : 'Install link expired') : h('span', { class: 'rpill bad' }, `Offline since ${ago(r.lastSeen)}`);
+    // The lines that change at every check-in (load, traffic, free space): updated where they are (data-live), see below.
+    const regionStats = (r) => (r.alive ? `load ${r.load ?? '?'} / ${r.cpus || 1} CPU \u00b7 ${r.mbps ?? 0} Mbit/s now \u00b7 ${r.monthGb ?? 0} GB this month${r.relayUp ? '' : ' \u00b7 relay stopped!'}` : '');
+    const regionBackup = (r) => (!r.backup ? 'Backups: reinstall to add backup space' : !r.backup.ready ? 'Backups: no backup space (needs SSH)'
+      : `Backups: ${r.backup.files} cop${r.backup.files === 1 ? 'y' : 'ies'}, ${fmtMb(r.backup.usedMb)} (${fmtMb(r.backup.freeMb)} free)${r.backup.last ? (r.backup.last.ok ? ` \u00b7 last copy ${ago(r.backup.last.at)} \u2713` : ' \u00b7 last copy FAILED') : ' \u00b7 waiting for the next backup'}`);
     clear(body).append(
       h('div', { class: 'admin-head' }, h('h3', null, 'Regions'), h('button', { class: 'btn primary', onclick: add }, icon('plus'), 'Add a region')),
       h('p', { class: 'field-hint' }, 'Chat lives on this one server: everyone sees the same messages instantly, and there\u2019s one database to back up. What distance slows down is calls that can\u2019t connect directly (about 1 in 5) and go through a relay. Regions put relays near people; each person\u2019s app measures which answer fastest and uses those two.'),
@@ -737,22 +783,21 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
         h('div', { class: 'adm-row region-row' }, h('b', null, 'This server'), h('span', { class: 'stat-sub' }, d.mainTurn.length ? d.mainTurn[0].replace(/^turn:|\?.*$/g, '') : 'No relay here (run scripts/setup-turn.sh to add one)'), h('span', { class: `rpill ${d.mainTurn.length ? 'ok' : 'warn'}` }, d.mainTurn.length ? 'Relay on' : 'Chat only'), h('span'), h('span')),
         ...d.regions.map((r) => h('div', { class: 'adm-row region-row' },
           h('b', null, r.name), h('span', { class: 'stat-sub' }, r.ip || '\u2014'), status(r),
-          h('span', { class: 'stat-sub' }, r.alive ? `load ${r.load ?? '?'} / ${r.cpus || 1} CPU \u00b7 ${r.mbps ?? 0} Mbit/s now \u00b7 ${r.monthGb ?? 0} GB this month${r.relayUp ? '' : ' \u00b7 relay stopped!'}` : ''),
+          h('span', { class: 'stat-sub', 'data-live': `stats:${r.id}` }, regionStats(r)),
           // Backup space on the region (Hearth 1.25+): keeps copies of this server's encrypted backups.
-          h('span', { class: 'stat-sub', 'data-tip': r.backup && r.backup.last && !r.backup.last.ok ? r.backup.last.error : null },
-            !r.backup ? 'Backups: reinstall to add backup space' : !r.backup.ready ? 'Backups: no backup space (needs SSH)'
-              : `Backups: ${r.backup.files} cop${r.backup.files === 1 ? 'y' : 'ies'}, ${fmtMb(r.backup.usedMb)} (${fmtMb(r.backup.freeMb)} free)${r.backup.last ? (r.backup.last.ok ? ` \u00b7 last copy ${ago(r.backup.last.at)} \u2713` : ' \u00b7 last copy FAILED') : ' \u00b7 waiting for the next backup'}`),
+          h('span', { class: 'stat-sub', 'data-live': `backup:${r.id}`, 'data-tip': r.backup && r.backup.last && !r.backup.last.ok ? r.backup.last.error : null }, regionBackup(r)),
           h('span', { class: 'row gap tight' },
-            h('button', { class: 'btn ghost sm', onclick: async () => {
+            h('button', { class: 'btn ghost sm', 'data-focus': `reinstall:${r.id}`, onclick: async () => {
               try {
                 const x = await withPassword((y) => api('POST', `/admin/regions/${r.id}/reinstall`, { origin: location.origin, ...y }));
-                if (x) showCommand(`Reinstall ${r.name}`, x.command);
+                if (x) regionCommand(`Reinstall ${r.name}`, x.command);
               } catch (e) { if (!e.cancelled) toast(e.message, 'error'); }
             } }, r.waitingForInstall ? 'Install command' : 'Reinstall'),
-            h('button', { class: 'btn ghost sm danger-text', onclick: async () => { if (await confirmDialog({ title: `Remove ${r.name}?`, text: 'Calls stop using it right away. The VPS keeps running until you cancel it with your provider.', confirm: 'Remove', danger: true })) { await api('DELETE', `/admin/regions/${r.id}`); regions(); } } }, 'Remove'))))),
+            h('button', { class: 'btn ghost sm danger-text', 'data-focus': `remove:${r.id}`, onclick: async () => { if (await confirmDialog({ title: `Remove ${r.name}?`, text: 'Calls stop using it right away. The VPS keeps running until you cancel it with your provider.', confirm: 'Remove', danger: true })) { await api('DELETE', `/admin/regions/${r.id}`); regions(); } } }, 'Remove'))))),
       d.regions.length ? '' : h('p', { class: 'field-hint' }, 'No regions yet.'),
+      ...memberRelays(d),
       h('div', { class: 'admin-head' }, h('h3', null, 'Which relay is nearest to me?')),
-      h('div', null, h('button', { class: 'btn', onclick: (e) => measure(e.currentTarget) }, 'Measure from this device')), measured,
+      h('div', null, h('button', { class: 'btn', 'data-focus': 'measure', onclick: (e) => measure(e.currentTarget) }, 'Measure from this device')), measured,
       h('div', { class: 'admin-head' }, h('h3', null, 'Cheap places to put a region')),
       h('p', { class: 'field-hint' }, 'A relay only forwards call traffic, so the smallest plan is enough. Traffic matters more than CPU: one relayed video call is about 1\u20132 Mbit/s per person. Prices change; check before buying.'),
       h('div', { class: 'adm-table price-table' },
@@ -763,7 +808,122 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
           ['Vultr / DigitalOcean / Linode', '$4\u20136/mo', '30+ cities worldwide, 0.5\u20132 TB traffic. Good for places the others don\u2019t cover (South America, India, Japan, Australia).'],
         ].map(([n, p2, t]) => h('div', { class: 'adm-row three' }, h('b', null, n), h('span', null, p2), h('span', { class: 'stat-sub' }, t)))),
       h('p', { class: 'field-hint' }, 'Start with the region where most people who can\u2019t connect live (Europe and US East cover most friend groups). Two or three regions is plenty for thousands of people.'));
-    timer = setInterval(() => { api('GET', '/admin/regions').then((x) => { if (JSON.stringify(x.regions.map((r) => [r.alive, r.mbps])) !== JSON.stringify(d.regions.map((r) => [r.alive, r.mbps]))) regions(); }).catch(() => {}); }, 20000);
+    const again = had && [...body.querySelectorAll('[data-focus]')].find((el) => el.dataset.focus === had);
+    if (again) again.focus({ preventScroll: true });
+    // Redrawn when a region or a member's relay comes or goes or changes state. What changes at nearly every check-in
+    // (load, traffic, free space, the time of the last one) is left out of that, and its lines are updated where they
+    // are instead: a home machine's traffic changes all the time, and a redraw each time would keep taking keyboard
+    // focus away and wipe the measurements. (One timer: a redraw after a change here mustn't leave the old one running.)
+    const steady = (r) => {
+      const { load: _l, cpus: _c, mem: _m, mbps: _b, monthGb: _g, month: _mo, lastSeen, backup, ...rest } = r;
+      return { ...rest, lastSeen: r.alive ? null : lastSeen, backup: backup ? { ...backup, usedMb: null, freeMb: null } : null };
+    };
+    const sig = (x) => JSON.stringify([x.regions.map(steady), (x.members || []).map(steady), x.memberRelays, x.mainTurn]);
+    clearInterval(timer);
+    timer = setInterval(() => {
+      api('GET', '/admin/regions').then((x) => {
+        if (sig(x) !== sig(d)) { regions(); return; }
+        d = x;
+        const live = new Map([...x.regions.flatMap((r) => [[`stats:${r.id}`, regionStats(r)], [`backup:${r.id}`, regionBackup(r)]]), ...(x.members || []).map((r) => [`stats:${r.id}`, memberDetails(r)])]);
+        body.querySelectorAll('[data-live]').forEach((el) => { const t = live.get(el.dataset.live); if (t !== undefined && el.textContent !== t) el.textContent = t; });
+      }).catch(() => {});
+    }, 20000);
+  }
+  // A member relay's line in Admin → Regions: what it reports, when it's up; its bandwidth limit; and backup copies:
+  // offered or not, and on or off.
+  const memberDetails = (r) => [
+    r.alive ? `load ${r.load ?? '?'} / ${r.cpus || 1} CPU · ${r.mbps ?? 0} Mbit/s now · ${r.monthGb ?? 0} GB this month` : null,
+    r.capMbit ? `limit ${r.capMbit} Mbit/s` : 'no bandwidth limit',
+    !r.offersBackups ? 'backups not offered' : !r.backups ? 'backups offered, off'
+      : !r.backup || !r.backup.ready ? 'backups on, no backup space yet (needs SSH)'
+        : `backups on: ${r.backup.files} cop${r.backup.files === 1 ? 'y' : 'ies'}, ${fmtMb(r.backup.usedMb)} (${fmtMb(r.backup.freeMb)} free)${r.backup.last ? (r.backup.last.ok ? ` · last copy ${ago(r.backup.last.at)} ✓` : ' · last copy FAILED') : ''}`,
+  ].filter(Boolean).join(' · ');
+
+  // Member relays (Settings → Help host): machines members offer as call relays for everyone here. None is used until
+  // it's approved here. Approving one, resuming one and sending it backup copies each put someone else's machine into
+  // everyone's calls or this server's backups, so they need the password again; pausing one, stopping its copies and
+  // removing it never do (the server checks the same).
+  function memberRelays(d) {
+    const list = d.members || [];
+    const on = d.memberRelays !== 'off';
+    const waiting = list.filter((r) => r.status === 'pending').length;
+    const who = (r) => (r.owner ? `@${r.owner.username}` : 'a member');
+    const fail = (e) => { if (!e.cancelled) toast(e.message, 'error'); };
+    const run = async (fn, done) => {
+      try { if (await fn()) { if (done) toast(done); regions(); } } catch (e) { fail(e); }
+    };
+    const approve = (r) => {
+      const keep = h('input', { type: 'checkbox' });
+      modal({ title: `Approve ${r.name}?`, size: 'md',
+        body: h('div', { class: 'stack' },
+          h('p', { class: 'muted-p' }, `${who(r)} runs it. Approving puts it in everyone’s calls: each person’s app measures it and uses it when it’s among the fastest to answer. Whoever runs it then sees the IP address of everyone whose call goes through it or whose app measures it, when, and how much they send. Never what’s said or shown: calls stay encrypted between the people in them, and a relay only passes the packets along.`),
+          h('p', { class: 'field-hint' }, 'People who turned on Avoid relays run by members (Settings → Privacy & safety) never use it. You can pause or remove it here at any time.'),
+          r.waitingForInstall ? h('p', { class: 'field-hint' }, 'It hasn’t checked in yet. Approved, it starts relaying calls once it does.') : null,
+          r.offersBackups
+            ? h('label', { class: 'toggle-row' }, h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Keep encrypted backup copies on it'),
+              h('span', { class: 'field-hint' }, 'Copies are locked with your backup key, which never leaves this server. Only send them to people you trust: anyone who someday got the key could open one.')),
+            h('span', { class: 'switch' }, keep, h('span', { class: 'switch-track' })))
+            : h('p', { class: 'field-hint' }, `${who(r)} didn’t offer backup space on it, so it only relays calls.`)),
+        actions: [{ label: 'Cancel' }, { label: 'Approve', kind: 'primary', action: async () => {
+          const x = await withPassword((y) => api('POST', `/admin/regions/${r.id}/approve`, { backups: keep.checked, ...y }),
+            { title: 'Confirm approving a relay', text: `${r.name} goes into everyone’s calls. That needs your password.`, button: 'Approve' });
+          if (!x) return false;
+          toast(`${r.name} is approved.`);
+          regions();
+        } }] });
+    };
+    const rename = (r) => {
+      const name = h('input', { class: 'input', maxlength: '40', value: r.name });
+      modal({ title: `Rename ${r.name}`, size: 'sm', body: h('div', { class: 'stack' }, field('Name', name, `Shown to you and to ${who(r)}. Everyone else’s app just says “Member relay”.`)),
+        actions: [{ label: 'Cancel' }, { label: 'Save', kind: 'primary', action: async () => {
+          if (!name.value.trim()) throw new Error('Give it a name.');
+          await api('PATCH', `/admin/regions/${r.id}`, { name: name.value.trim() });
+          toast('Saved.');
+          regions();
+        } }] });
+    };
+    const remove = async (r) => {
+      if (!(await confirmDialog({ title: `Remove ${r.name}?`, danger: true, confirm: 'Remove',
+        text: `Calls stop using it right away: everyone’s apps are told to fetch their relay list again, and a call going through it starts over without it. ${who(r)} is told on Help host. Their machine keeps the relay until they uninstall it; it switches itself off a day after this server starts telling it it’s gone.` }))) return;
+      run(() => api('DELETE', `/admin/regions/${r.id}`), `${r.name} removed.`);
+    };
+    const row = (r) => {
+      const st = relayStatus(r);
+      const btn = (label, onclick, cls = 'btn ghost sm') => h('button', { class: cls, 'data-focus': `${label}:${r.id}`, onclick }, label);
+      // Its address, and where it was before if that changed lately (a member's machine says where it is).
+      const moved = r.ipChanged && Date.now() - r.ipChanged.at < 7 * 86400000 ? r.ipChanged : null;
+      return h('div', { class: 'adm-row member-row', 'data-relay': r.id },
+        h('span', { class: 'member-who' }, h('b', null, r.name), h('span', { class: 'stat-sub' }, `by ${who(r)}`)),
+        h('span', { class: 'stat-sub' }, r.ip || 'hasn’t checked in', moved ? h('span', { class: 'stat-sub member-moved' }, ` (was ${moved.from} until ${ago(moved.at)})`) : null),
+        h('span', { class: `rpill ${st.kind}` }, st.label),
+        h('span', { class: 'stat-sub', 'data-live': `stats:${r.id}`, 'data-tip': r.backup && r.backup.last && !r.backup.last.ok ? r.backup.last.error : null }, memberDetails(r)),
+        h('span', { class: 'row gap tight member-actions' },
+          r.status === 'pending' ? btn('Approve', () => approve(r), 'btn primary sm') : null,
+          r.status === 'approved' ? btn('Pause', () => run(() => api('POST', `/admin/regions/${r.id}/pause`), `${r.name} is paused.`)) : null,
+          r.status === 'paused' ? btn('Resume', () => run(() => withPassword((y) => api('POST', `/admin/regions/${r.id}/resume`, y),
+            { title: 'Confirm resuming a relay', text: `${r.name} goes back into everyone’s calls. That needs your password.`, button: 'Resume' }), `${r.name} is back in calls.`)) : null,
+          r.offersBackups && r.status !== 'pending' ? (r.backups
+            ? btn('Backups off', () => run(() => api('POST', `/admin/regions/${r.id}/backups`, { on: false }), `No more copies go to ${r.name}. Copies already there stay until ${who(r)} uninstalls it.`))
+            : btn('Backups on', () => run(() => withPassword((y) => api('POST', `/admin/regions/${r.id}/backups`, { on: true, ...y }),
+              { title: 'Confirm sending backup copies', text: `Every encrypted backup is copied to ${r.name}, which ${who(r)} runs. Copies are locked with your backup key, which never leaves this server; anyone who someday got the key could open one. That needs your password.`, button: 'Turn on' }), `Backups go to ${r.name} too.`))) : null,
+          btn('Rename', () => rename(r)),
+          btn('Remove', () => remove(r), 'btn ghost sm danger-text')));
+    };
+    const setOn = async (input) => {
+      try {
+        await api('PATCH', '/admin/member-relays', { enabled: input.checked });
+        toast(input.checked ? 'Members can offer relays.' : 'Members can’t offer new relays.');
+      } catch (e) { input.checked = !input.checked; fail(e); }
+      regions();
+    };
+    return [
+      h('div', { class: 'admin-head' }, h('h3', null, 'Member relays ', waiting ? h('span', { class: 'badge-tag warn' }, `${waiting} waiting for approval`) : null)),
+      h('p', { class: 'field-hint' }, 'Members can offer a machine of their own (a VPS, a Raspberry Pi, a home PC) as a call relay, from Settings → Help host. None is used until you approve it. A member’s relay sees the IP address of everyone whose call goes through it or whose app measures it, never what’s said or shown. Each has its own relay secret (never this server’s) and logs people in under names made up for it alone. People who turn on Avoid relays run by members never use them.'),
+      h('label', { class: 'toggle-row' }, h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Let members offer relays'),
+        h('span', { class: 'field-hint' }, on ? 'Up to 2 each. Nothing is used until you approve it.' : 'Members can’t offer new relays. The ones you approved keep working.')),
+      h('span', { class: 'switch' }, h('input', { type: 'checkbox', checked: on, onchange: (e) => setOn(e.target) }), h('span', { class: 'switch-track' }))),
+      list.length ? h('div', { class: 'adm-table' }, ...list.map(row)) : h('p', { class: 'field-hint' }, 'No member has offered a relay yet.'),
+    ];
   }
 
   // ---------------------------------------------------------------- money (Ko-fi / Stripe → automatic supporters)
@@ -879,6 +1039,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
 
   async function owner() {
     const o = await api('GET', '/admin/owner');
+    const notes = await api('GET', '/update-notes').then((r) => r.notes).catch(() => []);
     const act = await api('GET', '/admin/activity').catch(() => ({}));
     const mail = await api('GET', '/admin/mail').catch(() => ({}));
     const mf = {
@@ -912,7 +1073,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       note: h('input', { class: 'input', maxlength: '300', value: F.note, placeholder: 'Optional: your own message' }) };
     const supQuota = h('input', { class: 'input', type: 'number', min: '0', value: String(o.supporterQuotaMb || '') , placeholder: '0 = same as everyone' });
     const keep = h('input', { class: 'input', type: 'number', min: '1', max: '60', value: String(o.autoBackup.keep), 'aria-label': 'Number of daily backups to keep' });
-    const download = async (b) => {
+    const download = (b) => underWay((async () => {
       try {
         const r = await fetch(`/api/admin/backups/${encodeURIComponent(b.name)}`, { headers: { authorization: 'Bearer ' + localStorage.getItem('hearth.token') } });
         if (!r.ok) throw new Error('Download failed.');
@@ -920,8 +1081,56 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
         h('a', { href: url, download: b.name }).click();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
       } catch (e) { toast(e.message, 'error'); }
+    })());
+    // Update notes: Hearth's updates come with none; people see only what's published here (server/updatenotes.js).
+    const note = {
+      title: h('input', { class: 'input', maxlength: '100', placeholder: 'e.g. New this week' }),
+      text: h('textarea', { class: 'input', rows: '5', placeholder: 'One line for each thing that\u2019s new' }),
+      android: h('input', { type: 'checkbox', checked: true }),
     };
+    let editing = null; // the note being changed
+    const noteBody = () => ({ title: note.title.value, text: note.text.value, android: note.android.checked });
+    const lines = () => note.text.value.split('\n').map((t) => t.trim()).filter(Boolean);
+    const publishNote = async () => {
+      try {
+        if (editing) { await api('PUT', `/admin/update-notes/${editing.id}`, noteBody()); toast('Note changed (people who saw it don\u2019t get it again).'); } else {
+          if (!(await confirmDialog({ title: 'Publish this note?', text: 'Everyone sees it once, in a \u201cWhat\u2019s new\u201d window (right away in apps that are open).', confirm: 'Publish' }))) return;
+          markNotesSeen([(await api('POST', '/admin/update-notes', noteBody())).id]);
+          toast('Published.');
+        }
+        owner();
+      } catch (e) { toast(e.message, 'error'); }
+    };
+    const editNote = (n) => {
+      editing = n;
+      note.title.value = n.title; note.text.value = n.items.join('\n'); note.android.checked = n.android;
+      publishBtn.textContent = 'Save changes'; cancelBtn.hidden = false;
+      note.title.focus();
+    };
+    const previewNote = () => modal({ title: 'What\u2019s new', size: 'md', className: 'whatsnew',
+      body: h('div', { class: 'stack' }, h('section', null, note.title.value.trim() ? h('h3', { class: 'set-h' }, note.title.value.trim()) : null,
+        lines().length ? h('ul', { class: 'perk-list' }, lines().map((t) => h('li', null, t))) : h('p', { class: 'field-hint' }, 'Nothing written yet.'))),
+      actions: [{ label: 'Close' }] });
+    const publishBtn = h('button', { class: 'btn primary', onclick: publishNote }, 'Publish');
+    const cancelBtn = h('button', { class: 'btn ghost sm', hidden: true, onclick: () => owner() }, 'Cancel');
     clear(body).append(
+      h('div', { class: 'admin-head' }, h('h3', null, 'Update notes')),
+      h('p', { class: 'field-hint' }, 'Hearth\u2019s updates come with no notes: people see only what you publish here, and only you can. Each note shows once to everyone, in a \u201cWhat\u2019s new\u201d window (right away in apps that are open). Plain text, one line per item.'),
+      field('Title (optional)', note.title),
+      field('What\u2019s new', note.text, 'Up to 20 lines.'),
+      h('label', { class: 'toggle-row' }, h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Show it in the Android app too'),
+        h('span', { class: 'field-hint' }, 'Turn off for a note about paying: Google Play doesn\u2019t allow that in the app.')), h('span', { class: 'switch' }, note.android, h('span', { class: 'switch-track' }))),
+      h('div', { class: 'row gap' }, publishBtn, h('button', { class: 'btn', onclick: previewNote }, 'Preview'), cancelBtn),
+      notes.length ? h('div', { class: 'adm-table update-notes' }, ...notes.map((n) => h('div', { class: 'adm-row' },
+        h('span', null, h('strong', null, n.title || n.items[0]), h('span', { class: 'stat-sub' }, ` \u00b7 ${n.items.length} line${n.items.length === 1 ? '' : 's'}${n.android ? '' : ' \u00b7 not in the Android app'}`)),
+        h('span', { class: 'stat-sub' }, `${fmtStamp(n.at)}${n.editedAt ? ' (changed)' : ''}`),
+        h('button', { class: 'btn ghost sm', onclick: () => editNote(n) }, 'Edit'),
+        h('button', { class: 'btn ghost sm danger-text', onclick: async () => {
+          if (!(await confirmDialog({ title: 'Take this note down?', text: 'It\u2019s deleted, and nobody who hasn\u2019t seen it yet will.', confirm: 'Delete', danger: true }))) return;
+          try { await api('DELETE', `/admin/update-notes/${n.id}`); toast('Note deleted.'); owner(); } catch (e) { toast(e.message, 'error'); }
+        } }, 'Delete'))))
+        : h('p', { class: 'field-hint' }, 'No notes published yet.'),
+
       h('div', { class: 'admin-head' }, h('h3', null, 'Name and welcome')),
       h('div', { class: 'grid-2' }, field('Server name', name, 'Shown in the browser tab, on the login screen and in installed apps.'), field('Tagline', tagline, 'One line under the name on the login screen.')),
       h('div', { class: 'row gap' }, h('button', { class: 'btn primary', onclick: () => save({ brand: { name: name.value, tagline: tagline.value } }) }, 'Save')),
@@ -1080,7 +1289,9 @@ async function userModal(id, refresh, myRank = 2) {
       u.keysResetAt ? h('div', { class: 'row gap wrap' },
         h('span', { class: 'badge-tag bad' }, `New keys from a password reset without the recovery key, ${ago(u.keysResetAt)} \u2014 not verified yet${u.keysWaiting ? ` in ${u.keysWaiting} ${u.keysWaiting === 1 ? 'server or group' : 'servers and groups'} they were in before` : ''}`),
         // It can't be taken back, so it takes your password (and a fresh two-factor code when that's on), in one dialog.
-        myRank >= 2 && !u.self ? h('button', { class: 'chip', onclick: async () => {
+        // Not by whoever made the reset link that gave them these keys (they could have opened it themselves).
+        u.keysResetByMe ? h('span', { class: 'field-hint' }, 'You made the reset link these keys came from, so a member who knew them before, or another admin, has to verify them.') : null,
+        myRank >= 2 && !u.self && !u.keysResetByMe ? h('button', { class: 'chip', onclick: async () => {
           try {
             const r = await withPassword((x) => api('POST', `/admin/users/${u.id}/keys/verify`, x), { title: `Mark ${u.username}\u2019s new keys as verified?`, button: 'Mark as verified',
               text: 'Only once you\u2019re sure it\u2019s really them and not someone who got into their email: for example, they read you the safety number from your profile in person or on a call. Everyone\u2019s apps then share the keys to all their servers and groups with them, including ones where nobody has verified them yet. This goes in the audit log.' });
@@ -1131,6 +1342,7 @@ async function userModal(id, refresh, myRank = 2) {
           await withPassword((x) => api('PUT', '/admin/staff', { userId: id, role: r, ...x }), { title: 'Confirm the team change', text: 'Changing the team needs your password.' })
             .then((ok) => { if (!ok) return; toast(r ? `Now ${l.toLowerCase()}.` : 'Removed from staff.'); m.close(); userModal(id, refresh, myRank); refresh(); }, (x) => { if (!x.cancelled) toast(x.message, 'error'); });
         } }, l))) : null,
+      u.myRole === 'owner' && u.canAct && !u.bot && !u.deletedAt ? resetLinkRow(u, () => { m.close(); userModal(id, refresh, myRank); }) : null,
       u.canAct ? null : h('p', { class: 'field-hint' }, 'You can look, but only someone ranked above this account can suspend, sign out or reset it.')),
     actions: !u.canAct ? [] : [
       { label: 'Reset profile', action: async () => {
@@ -1141,7 +1353,71 @@ async function userModal(id, refresh, myRank = 2) {
       u.suspendedAt
         ? { label: 'Unsuspend', kind: 'primary', action: async () => { await api('POST', `/admin/users/${id}/unsuspend`); toast('Unsuspended.'); refresh(); } }
         : { label: 'Suspend\u2026', kind: 'danger', action: () => { m.close(); suspendDialog(u, refresh); return false; } },
+      myRank >= 2 && !u.deletedAt && !u.bot ? { label: 'Delete account\u2026', kind: 'danger', action: () => { m.close(); deleteAccountDialog(u, refresh); return false; } } : null,
     ].filter(Boolean),
+  });
+}
+// The owner's password reset link, for someone who can't sign in and can't reset it by email (no address on the
+// account, or email isn't set up). They choose their own new password with it: the owner never sees it (it unlocks
+// their private key). server/accounts.js has the rules: one at a time, 24 hours, their two-factor code still asked
+// for, new keys verified by someone other than the owner who made it, an email to them, the audit log.
+function resetLinkRow(u, reopen) {
+  const make = async () => {
+    try {
+      const r = await withPassword((x) => api('POST', `/admin/users/${u.id}/reset-link`, x),
+        { title: `Make a password reset link for ${u.username}?`, button: 'Make the link', text: 'For someone who can\u2019t sign in and can\u2019t reset their password by email. They choose their own new password with it.' });
+      if (r) showResetLink(u, r, reopen);
+    } catch (e) { if (!e.cancelled) toast(e.message, 'error'); }
+  };
+  const cancel = async () => {
+    try { await api('DELETE', `/admin/users/${u.id}/reset-link`); toast('Reset link cancelled.'); reopen(); } catch (e) { toast(e.message, 'error'); }
+  };
+  return h('div', { class: 'stack' },
+    h('div', { class: 'row gap wrap' }, h('span', { class: 'field-label' }, 'Password'),
+      h('button', { class: 'chip', onclick: make }, u.resetLinkUntil ? 'Make a new reset link' : 'Make a password reset link')),
+    u.resetLinkUntil
+      ? h('p', { class: 'field-hint' }, `A reset link you made works until ${fmtStamp(u.resetLinkUntil)}. `, h('button', { class: 'link-btn', onclick: cancel }, 'Cancel it'))
+      : h('p', { class: 'field-hint' }, 'For someone who can\u2019t sign in: a one-time link they use to choose a new password themselves. You never see their password.'));
+}
+function showResetLink(u, r, reopen) {
+  const url = `${location.origin}/#reset=${r.token}`;
+  const inp = h('input', { class: 'input mono', readonly: true, value: url, 'aria-label': 'Reset link' });
+  modal({
+    title: `Reset link for ${u.username}`, size: 'sm',
+    body: h('div', { class: 'stack' },
+      h('p', { class: 'muted-p' }, `Give it to ${u.displayName} only, privately: whoever opens it can choose the password. It works once, until ${fmtStamp(r.expiresAt)}, and nothing changes until it\u2019s used.`),
+      inp,
+      h('p', { class: 'muted-p' }, u.hasRecovery
+        ? 'They have a recovery key: with it, all their messages stay readable.'
+        : 'They have no recovery key, so the reset gives them new encryption keys: their old direct messages can\u2019t be read any more, and someone who knew them before (not you, since you made the link) has to verify them before they can read their servers again.'),
+      u.totpEnabled ? h('p', { class: 'muted-p' }, 'Two-factor sign-in is on for them, so they\u2019ll still need their code.') : null,
+      h('p', { class: 'muted-p' }, 'Using it signs them out everywhere. They\u2019re told by email if they have an address, and it\u2019s in the audit log.')),
+    actions: [
+      { label: 'Copy link', kind: 'primary', action: () => { copyText(url); toast('Link copied.'); return false; } },
+      { label: 'Done', action: () => { reopen(); } },
+    ],
+  });
+  setTimeout(() => inp.select(), 50);
+}
+// Deleting someone's account for them: a child under 13, or a person who asked by email because they can't sign in.
+// The server does what Settings → Delete account does (eraseAccount in server/index.js), without their password.
+function deleteAccountDialog(u, after) {
+  const confirmIn = h('input', { class: 'input', maxlength: '40', autocomplete: 'off', spellcheck: 'false' });
+  const reason = h('input', { class: 'input', maxlength: '300', placeholder: 'For the audit log, e.g. \u201casked by email\u201d or \u201cunder 13\u201d' });
+  modal({
+    title: `Delete ${u.displayName}\u2019s account?`, size: 'sm',
+    body: h('div', { class: 'stack' },
+      h('p', { class: 'muted-p' }, 'The same as when they delete it themselves in Settings: they\u2019re signed out everywhere, and their keys, email, profile, pictures, friends and settings are erased. Their messages stay, as \u201cDeleted user\u201d. It can\u2019t be undone. If they own servers, delete those or give them to someone first.'),
+      h('p', { class: 'muted-p' }, 'Only for an account that belongs to a child under 13, or for someone who asked you and showed it\u2019s theirs. Reports and staff notes about them stay. This goes in the audit log.'),
+      field(`Type ${u.username} to confirm`, confirmIn), field('Reason', reason)),
+    actions: [{ label: 'Cancel' }, { label: 'Delete forever', kind: 'danger', action: async () => {
+      if (confirmIn.value.trim() !== u.username) throw new Error(`Type ${u.username} to confirm.`);
+      const r = await withPassword((x) => api('DELETE', `/admin/users/${u.id}`, { confirm: confirmIn.value.trim(), reason: reason.value, ...x }),
+        { title: 'Confirm deleting the account', text: `Deleting ${u.username}\u2019s account needs your password.`, button: 'Delete forever' });
+      if (!r) return false;
+      toast(`${u.username}\u2019s account is deleted.`);
+      if (after) await after();
+    } }],
   });
 }
 // Private staff notes on an account.

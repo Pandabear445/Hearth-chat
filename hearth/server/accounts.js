@@ -44,7 +44,7 @@ const EMAIL_RE = /^[^\s@<>()[\]\\,;:"]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24
 module.exports = function setupAccounts(ctx) {
   const { api, auth, db, fail, wrap, rateLimit, countHit, limitNet, getSetting, setSetting, getUserRow, selfUser, broadcastUser, bcrypt, seal, unseal,
     tokenId, requireInstanceAdmin, requireOutranks, auditLog, secEvent, cleanIp, emitKeyState, brandName, isB64ish, isSalt, atRestKey,
-    stepUp, createSession, revokeSessions, rotateToken, hitsSoFar, refundHit, refundNet, verifyCaptcha } = ctx;
+    stepUp, createSession, revokeSessions, rotateToken, hitsSoFar, refundHit, refundNet, verifyCaptcha, staffRole } = ctx;
   const now = () => Date.now();
 
   // ------------------------------------------------------------------ sending email
@@ -127,13 +127,17 @@ module.exports = function setupAccounts(ctx) {
     return t && t.expires_at > now() ? t : null;
   };
   // A reset link only works while the account still has the confirmed address it was sent to. So moving to a
-  // new email (say, because the old inbox was broken into) or removing it cancels links already sent there.
+  // new email (say, because the old inbox was broken into) or removing it cancels links already sent there. One the
+  // owner made (below) only works while whoever made it is still the owner.
   const resetLinkFor = (raw) => {
     const t = findToken(raw, 'reset');
     const row = t && getUserRow(t.user_id);
-    if (!row || row.deleted_at) return null;
+    if (!row || row.deleted_at || row.is_bot) return null;
     let d = {};
     try { d = JSON.parse(t.data || '{}') || {}; } catch { /* treated as not matching */ }
+    // (and isn't marked: a reset gave them new keys nobody has verified, so whoever reset their password could be
+    // anyone who got into their email).
+    if (d.owner) return d.owner !== row.id && staffRole(d.owner) === 'owner' && !(getUserRow(d.owner) || {}).keys_reset_at ? { t, row, owner: d.owner } : null;
     return d.email && row.email === d.email && row.email_verified ? { t, row } : null;
   };
   // Outstanding reset links stop working: after a password change, and when the email changes or goes away.
@@ -408,7 +412,7 @@ module.exports = function setupAccounts(ctx) {
     const b = req.body || {};
     const link = resetLinkFor(b.token);
     if (!link) fail(400, 'This reset link has expired or was already used. Ask for a new one.');
-    const { t, row } = link;
+    const { t, row, owner } = link;
     rateLimit('resetuser:' + t.user_id, 10, 15 * 60000);
     if (typeof b.authKey !== 'string' || !/^[0-9a-f]{64}$/.test(b.authKey) || !isB64ish(b.encPrivateKey, 4000) || !isSalt(b.kdfSalt)) fail(400, 'Bad key material.');
     const keep = b.keepKeys === true;
@@ -437,7 +441,12 @@ module.exports = function setupAccounts(ctx) {
         // earlier reset stays so, from now (whoever verifies must have known them before this reset), and what
         // anyone verified for the old keys no longer counts.
         const shares = db.prepare('SELECT 1 FROM members m JOIN members o ON o.server_id = m.server_id AND o.user_id != m.user_id WHERE m.user_id = ? LIMIT 1').get(row.id);
-        db.prepare('UPDATE users SET keys_reset_at = ?, keys_vouched_by = NULL, keys_vouched_at = NULL WHERE id = ?').run(shares || row.keys_reset_at ? now() : null, row.id);
+        // From the owner's link: that owner can't be the one who verifies them (index.js). One who made the link for
+        // the keys still waiting stays on record through a later reset (say, an emailed one from an address they added
+        // as this person), until someone else verifies them (markVerified). Read from the row as it is now.
+        const at = shares || row.keys_reset_at ? now() : null;
+        db.prepare(`UPDATE users SET keys_reset_at = @at, keys_reset_by = CASE WHEN @at IS NULL THEN NULL ELSE COALESCE(@owner, CASE WHEN keys_reset_at IS NOT NULL THEN keys_reset_by END) END,
+            keys_vouched_by = NULL, keys_vouched_at = NULL WHERE id = @id`).run({ at, owner: owner || null, id: row.id });
         db.prepare('DELETE FROM key_vouches WHERE user_id = ?').run(row.id);
       }
       db.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND kind = 'reset'").run(row.id);
@@ -447,15 +456,60 @@ module.exports = function setupAccounts(ctx) {
     broadcastUser(row.id);
     if (!keep) servers.forEach((sid) => emitKeyState(sid));
     const token = createSession(req, row.id, { mfa: !!row.totp_enabled });
-    secEvent('password_reset', cleanIp(req.ip), `${row.username}${keep ? ' (kept keys)' : ' (new keys)'}`);
-    auditLog(req, keep ? 'password_reset_kept_keys' : 'password_reset_new_keys', row.id, row.username, row.id);
+    const viaOwner = owner ? ` (with a reset link from the owner, ${(getUserRow(owner) || {}).username || 'deleted'})` : '';
+    secEvent('password_reset', cleanIp(req.ip), `${row.username}${keep ? ' (kept keys)' : ' (new keys)'}${viaOwner}`);
+    auditLog(req, keep ? 'password_reset_kept_keys' : 'password_reset_new_keys', row.id, `${row.username}${viaOwner}`, row.id);
     const fresh = getUserRow(row.id);
     const verify = fresh.keys_reset_at ? '\n\nThe reset gave the account new encryption keys, so someone in your servers or groups has to verify you (compare safety numbers with you) before you can read new messages there again.' : '';
     sendMail({ to: row.email, subject: `${brandName()}: your password was changed`, text: `The password for ${row.username} on ${brandName()} was just reset, and every device was signed out.${verify}\n\nIf this wasn't you, reset it again right away and tell the server owner.` }).catch(() => {});
     res.json({ token, user: selfUser(fresh), encPrivateKey: fresh.enc_private_key });
   }));
 
+  // ------------------------------------------------------------------ the owner's reset links (Admin → Users)
+  // For someone who can't get back in by themselves: no email on the account, or email isn't set up here. The owner
+  // gets a one-time link to hand them, and it's the same reset as the emailed one: they choose their own new password
+  // (the owner never knows it, and never can: it unlocks their private key), they keep their keys only with their
+  // recovery key, their two-factor code is still asked for, and new keys are held back until someone who knew them
+  // verifies them, which can't be the owner who made the link (users.keys_reset_by): they could have opened it
+  // themselves. Their devices are signed out only once the link is used. One link at a time (a newer emailed link
+  // replaces it and the other way round), for 24 hours, while whoever made it is still the owner. Making one takes
+  // the owner's password (and two-factor code), the person is told by email when they have one, and it all goes in
+  // the audit log.
+  const OWNER_LINK_MS = 24 * 3600000;
+  const ownerHere = (req) => { if (staffRole(req.userId) !== 'owner') fail(403, 'Only the owner can do that.'); };
+  function ownerLinkOf(uid) {
+    const t = db.prepare("SELECT * FROM auth_tokens WHERE user_id = ? AND kind = 'reset' AND expires_at > ?").get(uid, now());
+    let d = {};
+    try { d = JSON.parse((t && t.data) || '{}') || {}; } catch { /* not one */ }
+    return t && d.owner ? { id: t.id, expiresAt: t.expires_at, by: d.owner } : null;
+  }
+  api.post('/admin/users/:id/reset-link', auth, wrap(async (req, res) => {
+    ownerHere(req);
+    rateLimit('ownerresetlink:' + req.userId, 20, 3600000);
+    const r = requireOutranks(req, String(req.params.id)); // never your own account
+    if (r.is_bot || r.deleted_at) fail(400, 'That account can\u2019t sign in.');
+    // Not while your own password was reset without your recovery key (and nobody has verified you since): whoever
+    // got into your email could otherwise get into every account on the server (like PUT /admin/staff, row 137).
+    if (getUserRow(req.userId).keys_reset_at) fail(403, 'Your password was reset without your recovery key, so you can\u2019t make reset links until you\u2019re verified in your servers and groups. Ask a member who knew you before to compare safety numbers with you.', 'keys_unverified');
+    await stepUp(req, req.body);
+    const raw = newToken(r.id, 'reset', { owner: req.userId }, OWNER_LINK_MS);
+    const me = getUserRow(req.userId);
+    secEvent('reset_link_made', cleanIp(req.ip), `${r.username} by ${me.username}`);
+    auditLog(req, 'password_reset_link_made', r.id, `${r.username}: a one-time reset link for 24 hours, made by the owner, ${me.username}`);
+    notify(r, 'a password reset link was made for you', `The owner of ${brandName()}, ${me.username}, made a link to reset the password for ${r.username}. It works once, within 24 hours. Until someone opens it, nothing changes: your password stays the same.`,
+      { footer: 'If you didn\'t ask the owner for this, tell them, and keep using your password as usual.' });
+    res.json({ token: raw, expiresAt: ownerLinkOf(r.id).expiresAt });
+  }));
+  api.delete('/admin/users/:id/reset-link', auth, (req, res) => {
+    ownerHere(req);
+    const r = requireOutranks(req, String(req.params.id));
+    const link = ownerLinkOf(r.id);
+    const cancelled = !!link && db.prepare('DELETE FROM auth_tokens WHERE id = ?').run(link.id).changes === 1;
+    if (cancelled) auditLog(req, 'password_reset_link_cancelled', r.id, r.username);
+    res.json({ ok: true, cancelled });
+  });
+
   // What selfUser() adds about these settings (only ever sent to the account itself).
   const selfExtras = (row) => ({ email: row.email || null, emailVerified: !!row.email_verified, emailMasked: mask(row.email), hasRecovery: !!row.enc_private_key_recovery, totpEnabled: !!row.totp_enabled, backupCodesLeft: row.totp_enabled ? JSON.parse(row.backup_codes || '[]').length : 0 });
-  return { require2fa, selfExtras, mailReady, sendMail, mask, notify, dropResetLinks };
+  return { require2fa, selfExtras, mailReady, sendMail, mask, notify, dropResetLinks, ownerLinkUntil: (uid, viewer) => { const l = ownerLinkOf(uid); return l && l.by === viewer ? l.expiresAt : null; } };
 };

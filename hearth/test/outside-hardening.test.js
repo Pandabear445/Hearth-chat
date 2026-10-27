@@ -223,7 +223,8 @@ test('xss-8: every message body goes through click-to-load, voice channel chats 
   const calls = [...app.matchAll(/\bembedImg\(/g)].length;
   assert.equal(calls, 3, 'embedImg: its definition, the show branch and the Load button');
   // Image links are only pulled out of a message in fillMessage, and filtered by the reader's choice there.
-  const fill = app.slice(app.indexOf('function fillMessage('), app.indexOf('function fillMessage(') + 6000);
+  const at = app.indexOf('function fillMessage(');
+  const fill = app.slice(at, app.indexOf('\nfunction ', at + 1)); // the whole function
   assert.match(fill, /extractImageUrls\(text\)\.filter\(.*embedDecision\(u, m\) !== 'skip'\)/);
   assert.match(fill, /embeds\.map\(\(u\) => embedEl\(u, m\)\)/);
   assert.equal([...app.matchAll(/extractImageUrls\(/g)].length, 2, 'fillMessage, and a count of image links (no picture)');

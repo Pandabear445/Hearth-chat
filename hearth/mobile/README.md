@@ -16,9 +16,15 @@ What the app adds on top of the web page (in `native/MainActivity.java`):
 * **Invite links open in the app:** `hearth://invite/CODE`, and `https://your-server/invite/CODE` for an app
   built for your server (see *Invite links* below).
 * **Saving files** (attachments, exports) to *Downloads/Hearth*.
-* **Links to other sites** open in your browser; only your server loads inside the app.
-* **Back button** goes back; on the first screen it sends the app to the background (so messages keep
-  arriving) instead of closing it.
+* **Links to other sites** open in your browser; only your server loads inside the app. The connect screen
+  links to Hearth's privacy policy, which opens in the browser too. Payment pages (Stripe's checkout, payment
+  links and billing pages, and Ko-fi) don't open at all, wherever the link comes from.
+* **Nothing copied off the phone:** Android's backup and phone-to-phone transfer are off for the app, so your
+  sign-in and unlocked keys stay on the phone. On a new phone you sign in again.
+* **Back button** first closes whatever is open (a picture, a menu or dialog, the members panel, the channel
+  drawer), then goes back; on the first screen it sends the app to the background (so messages keep arriving)
+  instead of closing it. The page adds a history step while something is open (`public/js/phone-nav.js`), so the
+  app's usual `WebView.goBack()` does this with no change on the Android side.
 * **Switch server:** Settings → Apps & devices → *Switch server*.
 * **Status bar and keyboard:** the page sits between Android's status bar and navigation bar and above the
   keyboard on every Android version (Android 15+ would otherwise draw it underneath them).
@@ -33,12 +39,18 @@ Install it: open the `.apk` on the phone and allow "Install unknown apps" for yo
 Those warnings (and Play Protect's "unrecognised app") come with installing outside Google Play; to avoid them,
 offer the app through Google Play's internal testing track, see [`../docs/SIGNING.md`](../docs/SIGNING.md).
 To offer it to everyone, put the `.apk` in your server's `data/downloads/` folder — the `/download` page shows
-it to Android visitors.
+it to Android visitors (in a browser; opened inside the app, it lists no downloads).
 
-**Server address:** people type it on first launch (e.g. `chat.example.com` or `1.2.3.4:3000`). To build an
-app for your server only, set the repository variable `HEARTH_SERVER` (Settings → Secrets and variables →
-Actions → Variables), e.g. `https://chat.example.com`, or type it when running the workflow by hand. Set
-`"lockServer": true` in `www/config.json` to stop people changing it.
+**In app stores:** IzzyOnDroid and Google Play, step by step, with the store listing in
+[`fastlane/metadata/android/en-US/`](fastlane/metadata/android/en-US/):
+[`../docs/ANDROID-STORES.md`](../docs/ANDROID-STORES.md).
+
+**Server address:** the app connects to the community server `https://kappachat.duckdns.org` by itself on first
+launch (`defaultServer` in `www/config.json`). People can switch to any other Hearth server: Settings → Apps &
+devices → *Switch server* opens the connect screen, where they type its address (e.g. `chat.example.com` or
+`1.2.3.4:3000`). To build an app for your server instead, set the repository variable `HEARTH_SERVER` (Settings →
+Secrets and variables → Actions → Variables), e.g. `https://chat.example.com`, or type it when running the
+workflow by hand. Set `"lockServer": true` in `www/config.json` to stop people changing it.
 
 ## Signing (so updates install over the top)
 
@@ -137,8 +149,8 @@ which the build follows:
   Google Play asks apps to explain each foreground service type when they're submitted.
 
 The service keeps the microphone, not the camera: video may pause while the screen is off; the call's audio
-carries on. Anything that loads a new page (*Reload now* after a server update, switching server, a connection
-error) ends the call, and the notification goes with it.
+carries on. Anything that loads a new page (reloading it, switching server, a connection
+error) ends the call, and the notification goes with it. A server update never does: it waits until the call is over.
 
 ## Invite links
 
@@ -166,7 +178,7 @@ still need a real phone (checklist: `docs/design/ANDROID-PUSH.md` §17) before a
   default or "Always" picked (no question), with none installed, and *Change* (Hearth's list of every push app,
   including one Android's list can't show; backing out keeps the current one);
 * the call notification: the call carrying on with the screen locked for several minutes, *Hang up*, Android 14+
-  accepting the `microphone` service, and the notification going away after *Reload now* or switching server;
+  accepting the `microphone` service, and the notification going away after reloading the page or switching server;
 * the ringing channel for calls (sound, 45-second timeout), the missed-call case, and opening Hearth from the
   launcher while a call rings (the ringtone stops and the call's conversation opens);
 * the lock screen with Android's default ("show all notification content"): only "<server>" / "New message" and
@@ -181,19 +193,34 @@ still need a real phone (checklist: `docs/design/ANDROID-PUSH.md` §17) before a
 * **A full-screen incoming call screen** (like the phone app's) — calls ring as a notification.
 * **Google's push service built in** (for people without a push app) — planned as an optional build flag.
 
+## Left out on purpose
+
+* **Paying:** the supporter window (*Support* in the menu on your name), the funding card on Home and creator
+  memberships (joining one, and Server settings → Memberships) don't show in the app. Google Play doesn't allow
+  an app to send people to pay outside Play's own billing. A browser and the desktop app still show them. That
+  part comes from the server (1.29.1 or newer); the app itself also refuses to open Stripe and Ko-fi payment pages
+  (`BridgePolicy.isPaymentPage`), for a server on an older version and for links people post.
+* **Downloads:** Settings → Apps & devices has no download page or share link, and `/download` lists no
+  downloads when it's opened in the app. An app installed from Google Play updates only through Play.
+
 ## Building it yourself
 
 Needs Node 22, JDK 21 and the Android SDK (Android Studio Otter 2025.2.1 or newer): the app uses Capacitor 8
 and targets Android 16 (API 36), which Google Play requires for new apps and updates. The workflow's *Create
 the Android project* step shows exactly what it does: `npm ci` (exactly what `package-lock.json` lists; use it
 locally too), `npx cap add android`, copy `native/*.java` in, add the microphone/camera/notification permissions
-and the `androidx.webkit` dependency, then `node scripts/patch-android.js android`, which adds:
+and the `androidx.webkit` dependency, keep Google's dependency-info block out of the APK
+(`includeInApk = false` in `dependenciesInfo`: IzzyOnDroid's scanner flags it; the Play bundle keeps it), then
+`node scripts/patch-android.js android`, which adds:
 
 * the UnifiedPush library at an exact version (`org.unifiedpush.android:connector:3.3.5`, from Maven Central);
 * `HearthPushService` (unexported, reachable only by the library) and `CallService` (a `microphone` foreground
   service) with the `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_MICROPHONE` permissions;
 * the invite link filters (`SERVER` set: also the verified https one);
-* the status bar icon (`native/res`) and the unit tests (`native/test`).
+* the status bar icon (`native/res`) and the unit tests (`native/test`);
+* `android:allowBackup="false"` and data extraction rules that leave everything out
+  (`native/res/xml/data_extraction_rules.xml`), so Android neither backs the app's data up nor moves it to a new
+  phone.
 
 It refuses to patch a manifest that doesn't look like Capacitor's template, so a template change fails the build
 instead of shipping an app without push. Then `./gradlew assembleRelease testReleaseUnitTest` (and

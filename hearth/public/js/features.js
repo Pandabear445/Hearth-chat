@@ -129,6 +129,7 @@ export function voiceButton(getComposer, onSend) {
       h('button', { class: 'icon-btn', 'aria-label': 'Cancel recording', 'data-tip': 'Cancel', onclick: () => stop(false) }, icon('trash')),
       h('span', { class: 'rec-dot' }), h('span', null, 'Recording'), time, level,
       h('button', { class: 'btn primary sm', onclick: () => stop(true) }, icon('send'), 'Send'));
+    bar._cancel = () => stop(false); // (Back on a phone, as Cancel: app.js phoneNav)
     function stop(send) {
       if (rec.state === 'inactive') return;
       cancelled = !send;
@@ -156,6 +157,8 @@ const fmtDur = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padSta
 // Voice messages loaded so far, by file: one from a disappearing message stops when the message goes (the player
 // isn't in the page, so taking the message off the screen alone wouldn't stop it).
 const voiceAudio = new Map(); // file url -> Audio
+// A voice message is playing (its Audio isn't on the page, so a look at the page's media misses it).
+export const voicePlaying = () => [...voiceAudio.values()].some((a) => !a.paused && !a.ended && !a.error);
 export function stopVoice(urls) {
   for (const u of urls) {
     const a = voiceAudio.get(u);

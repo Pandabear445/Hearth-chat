@@ -378,7 +378,7 @@ test('nicknames: servers from before this version get Change Nickname for everyo
   const d = srv.db(); try { d.pragma('user_version = 18'); } finally { d.close(); }
   await srv.restart();
   assert.equal(srv.sql('SELECT permissions FROM roles WHERE id = ?', server.id)[0].permissions & P.CHANGE_NICKNAME, P.CHANGE_NICKNAME);
-  assert.equal(srv.db().pragma('user_version', { simple: true }), 19);
+  assert.equal(srv.db().pragma('user_version', { simple: true }), Number(/const SCHEMA_VERSION = (\d+);/.exec(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'db.js'), 'utf8'))[1]));
   // Once upgraded, a server that turns it off keeps it off across restarts.
   assert.equal((await as(owner, 'PATCH', `/roles/${server.id}`, { permissions: everyone & ~P.CHANGE_NICKNAME })).status, 200);
   await srv.restart();

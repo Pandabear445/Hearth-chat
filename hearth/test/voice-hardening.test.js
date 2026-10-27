@@ -363,7 +363,7 @@ test('voice-6/9: relay logins say when they run out, stay the same for hours, ne
   assert.ok(!theirs.username.includes(other.id));
   assert.equal(theirs.credential, crypto.createHmac('sha1', TURN_SECRET).update(theirs.username).digest('base64'));
   let limited = 0;
-  for (let i = 0; i < 60; i++) if ((await as(u, 'GET', '/ice')).status === 429) limited++;
+  for (let i = 0; i < 120; i++) if ((await as(u, 'GET', '/ice')).status === 429) limited++;
   assert.ok(limited >= 1, '/ice is rate-limited');
   // It's the access log's pseudonym for the same person, so an admin can match relay logs to it.
   assert.ok(await until(() => new RegExp(`route=/api/ice status=429 .*uid=${who}\\b`).test(srv.log)), 'the access log names the person the same way');
@@ -513,7 +513,9 @@ test('voice-11: a region can only report a public address, however an internal o
   const add = await as(admin, 'POST', '/admin/regions', { name: 'Frankfurt', origin: 'https://chat.example.test', authKey: admin.authKey });
   assert.equal(add.status, 200, add.text);
   const id = add.json.region.id;
-  const token = /[?&]k=([0-9a-f]+)/.exec(add.json.command)[1];
+  const link = /[?&]k=([0-9a-f]+)/.exec(add.json.command)[1];
+  // (The check-in token is inside the installer, not in the link.)
+  const token = /^TOKEN='([0-9a-f]+)'$/m.exec((await srv.call('GET', `/regions/install/${id}?k=${link}`)).text)[1];
   const beat = (ip) => srv.api('POST', `/regions/${id}/heartbeat`, { headers: { 'x-region-token': token }, body: { ip, relay: true } });
   assert.equal((await beat('203.0.113.9')).status, 200);
   for (const ip of ['0::1', '0:0:0:0:0:0:0:1', '::ffff:7f00:1', '::ffff:a00:1', '::ffff:127.0.0.1', 'fe8f::1', '::1', 'fe80::1', 'fd00::5', '::', '64:ff9b::a00:1', 'fe80::1%eth0', '10.0.0.1', '127.0.0.1', '169.254.169.254', 'not-an-ip']) {

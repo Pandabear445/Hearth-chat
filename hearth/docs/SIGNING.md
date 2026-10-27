@@ -86,16 +86,30 @@ What to know first:
 - SmartScreen: signed files start building reputation right away. A brand-new release may still show the
   warning for a short while; with your name gone from "Unknown publisher" it's far less scary either way.
 
-**Step by step:**
+**Step by step.** SignPath sets you up in two rounds: first you sign with a **test certificate** you make yourself,
+to show the build and its signing requests work; once that's working, SignPath reviews it and gives your project the
+Foundation's certificate for real releases.
 
-1. **Apply** at [signpath.org](https://signpath.org/) (the *Apply* link). Give the GitHub repository, the
-   website (`https://pandabear445.github.io/Hearth-chat`) and the code signing policy page above. Use a GitHub account with two-factor
-   authentication on: SignPath requires it for everyone with commit rights.
-2. **When you're accepted**, sign in at [app.signpath.io](https://app.signpath.io). The Foundation sets up your
-   project there. Check (or create) these, and note their *slugs* (short ids):
-   - **Project:** e.g. `hearth`. Its repository must be this GitHub repository, with the trusted build system
-     **GitHub.com** linked (SignPath only accepts files built by GitHub Actions for it).
-   - **Signing policy:** `release-signing` (the Foundation's certificate; you're its approver).
+1. **Make your organization** at [app.signpath.io](https://app.signpath.io) (sign up, with two-factor authentication
+   on your GitHub account: SignPath requires it for everyone with commit rights), and **apply** to the Foundation
+   at [signpath.org](https://signpath.org/) (the *Apply* link) with the GitHub repository, the website
+   (`https://pandabear445.github.io/Hearth-chat`) and the code signing policy page above.
+2. **The test certificate.** The certificate wizard offers three options; pick the recommended **self-signed X.509
+   certificate**. In its form:
+   - *Name* `Hearth test signing`, *Slug* `hearth-test`.
+   - *Purpose* **Test signing** (not *Release signing*: this certificate isn't trusted by any computer, and the real
+     one comes from the Foundation).
+   - *Key store* **Software key store** (the hardware one isn't in the free plan; that's fine for a test certificate).
+   - *Restrictions*: tick **Requires origin policy verification** (only builds of this repository by GitHub Actions
+     can use it). *Requires approval process* is up to you: without it, test requests sign straight away.
+   - *Certificate fields*: *Common Name* `Hearth (test signing)`, *Organization* `Hearth`, *Country* your
+     two-letter country code. Leave the rest empty: whatever you type ends up in every file it signs.
+   - Keep *RSA 4096* and the one-year validity.
+3. **The project and its policies.** *Projects → Add*: name `Hearth`, slug `hearth`, and the GitHub repository. (The
+   trusted build system **GitHub.com**, which GitHub Actions' signing requests need, isn't in SignPath's free plan:
+   the Foundation turns it on when it accepts the project. Until then the build's requests are refused with
+   "Trusted build system is not allowed to log into the organization", and you test by uploading by hand, step 6.)
+   In it:
    - **Artifact configuration:** paste this one (it signs the `.exe` inside each file the build sends) and note
      its slug, or make it the project's default:
 
@@ -109,26 +123,42 @@ What to know first:
        </zip-file>
      </artifact-configuration>
      ```
-3. **Make a login for GitHub:** *Users → Add CI user* (e.g. `github-actions`), give it the **Submitter** role on
-   the `release-signing` policy, and create an **API token** for it. Copy the token straight into GitHub (step 4).
-   Your **organization ID** is in *Settings* (a GUID).
-4. **Fill in GitHub:** your repository → *Settings → Secrets and variables → Actions*.
+   - **Signing policy** `test-signing`, using the test certificate.
+   - Later, the Foundation adds `release-signing` with its certificate, with you as its approver.
+4. **Make a login for GitHub:** *Users → Add CI user* (e.g. `github-actions`), give it the **Submitter** role on
+   `test-signing` (and on `release-signing` once it exists), and create an **API token** for it. Copy the token
+   straight into GitHub (step 5). Your **organization ID** is in *Settings* (a GUID).
+5. **Fill in GitHub:** your repository → *Settings → Secrets and variables → Actions*.
 
    | Kind | Name | Value |
    |---|---|---|
    | Secret | `SIGNPATH_API_TOKEN` | the CI user's API token |
-   | Variable | `SIGNPATH_ORGANIZATION_ID` | your organization ID |
-   | Variable | `SIGNPATH_PROJECT_SLUG` | e.g. `hearth` |
-   | Variable (optional) | `SIGNPATH_POLICY_SLUG` | only if it isn't `release-signing` |
+   | Variable | `SIGNPATH_ORGANIZATION_ID` | your organization ID (a secret of this name works too) |
+   | Variable | `SIGNPATH_PROJECT_SLUG` | the project's slug, exactly as its *CI Integration* tab shows it (capitals count), e.g. `hearth` (a secret of this name works too) |
+   | Variable (optional) | `SIGNPATH_TEST_POLICY_SLUG` | only if the test policy's slug isn't `test-signing` (its *CI Integration* tab shows it) |
+   | Variable (optional) | `SIGNPATH_POLICY_SLUG` | only if the release policy isn't `release-signing` |
    | Variable (optional) | `SIGNPATH_ARTIFACT_CONFIG_SLUG` | the artifact configuration's slug (default `initial`) |
-   | Variable (optional) | `SIGNPATH_PUBLISHER` | only if the certificate's name isn't exactly `SignPath Foundation` |
+   | Variable (optional) | `SIGNPATH_PUBLISHER` | only if the release certificate's name isn't exactly `SignPath Foundation` |
 
-5. **Build a release:** *Actions → Hearth apps → Run workflow* (or push an `app-v1.26.0` tag). The Windows job
-   says **"Signing with SignPath"**, then waits: open [app.signpath.io](https://app.signpath.io) → *Signing
-   requests*, and approve the app, then (a minute later) the installer. The **Check the signature** step prints
-   `Valid` and `SignPath Foundation`. Right-click the downloaded installer → *Properties → Digital Signatures* to
-   see it yourself.
-6. Once a signed version is out, set **`WINDOWS_REQUIRE_SIGNING`** to `true` (see "Keep signing once you start").
+6. **Test signing.** Before the Foundation has accepted the project: in SignPath, *Sign artifact* with the
+   `test-signing` policy and a ZIP of a Windows installer from a build's artifacts (a ZIP, as the artifact
+   configuration expects); that shows the certificate, policy and configuration work. Once GitHub.com is available
+   to your organization: *Actions → Hearth apps → Run workflow*, tick **SignPath test signing**, run. (Pick the branch
+   whose workflow has that box; the default branch has it once this change is merged.) The Windows job says
+   **"Test signing with SignPath"** and sends two requests, the app, then a minute later the installer. If the
+   policy needs approval, approve them on [app.signpath.io](https://app.signpath.io) → *Signing requests*. The
+   **Check the signature** step accepts the test certificate even though Windows doesn't trust it, and the run's
+   Windows files are named `hearth-desktop-Windows-SIGNPATH-TEST`. Nothing from this run is released, copied to
+   your server, signed for updates or sent to Google Play: these files are only for SignPath's review, never hand
+   them out.
+7. **Send SignPath the evidence:** the link to that run and to its two signing requests, as your application or
+   SignPath's support asks. They review the setup and add the Foundation's certificate and the `release-signing`
+   policy.
+8. **Real releases:** from then on, every release build (*Run workflow* without the box, an `app-v*` tag or a push
+   to the default branch) signs with `release-signing`. Approve each request on signpath.io. The **Check the
+   signature** step must print `Valid` and `SignPath Foundation`. Right-click the downloaded installer →
+   *Properties → Digital Signatures* to see it yourself.
+9. Once a signed version is out, set **`WINDOWS_REQUIRE_SIGNING`** to `true` (see "Keep signing once you start").
 
 ### Option A: Azure Artifact Signing, about $9.99/month
 
@@ -436,25 +466,34 @@ Hearth from the Play Store with no warnings, and get updates automatically.
 
 ### Google's developer verification (2026)
 
-Google is also starting to require that apps on certified Android phones come from **verified developers**,
-including apps installed outside Play. It starts with Brazil, Indonesia, Singapore and Thailand
-(scheduled for 30 September 2026) and is planned to reach everywhere in 2027. What it means for Hearth:
+Google is also starting to require that apps on certified Android phones come from **verified developers**.
+From 30 September 2026 that applies in Brazil, Indonesia, Singapore and Thailand, to apps installed or updated
+from participating app stores (Google Play and some phone makers' stores). Google's FAQ says an APK people install
+directly (from your server or GitHub) isn't covered yet; that's planned for every country in 2027, with no exact
+date. What it means for Hearth:
 
-- If you use Google Play (below), you're verified through your Play Console account. Register the package name
-  `app.hearth.mobile` there too, with the APK signed by the key from the `ANDROID_KEYSTORE_*` secrets, so the
-  APK from your server counts as yours.
-- Without Play, you can verify for free in Google's **Android Developer Console**. There's also a free
-  "limited distribution" account for students and hobbyists that allows installs on up to 20 devices.
-- Phones in those countries that install an app from an unverified developer get extra steps (an "advanced"
-  flow with a waiting period), and `adb install` keeps working for technical users.
+- If you use Google Play (below), you're verified through your Play Console account. Creating the app there
+  registers the package name `app.hearth.mobile`; with Play using your own key (step 4 below), the APK from your
+  server and GitHub, signed with the same key, counts as yours.
+- Without Play, you verify in Google's **Android Developer Console**: a **full distribution** account costs
+  **$25** and needs a government photo ID; a free **limited distribution** account (for students and hobbyists)
+  only allows installs on up to 20 devices that accept your invitation.
+- Once it applies, phones that install an app from an unverified developer get extra steps (an "advanced" flow
+  with a one-time waiting period), and `adb install` keeps working for technical users.
 
 Details change; see [developer.android.com/developer-verification](https://developer.android.com/developer-verification).
 
 ### Google Play internal testing: step by step
 
+The plain walkthrough for a first-time owner, with ready-to-paste answers for every Play Console form (and
+IzzyOnDroid): [ANDROID-STORES.md](ANDROID-STORES.md). This section is the short version.
+
 **Cost:** **$25 once** for a Google Play developer account. Google verifies your identity (government ID, and
 for new personal accounts an Android phone for verification). Internal testing has **no review wait and no
-"12 testers for 14 days" rule**; that rule only applies before publishing publicly (production).
+"12 testers for 14 days" rule**. That rule comes before publishing publicly (production): a personal account
+made after 13 November 2023 first runs a test on the **Closed testing** track, with at least 12 testers opted in
+for 14 days in a row. The workflow only uploads to internal testing, so you move a release to the closed track by
+hand (*Promote release*).
 
 1. **Add your signing key**, as described in `hearth/mobile/README.md` → *Signing* (without it the workflow
    only builds an unsigned APK): make `hearth.jks` and add the secrets `ANDROID_KEYSTORE_BASE64`,
@@ -476,9 +515,10 @@ for new personal accounts an Android phone for verification). Internal testing h
    the "upload key" and the two versions can't update each other.)
 5. **First upload by hand:** *Test and release → Testing → Internal testing → Create new release*, upload the
    `.aab` from the latest workflow run's **hearth-android-play-bundle** artifact, and roll it out.
-6. **Fill in the required forms** under *Policy → App content*: privacy policy (a URL; required because the app
-   uses the microphone and camera; your server's terms/privacy page is fine), data safety, ads (none),
-   content rating, target audience, and app access (give a test login, since the app needs an account).
+6. **Fill in the required forms** under *App content*: privacy policy (every app needs one:
+   `https://pandabear445.github.io/Hearth-chat/privacy.html`), data safety, ads (none), advertising ID (no),
+   content rating, target audience, foreground service (microphone, for calls) and app access (give a test login,
+   since the app needs an account). The answers, ready to paste: [ANDROID-STORES.md](ANDROID-STORES.md#46-app-content-the-forms-with-answers).
 7. **Add testers:** *Internal testing → Testers →* create an email list with your friends' Google account
    emails, save, and send them the **opt-in link**. They accept once, then install Hearth from the Play Store.
 8. **Automatic uploads from GitHub:**
@@ -544,7 +584,7 @@ copy copies nothing. Keep these as repository secrets in that case, knowing ever
 | `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` | Secret | Windows, option B |
 | `WIN_PUBLISHER_NAME`, `WIN_TIMESTAMP_SERVER` | Variable (optional) | Windows, option B |
 | `SIGNPATH_API_TOKEN` | Secret | Windows, option S |
-| `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG` (+ optional `SIGNPATH_POLICY_SLUG`, `SIGNPATH_ARTIFACT_CONFIG_SLUG`, `SIGNPATH_PUBLISHER`) | Variable | Windows, option S |
+| `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG` (+ optional `SIGNPATH_TEST_POLICY_SLUG`, `SIGNPATH_POLICY_SLUG`, `SIGNPATH_ARTIFACT_CONFIG_SLUG`, `SIGNPATH_PUBLISHER`) | Variable | Windows, option S |
 | `WINDOWS_REQUIRE_SIGNING` | Variable | `true` = fail instead of building unsigned |
 | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | Secret | Android signing key, Play bundle |
 | `PLAY_SERVICE_ACCOUNT_JSON` | Secret (`production` environment) | upload to Play internal testing |

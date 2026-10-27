@@ -39,7 +39,7 @@ import { api } from './api.js';
 import { modal, menu, confirmDialog, showError, field } from './ui.js';
 import { linkedUrls } from './markdown.js';
 import { label as timerLabel } from './disappear.js';
-import { bindingOf, bindScheduled } from './binding.js';
+import { bindingOf, bindScheduled, photoOf } from './binding.js';
 
 const LATE_OK = 10 * 60 * 1000; // re-encrypted by itself (and sent at once) up to this long after its time
 const MAX_DAYS = 30;
@@ -178,10 +178,11 @@ export function createScheduled(deps) {
   }
 
   // ------------------------------------------------------------------ opening and re-encrypting
-  // What it says, from your own copy (never from the ciphertext the server holds): { t, f, p?, l?, x?, b?, sid? }, or
-  // { error: true } when the copy is missing, doesn't open with your keys, or names another scheduled message (a
+  // What it says, from your own copy (never from the ciphertext the server holds): { t, f, p?, l?, x?, b?, ph?, sid? },
+  // or { error: true } when the copy is missing, doesn't open with your keys, or names another scheduled message (a
   // copy of that one, put here). x is the disappearing timer it was written for (seconds), which every re-encrypt
-  // keeps (see reseal); b is where it belongs (binding.js: its id, reply and thread, fixed when it was scheduled);
+  // keeps (see reseal); b is where it belongs (binding.js: its id, reply and thread, fixed when it was scheduled); ph,
+  // for a comment on one photo, which photo of the message it replies to (binding.js photoOf), which stays as well;
   // sid, the scheduled message it was sealed for (see the top of this file).
   async function open(it) {
     const o = opened.get(it.id);
@@ -192,7 +193,7 @@ export function createScheduled(deps) {
       if (p && typeof p === 'object' && !Array.isArray(p) && (p.sid === undefined || p.sid === it.id)) {
         dec = { t: typeof p.t === 'string' ? p.t : '', f: Array.isArray(p.f) ? p.f : [], ...(p.p && typeof p.p === 'object' ? { p: p.p } : {}), l: Array.isArray(p.l) ? p.l : [],
           ...(Number.isInteger(p.x) && p.x > 0 ? { x: p.x } : {}), ...(bindingOf(p) ? { b: bindingOf(p) } : {}),
-          ...(p.sid === it.id ? { sid: it.id } : {}) };
+          ...(photoOf(p) ? { ph: photoOf(p) } : {}), ...(p.sid === it.id ? { sid: it.id } : {}) };
       }
     } catch { /* doesn't open: can't confirm it's yours */ }
     opened.set(it.id, { draft: it.draft, dec });
@@ -214,7 +215,7 @@ export function createScheduled(deps) {
     const t = text !== undefined ? text : dec.t || '';
     const still = linkedUrls(t, { skipSpoilers: true });
     const links = (dec.l || []).filter((x) => x && still.includes(x.url));
-    const payload = { t, f: dec.f || [], ...(dec.p ? { p: dec.p } : {}), ...(links.length ? { l: links } : {}),
+    const payload = { t, f: dec.f || [], ...(dec.p ? { p: dec.p } : {}), ...(links.length ? { l: links } : {}), ...(dec.ph ? { ph: dec.ph } : {}),
       ...bindScheduled(dec.b, { at: at || dueOf(it, dec) }) };
     return deps.sealFor(keyOf(it), payload, { ref: it.ref, threadId: it.threadId, x: dec.x || 0, sid: it.id });
   }
@@ -426,14 +427,17 @@ export function createScheduled(deps) {
     const when = it.status === 'failed' ? `Not sent · was due ${whenPhrase(it.sendAt)}`
       : it.status === 'held' ? `${late ? 'Waiting · was due' : needsYou ? 'Waiting for you · sends' : 'Waiting to be re-encrypted · sends'} ${whenPhrase(it.sendAt)}`
         : `Sends ${whenPhrase(it.sendAt)}`;
-    const files = it.files ? h('span', { class: 'sched-files' }, icon('file'), plural(it.files, 'file', 'files')) : null;
+    // The server counts uploads (a picture's thumbnail too); the sender's own copy, once open, says how many files.
+    const nFiles = readable(dec) && Array.isArray(dec.f) ? dec.f.length : it.files;
+    const files = nFiles ? h('span', { class: 'sched-files' }, icon('file'), plural(nFiles, 'file', 'files')) : null;
     let body;
     if (editing.has(it.id) && readable(dec)) {
       const ta = h('textarea', { class: 'edit-input sched-edit', rows: '3', maxlength: '4000', 'aria-label': 'Edit scheduled message' });
       ta.value = dec.t || '';
+      if (deps.spellBox) deps.spellBox(ta); // Settings → Chat → Spelling, as in the message box
       const save = async () => {
         if (!ta.value.trim() && !(dec.f || []).length) return toast('Write something, or cancel the message.', 'error');
-        const text = ta.value;
+        const text = deps.spelled && ta.value !== (dec.t || '') ? deps.spelled(ta, dec.t || '') : ta.value;
         const done = async (opts) => {
           try { await reseal(items.get(it.id) || it, { text, ...opts }); editing.delete(it.id); redraw(); toast(opts.now ? 'Sent.' : 'Saved.'); } catch (e) { toast(e.message, 'error'); }
         };

@@ -8,7 +8,9 @@ import { api } from './api.js';
 import { cleanFiles } from './attachments.js';
 import { cleanLinks } from './linkpreview.js';
 import { cleanX } from './disappear.js';
-import { bindingOf } from './binding.js';
+import { bindingOf, photoOf } from './binding.js';
+// A quote the server sent without its ciphertext (server/index.js quoteOf): nothing to open here.
+export const BIG_QUOTE = Object.freeze({ t: '', f: [], big: true });
 
 // The news bot's account (server/newsbot.js): the only one that still posts plaintext channel messages.
 const NEWS_BOT_ID = 'newsbot00000000000001';
@@ -19,6 +21,27 @@ function cleanPoll(p) {
   const o = p.o.map((x) => String(x || '').slice(0, 100)).filter(Boolean).slice(0, 10);
   if (o.length < 2) return undefined;
   return { q: String(p.q || '').slice(0, 300), o, m: !!p.m };
+}
+
+// A chat background (chat-look.js, e2ee.js lkc1 / lkd1) as it's sealed and as it's opened: { bg, dim }, where bg is a
+// preset by its id ({ kind: 'preset', preset }), or a picture: its upload address on this server, its file key, its
+// size in pixels (0 when unknown) and its type, one of the picture types a browser shows as a background
+// ({ kind: 'image', url, k, w, h, type }). dim is how much it's darkened, 0 to 0.8. null for anything else, so nothing
+// else in a payload ever reaches the page, and whatever does fits the one 512-byte size (e2ee.js LOOK_BYTES).
+export const LOOK_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif'];
+export const LOOK_DIM_MAX = 0.8;
+const LOOK_PRESET = /^[a-z][a-z0-9-]{0,31}$/;
+const LOOK_FILE = /^\/uploads\/[a-z0-9]{1,80}\.bin$/; // what the server links to a background (an encrypted upload)
+const LOOK_KEY = /^[A-Za-z0-9+/]{43}=$/; // a file key: 32 bytes (e2ee.js encryptFile)
+export function cleanLook(p) {
+  if (!p || typeof p !== 'object' || Array.isArray(p) || !p.bg || typeof p.bg !== 'object' || Array.isArray(p.bg)) return null;
+  const d = typeof p.dim === 'number' && Number.isFinite(p.dim) ? p.dim : 0;
+  const dim = Math.round(Math.min(LOOK_DIM_MAX, Math.max(0, d)) * 100) / 100;
+  const b = p.bg;
+  if (b.kind === 'preset') return typeof b.preset === 'string' && LOOK_PRESET.test(b.preset) ? { bg: { kind: 'preset', preset: b.preset }, dim } : null;
+  if (b.kind !== 'image' || typeof b.url !== 'string' || !LOOK_FILE.test(b.url) || typeof b.k !== 'string' || !LOOK_KEY.test(b.k) || !LOOK_TYPES.includes(b.type)) return null;
+  const px = (n) => (Number.isInteger(n) && n >= 0 && n <= 20000 ? n : 0);
+  return { bg: { kind: 'image', url: b.url, k: b.k, w: px(b.w), h: px(b.h), type: b.type }, dim };
 }
 
 // Marks the server sends only while they're set (server/index.js publicUser: keysReset, deleted, bot).
@@ -65,6 +88,10 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   // the server says. Never throws either.
   const bindIn = (payload) => {
     try { const b = bindingOf(payload); return b ? { b } : {}; } catch { return {}; }
+  };
+  // Which photo of the replied-to message a comment is about (binding.js photoOf), as { ph } or nothing. Never throws.
+  const photoIn = (payload) => {
+    try { const ph = photoOf(payload); return ph ? { ph } : {}; } catch { return {}; }
   };
   const groupKeys = new Map(); // serverId -> Map(epoch -> Uint8Array)
   const states = new Map(); // serverId -> key state from the server
@@ -490,7 +517,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       const { payload, signedBy } = await E2EE.decryptGroup({ raw, serverId, channelId, authorId, authorSignPub: keys.map((k) => k.key), text });
       const how = signedBy ? keys.find((k) => k.key === signedBy).trust : null;
       return {
-        t: String(payload.t || ''), f: cleanFiles(payload.f), p: cleanPoll(payload.p), x: cleanX(payload.x), ...linksIn(payload), ...bindIn(payload),
+        t: String(payload.t || ''), f: cleanFiles(payload.f), p: cleanPoll(payload.p), x: cleanX(payload.x), ...linksIn(payload), ...bindIn(payload), ...photoIn(payload),
         verified: how === 'now' || how === 'pinned', ...(how && how !== 'now' ? { keyNote: how } : {}),
       };
     } catch {
@@ -528,7 +555,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   async function decryptChannelMessage(m) {
     if (m.dec && !m.dec.pending) return;
     if (m.legacy) await loadBotAuthor(m);
-    if (m.reply && !m.reply.ciphertext) await loadBotAuthor(m.reply);
+    if (m.reply && !m.reply.ciphertext && !m.reply.big) await loadBotAuthor(m.reply);
     if (m.legacy) m.dec = openLegacy(m);
     else {
       // If a key arrives while we're decrypting, try again so we never keep a stale "waiting" result.
@@ -539,7 +566,8 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       }
     }
     if (m.reply && (!m.reply.dec || m.reply.dec.pending)) {
-      m.reply.dec = m.reply.ciphertext ? await openGroup(m.serverId, m.channelId, m.reply.authorId, m.reply.ciphertext, Number(m.reply.createdAt) || 0) : openLegacy(m.reply);
+      // big: the server left out a very long one (the owner's, with many files); the app quotes it from the original.
+      m.reply.dec = m.reply.big ? BIG_QUOTE : m.reply.ciphertext ? await openGroup(m.serverId, m.channelId, m.reply.authorId, m.reply.ciphertext, Number(m.reply.createdAt) || 0) : openLegacy(m.reply);
     }
   }
 
@@ -551,7 +579,9 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     if (!u || !u.publicKey) throw new Error('Missing key');
     return u;
   }
-  async function encryptDm(dmId, payload) {
+  // The other person of a DM, when it's all right to write to them: not a deleted account, and not while their key
+  // changed and you haven't verified the new one.
+  async function writablePeer(dmId) {
     const peer = await dmPeer(dmId);
     if (peer.deleted) throw new Error('This account was deleted, so nobody can read new messages to it.');
     if (keyChanged(peer)) {
@@ -560,6 +590,10 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       throw err;
     }
     trust(peer);
+    return peer;
+  }
+  async function encryptDm(dmId, payload) {
+    const peer = await writablePeer(dmId);
     return E2EE.encryptDm({ myPriv: S.privateKey, theirPub: peer.publicKey, dmId, authorId: S.me.id, payload });
   }
   // The other person's identity keys a DM written at `at` may be locked with, best first (see keysOf): it's
@@ -578,7 +612,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       for (const { key, trust: how } of await dmKeys(dmId, at)) {
         try {
           const { payload, legacy } = await E2EE.decryptDm({ myPriv: S.privateKey, theirPub: key, dmId, authorId, text });
-          return { t: String(payload.t || ''), f: cleanFiles(payload.f), p: cleanPoll(payload.p), x: cleanX(payload.x), ...linksIn(payload), ...bindIn(payload), legacyFormat: !!legacy, ...(how !== 'now' ? { keyNote: how } : {}) };
+          return { t: String(payload.t || ''), f: cleanFiles(payload.f), p: cleanPoll(payload.p), x: cleanX(payload.x), ...linksIn(payload), ...bindIn(payload), ...photoIn(payload), legacyFormat: !!legacy, ...(how !== 'now' ? { keyNote: how } : {}) };
         } catch { /* not this key */ }
       }
       throw new Error('Missing key');
@@ -589,6 +623,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   async function decryptDmMessage(m) {
     if (m.dec) return;
     m.dec = await openDm(m.dmId, m.authorId, m.ciphertext, Number(m.createdAt) || 0);
+    if (m.reply && m.reply.big && !m.reply.dec) m.reply.dec = BIG_QUOTE;
     if (m.reply && m.reply.ciphertext && !m.reply.dec) m.reply.dec = await openDm(m.dmId, m.reply.authorId, m.reply.ciphertext, Number(m.reply.createdAt) || 0);
   }
 
@@ -603,6 +638,127 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       throw new Error('Missing key');
     }
     throw new Error('Missing file key');
+  }
+
+  // ---------------------------------------------------------------- photo tags (photo-notes.js, e2ee.js tc1 / td1)
+  // where: { serverId, channelId } (a server channel or a group chat) or { dmId }. payload: { n, fu }, the label
+  // (already normalised) and the address of the file it's on. Sealed as a message there would be: with the server's
+  // current key and your signature (ready() rotates or waits for it, and refuses as a send does), or in a DM with the
+  // key you share with them, refused the same way while their key changed and you haven't verified it.
+  async function encryptTag(where, { messageId, fileIndex, tagId, payload }) {
+    const tag = { messageId, fileIndex, tagId, authorId: S.me.id, payload };
+    if (where && where.serverId) {
+      const ck = await ready(where.serverId);
+      const ciphertext = await E2EE.encryptGroupTag({ raw: ck.raw, serverId: where.serverId, channelId: where.channelId, epoch: ck.epoch, signKey: S.signKey, ...tag });
+      return { ciphertext, epoch: ck.epoch };
+    }
+    const peer = await writablePeer(where.dmId);
+    return { ciphertext: await E2EE.encryptDmTag({ myPriv: S.privateKey, theirPub: peer.publicKey, dmId: where.dmId, ...tag }) };
+  }
+  // A tag as the server lists it ({ id, messageId, fileIndex, authorId, ciphertext, createdAt }, with serverId and
+  // channelId, or dmId): { n, fu } as its author sealed them, { pending: true } while the server key it was sealed
+  // with isn't here yet (before: it never will be, as for messages), or { error: true }, with retry: true when it
+  // couldn't be checked because someone's keys couldn't be looked up (offline, the server busy): worth trying again
+  // later, unlike a tag that doesn't check out. Never throws.
+  // A tag has no room for the warnings a message carries, so it only counts when it checks out with a key this device
+  // trusts for its author: in a channel signed with their current key or one this device pinned for them back then
+  // ('now' or 'pinned', as for a verified message), in a DM opened with such a key. Anything only a new key not
+  // verified yet, or a key the server merely lists, would vouch for is left out.
+  const LOOKUP = new Error('Keys not looked up');
+  const lookedUp = (p) => p.catch(() => { throw LOOKUP; });
+  async function openTag(t) {
+    try {
+      const at = Number(t.createdAt) || 0;
+      const bound = { messageId: t.messageId, fileIndex: t.fileIndex, tagId: t.id, authorId: t.authorId };
+      let payload = null;
+      if (t.serverId) {
+        const epoch = E2EE.tagEpoch(t.ciphertext);
+        const mine = keysFor(t.serverId);
+        const raw = epoch === null ? null : mine.get(epoch);
+        if (!raw) {
+          if (epoch === null) return { error: true };
+          const held = [...mine.keys()];
+          return { pending: true, before: held.length > 0 && epoch < Math.max(...held) };
+        }
+        const author = await lookedUp(userWithKeys(t.authorId));
+        if (t.authorId === S.me.id) await ownKeysOk();
+        const keys = keysOf(author, 's', at);
+        const r = await E2EE.decryptGroupTag({ raw, serverId: t.serverId, channelId: t.channelId, ...bound, authorSignPub: keys.map((k) => k.key), text: t.ciphertext });
+        const how = r.signedBy ? keys.find((k) => k.key === r.signedBy).trust : null;
+        if (how !== 'now' && how !== 'pinned') return { error: true };
+        payload = r.payload;
+      } else {
+        if (!S.dms.some((d) => d.id === t.dmId)) return { error: true };
+        for (const { key, trust: how } of await lookedUp(dmKeys(t.dmId, at))) {
+          if (how !== 'now' && how !== 'pinned') continue;
+          try { payload = (await E2EE.decryptDmTag({ myPriv: S.privateKey, theirPub: key, dmId: t.dmId, ...bound, text: t.ciphertext })).payload; break; } catch { /* not this key */ }
+        }
+      }
+      if (!payload || typeof payload !== 'object' || typeof payload.n !== 'string' || typeof payload.fu !== 'string') return { error: true };
+      return { n: payload.n, fu: payload.fu };
+    } catch (e) {
+      return e === LOOKUP ? { error: true, retry: true } : { error: true };
+    }
+  }
+
+  // ---------------------------------------------------------------- chat backgrounds (chat-look.js, e2ee.js lkc1 / lkd1)
+  // where: { serverId } (a group chat) or { dmId }. version: the one the server is to store it as (its version + 1).
+  // payload: { bg, dim } (cleanLook). Sealed as a message there would be: in a group chat with its current key and your
+  // signature (ready() rotates or waits for it, and refuses as a send does), in a DM with the key you share with them,
+  // refused the same way while their key changed and you haven't verified it.
+  async function encryptLook(where, { version, payload }) {
+    const clean = cleanLook(payload);
+    if (!clean) throw new Error('That background can’t be saved.');
+    const look = { version, authorId: S.me.id, payload: clean };
+    if (where && where.serverId) {
+      const ck = await ready(where.serverId);
+      const ciphertext = await E2EE.encryptGroupLook({ raw: ck.raw, serverId: where.serverId, epoch: ck.epoch, signKey: S.signKey, ...look });
+      return { ciphertext, epoch: ck.epoch };
+    }
+    const peer = await writablePeer(where.dmId);
+    return { ciphertext: await E2EE.encryptDmLook({ myPriv: S.privateKey, theirPub: peer.publicKey, dmId: where.dmId, ...look }) };
+  }
+  // A background as the server lists it ({ ciphertext, authorId, version, updatedAt }, with serverId or dmId): { bg, dim }
+  // as its author sealed them (cleanLook), { pending: true } while the group key it was sealed with isn't here yet
+  // (before: it never will be, as for messages), or { error: true }, with retry: true when its author's keys couldn't be
+  // looked up (offline, the server busy). Never throws.
+  // The same rule as tags: it only counts when it checks out with a key this device trusts for its author. In a group
+  // chat it's signed with their current key or one this device pinned for them back then ('now' or 'pinned'); in a DM
+  // it opens with such a key. Anything only a new key not verified yet, or a key the server merely lists, would vouch
+  // for is left out: a background has nowhere to carry the warnings a message shows.
+  async function openLook(look) {
+    try {
+      const at = Number(look.updatedAt) || 0;
+      const bound = { version: look.version, authorId: look.authorId };
+      if (!Number.isInteger(look.version) || look.version < 1 || typeof look.authorId !== 'string' || !look.authorId || typeof look.ciphertext !== 'string') return { error: true };
+      let payload = null;
+      if (look.serverId) {
+        const epoch = E2EE.lookEpoch(look.ciphertext);
+        const mine = keysFor(look.serverId);
+        const raw = epoch === null ? null : mine.get(epoch);
+        if (!raw) {
+          if (epoch === null) return { error: true };
+          const held = [...mine.keys()];
+          return { pending: true, before: held.length > 0 && epoch < Math.max(...held) };
+        }
+        const author = await lookedUp(userWithKeys(look.authorId));
+        if (look.authorId === S.me.id) await ownKeysOk();
+        const keys = keysOf(author, 's', at);
+        const r = await E2EE.decryptGroupLook({ raw, serverId: look.serverId, ...bound, authorSignPub: keys.map((k) => k.key), text: look.ciphertext });
+        const how = r.signedBy ? keys.find((k) => k.key === r.signedBy).trust : null;
+        if (how !== 'now' && how !== 'pinned') return { error: true };
+        payload = r.payload;
+      } else {
+        if (!look.dmId || !S.dms.some((d) => d.id === look.dmId)) return { error: true };
+        for (const { key, trust: how } of await lookedUp(dmKeys(look.dmId, at))) {
+          if (how !== 'now' && how !== 'pinned') continue;
+          try { payload = (await E2EE.decryptDmLook({ myPriv: S.privateKey, theirPub: key, dmId: look.dmId, ...bound, text: look.ciphertext })).payload; break; } catch { /* not this key */ }
+        }
+      }
+      return cleanLook(payload) || { error: true };
+    } catch (e) {
+      return e === LOOKUP ? { error: true, retry: true } : { error: true };
+    }
   }
 
   // ---------------------------------------------------------------- voice handshakes
@@ -641,7 +797,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
 
   return {
     ensureSigningKey, applyState, stateOf, currentKey, ready, refresh, forceRotate, maintain, awaitingVerify, heldBack, isHeld,
-    encryptChannel, decryptChannelMessage, encryptDm, decryptDmMessage, decryptAttachment,
+    encryptChannel, decryptChannelMessage, encryptDm, decryptDmMessage, decryptAttachment, encryptTag, openTag, encryptLook, openLook,
     signSdp, verifySdp, checkSdp, keyChanged, keysChanged, acceptKeys, trust, userWithKeys, reset,
     heldEpochs: (serverId) => [...keysFor(serverId).keys()],
     keysSaved: (serverId) => keeping.get(serverId) || Promise.resolve(), // our own copies are stored back

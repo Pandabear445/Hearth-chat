@@ -140,4 +140,30 @@ public class PushPolicyTest {
         assertTrue(BridgePolicy.allowed("setServer", local, local, server));
         assertFalse(BridgePolicy.allowed("setServer", server, local, server));
     }
+
+    @Test
+    public void theConnectScreensPrivacyLinkOpensInTheBrowser() {
+        assertTrue(BridgePolicy.opensInBrowser("https://pandabear445.github.io/Hearth-chat/privacy.html"));
+        for (String other : new String[] { "https://kappachat.duckdns.org/", "https://pandabear445.github.io/", "https://pandabear445.github.io/Hearth-chat",
+                "https://pandabear445.github.io.evil.example/Hearth-chat/privacy.html", "https://pandabear445.github.io@evil.example/Hearth-chat/",
+                "http://pandabear445.github.io/Hearth-chat/privacy.html", "", null }) {
+            assertFalse(String.valueOf(other), BridgePolicy.opensInBrowser(other));
+        }
+    }
+
+    @Test
+    public void paymentPagesDontOpenFromTheApp() {
+        for (String pay : new String[] { "https://checkout.stripe.com/c/pay/cs_test_a1", "https://buy.stripe.com/test_123", "https://donate.stripe.com/x",
+                "https://billing.stripe.com/p/session/x", "https://ko-fi.com/hearth", "https://www.ko-fi.com/hearth", "https://KO-FI.COM/hearth",
+                "http://ko-fi.com/hearth", "https://ko-fi.com./hearth", "https://ko-fi.com:443/hearth", "https://someone@ko-fi.com/hearth", "https://ko-fi.com",
+                "https://ko-fi.com?x=1", "https://ko-fi.com#top" }) {
+            assertTrue(pay, BridgePolicy.isPaymentPage(pay));
+        }
+        for (String other : new String[] { "https://kappachat.duckdns.org/", "https://stripe.com/docs", "https://connect.stripe.com/express/x",
+                "https://notko-fi.com/x", "https://ko-fi.com.evil.example/x", "https://evil.example/ko-fi.com", "https://evil.example/?u=https://ko-fi.com",
+                "https://ko-fi.com@evil.example/", "https://[::1]:3000/", "ftp://ko-fi.com/", "ko-fi.com", "", null,
+                "https://pandabear445.github.io/Hearth-chat/privacy.html" }) {
+            assertFalse(String.valueOf(other), BridgePolicy.isPaymentPage(other));
+        }
+    }
 }

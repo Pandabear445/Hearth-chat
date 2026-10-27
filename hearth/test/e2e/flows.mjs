@@ -2,7 +2,7 @@
 // Everything goes through the real UI; the only shortcuts are reading state the UI already shows.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { exact, makePng, totp, newPassword, Person } from './harness.mjs';
+import { exact, makeGif, makePng, totp, newPassword, Person, PHONE } from './harness.mjs';
 
 export function check(ok, message) { if (!ok) throw new Error(message); }
 const SERVER = 'E2E Hall';
@@ -257,6 +257,27 @@ async function webhooks(t) {
 }
 
 // ------------------------------------------------------------------ 4. direct messages and blocking
+// "… is typing…": the line under the open conversation's box ('' once nobody is), with its three dots.
+const typingLineSays = (p, text) => p.page.waitForFunction((want) => {
+  const el = document.querySelector('.cw-main .typing');
+  return !!el && el.textContent === want && el.querySelectorAll('.dots i').length === (want ? 3 : 0);
+}, text);
+// Writing in the message box without sending. Someone's typing goes out at most once a second (the app holds back
+// what the server would drop), and a fill is a single keystroke, so it waits a second after the last one.
+async function typeOnly(p, text) {
+  await p.page.waitForTimeout(1100);
+  await p.$('#composer-input').fill(text);
+}
+// A conversation's line in the lists (its row in the sidebar, its card on Home) saying "typing…" with the dots in
+// place of the last message, and then the message once it has arrived.
+async function listLineTyping(line, said, what) {
+  await line.locator('.conv-typing-text', { hasText: exact(said) }).waitFor();
+  check(await line.locator('.dots[aria-hidden="true"] i').count() === 3, `${what} should show three dots while they type.`);
+}
+async function listLineSays(line, text, what) {
+  await line.filter({ hasText: text }).waitFor();
+  check(!(await line.locator('.dots, .conv-typing-text').count()), `${what} should stop saying “typing…” once the message is here.`);
+}
 async function directMessages(t) {
   const { alice, bob } = t.people;
   await alice.showMembers();
@@ -269,8 +290,14 @@ async function directMessages(t) {
   await bob.dmRow('alice').click();
   await bob.page.waitForSelector('#composer-input[placeholder="Message alice"]');
   await bob.message('Private hello to bob: kiwi').waitFor();
-  await bob.send('Hi alice, got your kiwi');
+  // While bob writes, alice (in the DM too) sees "bob is typing…" under her box, until his message arrives.
+  await typeOnly(bob, 'Hi alice, got your kiwi');
+  await typingLineSays(alice, 'bob is typing\u2026');
+  await listLineTyping(alice.dmRow('bob').locator('.dm-row-status'), 'typing\u2026', 'Bob’s row in alice’s sidebar');
+  await bob.$('#composer-input').press('Enter');
   await alice.message('got your kiwi').waitFor();
+  await typingLineSays(alice, '');
+  await listLineSays(alice.dmRow('bob').locator('.dm-row-status'), 'Hi alice, got your kiwi', 'Bob’s row in alice’s sidebar');
 
   // Bob blocks alice: her next message is refused and never reaches him.
   await bob.$('#main-head button[aria-label="More"]').click();
@@ -284,14 +311,43 @@ async function directMessages(t) {
   await alice.toast('You can’t message this person.');
   check(!(await bob.message('papaya').count()), 'A blocked message should never show up.');
 
-  // Unblocked: messages flow again.
+  // Unblocked: messages flow again, and so does "typing…" (the other way this time).
   await bob.$('#main .key-bar button', { hasText: 'Unblock' }).click();
   await bob.$('#main .key-bar', { hasText: 'You blocked' }).waitFor({ state: 'detached' });
-  await alice.send('Back again: guava');
+  await typeOnly(alice, 'Back again: guava');
+  await typingLineSays(bob, 'alice is typing\u2026');
+  await alice.$('#composer-input').press('Enter');
   await bob.message('Back again: guava').waitFor();
+  await typingLineSays(bob, '');
+
+  // Bob writes while alice is on Home: his row in her sidebar and his card in Recent conversations say "typing…"
+  // with the dots instead of his last message, drawn in place (the row stays the same element), until his message
+  // arrives.
+  await alice.railButton('Home');
+  const row = alice.dmRow('bob');
+  const rowLine = row.locator('.dm-row-status');
+  const cardLine = alice.$('#main .conv-card', { hasText: 'bob' }).locator('.conv-line');
+  await listLineSays(rowLine, 'Back again: guava', 'Bob’s row in alice’s sidebar');
+  await row.evaluate((el) => { el.dataset.e2eSame = '1'; });
+  await typeOnly(bob, 'Written while you were on Home: lychee');
+  await listLineTyping(rowLine, 'typing\u2026', 'Bob’s row in alice’s sidebar');
+  await listLineTyping(cardLine, 'typing\u2026', 'Bob’s card on alice’s Home');
+  check(await row.getAttribute('data-e2e-same') === '1', 'Typing should change bob’s row in place, not draw the sidebar again.');
+  // The dots move, and hold still with Reduce motion (the app's setting, or the system's).
+  const dotAnimation = () => rowLine.locator('.dots i').first().evaluate((i) => getComputedStyle(i).animationName);
+  check(await dotAnimation() !== 'none', 'The typing dots should move.');
+  await alice.page.evaluate(() => document.documentElement.classList.add('reduce-motion'));
+  check(await dotAnimation() === 'none', 'With Reduce motion on, the typing dots should hold still.');
+  await alice.page.evaluate(() => document.documentElement.classList.remove('reduce-motion'));
+  await alice.page.emulateMedia({ reducedMotion: 'reduce' });
+  check(await dotAnimation() === 'none', 'With the system’s reduced motion, the typing dots should hold still.');
+  await alice.page.emulateMedia({ reducedMotion: null });
+  await bob.$('#composer-input').press('Enter');
+  await bob.message('Written while you were on Home: lychee').waitFor();
+  await listLineSays(rowLine, 'Written while you were on Home: lychee', 'Bob’s row in alice’s sidebar');
+  await listLineSays(cardLine, 'Written while you were on Home: lychee', 'Bob’s card on alice’s Home');
 
   // Friends: a request from Friends → Add friend, accepted from Pending.
-  await alice.railButton('Home');
   await alice.page.locator('#sidebar-body .nav-row', { hasText: 'Friends' }).click();
   await alice.page.locator('#main-head .tab', { hasText: 'Add friend' }).click();
   await alice.$('.add-friend input').fill('bob');
@@ -303,6 +359,46 @@ async function directMessages(t) {
   await bob.$('.friend-row', { hasText: 'alice' }).locator('button', { hasText: 'Accept' }).click();
   await alice.page.locator('#main-head .tab', { hasText: exact('All') }).click();
   await alice.$('.friend-row', { hasText: 'bob' }).waitFor();
+
+  // The conversation list follows an edit and a delete of the newest message, on both people's screens and on a
+  // second device of bob's that never opened the conversation (it shows Home, whose recent conversations show it too).
+  const laptop = await t.open('bob-laptop');
+  await laptop.login('bob', t.pw.bob);
+  await laptop.$('.home-view').waitFor();
+  const line = (p, name, text) => p.dmRow(name).locator('.dm-row-status', { hasText: text });
+  const card = (text) => laptop.$('.home-view .conv-card').filter({ has: laptop.$('.conv-card-text strong', { hasText: exact('alice') }) })
+    .locator('.conv-card-text > span', { hasText: text });
+  const everywhere = async (text) => {
+    for (const p of [bob, laptop]) await line(p, 'alice', text).waitFor();
+    await card(text).waitFor();
+    await line(alice, 'bob', `You: ${text}`).waitFor();
+  };
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await alice.send('I am the wrost');
+  await everywhere('I am the wrost');
+  await alice.messageAction('I am the wrost', 'Edit message');
+  const box = alice.$('#messages textarea.edit-input');
+  await box.fill('I am the worst');
+  await box.press('Enter');
+  await everywhere('I am the worst');
+  // Bob hasn't read it on either device: the line is unread, with a badge (a DM counts every message).
+  const unread = (p) => p.page.locator('#sidebar-body .dm-row.unread').filter({ has: p.page.locator('.dm-row-name', { hasText: exact('alice') }) });
+  for (const p of [bob, laptop]) await unread(p).locator('.badge').waitFor();
+  // Deleted: the line goes back to the message before it (bob's, written while alice was on Home).
+  await alice.messageAction('I am the worst', 'Delete message');
+  await alice.modal('Delete message?').locator('.modal-foot .btn.danger').click();
+  const before = 'Written while you were on Home: lychee';
+  for (const p of [bob, laptop]) await line(p, 'alice', `You: ${before}`).waitFor();
+  await card(`You: ${before}`).waitFor();
+  await line(alice, 'bob', exact(before)).waitFor();
+  check(!(await line(bob, 'alice', 'I am the').count()) && !(await card('I am the').count()), 'The deleted message should be gone from bob’s conversation lists.');
+  // And it no longer counts as unread (the app asks the server again, at most every 30 seconds).
+  for (const p of [bob, laptop]) await unread(p).waitFor({ state: 'detached', timeout: 40000 });
+  await laptop.$('.home-view .conv-card.unread').filter({ has: laptop.$('.conv-card-text strong', { hasText: exact('alice') }) }).waitFor({ state: 'detached' });
+  await laptop.logout();
+  await laptop.close();
+  delete t.people['bob-laptop'];
 }
 
 // ------------------------------------------------------------------ 5. attachments
@@ -336,6 +432,205 @@ async function attachments(t) {
   await alice.openSettings('Security');
   await alice.$('.set-content .kv', { hasText: 'Files in messages' }).locator('span', { hasText: /^2 ·/ }).waitFor();
   await alice.closeSettings();
+}
+
+// ------------------------------------------------------------------ 5b. pictures on a phone
+// A tall phone screenshot and a panorama, seen on a phone (390×844, touch) and on a desktop. On the phone they're as
+// big as the message allows (the screenshot up to about 70% of the screen's height), never cropped, sharp (the full
+// picture replaces the thumbnail), and the viewer takes fingers: double tap, pinch, swipes. The desktop's sizes are
+// the same as ever: at most 440 wide and 340 tall (and 40% of a short window's height), the thumbnail cropped to fit;
+// a touch screen with a computer's layout (a tablet, a laptop's) has the same.
+async function phonePictures(t) {
+  const { alice, bob } = t.people;
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  const sent = { 'A phone screenshot': [1170, 2532], 'A panorama': [4000, 1000] };
+  for (const [text, [w, h]] of Object.entries(sent)) {
+    const name = text.endsWith('screenshot') ? 'Screenshot_20261017-204512_Hearth_Chat_Conversation.png' : 'panorama.png';
+    await alice.$('.cw-main input[type=file]').setInputFiles([{ name, mimeType: 'image/png', buffer: makePng(w, h) }]);
+    await alice.send(text);
+  }
+  const loaded = (p, text) => p.page.waitForFunction((t) => {
+    const m = [...document.querySelectorAll('#messages .msg[data-mid]')].find((x) => x.textContent.includes(t));
+    const i = m && m.querySelector('.att-img');
+    return i && i.complete && i.naturalWidth > 0;
+  }, text);
+  const measure = (m) => m.evaluate((el) => {
+    const box = el.querySelector('.att-media').getBoundingClientRect();
+    const img = el.querySelector('.att-img');
+    return { w: box.width, h: box.height, col: el.querySelector('.msg-files').getBoundingClientRect().width, screen: innerHeight, fit: getComputedStyle(img).objectFit, nw: img.naturalWidth, nh: img.naturalHeight };
+  });
+
+  // A desktop with a mouse: exactly as before.
+  const desk = {};
+  for (const [text, [w, h]] of Object.entries(sent)) {
+    const m = bob.message(text).first();
+    await m.scrollIntoViewIfNeeded();
+    await loaded(bob, text);
+    const r = desk[text] = await measure(m);
+    const want = Math.min(440, w, Math.round(340 * w / h));
+    check(Math.abs(r.w - want) < 1 && Math.abs(r.h - want * h / w) < 1.5, `On a desktop “${text}” should be ${want}×${Math.round(want * h / w)} as before (got ${r.w}×${r.h}).`);
+    check(r.fit === 'cover', `On a desktop the picture should still fill its box (got object-fit ${r.fit}).`);
+  }
+
+  // The same messages on bob's phone.
+  const phone = await t.open('bob-phone', PHONE);
+  await phone.login('bob', t.pw.bob);
+  const nav = phone.$('#main-head .nav-toggle');
+  if (await nav.isVisible()) await nav.tap();
+  await phone.$(`#rail button[aria-label="${SERVER}"]`).tap();
+  await phone.page.locator('#sidebar-head .server-head-name', { hasText: exact(SERVER) }).waitFor({ state: 'attached' });
+  if (!(await phone.$('#composer-input[placeholder="Message #general"]').count())) {
+    if (await nav.isVisible()) await nav.tap();
+    await phone.channelRow('general').locator('.ch-main').tap();
+  }
+  await phone.page.waitForSelector('#composer-input[placeholder="Message #general"]');
+  const shot = phone.message('A phone screenshot').first();
+  const pano = phone.message('A panorama').first();
+  await shot.scrollIntoViewIfNeeded();
+  // Once it's on screen the full picture takes the thumbnail's place (it's drawn bigger than 480 px on this screen).
+  await phone.page.waitForFunction(() => {
+    const m = [...document.querySelectorAll('#messages .msg[data-mid]')].find((x) => x.textContent.includes('A phone screenshot'));
+    const i = m && m.querySelector('.att-img');
+    return i && i.complete && i.naturalWidth === 1170;
+  });
+  const s = await measure(shot);
+  check(s.w >= 0.7 * s.col || s.h >= 0.6 * s.screen, `On a phone the screenshot should be big (got ${s.w}×${s.h} in a ${s.col}px column on an ${s.screen}px screen).`);
+  check(s.h <= 0.72 * s.screen, `…but no taller than about 70% of the screen (got ${s.h} of ${s.screen}).`);
+  check(s.fit === 'contain' && Math.abs(s.w / s.h - 1170 / 2532) < 0.02, `…and never cropped (object-fit ${s.fit}, box ${s.w}×${s.h}).`);
+  await pano.scrollIntoViewIfNeeded();
+  await loaded(phone, 'A panorama');
+  const p = await measure(pano);
+  check(p.w >= p.col - 1, `On a phone the panorama should use the message's whole width (got ${p.w} of ${p.col}).`);
+  check(p.fit === 'contain' && Math.abs(p.w / p.h - 4) < 0.05, `…and never be cropped (object-fit ${p.fit}, box ${p.w}×${p.h}).`);
+
+  // The viewer: its bar fits, with 44px buttons.
+  await shot.locator('.att-img').tap();
+  await phone.$('.viewer').waitFor();
+  await phone.page.waitForFunction(() => { const i = document.querySelector('.viewer-img'); return i && i.complete && i.naturalWidth > 0 && i.offsetWidth > 0 && !i.getAnimations().length; });
+  const bar = await phone.page.evaluate(() => ({
+    buttons: [...document.querySelectorAll('.viewer-bar button')].filter((b) => b.getClientRects().length).map((b) => { const r = b.getBoundingClientRect(); return { label: b.getAttribute('aria-label'), w: r.width, h: r.height, right: r.right }; }),
+    count: document.querySelector('.viewer-count').getBoundingClientRect().height,
+    width: innerWidth,
+  }));
+  // (And Comments, for a photo that can have comments and tags: photo-notes.js. Its 44px are checked with the rest.)
+  const barLabels = bar.buttons.map((b) => b.label).filter((l) => !/^Comments( \(\d+\))?$/.test(l));
+  check(JSON.stringify(barLabels) === JSON.stringify(['Download', 'More', 'Close (Esc)']), `The phone viewer's bar should have Download, More and Close, and besides them only Comments (got ${bar.buttons.map((b) => b.label).join(', ')}).`);
+  check(bar.buttons.every((b) => b.w >= 44 && b.h >= 44 && b.right <= bar.width), `Its buttons should be at least 44px and on screen (got ${JSON.stringify(bar.buttons)}).`);
+  check(bar.count < 30, `The picture count should be on one line (it's ${bar.count}px tall).`);
+  // A long name is shortened in the middle, so how it ends stays in sight.
+  const name = await phone.page.evaluate(() => {
+    const base = document.querySelector('.viewer-name-base'); const ext = document.querySelector('.viewer-name-ext').getBoundingClientRect();
+    return { ext: document.querySelector('.viewer-name-ext').textContent, extWidth: ext.width, extRight: ext.right, count: document.querySelector('.viewer-count').getBoundingClientRect().left, cut: base.scrollWidth > base.clientWidth };
+  });
+  check(name.cut && name.ext === '.png' && name.extWidth > 0 && name.extRight <= name.count + 0.5, `A long name should be shortened, keeping “.png” in sight before the count (got ${JSON.stringify(name)}).`);
+  await phone.$('.viewer-bar button[aria-label="More"]').tap();
+  await phone.menuItem('Zoom in').waitFor();
+  await phone.page.keyboard.press('Escape');
+  await phone.page.locator('.popover').waitFor({ state: 'detached' });
+  check(await phone.$('.viewer').count(), 'Escape in the More menu should close the menu, not the viewer.');
+
+  const fingers = await touchscreen(phone);
+  const pic = () => phone.page.$eval('.viewer-img', (i) => { const r = i.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+  const still = () => phone.page.waitForFunction(() => !document.querySelector('.viewer-stage.easing, .viewer-stage.touching'));
+  const fit = await pic();
+  // A double tap zooms to 2x around the tapped point, and the next goes back to the whole picture.
+  const at = { x: fit.x + fit.w * 0.3, y: fit.y + fit.h * 0.35 };
+  await fingers.doubleTap(at.x, at.y);
+  await still();
+  const zoomed = await pic();
+  check(Math.abs(zoomed.w / fit.w - 2) < 0.02, `A double tap should zoom to 2x (got ${(zoomed.w / fit.w).toFixed(2)}x).`);
+  check(Math.abs((at.x - zoomed.x) / zoomed.w - 0.3) < 0.02 && Math.abs((at.y - zoomed.y) / zoomed.h - 0.35) < 0.02, 'The tapped point should stay under the finger.');
+  await fingers.doubleTap(at.x, at.y);
+  await still();
+  const back = await pic();
+  check(Math.abs(back.w - fit.w) < 1 && Math.abs(back.x - fit.x) < 1 && Math.abs(back.y - fit.y) < 1, 'A second double tap should go back to the whole picture.');
+  // Two fingers moving apart zoom in.
+  const mid = { x: fit.x + fit.w / 2, y: fit.y + fit.h / 2 };
+  await fingers.pinch(mid, 60, 200);
+  await still();
+  const pinched = await pic();
+  check(pinched.w / fit.w > 2.5 && pinched.w / fit.w <= 6.01, `A pinch should zoom in (got ${(pinched.w / fit.w).toFixed(2)}x).`);
+  await fingers.doubleTap(mid.x, mid.y);
+  await still();
+  // Not zoomed, a swipe to the left shows the next picture, and a swipe down closes the viewer.
+  const [k, n] = (await phone.$('.viewer-count').textContent()).split('/').map((x) => Number(x.trim()));
+  await fingers.swipe({ x: 330, y: mid.y }, { x: 60, y: mid.y });
+  await phone.$('.viewer-count', { hasText: `${(k % n) + 1} / ${n}` }).waitFor();
+  await still();
+  await fingers.swipe({ x: 200, y: 300 }, { x: 200, y: 600 });
+  await phone.$('.viewer').waitFor({ state: 'detached' });
+
+  // A touch screen that isn't a phone's (a tablet, a laptop's) has a computer's layout and its picture sizes too:
+  // sized like a phone's, a picture once filled a laptop's whole chat. Its window here is short, so they're also
+  // kept to 40% of its height (below).
+  await phone.page.setViewportSize({ width: 1366, height: 700 });
+  await phone.page.waitForSelector('#sidebar-body', { state: 'visible' });
+  for (const [text, [w, h]] of Object.entries(sent)) {
+    const m = phone.message(text).first();
+    await m.scrollIntoViewIfNeeded();
+    const r = await measure(m);
+    const want = Math.min(440, w, (340 * w) / h, (0.4 * 700 * w) / h);
+    check(Math.abs(r.w - want) < 1.5 && Math.abs(r.h - (want * h) / w) < 1.5, `On a touch screen with a computer's layout “${text}” should be ${Math.round(want)}×${Math.round((want * h) / w)}, as on a computer (got ${r.w}×${r.h}).`);
+  }
+
+  // Nothing of this reached the desktop: the same sizes, and still the thumbnail; the viewer names the picture in
+  // plain text, as it did (only a phone keeps the ending apart).
+  for (const text of Object.keys(sent)) {
+    const r = await measure(bob.message(text).first());
+    check(r.w === desk[text].w && r.h === desk[text].h && r.nw <= 480 && r.nh <= 480, `On a desktop “${text}” should keep its size and thumbnail (got ${r.w}×${r.h}, ${r.nw}×${r.nh}).`);
+  }
+  await bob.message(Object.keys(sent)[0]).first().locator('.att-img').click();
+  await bob.$('.viewer').waitFor();
+  check(await bob.page.$eval('.viewer-name', (el) => !el.childElementCount && /\.png$/.test(el.textContent)), 'On a desktop the viewer should name the picture in plain text, as before.');
+  // The whole picture fits the screen, as tall as there's room for: a tall one was once drawn at the window's
+  // width and cut off below.
+  await bob.page.waitForFunction(() => { const i = document.querySelector('.viewer-img'); return i && i.complete && i.naturalWidth === 1170 && !document.querySelector('.viewer-stage.loading-full') && !i.getAnimations().length; });
+  const fitted = await bob.page.evaluate(() => {
+    const r = document.querySelector('.viewer-img').getBoundingClientRect();
+    const stage = document.querySelector('.viewer-stage'); const q = stage.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, w: r.width, h: r.height, stageTop: q.top, stageBottom: q.bottom, room: q.height - parseFloat(getComputedStyle(stage).paddingBottom) };
+  });
+  check(fitted.top >= fitted.stageTop - 0.5 && fitted.bottom <= fitted.stageBottom + 0.5 && Math.abs(fitted.h - fitted.room) < 1.5 && Math.abs(fitted.w / fitted.h - 1170 / 2532) < 0.01,
+    `On a desktop the viewer should show the whole screenshot, as tall as it has room for (got ${JSON.stringify(fitted)}).`);
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  // A short window (a small laptop's screen) keeps a picture to 40% of its height, in its shape; a narrow one (half
+  // a laptop's screen, with the phone layout) keeps a computer's sizes.
+  for (const [width, height] of [[1366, 620], [700, 900]]) {
+    await bob.page.setViewportSize({ width, height });
+    for (const [text, [w, h]] of Object.entries(sent)) {
+      const m = bob.message(text).first();
+      await m.scrollIntoViewIfNeeded();
+      const r = await measure(m);
+      const want = Math.min(440, w, (340 * w) / h, (0.4 * height * w) / h, r.col);
+      check(Math.abs(r.w - want) < 1.5 && Math.abs(r.h - (want * h) / w) < 1.5, `In a ${width}×${height} window “${text}” should be ${Math.round(want)}×${Math.round((want * h) / w)} (got ${r.w}×${r.h}).`);
+    }
+  }
+  await bob.page.setViewportSize({ width: 1400, height: 900 });
+  await phone.close();
+}
+// Fingers on a phone's screen, through the browser's own touch input (two at once for a pinch).
+async function touchscreen(p) {
+  const cdp = await p.context.newCDPSession(p.page);
+  const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+  const frame = () => p.page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r())));
+  const tap = async (x, y) => { await touch('touchStart', [[x, y]]); await touch('touchEnd', []); };
+  return {
+    async doubleTap(x, y) { await tap(x, y); await frame(); await tap(x, y); },
+    async pinch(c, from, to, steps = 8) {
+      await touch('touchStart', [[c.x - from / 2, c.y], [c.x + from / 2, c.y]]);
+      for (let i = 1; i <= steps; i++) { const d = from + ((to - from) * i) / steps; await touch('touchMove', [[c.x - d / 2, c.y], [c.x + d / 2, c.y]]); await frame(); }
+      await touch('touchEnd', []);
+    },
+    async swipe(a, b, steps = 10) {
+      await touch('touchStart', [[a.x, a.y]]);
+      for (let i = 1; i <= steps; i++) { await touch('touchMove', [[a.x + ((b.x - a.x) * i) / steps, a.y + ((b.y - a.y) * i) / steps]]); await frame(); }
+      await touch('touchEnd', []);
+    },
+  };
 }
 
 // ------------------------------------------------------------------ pictures: avatar, server icon, custom emoji, GIF library
@@ -867,8 +1162,33 @@ async function groupChat(t) {
   await bob.dmRow('Fruit Club').click();
   await bob.message('Group hello: cherry').waitFor();
   check(!(await bob.$('#messages .msg-text.undecryptable').count()), 'Bob should read the group chat.');
-  await bob.send('Group reply: date');
+  // "… is typing…" both ways in a group chat: under the box, and with the name on the group's row in the sidebar.
+  await typeOnly(bob, 'Group reply: date');
+  await typingLineSays(alice, 'bob is typing\u2026');
+  await listLineTyping(alice.dmRow('Fruit Club').locator('.dm-row-status'), 'bob is typing\u2026', 'The group’s row in alice’s sidebar');
+  await bob.$('#composer-input').press('Enter');
   await alice.message('Group reply: date').waitFor();
+  await typingLineSays(alice, '');
+  await listLineSays(alice.dmRow('Fruit Club').locator('.dm-row-status'), 'bob: Group reply: date', 'The group’s row in alice’s sidebar');
+  // The group's line in the conversation list follows an edit and a delete of its newest message.
+  const line = (p, text) => p.dmRow('Fruit Club').locator('.dm-row-status', { hasText: text });
+  await bob.messageAction('Group reply: date', 'Edit message');
+  const box = bob.$('#messages textarea.edit-input');
+  await box.fill('Group reply: dates');
+  await box.press('Enter');
+  await line(alice, 'bob: Group reply: dates').waitFor();
+  await line(bob, 'You: Group reply: dates').waitFor();
+  await bob.messageAction('Group reply: dates', 'Delete message');
+  await bob.modal('Delete message?').locator('.modal-foot .btn.danger').click();
+  await line(alice, 'You: Group hello: cherry').waitFor();
+  await line(bob, ': Group hello: cherry').waitFor();
+  await typeOnly(alice, 'Group typing back: elderberry');
+  await typingLineSays(bob, 'Alice Wonder is typing\u2026');
+  await listLineTyping(bob.dmRow('Fruit Club').locator('.dm-row-status'), 'Alice Wonder is typing\u2026', 'The group’s row in bob’s sidebar');
+  await alice.$('#composer-input').press('Enter');
+  await bob.message('Group typing back: elderberry').waitFor();
+  await typingLineSays(bob, '');
+  await listLineSays(bob.dmRow('Fruit Club').locator('.dm-row-status'), 'Alice Wonder: Group typing back: elderberry', 'The group’s row in bob’s sidebar');
   // The group's call rings the others.
   await bob.$('#main-head button', { hasText: exact('Call') }).click();
   await alice.$('.ring-card', { hasText: 'bob' }).waitFor();
@@ -996,7 +1316,7 @@ async function androidApp(t) {
   await droid.page.evaluate(() => window.dispatchEvent(new CustomEvent('hearth-hangup', { detail: true })));
   await droid.page.waitForSelector('#voice-panel', { state: 'hidden' });
   await droid.page.waitForFunction(() => window.__androidSent.some((m) => m.type === 'callEnd'));
-  // Reloading the page in a call (the "Reload now" after an update, say) ends the call, and the notification too.
+  // Reloading the page in a call ends the call, and the notification too (an update never does that: it waits).
   const startsBefore = (await callStarts()).length;
   const endsBefore = (await sent('callEnd')).length;
   await droid.$('.cs-controls .btn.primary', { hasText: exact('Join call') }).click(); // still looking at the Lounge
@@ -1247,6 +1567,47 @@ async function deleteAccount(t) {
   await carl.$('#login-form button[type=submit]').click();
   await carl.$('#login-form .form-error', { hasText: 'Wrong username or password' }).waitFor({ timeout: 30000 });
   void alice;
+}
+
+// Staff delete an account for someone who can't sign in (delete-account.html's "Can't sign in?"), or a child under 13:
+// Admin → Users → Delete account…, with the username typed out and the owner's own password. It ends like deleting
+// it yourself: signed out with the reason, an email, messages left as "Deleted user", no signing in again. Dana
+// (from "away and status", with the email she confirmed in "reset without a recovery key") is the account: this is
+// the last flow, and a new sign-up would hit the limit of five an hour from one network.
+async function staffDelete(t) {
+  const { bob } = t.people; // the owner since "instance: new owner…"
+  const dana = await t.open('dana');
+  await dana.login('dana', t.pw.dana);
+  await bob.noModals();
+  await bob.railButton('Admin');
+  await bob.$('.admin-tabs .admin-tab', { hasText: exact('Users') }).click();
+  await bob.$('.admin-body input.search-input').fill('dana');
+  await bob.$('.admin-body .adm-row .adm-user', { hasText: '@dana' }).click();
+  const m = await bob.dialog('(@dana)');
+  await m.locator('.modal-foot button', { hasText: 'Delete account' }).click();
+  const d = await bob.dialog('account?');
+  await d.locator('.field', { hasText: 'Reason' }).locator('input').fill('asked by email');
+  // Not until the username is typed out.
+  await d.locator('.modal-foot .btn.danger', { hasText: 'Delete forever' }).click();
+  await d.locator('.form-error', { hasText: 'Type dana to confirm.' }).waitFor();
+  await d.locator('.field', { hasText: 'Type dana to confirm' }).locator('input').fill('dana');
+  await d.locator('.modal-foot .btn.danger', { hasText: 'Delete forever' }).click();
+  await bob.confirmPassword('Confirm deleting the account', t.pw.bob);
+  await bob.toast('dana\u2019s account is deleted.');
+  await bob.noModals();
+  await dana.page.waitForSelector('#login-form:not([hidden])');
+  await dana.$('#login-form .form-error', { hasText: 'This account was deleted.' }).waitFor();
+  await t.server.mail('dana@example.test', /deleted by the server's staff/);
+  // In the audit log, with the reason.
+  await bob.$('.admin-tabs .admin-tab', { hasText: 'Audit log' }).click();
+  await bob.$('.admin-body', { hasText: 'asked by email' }).waitFor();
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await bob.message('Hello again from dana: date').locator('.msg-name', { hasText: 'Deleted user' }).waitFor();
+  await dana.$('#login-form [name=username]').fill('dana');
+  await dana.$('#login-form [name=password]').fill(t.pw.dana);
+  await dana.$('#login-form button[type=submit]').click();
+  await dana.$('#login-form .form-error', { hasText: 'Wrong username or password' }).waitFor({ timeout: 30000 });
 }
 
 // ------------------------------------------------------------------ 13. recovery key, email, password change and reset
@@ -2288,7 +2649,8 @@ async function channelOrder(t) {
 // Alice sees her go Away by herself, and Online again the moment she moves the mouse; Dana's own panel changes in
 // place (its buttons aren't rebuilt under her pointer). Dana saves a custom status in Settings → Profile and clears
 // it again in the same tab. Alice sets a status that clears after 30 minutes: Bob sees it, and when it's due the
-// server clears it for both of them without a reload.
+// server clears it for both of them without a reload. In between, in her new DM with Dana, Alice folds away the profile
+// beside it (dmProfileFold).
 async function awayAndStatus(t) {
   const { alice, bob } = t.people;
   await bob.railButton(SERVER);
@@ -2342,7 +2704,15 @@ async function awayAndStatus(t) {
   await dana.$('#user-panel .me-sub', { hasText: 'Online' }).waitFor({ state: 'attached' });
   check(!(await dana.$('#toasts .toast-error').count()), `Saving the profile should show no error (got ${JSON.stringify(await dana.$('#toasts .toast-error').allTextContents())}).`);
   await dana.closeSettings();
+  // The word beside Dana's name in Alice's DM with her follows her: it used to stay on the one it was drawn with.
+  await alice.member('dana').click();
+  await alice.page.locator('.pop-profile button', { hasText: exact('Message') }).click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message dana"]');
+  await alice.$('#main-head .head-topic', { hasText: 'Online' }).waitFor();
   await dana.close();
+  await alice.$('#main-head .head-topic', { hasText: 'Offline' }).waitFor({ timeout: 20000 });
+  await alice.$('#main-head .status-dot.st-offline').waitFor();
+  await dmProfileFold(t);
 
   // A status that clears itself after 30 minutes.
   await alice.$('#user-panel .me-btn').click();
@@ -2371,6 +2741,229 @@ async function awayAndStatus(t) {
   t.server.sql('UPDATE users SET status_expires_at = ? WHERE id = ?', Date.now() - 1000, aliceId);
   await status.waitFor({ state: 'detached', timeout: 30000 });
   await alice.$('#user-panel .me-sub', { hasText: 'Out for lunch' }).waitFor({ state: 'detached', timeout: 10000 });
+}
+
+// The profile beside a DM folds away (an owner asked, "so it's not always on the side"). Its own fold button, from the
+// keyboard, slides it shut: the chat widens with it rather than at once, keeps its newest message at the bottom, and
+// the keyboard carries on from the header's "Show profile". It stays folded in another DM and after a reload. It's a
+// choice of its own: a server's member list is still shown, and hiding that doesn't bring the profile back (it used to
+// be one choice for both). The header's button brings it back the same way, keeping the focus. Before the fold, Bob's
+// status changing draws the panel afresh and Alice's focus stays on its fold button; pressed twice in a row either way,
+// the slide turns back from where it got to rather than jumping. With Reduce motion it
+// goes and comes at once; a narrower window never opens it by itself, opens it over the chat from the header, and its
+// fold button closes it. Alice is in her new DM with Dana, on a wide window, with the profile beside it.
+async function dmProfileFold(t) {
+  const { alice, bob } = t.people;
+  const { page } = alice;
+  const pane = alice.$('#members');
+  const profile = alice.$('#members .dm-profile');
+  const foldBtn = alice.$('#members .dm-profile-head button.dm-fold');
+  const headBtn = alice.$('#main-head button.head-profile');
+  // The two choices kept on this device: the DM profile's, and the member list's (never set: shown).
+  const chosen = () => page.evaluate(() => `${localStorage.getItem('hearth.dmprofile')}/${localStorage.getItem('hearth.members') || 'on'}`);
+  const focused = () => page.evaluate(() => { const a = document.activeElement; return a ? `${a.closest('#main-head') ? 'header: ' : ''}${a.getAttribute('aria-label') || a.id || a.tagName}` : null; });
+  const chatWidth = () => alice.$('#messages').evaluate((el) => Math.round(el.getBoundingClientRect().width));
+  // The chat against its own box: how far it is from its bottom, whether the newest message is all in view, and whether
+  // there's enough in it to scroll.
+  const atNewest = () => page.evaluate(() => {
+    const sc = document.querySelector('#messages'); const last = [...sc.querySelectorAll('.msg[data-mid]')].pop();
+    const r = last.getBoundingClientRect(); const box = sc.getBoundingClientRect();
+    return { fromBottom: Math.round(sc.scrollHeight - sc.scrollTop - sc.clientHeight), inside: r.top >= box.top - 1 && r.bottom <= box.bottom + 1, scrolls: sc.scrollHeight > sc.clientHeight + 100 };
+  });
+  const stillAtNewest = async (when) => {
+    const at = await atNewest();
+    check(at.fromBottom < 8 && at.inside, `${when}, the chat should still be at its newest message (got ${JSON.stringify(at)}).`);
+  };
+  // Watches what comes next for 1.5 s: whether the panel slides (its classes), and the chat's width on every frame.
+  const watch = () => page.evaluate(() => {
+    const el = document.querySelector('#members'); const sc = document.querySelector('#messages');
+    const w = { classes: [], widths: [], done: false };
+    window.e2eSlide = w;
+    const mo = new MutationObserver(() => { for (const c of ['panel-folding', 'panel-unfolding']) if (el.classList.contains(c) && !w.classes.includes(c)) w.classes.push(c); });
+    mo.observe(el, { attributes: true, attributeFilter: ['class'] });
+    const t0 = performance.now();
+    const tick = () => {
+      w.widths.push(Math.round(sc.getBoundingClientRect().width));
+      if (performance.now() - t0 < 1500) requestAnimationFrame(tick); else { mo.disconnect(); w.done = true; }
+    };
+    requestAnimationFrame(tick);
+  });
+  const watched = async () => { await page.waitForFunction(() => window.e2eSlide.done); return page.evaluate(() => window.e2eSlide); };
+  const slid = async (cls, from, to) => {
+    const w = await watched();
+    check(w.classes.includes(cls), `The profile should slide (${cls}; saw ${w.classes.join(', ') || 'none'}).`);
+    const [lo, hi] = [Math.min(from, to), Math.max(from, to)];
+    check(w.widths.some((x) => x > lo + 16 && x < hi - 16), `The chat should widen or narrow with it, not jump from ${from} to ${to} (widths ${w.widths.join(', ')}).`);
+    check(w.widths[w.widths.length - 1] === to, `The chat should end ${to} wide (widths ${w.widths.join(', ')}).`);
+  };
+  const noSlide = async (why) => { const w = await watched(); check(!w.classes.length, `${why}, it shouldn't slide (saw ${w.classes.join(', ')}).`); };
+  const toDm = async (name) => {
+    await alice.dmRow(name).click();
+    await page.waitForSelector(`#composer-input[placeholder="Message ${name}"]`);
+    await headBtn.waitFor();
+  };
+
+  // Shown, as before; the header's button says so (aria-expanded, which a label saying Show or Hide goes with).
+  await profile.waitFor();
+  check(await headBtn.getAttribute('aria-label') === 'Hide profile' && await headBtn.getAttribute('aria-expanded') === 'true' && await headBtn.getAttribute('aria-pressed') === null,
+    'The header’s profile button should say Hide profile, and that the profile is open.');
+  check(await chosen() === 'on/on', `The DM profile’s choice should start as the member list’s (got ${await chosen()}).`);
+  // Its fold button is where the panel meets the chat.
+  const [pb, fb] = [await pane.boundingBox(), await foldBtn.boundingBox()];
+  check(fb.x - pb.x < 24, `The fold button should be at the panel’s edge beside the chat (${fb.x - pb.x}px in).`);
+  check(await foldBtn.getAttribute('data-tip') === 'Hide profile', 'The fold button should have a tooltip.');
+  // (Enough in the conversation to scroll.)
+  for (let i = 1; i <= 9; i++) {
+    await alice.$('#composer-input').fill(`Folding ${i}:\nthe profile\nbeside\nthis chat`);
+    await alice.$('#composer-input').press('Enter');
+    await alice.message(`Folding ${i}:`).first().waitFor();
+    await page.waitForTimeout(450); // (under the server's limit on messages in a row)
+  }
+  check((await atNewest()).scrolls, 'The DM should have enough in it to scroll.');
+  await stillAtNewest('Before folding');
+
+  // Folded from the keyboard with its own button. Before Alice presses it, Bob goes Do not disturb and back, which
+  // draws her DM's panel afresh each time (anyone's status or game does): the focus stays on the fold button, so Enter
+  // still folds it.
+  const narrow = await chatWidth();
+  await foldBtn.focus();
+  for (const status of ['Do not disturb', 'Online']) {
+    await page.evaluate(() => { window.e2eFold = document.querySelector('#members .dm-fold'); });
+    await bob.$('#user-panel .me-btn').click();
+    await bob.$('.popover .status-menu .menu-item', { hasText: new RegExp(`^${status}`) }).click();
+    await page.waitForFunction(() => !window.e2eFold.isConnected, null, { timeout: 15000 });
+    check(await focused() === 'Hide profile', `Bob going ${status} should leave Alice’s focus on the profile’s fold button (it’s on ${await focused()}).`);
+  }
+  await watch();
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('#members', { state: 'hidden' });
+  const wide = await chatWidth();
+  check(wide > narrow + 200, `The chat should take the panel’s room (${narrow} → ${wide}).`);
+  await slid('panel-folding', narrow, wide);
+  await stillAtNewest('Folded');
+  check(await focused() === 'header: Show profile', `Folding should leave the focus on the header’s Show profile (it’s on ${await focused()}).`);
+  check(await headBtn.getAttribute('aria-expanded') === 'false', 'The header’s button should say the profile is folded.');
+  check(await chosen() === 'off/on', `Folding should be remembered for DMs only (got ${await chosen()}).`);
+
+  // Folded in another DM too.
+  await toDm('bob');
+  check(await pane.isHidden() && await headBtn.getAttribute('aria-label') === 'Show profile', 'The profile should stay folded in another DM.');
+  // A server's member list is still shown; hidden there, the profile stays as it was.
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await alice.$('#members .member-list').waitFor();
+  await alice.$('#main-head button[aria-label="Hide members"]').click();
+  await page.waitForSelector('#members', { state: 'hidden' });
+  check(await chosen() === 'off/off', `Hiding the member list should change only its own choice (got ${await chosen()}).`);
+
+  // After a reload: still folded.
+  await page.reload();
+  await alice.waitApp();
+  await alice.railButton('Direct messages');
+  await toDm('dana');
+  check(await pane.isHidden() && await headBtn.getAttribute('aria-label') === 'Show profile', 'The profile should stay folded after a reload.');
+  await alice.message('Folding 9:').first().waitFor();
+  await page.waitForTimeout(500);
+  await stillAtNewest('Reopened');
+
+  // The header's button brings it back, from the keyboard: it slides open, and the focus stays on it.
+  await headBtn.focus();
+  await watch();
+  await page.keyboard.press('Enter');
+  await profile.waitFor();
+  await slid('panel-unfolding', wide, narrow);
+  await stillAtNewest('Unfolded');
+  check(await focused() === 'header: Hide profile' && await headBtn.getAttribute('aria-expanded') === 'true', `Unfolding should keep the focus on the header’s button, now Hide profile (it’s on ${await focused()}).`);
+  check(await chosen() === 'on/off', `Unfolding should leave the member list’s choice alone (got ${await chosen()}).`);
+  // The member list stays hidden in the server, until it's shown there again.
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  check(await pane.isHidden(), 'Showing the profile shouldn’t bring the member list back.');
+  await alice.showMembers();
+  check(await chosen() === 'on/on', `Shown again (got ${await chosen()}).`);
+
+  // Pressed again before it's done (the header's button twice in a row), it turns back from where it got to: the panel
+  // doesn't jump to its full width, or the chat to its narrow one, to start over from there.
+  await alice.railButton('Direct messages');
+  await toDm('dana');
+  await profile.waitFor();
+  const settled = () => page.waitForFunction(() => !document.querySelector('#members.panel-folding, #members.panel-unfolding'));
+  await page.waitForTimeout(300);
+  const [full, chatBeside] = [Math.round((await pane.boundingBox()).width), await chatWidth()];
+  // The header's button pressed, and again once `again` says (the time since, or how wide the panel has got), with the
+  // panel's width and the chat's on every frame for 700 ms. turn: the last frame before the second press.
+  const pressTwice = (again) => page.evaluate(({ ms, from }) => new Promise((resolve) => {
+    const el = document.querySelector('#members'); const sc = document.querySelector('#messages');
+    const press = () => document.querySelector('#main-head button.head-profile').click();
+    const frames = []; let turn = -1;
+    press();
+    const t0 = performance.now();
+    const tick = () => {
+      const t = performance.now() - t0;
+      const f = { panel: el.hidden ? 0 : Math.round(el.getBoundingClientRect().width), chat: Math.round(sc.getBoundingClientRect().width) };
+      frames.push(f);
+      if (turn < 0 && (ms ? t >= ms : f.panel >= from)) { turn = frames.length - 1; press(); }
+      if (t < 700) requestAnimationFrame(tick); else resolve({ frames, turn });
+    };
+    requestAnimationFrame(tick);
+  }), again);
+  const framesSeen = (r) => `panel ${r.frames.map((f) => f.panel).join(', ')}; chat ${r.frames.map((f) => f.chat).join(', ')}; turned after frame ${r.turn}`;
+  // Folding, and back partway (well into it: going back takes as long as it had gone, so a few frames to see).
+  let r = await pressTwice({ ms: 100 });
+  let at = r.frames[r.turn];
+  let after = r.frames.slice(r.turn + 1);
+  check(r.turn >= 0 && at.panel > 0 && at.panel < full - 20, `The second press should come partway through folding (${framesSeen(r)}).`);
+  check(after.every((f) => f.panel >= at.panel - 2) && after.some((f) => f.panel > at.panel + 2 && f.panel < full - 2) && after.some((f) => f.chat < at.chat - 2 && f.chat > chatBeside + 2),
+    `Turned back partway through folding, the profile should slide back from where it got to, not jump (${framesSeen(r)}).`);
+  check(after.at(-1).panel === full && after.at(-1).chat === chatBeside, `It should end shown as it was (${framesSeen(r)}).`);
+  await settled();
+  check(await headBtn.getAttribute('aria-expanded') === 'true' && await chosen() === 'on/on', `Back again, it should be shown and remembered so (got ${await chosen()}).`);
+  // Unfolding, and back partway.
+  await headBtn.click();
+  await page.waitForSelector('#members', { state: 'hidden' });
+  await settled();
+  const chatAlone = await chatWidth();
+  r = await pressTwice({ from: Math.round(full * 0.3) });
+  at = r.frames[r.turn];
+  after = r.frames.slice(r.turn + 1);
+  check(r.turn >= 0 && at.panel < full - 20, `The second press should come partway through unfolding (${framesSeen(r)}).`);
+  check(after.every((f) => f.panel <= at.panel + 2 && f.chat >= at.chat - 2), `Turned back partway through unfolding, the profile should fold from where it got to, not from its full width (${framesSeen(r)}).`);
+  check(after.at(-1).panel === 0 && after.at(-1).chat === chatAlone && await pane.isHidden(), `It should end folded as it was (${framesSeen(r)}).`);
+  check(await headBtn.getAttribute('aria-expanded') === 'false' && await chosen() === 'off/on', `Back again, it should be folded and remembered so (got ${await chosen()}).`);
+  await headBtn.click();
+  await profile.waitFor();
+  await settled();
+
+  // With Reduce motion (the app's), it goes and comes at once.
+  await page.evaluate(() => document.documentElement.classList.add('reduce-motion'));
+  await watch();
+  await foldBtn.click();
+  check(await pane.isHidden(), 'With Reduce motion the profile should fold away at once.');
+  await headBtn.click();
+  check(await pane.isVisible() && (await pane.boundingBox()).width > 200, 'With Reduce motion the profile should come back at once.');
+  await noSlide('With Reduce motion');
+  await page.evaluate(() => document.documentElement.classList.remove('reduce-motion'));
+
+  // A narrower window, where the panel floats over the chat: it doesn't open by itself, the header's button opens it
+  // over the chat and its fold button closes it, without the slide.
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.reload();
+  await alice.waitApp();
+  await alice.railButton('Direct messages');
+  await toDm('dana');
+  check(await pane.isHidden(), 'On a narrower window the profile shouldn’t open by itself.');
+  await watch();
+  await headBtn.click();
+  await profile.waitFor();
+  check(await pane.evaluate((el) => getComputedStyle(el).position) === 'absolute', 'On a narrower window the profile should open over the chat.');
+  await foldBtn.click();
+  await page.waitForSelector('#members', { state: 'hidden' });
+  await noSlide('On a narrower window');
+  // Back on a wide window, shown again for what comes next.
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await headBtn.click();
+  await profile.waitFor();
+  check(await chosen() === 'on/on', `The profile should be shown again (got ${await chosen()}).`);
 }
 
 // ------------------------------------------------------------------ 24. text chat in a voice channel
@@ -3322,6 +3915,1790 @@ async function discordHabits(t) {
   await unread.waitFor({ state: 'detached' });
 }
 
+// ------------------------------------------------------------------ phones: held sideways, the drawer, Back
+// A phone held sideways gets the phone layout too: the chat, with the servers and channels in a drawer. A swipe from
+// the left edge opens the drawer. Back (the gesture, or the Android app's back button: both go back in the page's
+// history) closes the drawer, the side panel, a picture or a dialog instead of leaving Hearth, and closing them with
+// their own buttons leaves nothing behind in the history. A desktop adds nothing to it.
+async function phoneNavigation(t) {
+  const { bob } = t.people;
+  // Bob on his phone (one more new account would go over the sign-ups allowed from one network in an hour).
+  const phone = await t.open('bob-phone', PHONE);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  const app = page.url();
+  const drawerOpen = () => page.evaluate(() => document.body.classList.contains('nav-open'));
+  const drawerShut = () => page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  const hist = () => page.evaluate(() => ({ length: history.length, step: !!(history.state && history.state.hearthBack) }));
+  const stillHere = async (what) => {
+    check(page.url() === app && (await phone.$('#app:not([hidden])').count()) === 1, `Back ${what} should stay in Hearth (now at ${page.url()}).`);
+  };
+  const openNav = async () => { await page.locator('#main-head button[aria-label="Open navigation"]').tap(); await page.waitForTimeout(250); };
+  const showMembers = async () => { await page.locator('#main-head button[aria-label="Show members"]').tap(); await phone.$('#members .member-list').waitFor(); };
+  const membersGone = () => phone.$('#members .member-list').waitFor({ state: 'detached' });
+  // One finger from one point to another, as a phone sends it; then the drawer settles.
+  const cdp = await phone.context.newCDPSession(page);
+  const swipe = async (x0, y0, x1, y1) => {
+    const at = (x, y) => [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }];
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(x0, y0) });
+    for (let i = 1; i <= 10; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(x0 + ((x1 - x0) * i) / 10, y0 + ((y1 - y0) * i) / 10) });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await page.waitForTimeout(300);
+  };
+
+  // A server of its own, with a picture in #general.
+  await openNav();
+  await phone.createServer('Pocket');
+  await page.waitForSelector('#composer-input[placeholder="Message #general"]');
+  await phone.$('.cw-main input[type=file]').setInputFiles({ name: 'sunset.png', mimeType: 'image/png', buffer: makePng(320, 200) });
+  await phone.send('A picture from my phone');
+  const picture = phone.message('A picture from my phone').first().locator('.att-img');
+  await page.waitForFunction(() => { const i = document.querySelector('#messages .att-img'); return i && i.complete && i.naturalWidth > 0; });
+
+  // Sideways: still one column, with no server rail beside the chat and the drawer's button in the header.
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.waitForFunction(() => document.querySelector('#rail').getBoundingClientRect().right <= 0 && document.querySelector('#main').getBoundingClientRect().width >= 800);
+  check(await phone.$('#main-head .nav-toggle').isVisible(), 'A phone held sideways should have the button that opens the drawer.');
+  check(!(await hist()).step, 'With nothing open, Hearth should have added nothing to the history.');
+
+  // A swipe from the left edge opens the drawer; Back closes it, and stays in Hearth.
+  await swipe(10, 200, 330, 205);
+  check(await drawerOpen(), 'A swipe from the left edge should open the drawer.');
+  check((await hist()).step, 'The open drawer should have a step in the history for Back to take.');
+  await page.goBack();
+  await drawerShut();
+  await stillHere('from the drawer');
+  // Back closes the members panel, then the picture viewer.
+  await showMembers();
+  await page.goBack();
+  await membersGone();
+  await stillHere('from the members panel');
+  await picture.tap();
+  await phone.$('.viewer').waitFor();
+  await page.goBack();
+  await phone.$('.viewer').waitFor({ state: 'detached' });
+  await stillHere('from a picture');
+  // And a menu.
+  await page.locator('#main-head button[aria-label="More"]').tap();
+  await phone.$('#layer > .popover').waitFor();
+  await page.goBack();
+  await phone.$('#layer > .popover').waitFor({ state: 'detached' });
+  await stillHere('from a menu');
+  // Settings opened from the drawer: Back closes settings, then the drawer under it.
+  await openNav();
+  await page.locator('#user-panel button[aria-label="Settings"]').tap();
+  await phone.$('.settings-modal').waitFor();
+  await page.goBack();
+  await phone.$('.settings-modal').waitFor({ state: 'detached' });
+  check(await drawerOpen(), 'Back from settings should leave the drawer it was opened from.');
+  await page.goBack();
+  await drawerShut();
+  await stillHere('from settings and the drawer');
+
+  // Swipes put them away too: left on the open drawer, and right from the left edge on the members panel. Esc closes
+  // the panel as well (it covers the chat on a phone).
+  await openNav();
+  await swipe(250, 200, 30, 195);
+  await drawerShut();
+  await showMembers();
+  await swipe(8, 200, 600, 205);
+  await membersGone();
+  await showMembers();
+  await page.keyboard.press('Escape');
+  await membersGone();
+  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+
+  // Closed with their own buttons (or a tap beside the drawer), nothing is left behind: the history doesn't grow, and
+  // the page isn't left on a step of Hearth's (the next Back would seem to do nothing).
+  const cycle = async () => {
+    await openNav();
+    await page.touchscreen.tap(820, 200); // beside the drawer
+    await drawerShut();
+    await showMembers();
+    await page.locator('#members button[aria-label="Close panel"]').tap();
+    await membersGone();
+    await picture.tap();
+    await phone.$('.viewer').waitFor();
+    await page.locator('.viewer button[aria-label^="Close"]').first().tap();
+    await phone.$('.viewer').waitFor({ state: 'detached' });
+    await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+  };
+  await cycle();
+  const before = await hist();
+  await cycle();
+  await cycle();
+  const after = await hist();
+  check(after.length === before.length && !after.step, `Closing with their own buttons should leave no steps behind (history ${before.length} → ${after.length}).`);
+  await page.setViewportSize(PHONE.viewport);
+
+  // A desktop adds nothing to the history when the side panel or settings open and close.
+  const desk =() => bob.page.evaluate(() => JSON.stringify({ length: history.length, state: history.state }));
+  const d0 = await desk();
+  for (let i = 0; i < 2; i++) await bob.$('#main-head button[aria-label="Show members"], #main-head button[aria-label="Hide members"]').first().click();
+  await bob.openSettings();
+  await bob.closeSettings();
+  const d1 = await desk();
+  check(d1 === d0, `A desktop should add nothing to the history (${d0} → ${d1}).`);
+}
+
+// ------------------------------------------------------------------ phones: a message's actions, the message box
+// A touch screen has no hover: a long press on a message opens its actions in a sheet from the bottom (the quick
+// reactions, Reply, Copy text, Edit, Delete…), which goes with a tap outside it, a swipe down, Esc and Back. The
+// message box keeps +, the words, emoji and Send, with GIFs, voice messages and Send later in the + menu, and its text
+// is 16px so iOS doesn't zoom in. A desktop with a mouse keeps its hover toolbar and all six buttons.
+async function phoneMessageActions(t) {
+  const { bob } = t.people;
+  // Bob on his phone (one more new account would go over the sign-ups allowed from one network in an hour).
+  const phone = await t.open('bob-thumbs', PHONE);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  await catchCopies(phone);
+  const openNav = async () => {
+    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
+  };
+  await openNav();
+  await page.locator(`#rail button[aria-label="${SERVER}"]`).tap();
+  await openNav();
+  await phone.openChannel('general');
+  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  const text = 'Held down on a phone: what can I do with this?';
+  await phone.send(text);
+  const mine = page.locator(`#messages .msg[data-mid="${await phone.message(text).first().getAttribute('data-mid')}"]`);
+  const sheet = page.locator('.sheet-backdrop:not(.closing) .sheet');
+  const sheetGone = () => page.locator('.sheet-backdrop').waitFor({ state: 'detached' });
+  const backStep = () => page.evaluate(() => !!(history.state && history.state.hearthBack));
+  // A finger held still on the message's words, as a phone sends it.
+  const cdp = await phone.context.newCDPSession(page);
+  const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+  const hold = async () => {
+    const b = await mine.locator('.msg-text').boundingBox();
+    await touch('touchStart', b.x + 40, b.y + b.height / 2);
+    await page.waitForTimeout(700);
+    await touch('touchEnd');
+    await sheet.waitFor();
+  };
+  const row = (label) => sheet.locator('.sheet-row', { hasText: exact(label) });
+
+  // No hover toolbar on a touch screen; a quick tap opens nothing.
+  check(await page.evaluate(() => [...document.querySelectorAll('#messages .msg-tools')].every((el) => getComputedStyle(el).display === 'none')), 'A touch screen should not show the hover toolbar.');
+  await mine.locator('.msg-text').tap();
+  await page.waitForTimeout(700);
+  check(!(await page.locator('.sheet').count()), 'A quick tap on a message should not open its actions.');
+
+  // A long press: a short buzz, and the sheet with the quick reactions and what the ⋯ menu offers, without selecting
+  // any words.
+  await page.evaluate(() => { window.__buzz = []; navigator.vibrate = (ms) => { window.__buzz.push(ms); return true; }; });
+  await hold();
+  check((await page.evaluate(() => window.__buzz.join())) === '10', 'A long press should give one short buzz.');
+  check((await sheet.locator('.sheet-reacts button').count()) === 7, 'The sheet should start with six quick reactions and +.');
+  for (const label of ['Reply', 'Reply in thread', 'Copy text', 'Edit message', 'Delete message']) await row(label).waitFor();
+  check((await row('Reply').boundingBox()).height >= 48, 'The sheet’s rows should be at least 48px tall.');
+  check(await page.evaluate(() => String(getSelection()) === ''), 'A long press should not select the message’s words.');
+  check(await backStep(), 'An open sheet should have a step in the history for Back to take.');
+  // A reaction from the sheet; the sheet goes, and its history step with it.
+  await sheet.locator('button[aria-label="React with 👍"]').tap();
+  await sheetGone();
+  await mine.locator('.reaction.mine[aria-label="👍 1"]').waitFor();
+  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+  // A tap on the reaction still does what it did: takes it back.
+  await mine.locator('.reaction.mine[aria-label="👍 1"]').tap();
+  await mine.locator('.reactions').waitFor({ state: 'detached' });
+  // Reply puts the message box in reply mode.
+  await hold();
+  await row('Reply').tap();
+  await sheetGone();
+  await phone.$('.cw-main .reply-bar', { hasText: text }).waitFor();
+  await phone.$('.cw-main .reply-bar button[aria-label="Cancel reply (Esc)"]').tap();
+  await phone.$('.cw-main .reply-bar').waitFor({ state: 'detached' });
+  // Copy text copies the words.
+  await hold();
+  await row('Copy text').tap();
+  await phone.toast('Copied.');
+  check((await lastCopy(phone)) === text, `Copy text should copy the message (got “${await lastCopy(phone)}”).`);
+  // Edit opens the edit box (Esc leaves it as it was).
+  await hold();
+  await row('Edit message').tap();
+  await mine.locator('.edit-input').waitFor();
+  await page.keyboard.press('Escape');
+  await mine.locator('.edit-input').waitFor({ state: 'detached' });
+
+  // Back cancels a reply, an edit and a voice message being recorded (they take the screen on a phone), as Esc and
+  // their own Cancel buttons do, and stays in Hearth.
+  const app = page.url();
+  const stayed = async (what) => check(page.url() === app && (await phone.$('#app:not([hidden])').count()) === 1, `Back ${what} should stay in Hearth (now at ${page.url()}).`);
+  const quietly = (what) => mine.evaluate((el) => document.activeElement === el && getComputedStyle(el).outlineStyle === 'none')
+    .then((ok) => check(ok, `${what}, focus should be back on the message, without a focus ring.`));
+  await hold();
+  await row('Reply').tap();
+  await sheetGone();
+  await phone.$('.cw-main .reply-bar', { hasText: text }).waitFor();
+  check(await backStep(), 'A reply being written should have a step in the history for Back to take.');
+  await page.goBack();
+  await phone.$('.cw-main .reply-bar').waitFor({ state: 'detached' });
+  await stayed('from a reply');
+  await hold();
+  await row('Edit message').tap();
+  await mine.locator('.edit-input').waitFor();
+  await page.keyboard.type(' (half done)');
+  check(await backStep(), 'A message being edited should have a step in the history for Back to take.');
+  await page.goBack();
+  await mine.locator('.edit-input').waitFor({ state: 'detached' });
+  await stayed('from an edit');
+  check((await mine.locator('.msg-text').textContent()).trim() === text, 'Back from an edit should leave the message as it was.');
+  await quietly('After Back from an edit');
+  const voiceBefore = await phone.$('#messages .vm').count();
+  await page.locator('.cw-main .composer .attach').tap();
+  await phone.menuItem('Voice message').tap();
+  await phone.$('.cw-main .rec-bar').waitFor();
+  check(await backStep(), 'A voice message being recorded should have a step in the history for Back to take.');
+  await page.goBack();
+  await phone.$('.cw-main .rec-bar').waitFor({ state: 'detached' });
+  await stayed('while recording');
+  await page.waitForTimeout(800);
+  check((await phone.$('#messages .vm').count()) === voiceBefore, 'Back while recording should send nothing.');
+  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+  // Focus goes back to the message from the sheet without a ring, also after typing in the message box (which the
+  // browser would otherwise pass on as keyboard focus).
+  await page.locator('#composer-input').tap();
+  await page.keyboard.type('half a thought');
+  await hold();
+  await page.goBack();
+  await sheetGone();
+  await quietly('After Back from the sheet');
+  await page.locator('#composer-input').fill('');
+
+  // It goes with Back (staying in Hearth), Esc, a tap above it and a swipe down.
+  await hold();
+  await page.goBack();
+  await sheetGone();
+  check(page.url() === app && (await phone.$('#app:not([hidden])').count()) === 1, `Back from the sheet should stay in Hearth (now at ${page.url()}).`);
+  await hold();
+  await page.keyboard.press('Escape');
+  await sheetGone();
+  check(!(await page.locator('.cw-main .reply-bar').count()), 'Esc on the sheet should only close the sheet.');
+  // (Just above the sheet, at the side: an announcement from the instance's owner may sit at the top in the middle.)
+  await hold();
+  await page.locator('.sheet-backdrop').tap({ position: { x: 12, y: Math.max(4, (await sheet.boundingBox()).y - 10) } });
+  await sheetGone();
+  await hold();
+  const top = await sheet.boundingBox();
+  await touch('touchStart', 195, top.y + 10);
+  for (let i = 1; i <= 8; i++) await touch('touchMove', 195, top.y + 10 + i * 50);
+  await touch('touchEnd');
+  await sheetGone();
+  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+
+  // The message box: +, the words, emoji and Send, 44px each; 16px text.
+  const shown = await page.evaluate(() => [...document.querySelectorAll('.cw-main .composer button')].filter((b) => b.getClientRects().length && getComputedStyle(b).display !== 'none')
+    .map((b) => ({ label: b.getAttribute('aria-label'), h: Math.round(b.getBoundingClientRect().height) })));
+  check(shown.map((b) => b.label).join(' | ') === 'Attach, GIFs, voice message and more | Emoji | Send message', `On a phone the message box should show only +, emoji and Send (got ${shown.map((b) => b.label).join(', ')}).`);
+  check(shown.every((b) => b.h >= 44), `The message box’s buttons should be 44px tall on a phone (got ${shown.map((b) => b.h).join(', ')}).`);
+  check(await page.$eval('#composer-input', (el) => parseFloat(getComputedStyle(el).fontSize) >= 16), 'The message box’s text should be at least 16px on a touch screen.');
+  // GIFs, voice messages and Send later are in the + menu.
+  const plus = page.locator('.cw-main .composer .attach');
+  await plus.tap();
+  for (const label of ['Upload a file', 'Create a poll', 'GIFs', 'Voice message', 'Send later']) await phone.menuItem(label).waitFor();
+  await phone.menuItem('GIFs').tap();
+  await page.locator('.popover .gif-picker').waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('.popover').waitFor({ state: 'detached' });
+  await page.locator('#composer-input').fill('Later, from my phone');
+  await plus.tap();
+  await phone.menuItem('Send later').tap();
+  await page.locator('.popover .menu-header', { hasText: 'Send later' }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('#composer-input').fill('');
+
+  // Delete from the sheet, after the usual question.
+  await hold();
+  await row('Delete message').tap();
+  await (await phone.dialog('Delete message?')).locator('.modal-foot .btn.danger').click();
+  await mine.waitFor({ state: 'detached' });
+  await phone.close();
+
+  // A desktop with a mouse: the hover toolbar, all six buttons in the message box, a + menu of two, a right-click menu.
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await bob.send('Typed at a desk with a mouse');
+  const desk = bob.message('Typed at a desk with a mouse').first();
+  await desk.hover();
+  await bob.page.waitForFunction(() => { const tb = [...document.querySelectorAll('#messages .msg')].find((m) => m.textContent.includes('Typed at a desk with a mouse')).querySelector('.msg-tools'); return getComputedStyle(tb).opacity === '1'; });
+  const tools = await desk.locator('.msg-tools button').evaluateAll((list) => list.map((b) => `${b.getAttribute('aria-label')} ${Math.round(b.getBoundingClientRect().width)}x${Math.round(b.getBoundingClientRect().height)}`));
+  check(tools.join(', ') === 'React with thumbs up 30x28, Add reaction 30x28, Reply 30x28, Reply in thread 30x28, More actions 30x28', `The desktop hover toolbar should be as it was (got ${tools.join(', ')}).`);
+  const boxBtns = await bob.page.evaluate(() => [...document.querySelectorAll('.cw-main .composer button')].filter((b) => b.getClientRects().length).map((b) => `${b.getAttribute('aria-label')} ${Math.round(b.getBoundingClientRect().width)}x${Math.round(b.getBoundingClientRect().height)}`));
+  check(boxBtns.join(', ') === 'Attach a file or create a poll 34x34, Emoji 34x34, Record a voice message 34x34, GIFs 34x34, Send later 34x34, Send message 34x34', `The desktop message box should be as it was (got ${boxBtns.join(', ')}).`);
+  check(await bob.page.$eval('#composer-input', (el) => getComputedStyle(el).fontSize === '15px'), 'The desktop message box’s text should stay 15px.');
+  check(await desk.evaluate((el) => getComputedStyle(el).userSelect !== 'none'), 'On a desktop, message words should stay selectable.');
+  await bob.$('.cw-main button[aria-label="Attach a file or create a poll"]').click();
+  await bob.menuItem('Create a poll').waitFor();
+  check((await bob.$('.popover .menu-item').count()) === 2, 'The desktop + menu should have just Upload a file and Create a poll.');
+  await bob.page.keyboard.press('Escape');
+  await desk.locator('.msg-text').click({ button: 'right' });
+  await bob.menuItem('Copy text').waitFor();
+  check(!(await bob.$('.sheet').count()) && !(await bob.page.evaluate(() => !!(history.state && history.state.hearthBack))), 'A right-click on a desktop should open the menu, not a sheet.');
+  await bob.page.keyboard.press('Escape');
+  await bob.messageAction('Typed at a desk with a mouse', 'Delete message');
+  await (await bob.dialog('Delete message?')).locator('.modal-foot .btn.danger').click();
+  await desk.waitFor({ state: 'detached' });
+}
+
+// ------------------------------------------------------------------ a video over the limit is made smaller
+// Phone videos are nearly always bigger than the server's limit (25 MB unless the owner changes it), and the server
+// can't shrink an encrypted file. So the app makes the video smaller first (video-shrink.js), then sends it. Here the
+// limit is 1 MB, and a video recorded in the page (a few MB, noisy, with sound) goes out small enough and plays.
+async function videoShrink(t) {
+  const { alice, bob } = t.people;
+  const setLimit = (fileMb) => bob.page.evaluate(async (mb) => (await fetch('/api/admin/limits', { method: 'PUT',
+    headers: { authorization: `Bearer ${localStorage.getItem('hearth.token')}`, 'content-type': 'application/json' }, body: JSON.stringify({ fileMb: mb }) })).status, fileMb);
+  // About 8 seconds of video that doesn't compress, as a phone's would be (a browser recording: no length in it); 8 so
+  // it's well over 1 MB even on a busy machine (fewer frames get drawn then).
+  const video = await alice.page.evaluate(async () => {
+    const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
+    const g = c.getContext('2d');
+    const ac = new AudioContext(); const osc = ac.createOscillator(); const to = ac.createMediaStreamDestination();
+    osc.connect(to); osc.start();
+    const stream = c.captureStream(30); to.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
+    const rec = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9,opus', videoBitsPerSecond: 9000000 });
+    const chunks = []; rec.ondataavailable = (e) => chunks.push(e.data);
+    let n = 0;
+    const draw = () => {
+      g.fillStyle = `hsl(${(n += 7) % 360} 70% 50%)`; g.fillRect(0, 0, 1280, 720);
+      for (let k = 0; k < 400; k++) { g.fillStyle = `rgb(${Math.random() * 255 | 0},${Math.random() * 255 | 0},${Math.random() * 255 | 0})`; g.fillRect(Math.random() * 1280, Math.random() * 720, 32, 32); }
+    };
+    const tick = setInterval(draw, 33);
+    rec.start(500);
+    await new Promise((r) => setTimeout(r, 8000));
+    const stopped = new Promise((r) => { rec.onstop = r; }); rec.stop(); await stopped;
+    clearInterval(tick); osc.stop(); ac.close();
+    const b = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    let bin = ''; for (let i = 0; i < b.length; i += 32768) bin += String.fromCharCode(...b.subarray(i, i + 32768));
+    return btoa(bin);
+  });
+  const buffer = Buffer.from(video, 'base64');
+  check(buffer.length > 1.5 * 1024 * 1024, `The test video should be well over 1 MB (it's ${buffer.length} bytes).`);
+  check(await setLimit(1) === 200, 'The owner should be able to set the limit to 1 MB.');
+  try {
+    await alice.railButton(SERVER);
+    await alice.openChannel('general');
+    await bob.railButton(SERVER);
+    await bob.openChannel('general');
+    await alice.page.waitForTimeout(500); // the new limit reaches the app live
+    await alice.$('.cw-main input[type=file]').setInputFiles([{ name: 'from-my-phone.webm', mimeType: 'video/webm', buffer }]);
+    await alice.$('.pending-files .pending .pending-note', { hasText: 'Made smaller when you send it' }).waitFor({ timeout: 20000 });
+    await alice.$('#composer-input').fill('A video from my phone');
+    // Watch what the phone would care about: the video starts playing in the tap (or it couldn't later, with sound),
+    // and no error turns up on the way (a toast can come and go before anyone looks).
+    await alice.page.evaluate(() => {
+      const w = window.__shrinkWatch = { plays: [], errors: [] };
+      const play = HTMLMediaElement.prototype.play;
+      w.restore = () => { HTMLMediaElement.prototype.play = play; w.seen.disconnect(); };
+      HTMLMediaElement.prototype.play = function (...a) {
+        if (this.classList.contains('shrink-source')) w.plays.push(!!(navigator.userActivation && navigator.userActivation.isActive));
+        return play.apply(this, a);
+      };
+      w.seen = new MutationObserver(() => document.querySelectorAll('#toasts .toast-error').forEach((x) => w.errors.includes(x.textContent) || w.errors.push(x.textContent)));
+      w.seen.observe(document.getElementById('toasts'), { childList: true, subtree: true });
+    });
+    await alice.$('.send-btn').click();
+    await alice.$('.upload-text', { hasText: 'Making the video smaller to send' }).waitFor();
+    const m = bob.message('A video from my phone').first();
+    await m.waitFor({ timeout: 60000 });
+    const stored = t.server.rows("SELECT size FROM user_files WHERE kind = 'attachment' ORDER BY created_at DESC LIMIT 1")[0].size;
+    check(stored < 1024 * 1024 + 64 * 1024, `What's stored should fit the 1 MB limit (it's ${stored} bytes).`);
+    await m.scrollIntoViewIfNeeded();
+    const played = await bob.page.waitForFunction(() => {
+      const msg = [...document.querySelectorAll('#messages .msg')].find((x) => x.textContent.includes('A video from my phone'));
+      const v = msg && msg.querySelector('video');
+      return v && v.readyState >= 1 && !v.error ? { w: v.videoWidth, h: v.videoHeight } : null;
+    }, null, { timeout: 30000 }).then((x) => x.jsonValue());
+    check(played.w > 0 && played.w <= 1280 && played.h > 0, `Bob should be able to play it (got ${JSON.stringify(played)}).`);
+    // It has a picture (not one colour) and sound: Bob plays a second of it (muted) and the browser decodes both.
+    const plays = await bob.page.evaluate(async () => {
+      const msg = [...document.querySelectorAll('#messages .msg')].find((x) => x.textContent.includes('A video from my phone'));
+      const v = msg.querySelector('video');
+      v.muted = true;
+      await v.play();
+      await new Promise((r) => setTimeout(r, 1500));
+      v.pause();
+      const c = document.createElement('canvas'); c.width = 64; c.height = 36;
+      const g = c.getContext('2d'); g.drawImage(v, 0, 0, 64, 36);
+      const px = g.getImageData(0, 0, 64, 36).data;
+      const colours = new Set();
+      for (let i = 0; i < px.length; i += 4) colours.add(`${px[i] >> 4},${px[i + 1] >> 4},${px[i + 2] >> 4}`);
+      return { frames: v.getVideoPlaybackQuality().totalVideoFrames, sound: v.webkitAudioDecodedByteCount, colours: colours.size };
+    });
+    check(plays.frames > 0 && plays.colours > 20, `Bob's video should have a picture (got ${JSON.stringify(plays)}).`);
+    check(plays.sound > 0, `Bob's video should have sound (got ${JSON.stringify(plays)}).`);
+    const watch = await alice.page.evaluate(() => ({ plays: window.__shrinkWatch.plays, errors: window.__shrinkWatch.errors }));
+    check(watch.plays.length >= 1 && watch.plays[0] === true, `The video should start playing in the tap that sends it (got ${JSON.stringify(watch.plays)}).`);
+    check(!watch.errors.length && !(await alice.$('.toast.toast-error').count()), `No error on the way (got ${JSON.stringify(watch.errors)}).`);
+  } finally {
+    await alice.page.evaluate(() => window.__shrinkWatch && window.__shrinkWatch.restore()).catch(() => {});
+    await setLimit(25);
+  }
+}
+
+// ------------------------------------------------------------------ the owner sends more than 10 files at once
+// The server's owner (bob) can put up to 100 files in one message; everyone else 10 (attachments.js maxFilesFor,
+// server/index.js maxFilesOf; test/owner-many-files.test.js has the server's side).
+async function ownerManyFiles(t) {
+  const { alice, bob } = t.people;
+  const notes = (n, who) => Array.from({ length: n }, (_, i) => ({ name: `${who}-note-${i + 1}.txt`, mimeType: 'text/plain', buffer: Buffer.from(`note ${i + 1} from ${who}\n`) }));
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  // 7 files, 4 pictures (640 px wide: each goes up with a thumbnail) and a second of video.
+  const pictures = (await bob.page.evaluate(() => Promise.all([0, 1, 2, 3].map((i) => {
+    const c = document.createElement('canvas'); c.width = 640; c.height = 480;
+    const g = c.getContext('2d'); g.fillStyle = `hsl(${i * 90} 70% 50%)`; g.fillRect(0, 0, 640, 480);
+    g.fillStyle = '#fff'; g.font = 'bold 200px sans-serif'; g.fillText(String(i + 1), 260, 320);
+    return new Promise((r) => c.toBlob((b) => b.arrayBuffer().then((a) => r(btoa(String.fromCharCode(...new Uint8Array(a))))), 'image/png'));
+  })))).map((b64, i) => ({ name: `bob-picture-${i + 1}.png`, mimeType: 'image/png', buffer: Buffer.from(b64, 'base64') }));
+  const clip = await bob.page.evaluate(async () => {
+    const c = document.createElement('canvas'); c.width = 320; c.height = 240;
+    const g = c.getContext('2d');
+    const rec = new MediaRecorder(c.captureStream(15), { mimeType: 'video/webm' });
+    const chunks = []; rec.ondataavailable = (e) => chunks.push(e.data);
+    let n = 0; const tick = setInterval(() => { g.fillStyle = `hsl(${(n += 20) % 360} 70% 50%)`; g.fillRect(0, 0, 320, 240); }, 60);
+    rec.start(200); await new Promise((r) => setTimeout(r, 1000));
+    const stopped = new Promise((r) => { rec.onstop = r; }); rec.stop(); await stopped; clearInterval(tick);
+    const b = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    return btoa(String.fromCharCode(...b));
+  });
+  await bob.$('.cw-main input[type=file]').setInputFiles([...notes(7, 'bob'), ...pictures, { name: 'bob-clip.webm', mimeType: 'video/webm', buffer: Buffer.from(clip, 'base64') }]);
+  await bob.$('.pending-files .pending', { hasText: 'bob-picture-4.png' }).waitFor();
+  check(await bob.$('.pending-files .pending').count() === 12, 'The owner should be able to attach 12 files.');
+  check(!(await bob.$('.toast.toast-error').count()), 'No “up to 10 files” for the owner.');
+  await bob.$('#composer-input').fill('Twelve files from the owner');
+  await bob.$('.send-btn').click();
+  const m = alice.message('Twelve files from the owner').first();
+  await m.waitFor({ timeout: 60000 });
+  await m.locator('.att-file', { hasText: 'bob-note-7.txt' }).waitFor({ timeout: 30000 });
+  check(await m.locator('.att-file').count() === 7 && await m.locator('.att-media.tile').count() === 4 && await m.locator('.att-video').count() === 1,
+    `Alice should see all 12: 7 files, 4 pictures and a video (got ${await m.locator('.att-file').count()}, ${await m.locator('.att-media.tile').count()} and ${await m.locator('.att-video').count()}).`);
+  // Among this many, a video waits for a click (small as it is), and loads when asked.
+  const play = m.locator('.att-media.click-to-load .att-play', { hasText: 'Play video' });
+  check(await play.count() === 1 && !(await m.locator('.att-video').getAttribute('src')), 'The video should wait for a click.');
+  // More than 10: the pictures are small square tiles in a grid, their thumbnails loaded.
+  check(await m.locator('.msg-files.many').count() === 1, 'A message with more than 10 files should use the grid.');
+  const tile = m.locator('.att-media.tile').first();
+  await tile.scrollIntoViewIfNeeded();
+  await m.locator('.att-media.tile:not(.locked) img.att-img').nth(3).waitFor({ timeout: 30000 });
+  const box = await tile.boundingBox();
+  check(box && box.width >= 80 && box.width <= 200 && Math.abs(box.width - box.height) <= 2, `A picture should be a small square tile (got ${JSON.stringify(box)}).`);
+  // Everyone else stops at 10, as before.
+  await alice.$('.cw-main input[type=file]').setInputFiles(notes(12, 'alice'));
+  await alice.toast('You can attach up to 10 files at once.');
+  check(await alice.$('.pending-files .pending').count() === 10, 'Alice should get 10 of her 12 files in the box.');
+  for (let i = 0; i < 10; i++) await alice.$('.pending-files .pending-x').first().click();
+  await alice.$('.pending-files').waitFor({ state: 'detached' });
+}
+
+// ------------------------------------------------------------------ update notes: only the owner publishes them
+// Hearth comes with no update notes; the owner (bob) writes one in Admin → Owner and publishes it. Apps that are open
+// show it in "What's new" (as plain text) until it's closed; the owner's own don't (server/updatenotes.js, whatsnew.js).
+async function updateNotes(t) {
+  const { alice, bob } = t.people;
+  await bob.railButton('Admin');
+  await bob.$('.admin-tabs .admin-tab', { hasText: exact('Owner') }).click();
+  await bob.$('.admin-body input[placeholder="e.g. New this week"]').fill('New this week');
+  await bob.$('.admin-body textarea[placeholder="One line for each thing that\u2019s new"]').fill('Calls reconnect by themselves.\n<b>Not bold</b>');
+  await bob.$('.admin-body button', { hasText: exact('Publish') }).click();
+  const ok = await bob.dialog('Publish this note?');
+  await ok.locator('.modal-foot .btn.primary').click();
+  await bob.toast('Published.');
+  await bob.$('.admin-body .update-notes .adm-row', { hasText: 'New this week' }).waitFor();
+  // Everyone else's open app shows it now; dismissed, it doesn't come back.
+  const box = alice.$('.modal.whatsnew');
+  await box.waitFor({ timeout: 40000 }); // (at once, or once she isn't in the middle of something)
+  check(await box.locator('h3', { hasText: 'New this week' }).count() === 1 && await box.locator('li', { hasText: '<b>Not bold</b>' }).count() === 1 && !(await box.locator('li b').count()),
+    'The note should show as plain text.');
+  for (const p of Object.values(t.people)) {
+    if (p === bob || p.page.isClosed()) continue; // (some people's windows were closed by earlier flows)
+    const m = p.page.locator('.modal.whatsnew');
+    if (await m.count()) { await m.locator('.modal-foot button', { hasText: 'Nice' }).click(); await m.waitFor({ state: 'detached' }); }
+  }
+  check(!(await bob.$('.modal.whatsnew').count()), 'The owner who published it shouldn\u2019t get it.');
+  await bob.page.reload();
+  await bob.waitApp();
+  await alice.page.reload();
+  await alice.waitApp();
+  await alice.page.waitForTimeout(1500);
+  check(!(await alice.$('.modal.whatsnew').count()), 'A note shows once.');
+  check(!(await bob.$('.modal.whatsnew').count()), 'The owner doesn\u2019t get their own notes on other devices either.');
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+}
+
+// ------------------------------------------------------------------ spelling: corrected as people type (computers)
+// Settings → Chat → Spelling (public/js/spelling.js): a finished word with a common typo is fixed, Backspace or Ctrl+Z
+// right after puts it back (and leaves that word alone from then on), code isn't touched, and the last word is fixed
+// on send.
+async function spelling(t) {
+  const { alice } = t.people;
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  const box = alice.$('#composer-input');
+  check(await box.getAttribute('spellcheck') === 'true', 'The message box should be spell-checked.');
+  await box.click();
+  await box.fill('');
+  await alice.page.keyboard.type('teh ');
+  check(await box.inputValue() === 'the ', `"teh " should become "the " (got ${JSON.stringify(await box.inputValue())}).`);
+  await alice.page.keyboard.press('Backspace');
+  check(await box.inputValue() === 'teh ', `Backspace right after should put "teh" back (got ${JSON.stringify(await box.inputValue())}).`);
+  await alice.page.keyboard.type('and `recieve` recieve dont');
+  check(await box.inputValue() === 'teh and `recieve` receive dont', `Fixed outside code only (got ${JSON.stringify(await box.inputValue())}).`);
+  await alice.page.keyboard.press('Enter');
+  const sent = alice.message("receive don't").first(); // (the code shows without its backticks)
+  await sent.waitFor();
+  check((await sent.locator('.msg-text').textContent()).includes("teh and recieve receive don't"), 'Sent as corrected.');
+  // "teh" was put back: it stays from now on, on this device.
+  await box.click();
+  await alice.page.keyboard.type('teh ');
+  check(await box.inputValue() === 'teh ', 'A word put back is left alone.');
+  // Ctrl+Z right after a fix puts it back too, with the caret where it was; nothing in an inline code span still open.
+  await alice.page.keyboard.type('recieve ');
+  check(await box.inputValue() === 'teh receive ', `"recieve " should be fixed (got ${JSON.stringify(await box.inputValue())}).`);
+  await alice.page.keyboard.press('Control+z');
+  await alice.page.keyboard.type('`x dont ');
+  check(await box.inputValue() === 'teh recieve `x dont ', `Ctrl+Z puts it back, and code is left (got ${JSON.stringify(await box.inputValue())}).`);
+  await box.fill('');
+  await alice.page.evaluate(() => localStorage.removeItem('hearth.spellKept'));
+}
+
+// ------------------------------------------------------------------ the owner's password reset link
+// For someone who can't sign in and has no email to reset it with (droid has none): the owner (bob, since "instance:
+// new owner…") makes a one-time link in Admin → Users, with his password. Droid opens it on her own device and chooses
+// her own new password; her other devices are signed out. The new keys it made can't be verified by bob: someone
+// else has to (server/accounts.js, test/owner-reset-link.test.js).
+async function ownerResetLink(t) {
+  const { bob } = t.people;
+  await bob.noModals();
+  const openDroid = async () => {
+    await bob.railButton('Admin');
+    await bob.$('.admin-tabs .admin-tab', { hasText: exact('Users') }).click();
+    await bob.$('.admin-body input.search-input').fill('droid');
+    await bob.$('.admin-body .adm-row .adm-user', { hasText: '@droid' }).click();
+    return bob.dialog('(@droid)');
+  };
+  let m = await openDroid();
+  await m.locator('button.chip', { hasText: 'Make a password reset link' }).click();
+  await bob.confirmPassword('Make a password reset link for droid?', t.pw.bob);
+  const shown = await bob.dialog('Reset link for droid');
+  const link = await shown.locator('input[aria-label="Reset link"]').inputValue();
+  check(/\/#reset=[\w-]{20,}$/.test(link), `The dialog should show the link (got ${link}).`);
+  await shown.locator('.modal-foot button', { hasText: 'Done' }).click();
+  m = await bob.dialog('(@droid)');
+  await m.locator('.field-hint', { hasText: 'A reset link you made works until' }).waitFor();
+  await bob.page.keyboard.press('Escape');
+  await bob.noModals();
+
+  // Droid, on a device of hers: the link, her own new password, and she's in.
+  const droid = await t.open('droid');
+  await droid.$('#login-form').waitFor(); // the app listens for a #reset= link by then
+  await droid.page.goto(link);
+  const fresh = newPassword();
+  const form = await droid.dialog('Choose a new password for droid');
+  await form.locator('.field', { hasText: exact('New password') }).locator('input').fill(fresh);
+  await form.locator('.field', { hasText: 'Confirm new password' }).locator('input').fill(fresh);
+  await form.locator('.modal-foot .btn.primary').click();
+  await droid.toast('Password reset with new keys');
+  t.pw.droid = fresh;
+  await droid.waitApp();
+
+  // Bob can't vouch for the keys his link made: another admin or a member who knew her has to.
+  m = await openDroid();
+  await m.locator('.field-hint', { hasText: 'You made the reset link these keys came from' }).waitFor();
+  check(!(await m.locator('button.chip', { hasText: 'Mark as verified' }).count()), 'The owner who made the link shouldn\u2019t be offered to verify the keys it made.');
+  await bob.page.keyboard.press('Escape');
+  await bob.noModals();
+  // And it's all in the audit log.
+  await bob.$('.admin-tabs .admin-tab', { hasText: 'Audit log' }).click();
+  await bob.$('.admin-body', { hasText: 'a one-time reset link for 24 hours, made by the owner' }).waitFor();
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await droid.close();
+}
+
+// ------------------------------------------------------------------ an update puts itself in place
+// An update reaches an open page as a new service worker. There's nothing to click: the page reloads into the new
+// version by itself, keeping its place and a message being typed, but never while something is under way (here a
+// dialog is open): then it waits until that's done. Out of sight (simulated here) it doesn't wait for the person to
+// leave it alone first (test/auto-update.test.js has the timing).
+async function updateBar(t) {
+  const { alice } = t.people;
+  const page = alice.page;
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await page.waitForFunction(() => navigator.serviceWorker.controller);
+  const swVersion = async () => (await (await fetch(`${t.server.base}/sw.js`)).text()).match(/VERSION = '(\w+)'/)[1];
+  const cacheNames = () => page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith('hearth-')).sort());
+  const before = await swVersion();
+  const draft = 'Half a message, typed before the update';
+  await alice.$('#composer-input').fill(draft);
+  // A dialog is open with something typed in it: a reload would lose that.
+  await alice.railButton('Add a server');
+  await page.locator('.modal .choice', { hasText: 'Create my own' }).click();
+  const dialog = await alice.dialog('Create a server');
+  await dialog.locator('input.input').fill('Half a server name');
+  // (Not in the field any more: it's the open dialog itself that holds the update.)
+  await dialog.locator('input.input').evaluate((el) => el.blur());
+
+  await t.server.restart({ newVersion: true });
+  const after = await swVersion();
+  check(after !== before, `The restarted server should be a new version (${before} both times).`);
+  await alice.waitApp();
+  await page.evaluate(() => { window.__beforeReload = true; });
+  // The browser checks for a new version every so often; here, now. It takes over by itself.
+  await page.evaluate(() => navigator.serviceWorker.getRegistration().then((r) => r.update()));
+  for (let i = 0; JSON.stringify(await cacheNames()) !== JSON.stringify([`hearth-${after}`]); i++) {
+    check(i < 100, `The new version should take over by itself (caches: ${JSON.stringify(await cacheNames())}).`);
+    await page.waitForTimeout(100);
+  }
+  // Hearth goes out of sight, but the dialog is still open: no reload, and nothing to click either.
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { value: true, configurable: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.waitForTimeout(7000);
+  check(await page.evaluate(() => window.__beforeReload === true), 'It should never reload while a dialog is open.');
+  check(!(await page.locator('.update-bar').count()), 'There should be no bar to click.');
+  // Once the dialog is closed it reloads into the new version by itself (a What's new window doesn't hold updates
+  // up: its notes count as seen only once it's closed, so after the reload it comes back).
+  await Promise.all([page.waitForEvent('load', { timeout: 15000 }), page.keyboard.press('Escape')]);
+  await alice.waitApp();
+  check(await page.evaluate(() => !window.__beforeReload), 'It should have reloaded by itself.');
+  check(JSON.stringify(await cacheNames()) === JSON.stringify([`hearth-${after}`]) && await page.evaluate(() => !!navigator.serviceWorker.controller), 'It should run the new version.');
+  await alice.$('#composer-input[placeholder="Message #general"]').waitFor();
+  check(await alice.$('#composer-input').inputValue() === draft, 'The message being typed should still be there.');
+  check(!(await page.locator('.update-bar, #update-overlay').count()), 'Nothing about the update should be left on screen.');
+  await alice.$('#composer-input').fill('');
+}
+
+// ------------------------------------------------------------------ photos & videos panel
+// Every picture and video sent in a conversation, newest first, in a side panel (public/js/media-panel.js; the
+// server's GET /api/dms/:id/media and /api/channels/:id/media hand over the messages with files, and the app keeps the
+// pictures and videos): a header button in DMs and group chats, the ⋯ menu everywhere (the way in on a phone). All,
+// Photos and Videos; the viewer goes left and right through the panel's list, videos too, and jumps to the message;
+// a deleted message's tiles go and a new one's come on top as it happens.
+async function mediaPanel(t) {
+  const { alice, bob } = t.people;
+  const pic = (name, w, h) => ({ name, mimeType: 'image/png', buffer: makePng(w, h) });
+  const tiles = (p) => p.page.$$eval('#members .mp-tile .mp-open', (els) => els.map((e) => e.getAttribute('aria-label')));
+  const tileCount = (p, n) => p.page.waitForFunction((k) => document.querySelectorAll('#members .mp-tile').length === k, n);
+  const firstTile = (p, label) => p.page.waitForFunction((l) => { const x = document.querySelector('#members .mp-tile .mp-open'); return !!x && x.getAttribute('aria-label') === l; }, label);
+  // Is the message with these words in full view in the chat (as a jump leaves it)?
+  const shown = (words) => {
+    const el = [...document.querySelectorAll('#messages .msg[data-mid]')].find((m) => m.textContent.includes(words));
+    if (!el) return false;
+    const r = el.getBoundingClientRect(); const box = document.querySelector('#messages').getBoundingClientRect();
+    return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+  };
+  const inView = (p, text) => p.page.evaluate(shown, text);
+  const jumpedTo = (p, text) => p.page.waitForFunction(shown, text);
+
+  // ---- a DM: two pictures (and a PDF, which isn't shown), a video, one more picture, then enough to scroll them away.
+  await alice.railButton('Direct messages');
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  const clip = await alice.page.evaluate(async () => {
+    const c = document.createElement('canvas'); c.width = 160; c.height = 120;
+    const g = c.getContext('2d');
+    const rec = new MediaRecorder(c.captureStream(15), { mimeType: 'video/webm' });
+    const chunks = []; rec.ondataavailable = (e) => chunks.push(e.data);
+    let n = 0; const tick = setInterval(() => { g.fillStyle = `hsl(${(n += 20) % 360} 70% 50%)`; g.fillRect(0, 0, 160, 120); }, 60);
+    rec.start(200); await new Promise((r) => setTimeout(r, 800));
+    const stopped = new Promise((r) => { rec.onstop = r; }); rec.stop(); await stopped; clearInterval(tick);
+    const b = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    return btoa(String.fromCharCode(...b));
+  });
+  const sendWith = async (files, text) => {
+    await alice.$('.cw-main input[type=file]').setInputFiles(files);
+    await alice.send(text);
+    await bob.message(text).first().waitFor({ timeout: 60000 });
+  };
+  await sendWith([pic('dm-apple-1.png', 40, 30), pic('dm-apple-2.png', 30, 40), { name: 'dm-notes.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 notes') }], 'Photos from the trip: apple');
+  await sendWith([{ name: 'dm-clip.webm', mimeType: 'video/webm', buffer: Buffer.from(clip, 'base64') }], 'A short clip: banana');
+  await sendWith([pic('dm-cherry.png', 50, 20)], 'One more photo: cherry');
+  for (let i = 1; i <= 12; i++) {
+    // (Several lines each: send() would look for the words with their line breaks, which the message draws as breaks.)
+    await alice.$('#composer-input').fill(`Filler ${i}:\nso the photos\nscroll out\nof view`);
+    await alice.$('#composer-input').press('Enter');
+    await alice.message(`Filler ${i}:`).first().waitFor();
+  }
+  await bob.message('Filler 12:').first().waitFor();
+  check(!(await inView(bob, 'Photos from the trip: apple')), 'The first photos should have scrolled out of view.');
+
+  // The header button opens it beside the chat: newest first, each message's files in the order sent. secret.png (the
+  // disappearing flow's) is gone, and the PDF isn't a picture.
+  await bob.$('#main-head button[aria-label="Photos & videos"]').click();
+  await bob.$('#members .mp-tile').first().waitFor();
+  await tileCount(bob, 4);
+  const dmTiles = await tiles(bob);
+  check(JSON.stringify(dmTiles) === JSON.stringify(['Open dm-cherry.png', 'Open dm-clip.webm (video)', 'Open dm-apple-1.png', 'Open dm-apple-2.png']),
+    `The panel should list the DM’s pictures and video, newest first (got ${dmTiles.join(', ')}).`);
+  check((await bob.$('#members .panel-head h2').textContent()) === 'Photos & videos', 'The panel should be called Photos & videos.');
+  const pressed = bob.$('#main-head button[aria-label="Hide photos & videos"]');
+  check((await pressed.count()) === 1 && (await pressed.getAttribute('aria-pressed')) === 'true', 'Its header button should be pressed and say it hides them.');
+  const month = await bob.page.evaluate(() => new Date().toLocaleDateString([], { month: 'long', year: 'numeric' }));
+  check((await bob.$('#members .mp-month-name').first().textContent()) === month, `The tiles should sit under “${month}”.`);
+  await bob.page.waitForFunction(() => [...document.querySelectorAll('#members .mp-tile.img img')].length === 3
+    && [...document.querySelectorAll('#members .mp-tile.img img')].every((i) => i.complete && i.naturalWidth > 0 && i.src.startsWith('blob:')));
+  const video = bob.$('#members .mp-tile.video');
+  check(!(await video.locator('video').count()) && /\d+(\.\d+)? (B|KB)/.test(await video.textContent()), 'A video’s tile should show its size and download nothing.');
+  const box = await bob.$('#members').boundingBox();
+  check(box && box.width >= 380, `The panel should be as wide as a thread (got ${box && box.width}).`);
+
+  // All, Photos, Videos.
+  await bob.$('#members .seg-btn', { hasText: exact('Videos') }).click();
+  check(JSON.stringify(await tiles(bob)) === JSON.stringify(['Open dm-clip.webm (video)']), 'Videos should leave only the video.');
+  await bob.$('#members .seg-btn', { hasText: exact('Photos') }).click();
+  check(JSON.stringify(await tiles(bob)) === JSON.stringify(['Open dm-cherry.png', 'Open dm-apple-1.png', 'Open dm-apple-2.png']), 'Photos should leave only the pictures.');
+  await bob.$('#members .seg-btn', { hasText: exact('All') }).click();
+  await tileCount(bob, 4);
+
+  // The viewer from a tile: left and right go through the panel's list, the video too (it plays in the viewer).
+  await bob.$('#members .mp-open[aria-label="Open dm-apple-1.png"]').click();
+  await bob.$('.viewer').waitFor();
+  const at = async () => [await bob.$('.viewer-count').textContent(), await bob.$('.viewer-name').textContent()].join(' ');
+  check(await at() === '3 / 4 dm-apple-1.png', `The viewer should open on the tile clicked (got ${await at()}).`);
+  await bob.page.keyboard.press('ArrowRight');
+  check(await at() === '4 / 4 dm-apple-2.png', `Right should go to the next one (got ${await at()}).`);
+  await bob.page.keyboard.press('ArrowLeft');
+  await bob.page.keyboard.press('ArrowLeft');
+  check(await at() === '2 / 4 dm-clip.webm', `Left should reach the video (got ${await at()}).`);
+  await bob.page.waitForFunction(() => { const v = document.querySelector('.viewer-video'); return !!v && !v.hidden && v.src.startsWith('blob:'); }, null, { timeout: 30000 });
+  check(await bob.$('.viewer-img').evaluate((i) => i.hidden), 'A video should play in place of the picture.');
+  check(!(await bob.$('.viewer-bar button[aria-label="Zoom in (+)"]').isVisible()), 'A video doesn’t zoom.');
+  await bob.page.keyboard.press('ArrowLeft');
+  check(await at() === '1 / 4 dm-cherry.png', `Left again should reach the newest (got ${await at()}).`);
+  check(await bob.page.evaluate(() => !document.querySelector('.viewer-video').getAttribute('src')), 'Leaving the video should stop it.');
+  await bob.page.keyboard.press('ArrowLeft');
+  check(await at() === '4 / 4 dm-apple-2.png', `Left from the first should wrap to the last (got ${await at()}).`);
+  await bob.page.keyboard.press('ArrowLeft');
+  // Jump to message: the viewer closes and the chat goes to it; beside the chat, the panel stays.
+  await bob.$('.viewer-bar button', { hasText: 'Jump to message' }).click();
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  await jumpedTo(bob, 'Photos from the trip: apple');
+  check(await bob.$('#members .mp-tile').count() === 4, 'On a desktop the panel should stay open after a jump.');
+  // Esc closes the viewer only, and the tile gets the focus back.
+  await bob.$('#members .mp-open[aria-label="Open dm-cherry.png"]').click();
+  await bob.$('.viewer').waitFor();
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  check(await bob.page.evaluate(() => (document.activeElement && document.activeElement.getAttribute('aria-label')) === 'Open dm-cherry.png'), 'Focus should go back to the tile.');
+
+  // A deleted message's tiles go, and a new one's come on top, as it happens.
+  await alice.messageAction('One more photo: cherry', 'Delete message');
+  await alice.modal('Delete message?').locator('.modal-foot .btn.danger').click();
+  await bob.message('One more photo: cherry').waitFor({ state: 'detached' });
+  await tileCount(bob, 3);
+  check((await tiles(bob))[0] === 'Open dm-clip.webm (video)', 'The deleted picture’s tile should go.');
+  await sendWith([pic('dm-date.png', 24, 24)], 'Another photo: date');
+  await firstTile(bob, 'Open dm-date.png');
+
+  // ---- a group chat: going there closes the DM's panel; its own lists the group's, live.
+  await alice.dmRow('Fruit Club').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  await alice.$('.cw-main input[type=file]').setInputFiles([pic('club-fig.png', 60, 40)]);
+  await alice.send('Group photo: fig');
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  await bob.message('Group photo: fig').first().waitFor({ timeout: 60000 });
+  check(!(await bob.$('#members .mp-tile').count()), 'Another conversation should close the panel.');
+  await bob.$('#main-head button[aria-label="Photos & videos"]').click();
+  await firstTile(bob, 'Open club-fig.png');
+  await alice.$('.cw-main input[type=file]').setInputFiles([pic('club-grape.png', 40, 60)]);
+  await alice.send('Group photo: grape');
+  await firstTile(bob, 'Open club-grape.png');
+  check((await tiles(bob))[1] === 'Open club-fig.png', 'The older group photo should come after the new one.');
+  await bob.$('#members button[aria-label="Close panel"]').click();
+  await bob.$('#members .mp-tile').first().waitFor({ state: 'detached' });
+
+  // ---- a server channel: the ⋯ menu (no header button there). The owner's twelve files are in it too, and the
+  // quokka from discordHabits under its Spoiler cover until it's clicked.
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await alice.$('.cw-main input[type=file]').setInputFiles([pic('general-kiwi.png', 64, 48)]);
+  await alice.send('Channel photo: kiwi');
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await bob.message('Channel photo: kiwi').first().waitFor({ timeout: 60000 });
+  check(!(await bob.$('#main-head button[aria-label="Photos & videos"]').count()), 'A server channel should have no header button for it (the ⋯ menu has it).');
+  await bob.$('#main-head button[aria-label="More"]').click();
+  await bob.menuItem('Photos & videos').click();
+  await firstTile(bob, 'Open general-kiwi.png');
+  await bob.page.waitForFunction(() => {
+    const l = [...document.querySelectorAll('#members .mp-tile .mp-open')].map((e) => e.getAttribute('aria-label'));
+    return ['Open bob-picture-1.png', 'Open bob-picture-4.png', 'Open bob-clip.webm (video)'].every((x) => l.includes(x));
+  }, null, { timeout: 30000 });
+  const owner = await tiles(bob);
+  check(owner.indexOf('Open bob-picture-1.png') < owner.indexOf('Open bob-picture-4.png') && owner.indexOf('Open bob-picture-4.png') < owner.indexOf('Open bob-clip.webm (video)'),
+    `One message’s pictures and video should keep the order they were sent in (got ${owner.join(', ')}).`);
+  const quokka = bob.$('#members .mp-tile.spoiler', { has: bob.page.locator('.mp-open[aria-label="Open A quokka smiling at the camera"]') });
+  await quokka.waitFor({ timeout: 30000 });
+  await quokka.locator('.mp-cover').click();
+  check(await quokka.evaluate((el) => el.classList.contains('revealed')) && !(await bob.$('.viewer').count()), 'The first click on a spoiler should only uncover it.');
+  await bob.$('#members button[aria-label="Close panel"]').click();
+  await bob.$('#members .mp-tile').first().waitFor({ state: 'detached' });
+
+  // ---- a phone: the header is full, so the way in is the ⋯ menu; the panel covers the chat; Jump to message closes
+  // the viewer and the panel; Back closes the panel too.
+  const phone = await t.open('bob-photos', PHONE);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  const openNav = async () => {
+    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
+  };
+  await openNav();
+  await page.locator('#rail button[aria-label="Direct messages"]').tap();
+  await openNav();
+  await phone.dmRow('Alice Wonder').tap();
+  await page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  check(!(await page.locator('#main-head button[aria-label="Photos & videos"]').isVisible()), 'A phone’s header should have no button for it.');
+  await page.locator('#main-head button[aria-label="More"]').tap();
+  await phone.menuItem('Photos & videos').tap();
+  await tileCount(phone, 4);
+  // (Once it has slid in.)
+  await page.waitForFunction(() => { const r = document.querySelector('#members').getBoundingClientRect(); return r.left <= 1 && r.width >= innerWidth - 1; }, null, { timeout: 5000 })
+    .catch(() => check(false, 'On a phone the panel should cover the chat.'));
+  await page.locator('#members .mp-open[aria-label="Open dm-apple-2.png"]').tap();
+  await phone.$('.viewer').waitFor();
+  await page.locator('.viewer-bar button[aria-label="More"]').tap();
+  await phone.menuItem('Jump to message').tap();
+  await phone.$('.viewer').waitFor({ state: 'detached' });
+  await phone.$('#members .mp-tile').first().waitFor({ state: 'detached' });
+  await jumpedTo(phone, 'Photos from the trip: apple');
+  await page.locator('#main-head button[aria-label="More"]').tap();
+  await phone.menuItem('Photos & videos').tap();
+  await phone.$('#members .mp-tile').first().waitFor();
+  await page.goBack();
+  await phone.$('#members .mp-tile').first().waitFor({ state: 'detached' });
+  await phone.close();
+  delete t.people['bob-photos'];
+}
+
+// ------------------------------------------------------------------ photo comments and tags
+// Alice sends three photos in one message, in the DM with Bob and in #general. Bob comments on one of them from the
+// viewer: it goes as an ordinary encrypted reply that names that photo inside it (the server is only told its index,
+// to count), and Alice sees it as a reply quoting that very photo, with its thumbnail, and the photo's count in the
+// chat. Tags go on single photos, sealed on the device (the server never sees the words); the box suggests the
+// labels already used there; whoever added one can remove it, and someone who isn't allowed has no × and is refused
+// by the server (in Alice's group chat, where Bob has no say over other people's messages). Last, the Photos & videos
+// panel filtered by a tag shows just the photos carrying it.
+// (The side panel is photo-notes.js inside the viewer's place for it; the Photos & videos panel is media-panel.js.)
+async function photoNotes(t) {
+  const { alice, bob } = t.people;
+  const shells = [makePng(240, 180), makePng(180, 240), makePng(200, 200)];
+  const sizes = [[240, 180], [180, 240], [200, 200]];
+  const token = (p) => p.page.evaluate(() => localStorage.getItem('hearth.token'));
+  const status = async (p, method, url) => p.page.evaluate(async ({ method, url, tok }) => (await fetch(url, { method, headers: { Authorization: 'Bearer ' + tok } })).status,
+    { method, url, tok: await token(p) });
+  // A message's pictures, decrypted and drawn (how many).
+  const drawn = (p, mid, n) => p.page.waitForFunction(({ mid, n }) => [...document.querySelectorAll(`#messages [data-mid="${mid}"] .att-img`)]
+    .filter((i) => i.complete && i.naturalWidth > 0).length === n, { mid, n });
+  // The viewer, opened at the comment box from a photo's "Comment on this photo" button.
+  const commentOn = async (p, msg, i) => {
+    const tile = msg.locator('.att-media').nth(i);
+    await tile.hover();
+    await tile.locator('.pn-comment-btn').click();
+    const side = p.$('.viewer .pn-side');
+    await side.waitFor();
+    await p.page.waitForFunction(([w, h]) => { const img = document.querySelector('.viewer .viewer-img'); return img && img.naturalWidth === w && img.naturalHeight === h; }, sizes[i]);
+    return side;
+  };
+  const closeViewer = async (p) => {
+    await p.$('.viewer-bar button[aria-label="Close (Esc)"]').click();
+    await p.page.waitForSelector('.viewer', { state: 'detached' });
+  };
+  // The quote of a comment shows that very photo: the same decrypted picture as its tile, at its own size.
+  const quotes = (p, rid, pid, i) => p.page.waitForFunction(({ rid, pid, i, w, h }) => {
+    const q = document.querySelector(`#messages [data-mid="${rid}"] .msg-reply.pn-reply .pn-quote-img`);
+    const tile = document.querySelectorAll(`#messages [data-mid="${pid}"] .att-img`)[i];
+    return !!q && !!tile && q.complete && q.naturalWidth === w && q.naturalHeight === h && q.getAttribute('src') === tile.getAttribute('src');
+  }, { rid, pid, i, w: sizes[i][0], h: sizes[i][1] });
+
+  // ---- In the DM.
+  await alice.railButton('Direct messages');
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await alice.$('.cw-main input[type=file]').setInputFiles(shells.map((buffer, i) => ({ name: `shell-${i + 1}.png`, mimeType: 'image/png', buffer })));
+  await alice.send('Three shells from the beach: cockle');
+  const onBob = bob.message('Three shells from the beach: cockle').first();
+  await onBob.waitFor();
+  const mid = await onBob.getAttribute('data-mid');
+  await drawn(bob, mid, 3);
+  check(await onBob.locator('.pn-comment-btn').count() === 3, 'Each of several photos should have its own “Comment on this photo” button.');
+  check(!(await onBob.locator('.pn-badges').count()), 'Nothing to count yet.');
+
+  // Bob comments on photo 2 from the viewer.
+  let side = await commentOn(bob, onBob, 1);
+  const posted = bob.page.waitForRequest((r) => /\/api\/dms\/\w+\/messages$/.test(r.url()) && r.method() === 'POST');
+  await side.locator('textarea.pn-box').fill('The middle one is the best: whelk');
+  await side.locator('textarea.pn-box').press('Enter');
+  const body = (await posted).postDataJSON();
+  check(body.replyTo === mid && body.replyFile === 1, `A comment should go as a reply naming photo 2 (got ${JSON.stringify({ replyTo: body.replyTo, replyFile: body.replyFile })}).`);
+  check(!JSON.stringify(body).includes('whelk'), 'The comment’s words should only go encrypted.');
+  await side.locator('.pn-c', { hasText: 'The middle one is the best: whelk' }).waitFor();
+  await closeViewer(bob);
+  await bob.message('The middle one is the best: whelk').waitFor(); // in the chat too, as a reply
+
+  // Alice: a reply quoting that photo, its thumbnail, and the count on photo 2 only.
+  const reply = alice.message('The middle one is the best: whelk').first();
+  await reply.waitFor();
+  const rid = await reply.getAttribute('data-mid');
+  await reply.locator('.msg-reply.pn-reply', { hasText: 'Alice Wonder’s photo' }).waitFor();
+  await quotes(alice, rid, mid, 1);
+  const onAlice = alice.message('Three shells from the beach: cockle').first();
+  await onAlice.locator('.att-media').nth(1).locator('.pn-badges[aria-label="1 comment"]').waitFor();
+  check(!(await onAlice.locator('.att-media').nth(0).locator('.pn-badges').count()) && !(await onAlice.locator('.att-media').nth(2).locator('.pn-badges').count()),
+    'Only photo 2 should count a comment.');
+  // Clicking the quote opens that photo (its message is on screen), with its comments beside it.
+  await reply.locator('.msg-reply.pn-reply').click();
+  await alice.page.waitForFunction(([w, h]) => { const img = document.querySelector('.viewer .viewer-img'); return img && img.naturalWidth === w && img.naturalHeight === h; }, sizes[1]);
+  side = alice.$('.viewer .pn-side');
+  await side.locator('.pn-c', { hasText: 'The middle one is the best: whelk' }).waitFor();
+
+  // Alice tags photo 2. The label is sealed on her device, bound to that photo.
+  const aliceTag = alice.page.waitForResponse((r) => /\/api\/dm-messages\/\w+\/tags$/.test(r.url()) && r.request().method() === 'POST');
+  await side.locator('.pn-tag-in').fill('Beach');
+  await side.locator('.pn-tag-in').press('Enter');
+  const aliceRes = await aliceTag;
+  const sent = aliceRes.request().postDataJSON();
+  check(/^td1:/.test(sent.ciphertext) && sent.fileIdx === 1 && !JSON.stringify(sent).includes('Beach'), 'A DM tag should go sealed (td1), naming only the photo’s index.');
+  check(aliceRes.status() === 200, `Adding a tag should work (got ${aliceRes.status()}).`);
+  const beachId = (await aliceRes.json()).tag.id;
+  await side.locator('.pn-chip', { hasText: '#Beach' }).locator('.chip-x').waitFor(); // her own: she can remove it
+  await closeViewer(alice);
+  await onAlice.locator('.att-media').nth(1).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
+  await onBob.locator('.att-media').nth(1).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
+
+  // Bob tags photo 1 with a new label and, from the suggestions, with the one Alice made; then takes his own back.
+  side = await commentOn(bob, onBob, 0);
+  await side.locator('.pn-tag-in').fill('Sunset');
+  await side.locator('.pn-tag-in').press('Enter');
+  await side.locator('.pn-chip', { hasText: '#Sunset' }).waitFor();
+  await side.locator('.pn-tag-in').fill('bea');
+  await side.locator('.pn-suggestion', { hasText: '#Beach' }).click();
+  await side.locator('.pn-chip', { hasText: '#Beach' }).waitFor();
+  check(!(await side.locator('.pn-suggestion', { hasText: '#Beach' }).count()), 'A label the photo has isn’t suggested again.');
+  await side.locator('.pn-chip', { hasText: '#Sunset' }).locator('.chip-x').click();
+  await side.locator('.pn-chip', { hasText: '#Sunset' }).waitFor({ state: 'detached' });
+  await onAlice.locator('.att-media').nth(0).locator('.pn-badges[aria-label="1 tag"]').waitFor();
+  // On photo 2, Alice's tag on Alice's photo: Bob has no ×, and the server refuses him anyway.
+  await closeViewer(bob);
+  side = await commentOn(bob, onBob, 1);
+  await side.locator('.pn-chip', { hasText: '#Beach' }).waitFor();
+  check(!(await side.locator('.pn-chip', { hasText: '#Beach' }).locator('.chip-x').count()), 'Someone who neither added a tag nor sent the photo can’t remove it.');
+  const refused = await status(bob, 'DELETE', `/api/dm-messages/${mid}/tags/${beachId}`);
+  check(refused === 403, `The server should refuse to remove someone else’s tag (got ${refused}).`);
+  await closeViewer(bob);
+
+  // ---- The same in a server channel (signed tags under the server's key).
+  await alice.railButton(SERVER);
+  await alice.openChannel('general');
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await alice.$('.cw-main input[type=file]').setInputFiles(shells.map((buffer, i) => ({ name: `harbour-${i + 1}.png`, mimeType: 'image/png', buffer })));
+  await alice.send('The harbour three ways: mussel');
+  const inChannel = bob.message('The harbour three ways: mussel').first();
+  await inChannel.waitFor();
+  const cmid = await inChannel.getAttribute('data-mid');
+  await drawn(bob, cmid, 3);
+  side = await commentOn(bob, inChannel, 2);
+  const cposted = bob.page.waitForRequest((r) => /\/api\/channels\/\w+\/messages$/.test(r.url()) && r.method() === 'POST');
+  await side.locator('textarea.pn-box').fill('This one could be a postcard: limpet');
+  await side.locator('textarea.pn-box').press('Enter');
+  const cbody = (await cposted).postDataJSON();
+  check(cbody.replyTo === cmid && cbody.replyFile === 2, 'In a channel too, a comment names its photo.');
+  await side.locator('.pn-c', { hasText: 'This one could be a postcard: limpet' }).waitFor();
+  const bobTag = bob.page.waitForResponse((r) => /\/api\/messages\/\w+\/tags$/.test(r.url()) && r.request().method() === 'POST');
+  await side.locator('.pn-tag-in').fill('Harbour');
+  await side.locator('.pn-tag-in').press('Enter');
+  const bobRes = await bobTag;
+  const csent = bobRes.request().postDataJSON();
+  check(/^tc1:[1-9]\d*:/.test(csent.ciphertext) && csent.fileIdx === 2 && !JSON.stringify(csent).includes('Harbour'), 'A channel tag should go sealed and signed (tc1), under the current key.');
+  const harbourId = (await bobRes.json()).tag.id;
+  await side.locator('.pn-chip', { hasText: '#Harbour' }).locator('.chip-x').waitFor();
+  await closeViewer(bob);
+  const creply = alice.message('This one could be a postcard: limpet').first();
+  await creply.waitFor();
+  await creply.locator('.msg-reply.pn-reply', { hasText: '’s photo' }).waitFor(); // (her name there, a nickname if she has one)
+  await quotes(alice, await creply.getAttribute('data-mid'), cmid, 2);
+  const chAlice = alice.message('The harbour three ways: mussel').first();
+  await chAlice.locator('.att-media').nth(2).locator('.pn-badges[aria-label="1 comment, 1 tag"]').waitFor();
+
+  // Bob takes his own back: gone for Alice too.
+  side = await commentOn(bob, inChannel, 2);
+  await side.locator('.pn-chip', { hasText: '#Harbour' }).locator('.chip-x').click();
+  await side.locator('.pn-chip', { hasText: '#Harbour' }).waitFor({ state: 'detached' });
+  await closeViewer(bob);
+  await chAlice.locator('.att-media').nth(2).locator('.pn-badges[aria-label="1 comment"]').waitFor();
+
+  // ---- A group chat (also sealed and signed, under the group's key). Alice made Fruit Club, so only she has Manage
+  // Messages there: Bob reads her tag on her photo, has no × and is refused.
+  for (const p of [alice, bob]) {
+    await p.railButton('Direct messages');
+    await p.dmRow('Fruit Club').click();
+    await p.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  }
+  await alice.$('.cw-main input[type=file]').setInputFiles(shells.slice(0, 2).map((buffer, i) => ({ name: `pool-${i + 1}.png`, mimeType: 'image/png', buffer })));
+  await alice.send('Two from the rock pool: periwinkle');
+  const inGroup = bob.message('Two from the rock pool: periwinkle').first();
+  await inGroup.waitFor();
+  const gmid = await inGroup.getAttribute('data-mid');
+  await drawn(alice, gmid, 2);
+  side = await commentOn(alice, alice.message('Two from the rock pool: periwinkle').first(), 0);
+  const groupTag = alice.page.waitForResponse((r) => /\/api\/messages\/\w+\/tags$/.test(r.url()) && r.request().method() === 'POST');
+  await side.locator('.pn-tag-in').fill('Rock pool');
+  await side.locator('.pn-tag-in').press('Enter');
+  const gres = await groupTag;
+  check(/^tc1:[1-9]\d*:/.test(gres.request().postDataJSON().ciphertext), 'A group chat’s tag should go sealed and signed (tc1).');
+  const poolId = (await gres.json()).tag.id;
+  await side.locator('.pn-chip', { hasText: '#Rock pool' }).locator('.chip-x').waitFor();
+  await closeViewer(alice);
+  await drawn(bob, gmid, 2);
+  await inGroup.locator('.att-media').nth(0).locator('.pn-badges[aria-label="1 tag"]').waitFor();
+  side = await commentOn(bob, inGroup, 0);
+  await side.locator('.pn-chip', { hasText: '#Rock pool' }).waitFor();
+  check(!(await side.locator('.pn-chip .chip-x').count()), 'Bob can’t remove Alice’s tag on Alice’s photo in her group.');
+  const grefused = await status(bob, 'DELETE', `/api/messages/${gmid}/tags/${poolId}`);
+  check(grefused === 403, `The server should refuse Bob there (got ${grefused}).`);
+  await closeViewer(bob);
+
+  // ---- The Photos & videos panel filtered by a tag: in the DM, #Beach is on photo 2 (Alice's) and photo 1 (Bob's).
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await alice.$('#main-head button[aria-label="Photos & videos"]').click();
+  await alice.$('#members .mp-tile').first().waitFor();
+  const beach = alice.$('#members button.mp-tag[data-label="Beach"]');
+  await beach.waitFor();
+  check(/#Beach\s*2/.test(await beach.textContent()), `The chip should count the two photos tagged Beach (got “${await beach.textContent()}”).`);
+  await beach.click();
+  const gids = () => alice.page.$$eval('#members .mp-tile', (els) => els.map((e) => e.dataset.gid).sort());
+  await alice.page.waitForFunction(() => document.querySelectorAll('#members .mp-tile').length === 2);
+  check(JSON.stringify(await gids()) === JSON.stringify([`${mid}:0`, `${mid}:1`]), `Only the two photos tagged Beach should show (got ${(await gids()).join(', ')}).`);
+  await alice.$('#members button[aria-label="Show all, not only #Beach"]').click();
+  await alice.page.waitForFunction(() => document.querySelectorAll('#members .mp-tile').length > 3);
+  await alice.$('#main-head button[aria-label="Hide photos & videos"]').click();
+  await alice.$('#members .mp-tile').first().waitFor({ state: 'detached' });
+}
+
+// ------------------------------------------------------------------ chat backgrounds
+// Alice gives her DM with Bob a preset from the More menu: it's sealed for the DM (lkd1) and both see it at once, as
+// the app's backdrop, with a line in the chat; Bob turns chat backgrounds off on his device and his own comes back. Bob
+// sets a picture of his own, dimmed: it goes up encrypted, linked to the background, and both see it (as a blob: copy).
+// Alice removes it. A fresh page still has the lines (from history) and what's set (from the bootstrap). In Fruit Club,
+// a preset sealed and signed with the group's key (lkc1), which stays with that chat; when Bob replaces the group's key
+// with nobody else there, his own app seals it again with the new one, without a line, and it's still Alice's.
+async function chatBackgrounds(t) {
+  const { alice, bob } = t.people;
+  // Colors from appearance.js BACKGROUNDS as the browser writes them in the backdrop's style.
+  const AURORA = 'rgb(6, 18, 31)';
+  const NEBULA = 'rgb(11, 6, 24)';
+  const backdrop = (p) => p.page.evaluate(() => { const l = document.querySelector('#app-bg .bg-layer'); return l ? l.style.background : ''; });
+  const shows = (p, part) => p.page.waitForFunction((x) => { const l = document.querySelector('#app-bg .bg-layer'); return !!l && l.style.background.includes(x); }, part, { timeout: 30000 });
+  const gone = (p, part) => p.page.waitForFunction((x) => { const l = document.querySelector('#app-bg .bg-layer'); return !!l && !l.style.background.includes(x); }, part, { timeout: 30000 });
+  const openDialog = async (p) => {
+    await p.$('#main-head button[aria-label="More"]').click();
+    await p.menuItem('Chat background…').click();
+    return p.dialog('Chat background');
+  };
+  // (The inner locator of has: is relative to each tile, so it starts from the page, not the dialog.)
+  const tile = (m, name) => m.locator('.bg-tile').filter({ has: m.page().locator('.bg-tile-name', { hasText: exact(name) }) });
+  const sealed = (p, re) => p.page.waitForRequest((r) => re.test(r.url()) && r.method() === 'PUT');
+  const line = (p, text) => p.$('#messages .sys-line', { hasText: text });
+
+  // ---- the DM: Alice picks Aurora.
+  for (const [p, name] of [[alice, 'bob'], [bob, 'Alice Wonder']]) {
+    await p.railButton('Direct messages');
+    await p.dmRow(name).click();
+    await p.page.waitForSelector(`#composer-input[placeholder="Message ${name}"]`);
+  }
+  check(!(await backdrop(bob)).includes(AURORA), 'Bob shouldn’t have Aurora as his own background.');
+  // The sidebar's right-click menu has it too.
+  await alice.dmRow('bob').click({ button: 'right' });
+  await alice.menuItem('Chat background…').waitFor();
+  await alice.page.keyboard.press('Escape');
+  let m = await openDialog(alice);
+  check(await m.locator('.cl-note', { hasText: 'Everyone in this conversation sees it. It’s end-to-end encrypted, like your messages.' }).count() === 1, 'The dialog should say who sees it.');
+  check(!(await m.locator('.modal-foot .btn', { hasText: 'Remove background' }).count()), 'Nothing to remove yet.');
+  check(await m.locator('.cl-dim').isHidden(), 'Dim is for pictures.');
+  await tile(m, 'Aurora').click();
+  check((await tile(m, 'Aurora').getAttribute('aria-pressed')) === 'true', 'The tile picked should be pressed.');
+  let req = sealed(alice, /\/api\/dms\/\w+\/look$/);
+  await m.locator('.modal-foot .btn.primary', { hasText: 'Save' }).click();
+  let body = (await req).postDataJSON();
+  check(body.version === 1 && /^lkd1:/.test(body.ciphertext) && Array.isArray(body.files) && !body.files.length, `The first background should go sealed for the DM as version 1 (got ${JSON.stringify({ ...body, ciphertext: body.ciphertext.slice(0, 5) })}).`);
+  const presetSize = body.ciphertext.length;
+  await alice.toast('Chat background saved.');
+  await alice.noModals();
+  await shows(alice, AURORA);
+  await shows(bob, AURORA);
+  await line(alice, 'You changed the chat background').locator('.sys-you').waitFor();
+  await line(bob, 'changed the chat background').locator('.sys-who', { hasText: 'Alice Wonder' }).waitFor();
+
+  // ---- Bob turns chat backgrounds off on his device: his own comes back; on again, Aurora's back.
+  await bob.openSettings('Appearance');
+  const sw = bob.$('.set-content .toggle-row', { hasText: 'Show backgrounds people set for chats' });
+  check(await sw.locator('input[type=checkbox]').isChecked(), 'Chat backgrounds should be on to start with.');
+  await sw.locator('.switch').click();
+  await gone(bob, AURORA);
+  await sw.locator('.switch').click();
+  await shows(bob, AURORA);
+  await sw.locator('.switch').click();
+  await bob.closeSettings();
+  check(!(await backdrop(bob)).includes(AURORA), 'Off should stay off after closing Settings.');
+
+  // ---- Bob sets a picture of his own, dimmed by half (his device still has them off, so he turns them back on after).
+  m = await openDialog(bob);
+  check((await tile(m, 'Aurora').getAttribute('aria-pressed')) === 'true', 'The dialog should start on what’s set.');
+  await m.locator('input[type=file]').setInputFiles({ name: 'meadow.png', mimeType: 'image/png', buffer: makePng(64, 48) });
+  await m.locator('.cl-dim').waitFor();
+  await bob.page.waitForFunction(() => (document.querySelector('.chat-look-modal .cl-sw') || { style: {} }).style.background.includes('blob:'));
+  await m.locator('.cl-dim input[type=range]').evaluate((el) => { el.value = '50'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  check((await m.locator('.cl-dim .counter').textContent()) === '50%', 'The slider should say how much.');
+  req = sealed(bob, /\/api\/dms\/\w+\/look$/);
+  await m.locator('.modal-foot .btn.primary', { hasText: 'Save' }).click();
+  body = (await req).postDataJSON();
+  check(body.version === 2 && /^lkd1:/.test(body.ciphertext) && body.files.length === 1 && /^\/uploads\/[a-z0-9]+\.bin$/.test(body.files[0]),
+    `The picture should go up encrypted and be linked to the background (got ${JSON.stringify(body.files)}, version ${body.version}).`);
+  check(body.ciphertext.length === presetSize, 'A picture’s background should be the same size as a preset’s: its length says nothing about which.');
+  await bob.toast('Chat background saved.');
+  await bob.noModals();
+  await shows(alice, 'blob:');
+  check((await alice.page.evaluate(() => document.documentElement.style.getPropertyValue('--dim'))).trim() === '0.5', 'Alice should see it dimmed by half.');
+  await line(alice, 'changed the chat background').locator('.sys-who', { hasText: 'bob' }).waitFor();
+  check(!(await backdrop(bob)).includes('blob:'), 'Bob has them off on this device.');
+  await bob.openSettings('Appearance');
+  await bob.$('.set-content .toggle-row', { hasText: 'Show backgrounds people set for chats' }).locator('.switch').click();
+  await bob.closeSettings();
+  await shows(bob, 'blob:');
+  // What went up is ciphertext: not a PNG.
+  const head = await bob.page.evaluate(async (u) => [...new Uint8Array(await (await fetch(u)).arrayBuffer()).slice(0, 4)], body.files[0]);
+  check(head.join() !== '137,80,78,71', 'The uploaded picture should be encrypted.');
+
+  // ---- Alice removes it: gone for both, with a line.
+  m = await openDialog(alice);
+  await m.locator('.modal-foot .btn', { hasText: 'Remove background' }).click();
+  await alice.toast('Chat background removed.');
+  await alice.noModals();
+  await gone(alice, 'blob:');
+  await gone(bob, 'blob:');
+  await line(bob, 'removed the chat background').waitFor();
+  await line(alice, 'You removed the chat background').waitFor();
+
+  // ---- Fruit Club: Alice picks Nebula; it's sealed and signed with the group's key, and Bob sees it.
+  for (const p of [alice, bob]) {
+    await p.dmRow('Fruit Club').click();
+    await p.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  }
+  m = await openDialog(alice);
+  await tile(m, 'Nebula').click();
+  req = sealed(alice, /\/api\/groups\/\w+\/look$/);
+  await m.locator('.modal-foot .btn.primary', { hasText: 'Save' }).click();
+  body = (await req).postDataJSON();
+  check(body.version === 1 && /^lkc1:[1-9]\d*:/.test(body.ciphertext), `A group chat’s background should go sealed and signed with its key (got ${body.ciphertext.slice(0, 8)}…).`);
+  await alice.toast('Chat background saved.');
+  await shows(alice, NEBULA);
+  await shows(bob, NEBULA);
+  await line(bob, 'changed the chat background').waitFor();
+
+  // ---- Bob replaces Fruit Club's key while Alice's app is closed. Nebula was sealed with the old one, which nobody who
+  // joins from now on gets, so the first app that can seals the same background again with the new key: here Bob's,
+  // the one that made the key (for which it was never "new"). The next version, no new line, and both still see it.
+  const fruit = t.server.rows("SELECT id FROM servers WHERE kind = 'group' AND name = 'Fruit Club'")[0].id;
+  const stored = () => t.server.rows('SELECT c.epoch, c.version, c.author_id, s.key_epoch FROM chat_looks c JOIN servers s ON s.id = substr(c.conv, 3) WHERE c.conv = ?', 'g:' + fruit)[0];
+  const idOf = (p) => p.page.evaluate(() => localStorage.getItem('hearth.userId'));
+  const [aliceId, bobId] = [await idOf(alice), await idOf(bob)];
+  const logged = () => t.server.rows('SELECT COUNT(*) AS n FROM look_log WHERE conv = ?', 'g:' + fruit)[0].n;
+  const was = stored();
+  const lines = logged();
+  check(was.epoch === was.key_epoch && was.version === 1, `Nebula should be sealed with the group’s key (got ${JSON.stringify(was)}).`);
+  // (A key made less than 10 minutes ago can't be replaced by hand yet: these are made older.)
+  t.server.sql('UPDATE server_epochs SET created_at = created_at - 3600000 WHERE server_id = ?', fruit);
+  // (The owner's announcement from an earlier flow is still up on Bob's screen, over the header: he dismisses it.)
+  if (await bob.$('#announce').count()) {
+    await bob.$('#announce button[aria-label="Dismiss"]').click();
+    await bob.$('#announce').waitFor({ state: 'detached' });
+  }
+  await alice.page.goto('about:blank');
+  await bob.$('#main-head button.head-badge.e2ee').first().click();
+  const enc = await bob.dialog('End-to-end encryption');
+  await enc.locator('.modal-foot .btn', { hasText: 'Replace key now' }).click();
+  await bob.toast('New encryption key created and shared with every member.');
+  let now = stored();
+  for (const until = Date.now() + 30000; now.epoch === was.epoch; now = stored()) {
+    check(Date.now() < until, `Bob’s app should seal Nebula again with the new key (still ${JSON.stringify(now)}).`);
+    await bob.page.waitForTimeout(200);
+  }
+  check(now.epoch === now.key_epoch && now.key_epoch > was.key_epoch && now.version === 2, `Sealed again with the new key, as the next version (got ${JSON.stringify(now)}).`);
+  check(now.author_id === bobId, 'Bob’s app, the only one there, should be the one that sealed it again.');
+  check(logged() === lines, 'Sealing it again shouldn’t add a line to the chat’s history.');
+  const look = await bob.page.evaluate(async (id) => (await (await fetch('/api/bootstrap', { headers: { authorization: 'Bearer ' + localStorage.getItem('hearth.token') } })).json()).servers.find((s) => s.id === id).look, fruit);
+  check(look.authorId === bobId && look.setBy === aliceId, `It should still count as Alice’s (got ${JSON.stringify({ authorId: look.authorId, setBy: look.setBy })}).`);
+  await shows(bob, NEBULA);
+  // Alice comes back: her app opens it with the new key Bob handed her.
+  await alice.page.goto(alice.base);
+  await alice.waitApp();
+  await alice.railButton('Direct messages');
+  await alice.dmRow('Fruit Club').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  await shows(alice, NEBULA);
+  await line(alice, 'You changed the chat background').waitFor();
+  await bob.page.waitForTimeout(500);
+  check(await line(bob, 'changed the chat background').count() === 1 && await line(alice, 'changed the chat background').count() === 1, 'Nor a line in the chat.');
+  // It stays with that chat: the DM has none now.
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await gone(bob, NEBULA);
+
+  // ---- A fresh page: the lines come with the history, and what's set with the bootstrap.
+  await bob.page.reload();
+  await bob.waitApp();
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await line(bob, 'removed the chat background').waitFor();
+  check(await line(bob, 'changed the chat background').count() === 2, 'Both changes should be in the DM’s history.');
+  check(!(await backdrop(bob)).includes('blob:'), 'The DM has none.');
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  await shows(bob, NEBULA);
+  await line(bob, 'changed the chat background').waitFor();
+}
+
+// ------------------------------------------------------------------ the side view
+// Bob pins a message (from its ⋯ menu) and a photo (from the viewer) in his DM with Alice. Both stay at the side while
+// he goes to the group chat, untouched; the photo opens in the viewer from there, and Jump takes him back to the
+// message. × takes one off; a pinned message Alice deletes says it's no longer available. Cards the panel fetched
+// itself get the flags the chat's copies turn up later (a reply's original still there, a message repeated). On his
+// phone, a long press pins one, the panel covers the chat, Back closes it, and signing out clears the list from the
+// phone.
+async function sideView(t) {
+  const { alice, bob } = t.people;
+  const pic = (name, w, h) => ({ name, mimeType: 'image/png', buffer: makePng(w, h) });
+  const sids = (p) => p.page.$$eval('#members .sv-card', (els) => els.map((e) => e.dataset.sid));
+  const card = (p, sid) => p.$(`#members .sv-card[data-sid="${sid}"]`);
+  const headButton = (p) => p.$('#main-head button.head-side');
+  // Is the message with these words in full view in the chat (as a jump leaves it)?
+  const shown = (words) => {
+    const el = [...document.querySelectorAll('#messages .msg[data-mid]')].find((m) => m.textContent.includes(words));
+    if (!el) return false;
+    const r = el.getBoundingClientRect(); const box = document.querySelector('#messages').getBoundingClientRect();
+    return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+  };
+
+  // ---- In the DM: words, and a photo.
+  for (const p of [alice, bob]) await p.railButton('Direct messages');
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  const recipe = 'Side view: the recipe is two cups of flour';
+  await alice.send(recipe);
+  await bob.message(recipe).first().waitFor({ timeout: 60000 });
+  await alice.$('.cw-main input[type=file]').setInputFiles([pic('side-plum.png', 240, 160)]);
+  await alice.send('Side view photo: plum');
+  const plum = bob.message('Side view photo: plum').first();
+  await plum.waitFor({ timeout: 60000 });
+  const recipeId = await bob.message(recipe).first().getAttribute('data-mid');
+  const plumId = await plum.getAttribute('data-mid');
+  check(!(await headButton(bob).count()), 'With nothing pinned, the header should have no button for it.');
+
+  // The message, from its ⋯ menu: the panel opens, as wide as a thread, saying where it's from.
+  await bob.messageAction(recipe, 'Pin to side');
+  await card(bob, recipeId).locator('.sv-text').waitFor();
+  check((await bob.$('#members .panel-head h2').textContent()) === 'Pinned to side', 'The panel should be called Pinned to side.');
+  check(/DM with Alice Wonder/.test(await card(bob, recipeId).locator('.sv-where').textContent()), 'A card should say where it’s from.');
+  check((await card(bob, recipeId).locator('.sv-text').textContent()).includes('two cups of flour'), 'A card should show the message’s words.');
+  check(!(await card(bob, recipeId).locator('.msg-flag, .bot-tag').count()), 'A card should say nothing more about who wrote it than the chat does (nothing here).');
+  check((await headButton(bob).getAttribute('aria-label')) === 'Hide pinned to side (1)', `The header button should count it (got ${await headButton(bob).getAttribute('aria-label')}).`);
+  const box = await bob.$('#members').boundingBox();
+  check(box && box.width >= 380, `The panel should be as wide as a thread (got ${box && box.width}).`);
+  // (Pinned already: its menu offers to take it off.)
+  await bob.message(recipe).first().hover();
+  await bob.message(recipe).first().locator('button[aria-label="More actions"]').click();
+  await bob.menuItem('Unpin from side').waitFor();
+  await bob.page.keyboard.press('Escape');
+
+  // The photo, from the viewer's bar: it goes on top, as wide as the panel.
+  await bob.page.waitForFunction((id) => { const i = document.querySelector(`#messages .msg[data-mid="${id}"] .att-img`); return !!i && i.src.startsWith('blob:'); }, plumId, { timeout: 30000 });
+  await plum.locator('.att-img').click({ position: { x: 24, y: 80 } }); // (clear of its download button)
+  await bob.$('.viewer').waitFor();
+  await bob.$('.viewer-bar button[aria-label="Pin to side"]').click();
+  await bob.$('.viewer-bar button[aria-label="Unpin from side"]').waitFor();
+  await bob.toast('Pinned to the side.');
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  await bob.page.waitForFunction(() => document.querySelectorAll('#members .sv-card').length === 2);
+  check(JSON.stringify(await sids(bob)) === JSON.stringify([`${plumId}:0`, recipeId]), `The newest pinned should come first (got ${(await sids(bob)).join(', ')}).`);
+  await bob.page.waitForFunction((sid) => { const i = document.querySelector(`#members .sv-card[data-sid="${sid}"] .sv-pic img`); return !!i && i.complete && i.naturalWidth === 240 && i.src.startsWith('blob:'); }, `${plumId}:0`, { timeout: 30000 });
+  const picWidth = (await card(bob, `${plumId}:0`).locator('.sv-pic').boundingBox()).width;
+  check(picWidth >= 300, `A pinned picture should be as wide as the panel (got ${picWidth}).`);
+  check((await headButton(bob).getAttribute('aria-label')) === 'Hide pinned to side (2)', 'The count should follow.');
+  // Nothing in the panel looks like a chat row (the app redraws those by data-mid).
+  check(!(await bob.$('#members [data-mid]').count()), 'No card should carry data-mid.');
+
+  // ---- Another conversation: the panel stays, with both, as they were (nothing drawn again).
+  await bob.page.$eval(`#members .sv-card[data-sid="${plumId}:0"] .sv-pic img`, (i) => { i.__kept = true; });
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  check(JSON.stringify(await sids(bob)) === JSON.stringify([`${plumId}:0`, recipeId]), 'Going to another conversation should leave the side view open, with both.');
+  check(await bob.page.$eval(`#members .sv-card[data-sid="${plumId}:0"] .sv-pic img`, (i) => i.__kept === true), 'The picture should stay as it was, not be drawn again.');
+  check((await headButton(bob).getAttribute('aria-label')) === 'Hide pinned to side (2)', 'The group chat’s header should have the button too.');
+
+  // The picture opens in the viewer from the side (from the keyboard here).
+  const focusedOn = (sel) => bob.page.evaluate((x) => !!document.activeElement && document.activeElement.matches(x), sel);
+  const focused = () => bob.page.evaluate(() => (document.activeElement ? document.activeElement.outerHTML.slice(0, 100) : 'nothing'));
+  await card(bob, `${plumId}:0`).locator('.sv-open').focus();
+  await bob.page.keyboard.press('Enter');
+  await bob.$('.viewer').waitFor();
+  check((await bob.$('.viewer-name').textContent()) === 'side-plum.png', 'The viewer should open on the pinned picture.');
+  await bob.$('.viewer-bar button[aria-label="Unpin from side"]').waitFor();
+  await bob.page.waitForFunction(() => { const i = document.querySelector('.viewer-img'); return !!i && i.src.startsWith('blob:') && i.naturalWidth === 240; });
+  // Unpinned and pinned again from the viewer's bar while it's open: its card is drawn anew, and Esc gives the focus
+  // back to the picture on the new card (not to the page).
+  await bob.$('.viewer-bar button[aria-label="Unpin from side"]').click();
+  await card(bob, `${plumId}:0`).waitFor({ state: 'detached' });
+  await bob.$('.viewer-bar button[aria-label="Pin to side"]').click();
+  await card(bob, `${plumId}:0`).locator('.sv-open').waitFor();
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  check(await focusedOn(`#members .sv-card[data-sid="${plumId}:0"] .sv-open`), `Closing the viewer should give the focus back to the picture on its card, drawn anew (got ${await focused()}).`);
+  check(JSON.stringify(await sids(bob)) === JSON.stringify([`${plumId}:0`, recipeId]), 'Pinned again, it should be back on top.');
+
+  // ---- Jump: back to the DM, at the message; beside the chat, the panel stays.
+  await card(bob, recipeId).locator('.sv-actions .btn', { hasText: 'Jump' }).click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await bob.page.waitForFunction(shown, recipe);
+  check((await sids(bob)).length === 2, 'On a desktop the panel should stay open after a jump.');
+
+  // ---- Unpinned from the viewer it was opened from, its card goes: Esc puts the focus on the panel's next card
+  // rather than nowhere. (Then pinned again, from the chat's picture.)
+  await card(bob, `${plumId}:0`).locator('.sv-open').focus();
+  await bob.page.keyboard.press('Enter');
+  await bob.$('.viewer').waitFor();
+  await bob.$('.viewer-bar button[aria-label="Unpin from side"]').click();
+  await card(bob, `${plumId}:0`).waitFor({ state: 'detached' });
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  check(await focusedOn(`#members .sv-card[data-sid="${recipeId}"] button`), `With its card gone, closing the viewer should put the focus on the panel’s next card (got ${await focused()}).`);
+  await bob.page.waitForFunction((id) => { const i = document.querySelector(`#messages .msg[data-mid="${id}"] .att-img`); return !!i && i.src.startsWith('blob:'); }, plumId, { timeout: 30000 });
+  await plum.locator('.att-img').click({ position: { x: 24, y: 80 } });
+  await bob.$('.viewer').waitFor();
+  await bob.$('.viewer-bar button[aria-label="Pin to side"]').click();
+  await bob.$('.viewer-bar button[aria-label="Unpin from side"]').waitFor();
+  await bob.page.keyboard.press('Escape');
+  await bob.$('.viewer').waitFor({ state: 'detached' });
+  await bob.page.waitForFunction((want) => JSON.stringify([...document.querySelectorAll('#members .sv-card')].map((e) => e.dataset.sid)) === want, JSON.stringify([`${plumId}:0`, recipeId]));
+
+  // ---- × takes one off.
+  await card(bob, recipeId).locator('.sv-x').click();
+  await card(bob, recipeId).waitFor({ state: 'detached' });
+  check((await headButton(bob).getAttribute('aria-label')) === 'Hide pinned to side (1)', 'Unpinning should lower the count.');
+
+  // ---- A pinned message deleted: its card says so, and × removes it.
+  await alice.messageAction('Side view photo: plum', 'Delete message');
+  await alice.modal('Delete message?').locator('.modal-foot .btn.danger').click();
+  await card(bob, `${plumId}:0`).filter({ hasText: 'This message is no longer available' }).waitFor({ timeout: 20000 });
+  check(!(await card(bob, `${plumId}:0`).locator('img').count()), 'A deleted message’s picture should go from its card.');
+  await card(bob, `${plumId}:0`).locator('.sv-x').click();
+  await bob.$('#members .sv-empty:not([hidden])').waitFor();
+  // The ⋯ menu shows and hides it too; closed with nothing pinned, the header has no button for it.
+  await bob.$('#main-head button[aria-label="More"]').click();
+  await bob.menuItem('Hide pinned to side').click();
+  await bob.$('#members .sv-scroll').waitFor({ state: 'detached' });
+  check(!(await headButton(bob).count()), 'Closed with nothing pinned, the header button should go.');
+
+  // ---- What turns up later about who could have written a message shows on its card, which the side view fetched
+  // itself. Bob pins a message in #general and his reply to it; the server's operator then posts the first again under
+  // a new id and serves the reply as one to nothing (as in the message binding flow). After a reload, in the group
+  // chat (where nothing else draws the panel), the side view fetches both: the reply's card is flagged once the server
+  // says its original is still there. Opening #general loads the copy into the chat, and the first message's card is
+  // flagged as repeated too.
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  const oak = 'Side view binding: oak';
+  const acorn = 'Side view binding: acorn';
+  await bob.send(oak);
+  await bob.message(oak).first().hover();
+  await bob.message(oak).first().locator('button[aria-label="Reply"]').click();
+  await bob.send(acorn);
+  await bob.message(acorn).first().locator('.msg-reply .reply-text', { hasText: oak }).waitFor();
+  const oakId = await bob.message(oak).first().getAttribute('data-mid');
+  const acornId = await bob.message(acorn).first().getAttribute('data-mid');
+  await bob.messageAction(oak, 'Pin to side');
+  await card(bob, oakId).locator('.sv-text').waitFor();
+  await bob.messageAction(acorn, 'Pin to side');
+  await card(bob, acornId).locator('.sv-text').waitFor();
+  check(!(await bob.$('#members .sv-card .msg-flag').count()), 'Nothing should be flagged before anything was tampered with.');
+  t.server.sql('UPDATE messages SET reply_to = NULL WHERE id = ?', acornId);
+  const oakCopy = Date.now().toString(36).padStart(9, '0') + crypto.randomBytes(5).toString('hex');
+  t.server.sql(`INSERT INTO messages (id, channel_id, author_id, body, ciphertext, epoch, reply_to, created_at, thread_id)
+    SELECT ?, channel_id, author_id, body, ciphertext, epoch, reply_to, created_at, thread_id FROM messages WHERE id = ?`, oakCopy, oakId);
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  await bob.page.reload();
+  await bob.waitApp();
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  if (!(await card(bob, oakId).count())) await headButton(bob).click();
+  await card(bob, oakId).locator('.sv-text').waitFor();
+  await card(bob, acornId).locator('.sv-text').waitFor();
+  const flagTip = async (sid) => (await card(bob, sid).locator('.msg-flag.warn').getAttribute('data-tip')) || '';
+  await card(bob, acornId).locator('.msg-flag.warn').waitFor({ timeout: 15000 }).catch(() => check(false, 'The reply’s card should be flagged once its original turns out to be still there.'));
+  check(/shown without one while the original is still there/.test(await flagTip(acornId)), `The reply’s flag should say why (“${await flagTip(acornId)}”).`);
+  check(!(await card(bob, oakId).locator('.msg-flag').count()), 'The first message’s card has nothing to say yet.');
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await bob.page.waitForFunction((n) => [...document.querySelectorAll('#messages .msg[data-mid] .msg-text')].filter((e) => e.textContent.includes(n)).length === 2, oak);
+  await card(bob, oakId).locator('.msg-flag.warn').waitFor({ timeout: 15000 }).catch(() => check(false, 'The first message’s card should be flagged once the chat loads its copy.'));
+  check(/appears here twice/.test(await flagTip(oakId)), `Its flag should say it was repeated (“${await flagTip(oakId)}”).`);
+  for (const sid of [oakId, acornId]) {
+    await card(bob, sid).locator('.sv-x').click();
+    await card(bob, sid).waitFor({ state: 'detached' });
+  }
+  await bob.$('#main-head button[aria-label="More"]').click();
+  await bob.menuItem('Hide pinned to side').click();
+  await bob.$('#members .sv-scroll').waitFor({ state: 'detached' });
+
+  // ---- A phone: a long press pins it, the panel covers the chat, Back closes it; signing out clears the list.
+  const phone = await t.open('bob-side', PHONE);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  const openNav = async () => {
+    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
+  };
+  await openNav();
+  await page.locator('#rail button[aria-label="Direct messages"]').tap();
+  await openNav();
+  await phone.dmRow('Alice Wonder').tap();
+  await page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  const held = phone.message(recipe).first();
+  await held.waitFor({ timeout: 30000 });
+  const cdp = await phone.context.newCDPSession(page);
+  const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+  await held.scrollIntoViewIfNeeded();
+  const b = await held.locator('.msg-text').boundingBox();
+  await touch('touchStart', b.x + 40, b.y + b.height / 2);
+  await page.waitForTimeout(700);
+  await touch('touchEnd');
+  const sheet = page.locator('.sheet-backdrop:not(.closing) .sheet');
+  await sheet.waitFor();
+  await sheet.locator('.sheet-row', { hasText: exact('Pin to side') }).tap();
+  await phone.$(`#members .sv-card[data-sid="${recipeId}"] .sv-text`).waitFor();
+  await page.waitForFunction(() => { const r = document.querySelector('#members').getBoundingClientRect(); return r.left <= 1 && r.width >= innerWidth - 1; }, null, { timeout: 5000 })
+    .catch(() => check(false, 'On a phone the panel should cover the chat.'));
+  check(!(await page.locator('#main-head button.head-side').isVisible()), 'A phone’s header should have no button for it.');
+  check(await page.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith('hearth.sideview.'))), 'The list should be kept on the phone.');
+  await page.goBack();
+  await phone.$('#members .sv-card').first().waitFor({ state: 'detached' });
+  await openNav();
+  await phone.logout();
+  check(await page.evaluate(() => !Object.keys(localStorage).some((k) => k.startsWith('hearth.sideview.'))), 'Signing out should clear the side view from this device.');
+  await phone.close();
+  delete t.people['bob-side'];
+}
+
+// ------------------------------------------------------------------ where the chat puts you
+// Two reports from an owner. Reopening a DM put you "in a random part" of it: GIFs (and videos), whose size the chat
+// only learns once they've loaded, came in after the list was put at the bottom and pushed the newest messages down
+// out of sight. And Jump on a pinned message went "way past" it: the list glided there while the pictures on the way
+// and above it came in, and those above pushed it on down out of view. Now a DM opens at its newest message and stays
+// there as they load, with the "New messages" line and Jump to first unread still there to go up to; a jump (from the
+// pins, a search result…) lands on the message and keeps it in the middle while they load; and on a phone the pins
+// panel, which covers the chat, closes on Jump (app.js keepPlace).
+async function keepYourPlace(t) {
+  const { alice, bob } = t.people;
+  const gif = (name) => ({ name, mimeType: 'image/gif', buffer: makeGif(300, 300) });
+  // (Several lines each, like mediaPanel's fillers, so a few of them are more than a screen.)
+  const say = async (text, files) => {
+    if (files) await alice.$('.cw-main input[type=file]').setInputFiles(files);
+    await alice.$('#composer-input').fill(text);
+    await alice.$('#composer-input').press('Enter');
+    await alice.message(text.split('\n')[0]).first().waitFor({ timeout: 60000 });
+    await alice.page.waitForTimeout(450); // (under the server's limit on messages in a row)
+  };
+  // The message with these words against the chat's own box: where it is, how far from the middle, whether it's all in
+  // view, how far the list is from its bottom, and whether it's the newest drawn (null: not drawn).
+  const where = (p, words) => p.page.evaluate((w) => {
+    const sc = document.querySelector('#messages');
+    const el = sc && [...sc.querySelectorAll('.msg[data-mid]')].find((m) => m.textContent.includes(w));
+    if (!el) return null;
+    const r = el.getBoundingClientRect(); const box = sc.getBoundingClientRect();
+    return { top: Math.round(r.top - box.top), bottom: Math.round(r.bottom - box.top), box: Math.round(box.height),
+      middle: Math.round((r.top + r.bottom) / 2 - (box.top + box.bottom) / 2), inside: r.top >= box.top - 1 && r.bottom <= box.bottom + 1,
+      fromBottom: Math.round(sc.scrollHeight - sc.scrollTop - sc.clientHeight), last: el === [...sc.querySelectorAll('.msg[data-mid]')].pop() };
+  }, words);
+  const inside = (p, words) => p.page.waitForFunction((w) => {
+    const sc = document.querySelector('#messages');
+    const el = sc && [...sc.querySelectorAll('.msg[data-mid]')].find((m) => m.textContent.includes(w));
+    if (!el) return false;
+    const r = el.getBoundingClientRect(); const box = sc.getBoundingClientRect();
+    return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+  }, words, { timeout: 30000 });
+  // Every picture on screen is in (they load as they come into the chat's view), and nothing has moved for a moment.
+  const settled = async (p) => {
+    await p.page.waitForFunction(() => {
+      const sc = document.querySelector('#messages');
+      if (!sc || sc.querySelector('.att-media.loading, .msg-skeleton')) return false;
+      const box = sc.getBoundingClientRect();
+      const shown = (el) => { const r = el.getBoundingClientRect(); return r.bottom > box.top && r.top < box.bottom; };
+      if ([...sc.querySelectorAll('.att-media.locked:not(.failed):not(.gone)')].some(shown)) return false;
+      return [...sc.querySelectorAll('.att-img[src]')].filter(shown).every((i) => i.complete);
+    }, null, { timeout: 30000 });
+    await p.page.waitForTimeout(800);
+  };
+  const scrollUp = async (p, by) => {
+    const b = await p.$('#messages').boundingBox();
+    await p.page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await p.page.mouse.wheel(0, -by);
+    await p.page.waitForTimeout(500);
+  };
+
+  // ---- In the DM: four GIFs, the message that gets pinned, more GIFs, then enough to scroll it all away.
+  await alice.railButton('Direct messages');
+  await alice.dmRow('bob').click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message bob"]');
+  await bob.railButton('Direct messages');
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  for (let i = 1; i <= 4; i++) await say(`Before the pin ${i}: a GIF`, [gif(`before-${i}.gif`)]);
+  const target = 'Pinned for later: walnut';
+  await say(target);
+  for (let i = 1; i <= 3; i++) await say(`After the pin ${i}: a GIF`, [gif(`after-${i}.gif`)]);
+  for (let i = 1; i <= 8; i++) await say(`Scroll filler ${i}:\nso the pin\nscrolls well\nout of view`);
+  await alice.messageAction(target, 'Pin message');
+  await alice.toast('Message pinned.');
+  await bob.message('Scroll filler 8:').first().waitFor({ timeout: 60000 });
+  await settled(bob);
+  let at = await where(bob, 'Scroll filler 8:');
+  check(at && at.last && at.inside && at.fromBottom < 8, `Bob should be at the newest message (got ${JSON.stringify(at)}).`);
+
+  // ---- Reopening it after scrolling up, with more than a screenful of new messages and GIFs among them: it opens at
+  // the newest, which stays in view as the GIFs load; the "New messages" line is above, and Jump to first unread goes up.
+  await scrollUp(bob, 2500);
+  at = await where(bob, 'Scroll filler 8:');
+  check(at && at.fromBottom > 500, `Bob should have scrolled up (got ${JSON.stringify(at)}).`);
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  for (let i = 1; i <= 6; i++) await say(`While you were away ${i}:\none\ntwo\nthree`, i % 3 === 2 ? [gif(`away-${i}.gif`)] : null);
+  const newest = 'Newest of all: hazelnut';
+  await say(newest);
+  await bob.dmRow('Alice Wonder').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await bob.message(newest).first().waitFor();
+  await settled(bob);
+  at = await where(bob, newest);
+  check(at && at.last && at.inside && at.fromBottom < 8, `Reopening the DM should show the newest message at the bottom (got ${JSON.stringify(at)}).`);
+  const line = await bob.page.evaluate(() => { const d = document.querySelector('#messages #new-div'); return d && d.getBoundingClientRect().bottom - document.querySelector('#messages').getBoundingClientRect().top; });
+  check(line !== null && line < 0, `The "New messages" line should be there, above what's on screen (got ${line}).`);
+  await bob.$('#unread-bar .unread-jump', { hasText: 'Jump to first unread' }).click();
+  await settled(bob);
+  check(await bob.page.evaluate(() => {
+    const d = document.querySelector('#messages #new-div'); const box = document.querySelector('#messages').getBoundingClientRect();
+    const r = d && d.getBoundingClientRect();
+    return !!r && r.top >= box.top && r.bottom <= box.bottom && d.nextElementSibling.textContent.includes('While you were away 1');
+  }), 'Jump to first unread should show the "New messages" line, above the first new message.');
+
+  // ---- Jump from Pinned messages: on the message, in the middle, and still there once the GIFs above it are in.
+  await bob.$('#main-head button[aria-label="More"]').click();
+  await bob.menuItem('Pinned messages').click();
+  await bob.$('#members .pin-card', { hasText: 'walnut' }).locator('button', { hasText: 'Jump' }).click();
+  await bob.$('#messages .msg.flash', { hasText: 'walnut' }).waitFor();
+  await inside(bob, target);
+  await settled(bob);
+  at = await where(bob, target);
+  check(at && at.inside && Math.abs(at.middle) <= 40, `After Jump the pinned message should be in the middle of the chat (got ${JSON.stringify(at)}).`);
+  check(await bob.page.evaluate(() => [...document.querySelectorAll('#messages .msg[data-mid]')].filter((m) => /Before the pin \d/.test(m.textContent)).some((m) => m.querySelector('.att-img[src]'))),
+    'The GIFs above the pinned message should have loaded.');
+  await bob.$('#members button[aria-label="Close panel"]').click();
+
+  // ---- From another conversation, a search result: its page loads around it, and it lands the same way.
+  await bob.dmRow('Fruit Club').click();
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Fruit Club"]');
+  await bob.page.keyboard.press('Control+k');
+  await bob.$('.search-modal input.search-main').fill('walnut');
+  await bob.$('.search-modal .search-msg', { hasText: 'walnut' }).first().click();
+  await bob.page.waitForSelector('.search-modal', { state: 'detached' });
+  await bob.page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await inside(bob, target);
+  await settled(bob);
+  at = await where(bob, target);
+  check(at && at.inside && Math.abs(at.middle) <= 40, `A search result should land in the middle of the chat (got ${JSON.stringify(at)}).`);
+  // Scrolling yourself afterwards isn't undone: the list doesn't go back to the message.
+  await scrollUp(bob, 600);
+  await settled(bob);
+  at = await where(bob, target);
+  check(at && at.middle > 300, `Once you scroll, the list shouldn't be pulled back to the message (got ${JSON.stringify(at)}).`);
+
+  // ---- A phone: the pinned messages cover the chat, so Jump closes them and the message is in view.
+  const phone = await t.open('bob-place', PHONE);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  const openNav = async () => {
+    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
+  };
+  await openNav();
+  await page.locator('#rail button[aria-label="Direct messages"]').tap();
+  await openNav();
+  await phone.dmRow('Alice Wonder').tap();
+  await page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
+  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  await phone.message(newest).first().waitFor({ timeout: 30000 });
+  // (The instance owner's announcement, from an earlier flow, sits over the top of a phone's menu: put away first.)
+  const announce = page.locator('#announce button[aria-label="Dismiss"]');
+  if (await announce.count()) { await announce.tap(); await phone.$('#announce').waitFor({ state: 'detached' }); }
+  await page.locator('#main-head button[aria-label="More"]').tap();
+  await phone.menuItem('Pinned messages').tap();
+  const jumpBtn = page.locator('#members .pin-card', { hasText: 'walnut' }).locator('button', { hasText: 'Jump' });
+  await jumpBtn.waitFor();
+  await jumpBtn.tap();
+  await phone.$('#members .pin-card').first().waitFor({ state: 'detached' });
+  await inside(phone, target);
+  await settled(phone);
+  check((await where(phone, target) || {}).inside, 'On a phone, Jump should close the pinned messages and show the message.');
+  await phone.close();
+  delete t.people['bob-place'];
+}
+
+// ------------------------------------------------------------------ member relays (Settings → Help host)
+// A member offers a machine as a call relay and gets its install command; the machine checks in (here: a heartbeat
+// sent the way the relay's agent sends it); the owner approves it with their password in Admin → Regions; the
+// member's page follows by itself; everyone's /api/ice then carries it, marked as a member's, under a login that
+// doesn't name the person. The member then keeps their own calls off members' relays, removes theirs and is shown
+// how to take it off the machine. By now bob owns the instance and alice is a member.
+async function memberRelays(t) {
+  const { alice, bob } = t.people;
+  const name = 'Alice’s Pi, Lisbon';
+  await catchCopies(alice);
+  await alice.openSettings('Help host');
+  const page = alice.$('.set-content');
+  await page.locator('.set-section', { hasText: 'What your relay can and can’t see' }).waitFor();
+  await page.locator('button', { hasText: 'Offer a machine' }).click();
+  const offer = await alice.dialog('Offer a machine');
+  await offer.locator('input[placeholder^="e.g."]').fill(name);
+  await offer.locator('.chips .chip', { hasText: exact('50 Mbit/s') }).click();
+  await offer.locator('.toggle-row', { hasText: 'Also keep encrypted backup copies' }).locator('.switch').click();
+  await offer.locator('.modal-foot .btn.primary').click();
+  const setup = alice.modal(`Set up ${name}`);
+  // (textContent: as it's written, with the two spaces sha256sum wants; innerText would show them as one)
+  const command = (await setup.locator('.cmd-box code').textContent()).trim();
+  const link = command.match(/\/regions\/install\/(\w+)\?k=([0-9a-f]+)/);
+  check(link, `The install command should carry its one-time link (got “${command}”).`);
+  check(/24 hours/.test(await setup.innerText()) && /every minute/.test(await setup.innerText()), 'The command should say its link works for 24 hours and what it installs.');
+  await setup.locator('.cmd-box button', { hasText: 'Copy' }).click();
+  check(await lastCopy(alice) === command, 'Copy should copy the install command.');
+  await setup.locator('.modal-x').click();
+  await setup.waitFor({ state: 'detached' }); // (Settings stays open underneath)
+  const mine = () => page.locator('.relay-row', { hasText: name });
+  await mine().locator('.rpill', { hasText: 'Waiting for install' }).waitFor();
+  check((await mine().innerText()).includes('Limit 50 Mbit/s'), 'The bandwidth limit picked should show.');
+
+  // The machine checks in, as its agent does every minute, with the check-in token its installer carries (the link's own
+  // token only downloads the installer). A relay waiting for approval gets no backup key.
+  const [, id, k] = link;
+  const installer = await (await fetch(`${t.server.base}/regions/install/${id}?k=${k}`)).text();
+  const token = (/^TOKEN='([0-9a-f]+)'$/m.exec(installer) || [])[1];
+  check(token && token !== k, 'The installer should carry a check-in token of its own.');
+  const checkIn = (ip = '198.51.100.77') => fetch(`${t.server.base}/api/regions/${id}/heartbeat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Region-Token': token },
+    body: JSON.stringify({ ip, relayIp: ip, tx: 5000000, rx: 4000000, load: 0.2, cpus: 4, mem: 31, relay: true, uptime: 86400,
+      ssh: { port: 22, hostKey: '', ready: false, usedMb: 0, freeMb: 20000, files: 0 }, version: 5 }),
+  });
+  // It can't claim another machine's address: this server's own relay is at 203.0.113.7 (set in the step-up flow).
+  if (String((t.server.rows("SELECT value FROM instance_settings WHERE key = 'turnUrls'")[0] || {}).value || '').includes('203.0.113.7')) {
+    const claimed = await checkIn('203.0.113.7');
+    check(claimed.status === 409, `A member relay claiming this server's relay's address should be refused (got ${claimed.status}).`);
+  }
+  const beat = await checkIn();
+  const said = await beat.json().catch(() => ({}));
+  check(beat.ok && said.ok, `The relay’s check-in should be taken (${beat.status} ${JSON.stringify(said)}).`);
+  check(!said.backupKey, 'A relay waiting for approval should get no backup key.');
+  await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Privacy & safety') }).click();
+  await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Help host') }).click();
+  await mine().locator('.rpill', { hasText: 'Waiting for approval' }).waitFor();
+
+  // The owner sees it waiting, with who runs it and where, and approves it with his password.
+  await bob.railButton('Admin');
+  await bob.$('.admin-tabs .admin-tab', { hasText: 'Regions' }).click();
+  await bob.$('.admin-body .admin-head', { hasText: 'Member relays' }).locator('.badge-tag', { hasText: '1 waiting' }).waitFor();
+  const row = bob.$('.admin-body .member-row', { hasText: name });
+  await row.locator('.rpill', { hasText: 'Waiting for approval' }).waitFor();
+  const seen = await row.innerText();
+  check(seen.includes('by @alice_w') && seen.includes('198.51.100.77') && seen.includes('limit 50 Mbit/s') && seen.includes('backups offered, off'), `The row should say who runs it, its address, its limit and its backup offer (got “${seen}”).`);
+  await row.locator('button', { hasText: exact('Approve') }).click();
+  const approve = await bob.dialog(`Approve ${name}?`);
+  // Backup copies stay off: that's a separate choice, with its own warning.
+  await approve.locator('.toggle-row', { hasText: 'Keep encrypted backup copies on it' }).waitFor();
+  await approve.locator('.modal-foot .btn.primary').click();
+  await bob.confirmPassword('Confirm approving a relay', t.pw.bob);
+  await bob.toast(`${name} is approved.`);
+  await bob.noModals();
+  await row.locator('.rpill', { hasText: 'Relaying calls' }).waitFor();
+  check(!(await bob.$('.admin-body .admin-head', { hasText: 'Member relays' }).locator('.badge-tag').count()), 'Nothing should be waiting any more.');
+
+  // Alice's page follows by itself.
+  await mine().locator('.rpill', { hasText: 'Relaying calls' }).waitFor();
+  check((await mine().innerText()).includes('No backups'), 'Her page should say the relay keeps no backups.');
+
+  // Everyone's calls can use it now: it's in /api/ice, marked as a member's, and its login doesn't name her.
+  const ice = await alice.page.evaluate(() => fetch('/api/ice', { headers: { Authorization: 'Bearer ' + localStorage.getItem('hearth.token') } }).then((r) => r.json()));
+  const entry = ice.find((e) => e.community === true);
+  check(entry && [].concat(entry.urls).some((u) => u.includes('198.51.100.77')), `/api/ice should carry the member’s relay (got ${JSON.stringify(ice.map((e) => e.urls))}).`);
+  const aliceId = await alice.page.evaluate(() => localStorage.getItem('hearth.userId'));
+  check(!String(entry.username).includes(aliceId) && !String(entry.username).includes('alice'), 'The relay login should not name the person.');
+  check(entry.region === 'Member relay' && !JSON.stringify(ice).includes('Lisbon'), `Apps should get “Member relay”, never the name she gave it (got ${entry.region}).`);
+
+  // Alice keeps her own calls off members' relays.
+  await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Privacy & safety') }).click();
+  const avoid = alice.$('.set-content .toggle-row', { hasText: 'Avoid relays run by members' });
+  check(!(await avoid.locator('input').isChecked()), 'Avoiding members’ relays should be off to begin with.');
+  check((await checkIn()).ok, 'The relay checks in again (it’s up).');
+  // Her app fetches its relay list again at once: the member's relay is in it only as where it is, with no login.
+  // (The list it fetches for the new choice: approving the relay made every app fetch one too, a moment later.)
+  const iceWhere = (page, want) => page.waitForResponse(async (r) => r.url().endsWith('/api/ice') && r.request().method() === 'GET' && want(await r.json().catch(() => [])), { timeout: 15000 });
+  const refetched = iceWhere(alice.page, (list) => list.some((e) => e.community === true && !('username' in e)));
+  await avoid.locator('.switch').click();
+  await alice.toast('Saved.');
+  check(JSON.parse(t.server.rows('SELECT privacy FROM users WHERE id = ?', aliceId)[0].privacy).memberRelays === 'avoid', 'The choice should be saved on her account.');
+  const avoiding = await (await refetched).json();
+  const where = avoiding.find((e) => e.community === true);
+  check(where && [].concat(where.urls).some((u) => u.includes('198.51.100.77')) && !('username' in where) && !('credential' in where),
+    `After avoiding, her app should fetch the relay list again, with the member’s relay and no login for it (got ${JSON.stringify(avoiding)}).`);
+
+  // She removes her relay, and is shown how to take it off the machine. Everyone's apps are told and fetch their relay
+  // list again (bob's too, who uses members' relays), so nobody's calls keep using it.
+  await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Help host') }).click();
+  await mine().locator('button', { hasText: exact('Remove') }).click();
+  const bobRefetched = iceWhere(bob.page, (list) => !list.some((e) => e.community === true));
+  await alice.modal(`Remove ${name}?`).locator('.modal-foot .btn.danger').click();
+  const uninstall = alice.modal(`Uninstall ${name}`);
+  check((await uninstall.locator('.cmd-box code').innerText()).trim() === 'sudo hearth-relay-uninstall', 'The uninstall command should be shown.');
+  await uninstall.locator('.modal-x').click();
+  await uninstall.waitFor({ state: 'detached' });
+  await mine().waitFor({ state: 'detached' });
+  const bobsList = await (await bobRefetched).json();
+  check(!bobsList.some((e) => e.community === true && e.username), `Bob’s app should fetch its relay list again, without a login for the removed relay (got ${JSON.stringify(bobsList)}).`);
+  await alice.closeSettings();
+  await bob.$('.admin-tabs .admin-tab', { hasText: 'Regions' }).click();
+  await bob.$('.admin-body .admin-head', { hasText: 'Member relays' }).waitFor();
+  check(!(await bob.$('.admin-body .member-row', { hasText: name }).count()), 'The owner’s list should no longer have it.');
+  const thrown = [...alice.pageErrors, ...bob.pageErrors];
+  check(!thrown.length, `No page errors (got ${thrown.join(' / ')}).`);
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -3330,6 +5707,7 @@ export const FLOWS = [
   ['direct messages: both ways, block and unblock, friends', directMessages],
   ['disappearing messages: turn on in a DM, a picture vanishes on both screens with its file and inbox entry, turn off, day dividers, asked before sending under a weaker timer; a channel message goes by the apps’ own timer', disappearing],
   ['attachments: image preview, byte-exact download, storage', attachments],
+  ['pictures on a phone: as big as the message allows, never cropped, sharp; the viewer zooms with a double tap and a pinch, swipes to the next and down to close; on a desktop the viewer fits the whole picture and the chat is as before, a touch laptop or tablet and a narrow window too, a short window keeps them to 40% of its height', phonePictures],
   ['pictures: avatar, custom emoji, server icon, GIF library', pictures],
   ['search: Ctrl+K words, from:, jump to the message', search],
   ['settings: display name, username, signed-in devices', settings],
@@ -3357,7 +5735,7 @@ export const FLOWS = [
   ['outside images: a picture link waits for a click and loads after it; Never and Always load; fonts come from Hearth', outsideImages],
   ['discord import: paste a template, see what is skipped, leave some out, create', discordImport],
   ['channel order: drag a channel into a category and a category above another, live for everyone; Move down by keyboard keeps focus (into a collapsed category too); a menu left open doesn’t undo another move', channelOrder],
-  ['away and status: Away after inactivity and back on input; a custom status that clears itself, live', awayAndStatus],
+  ['away and status: Away after inactivity and back on input; a custom status that clears itself, live; the profile beside a DM folds away and stays folded, apart from servers\u2019 member lists, and comes back', awayAndStatus],
   ['voice chat: open beside the call, both ways, a picture link from another site waits for a click, no threads, unread only once opened, pings always, pins, All messages, in a call', voiceChat],
   ['send later: schedule from the send button, edit, reschedule and send now from the list; cancel one in a DM; re-encrypted by itself when the key changes, never from a copy it can’t confirm; a signed-out session’s message waits for Keep; overdue ones ask first', sendLater],
   ['nicknames: set your own, seen in the member list, messages and @mention suggestions; a moderator changes and removes it; audit log', nicknames],
@@ -3367,4 +5745,20 @@ export const FLOWS = [
   ['join history: new members can’t read back (setting, audit log); someone joining again sees one line instead of locked rows, in a channel and a voice chat; later messages both ways', joinHistory],
   ['alert channels: add a signed webhook, its secret shown once, Test reaches it, masked address; off and remove need the password; the page stays put', alertChannels],
   ['discord habits: # picks a channel and the link opens it (unknown ones stay plain); headings, lists and >>> quotes; a spoiler picture with a description; Ctrl+/ and Shift+Esc', discordHabits],
+  ['staff deletion: the owner deletes an account for someone who can’t sign in, from Admin → Users', staffDelete],
+  ['phones: held sideways it’s still the phone layout; a swipe from the left edge opens the drawer; Back closes the drawer, members, a picture, a menu and settings without leaving; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
+  ['phone message actions: a long press opens a sheet (react, reply, copy, edit, delete; closes with Back, Esc, a tap or a swipe); a roomier message box with GIFs and Send later under +; the desktop keeps its hover toolbar and buttons', phoneMessageActions],
+  ['a video over the limit: made smaller on the device to fit, sent, and it plays', videoShrink],
+  ['the owner sends 12 files in one message; everyone else still stops at 10', ownerManyFiles],
+  ['update notes: only the owner publishes them; open apps show a new one once, as plain text', updateNotes],
+  ['spelling: common typos fixed as a word is finished, Backspace or Ctrl+Z puts one back, the last word fixed on send', spelling],
+  ['owner reset link: the owner makes a one-time link in Admin → Users for someone who can\u2019t sign in; they choose their own new password with it; the owner can\u2019t verify the keys it made', ownerResetLink],
+  ['photos & videos: every picture and video in a DM, a group chat and a channel, newest first, opened in the viewer and jumped to', mediaPanel],
+  ['photo comments and tags: a comment on one photo of several, tags added and removed, the panel filtered by a tag', photoNotes],
+  ['chat backgrounds: set in a DM and a group chat, seen live by the other side with a line in the chat, a picture, removed, and turned off on one device', chatBackgrounds],
+  ['the side view: a message and a picture pinned to the side stay beside the chat while you switch conversations, jump, unpin', sideView],
+  ['where the chat puts you: a DM reopens at its newest message as GIFs load, the "New messages" line above; Jump on a pin or a search result lands on the message and keeps it there; on a phone the pins close on Jump', keepYourPlace],
+  ['member relays: a member offers a machine in Help host, it checks in, the owner approves it with a password, it’s in everyone’s calls under a made-up login; the member avoids members’ relays, removes theirs and gets the uninstall command', memberRelays],
+  // Last: it restarts the server.
+  ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
 ];

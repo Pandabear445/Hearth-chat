@@ -50,7 +50,9 @@ Each item is checked by `npm run test:a11y` unless marked otherwise.
   the focused one, or the dialog's only field. It uses `aria-invalid` and `aria-describedby` (`markInvalid` /
   `clearInvalid`). Editing the field clears the error state.
 - The image viewer (`openViewer`) does the same: it traps Tab, closes on Esc and returns focus to the picture.
-  Pictures in messages open with Enter or Space.
+  Pictures in messages open with Enter or Space. On a touch screen it also takes gestures (`viewer-touch.js`), each
+  with a button too: on a phone, More has the previous and next pictures and zoom, beside Download and Close (44px).
+  With reduced motion the picture doesn't follow the finger or slide.
 
 ### Menus and popups (`popover()`, `menu()`, `contextMenu()`)
 - Any `button` built with `data-pop-anchor` gets `aria-haspopup="true"` and `aria-expanded="false"` automatically
@@ -88,7 +90,14 @@ Each item is checked by `npm run test:a11y` unless marked otherwise.
   collapsed category opens it, so the channel is still there to focus (and to move again). If a live update
   redrew the sidebar while the menu was open, the focus goes to the moved channel rather than the page. Items that
   would be refused (Manage Channels denied in that channel, or in one of a category's channels) aren't offered.
-- On phones, Esc closes the navigation drawer and returns focus to its button.
+- On phones, Esc closes the navigation drawer and returns focus to its button, then the side panel (members, a
+  thread, pins), which covers the chat on a phone; focus goes back to the conversation. On wider screens Esc leaves
+  the panel open beside the chat, as before.
+- On phones, Back (the gesture, or Android's back button) closes the menu, picture, message actions, dialog, side
+  panel or drawer on top, like Esc, and cancels a voice message being recorded, an edit or a reply, instead of
+  leaving Hearth (`public/js/phone-nav.js`; on touch tablets the same,
+  except the side panel, which sits beside the chat there). The swipes from the screen's left edge that
+  open and close the drawer, or close the side panel, only add a way: every one has a button that does the same.
 
 ### Announcements
 - `#toasts` is a polite live region (`role="status"`), so each toast is read once. Error toasts are `role="alert"`
@@ -182,6 +191,24 @@ On a 390×844 touch phone:
 - settings fit and can be closed. The close button now has a solid background; before, it sat transparently on top
   of the scrolling tab names;
 - in a voice channel, the call controls are on screen after joining.
+
+**Touch screens** (`pointer: coarse`; `public/js/device.js` and the matching media queries at the end of `app.css`;
+a desktop with a mouse is unchanged):
+- There's no hover, so the message toolbar is hidden and a long press on a message (or the context-menu key) opens
+  its actions in a bottom sheet (`ui.js` `sheet`): the quick reactions, then the same items as the ⋯ menu. The sheet
+  is a labelled modal dialog: it takes focus, keeps Tab inside, and closes with Esc, Back, a tap outside or a swipe
+  down, sending focus back to the message. Opened with a finger, focus goes back without the keyboard's focus ring
+  (`ui.js` `quietFocus`: the browser would otherwise draw it after typing in the message box, and leave a stray box
+  around the message); the next key press shows it again. Holding a finger on a message doesn't select its words;
+  **Copy text** is in the sheet.
+- Buttons and rows you tap are at least 44 px in both directions: header buttons, channel, DM and member rows,
+  category headings, settings tabs, menu items, dialog buttons and close buttons, the reply bar's Cancel, the voice
+  recording bar, a voice message's Play, the profile card's buttons, a call's own buttons and full-screen search's
+  close and filters. Where the look stays small (reactions under a message, a voice message's speed, the × on a
+  filter or a role, Download on a picture), the area that takes the tap is 44 px around it. Text boxes use 16 px text
+  so iOS doesn't zoom in on them.
+- The message box's buttons and the picture viewer's are 44 px on any touch screen, a tablet's too. In the phone
+  layout the message box keeps +, the text, emoji and Send; GIFs, voice messages and Send later are in the + menu.
 
 **Mobile keyboard.** iOS Safari, and Chrome without an opt-in, don't resize the page when the on-screen keyboard
 opens, so it covered the message box. Two changes handle this:

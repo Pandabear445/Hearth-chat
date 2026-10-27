@@ -70,6 +70,10 @@ is encrypted or assembled on the device.
   - a **"New messages"** divider above the first unread message;
   - an unread bar ("3 new messages since 7:46 PM · **Jump to first unread** · **Mark as read**"). Jump loads the
     page around the marker if it isn't loaded yet;
+  - where a conversation opens: a DM or group chat at its newest message (the divider and the bar above it), a server
+    channel at the divider when it's more than a screen up. `app.js` `keepPlace` keeps that place while GIFs, videos
+    and picture links (whose size only comes with the picture) load, and keeps a message jumped to (pins, replies,
+    search, Photos & videos, the side view, notifications) in the middle until they're in or you scroll;
   - **Jump to latest**, which already existed;
   - **Mark as read** and **Mark unread** on messages, channels, DMs and group chats, and **Mark server as read**
     (`POST /servers/:id/read`).
@@ -253,10 +257,11 @@ Before this, a thread reply counted nowhere: not as unread, not as a mention, an
   - `POST /channels/:id/messages/bulk-delete` with `{ ids: [...] }` (up to 100) or `{ count: 1–100 }` (the newest
     messages). Manage Messages in the channel; messages older than 14 days can't be picked; messages by people at
     or above your highest role are kept (the answer says how many). One transaction, one
-    `message:delete-bulk { channelId, messages: [{ id, threadId }] }` event per channel, one audit log entry
-    (`messages_bulk_deleted`). Like a single delete, thread replies, files, reactions and poll votes go too, and bots
-    get `message.deleted` for each message (written in one transaction per channel, `BOTS.events`). Refused while
-    you're timed out.
+    `message:delete-bulk { channelId, messages: [{ id, threadId }] }` event per channel (in a group chat also `last`,
+    its newest message now, and `lastMessageAt`, as every delete there carries for the conversation list), one audit
+    log entry (`messages_bulk_deleted`). Like a single delete, thread replies, files, reactions and poll votes go too,
+    and bots get `message.deleted` for each message (written in one transaction per channel, `BOTS.events`). Refused
+    while you're timed out.
 - **Server audit log and report inbox** (v19, `server/serveraudit.js`):
   - A new permission, **View Audit Log** (`1 << 19`), server-wide; owners and Administrators always have it. It
     counts as a moderator power, so it can't be on a role sold as a membership or one members pick themselves.
@@ -502,7 +507,8 @@ Built by the sender, carried inside the encrypted message. Design and the reason
    `media.js` `previewThumb`). The chip shows the card with a **Remove link preview** button.
 5. Sending puts `l: [{ v: 1, url, title, desc, site, kind, img? }]` in the payload next to `t` and `f`, only
    if the card is ready (sending never waits) and its link is still in the text. If the ciphertext would be
-   over 64,000 characters, the picture is dropped first, then the card (`payloadVariants`, `encryptFitting`).
+   over 64,000 characters (262,144 for the server's owner: see "Many files in one message"), the picture is
+   dropped first, then the card (`payloadVariants`, `encryptFitting`).
 6. Readers' apps (`secure.js` `openGroup`/`openDm` → `cleanLinks`) keep the card only if its URL is one of the
    message's links (outside code and spoilers), https, without credentials, without a mixed-script host or bidi
    characters, with every field capped and the picture a real WebP/JPEG of at most 16 KiB. `linkCardEl` draws
@@ -1143,7 +1149,8 @@ Socket events go only to `user:<you>`: `scheduled:update` (the item) and `schedu
 Items carry `id`, `serverId`, `channelId`, `dmId`, `threadId`, `replyTo`, `ciphertext`, `epoch`, `ref`, `draft`,
 `files` (a count), `sendAt`, `status` (`pending`, `held`, `failed`), `reason` (for held: `key`, `peer_key`,
 `session_ended`, `token_renewed`), `note`, `createdAt` and `encryptedAt`. `ref` must be 16–64 of `A-Z a-z 0-9 _ -` and `draft` an
-`x1:` string of at most 66,000 characters (400 `draft` otherwise); the server can't open it.
+`x1:` string of at most 2,000 characters more than the ciphertext may have (66,000; 264,144 for the server's owner;
+400 `draft` otherwise); the server can't open it.
 
 **Data model** (`scheduled_messages`, v19): owner, server, channel or DM (exactly one; no foreign key, so a deleted
 one is reported at send time), thread, reply, ciphertext, epoch, `ref` and `draft` (the sender's own copy),
@@ -1630,6 +1637,25 @@ text and show an ALT button that opens it; spoilers are blurred under a Spoiler 
 only uncovers them (videos and songs stay paused, file cards say Spoiler). The picture viewer's arrows skip spoilers
 nobody has opened yet.
 
+**Many files in one message** (the server's owner). Everyone can attach up to 10 files to a message, the server's
+owner up to 100 (`maxFilesFor` in `public/js/attachments.js`, `maxFilesOf` in `server/index.js`; the owner is
+`staffRole(uid) === 'owner'`, so handing the server over moves it). For the owner the server links up to 200 uploads
+to a message (a picture brings a thumbnail) in channels, DMs and scheduled messages, takes a ciphertext of up to
+262,144 characters (everyone else 64,000), and counts each of their files for messages as a tenth against the
+upload limits (so 200 uploads in a minute go through, and their avatar, icons and new servers aren't held up),
+without the per-network limit. Every app reads up to 100 files in any message (a reader can't tell who owns the
+server; anyone else's extra entries have no files linked). The sender's app makes each file ready and uploads it
+before the next, so a hundred photos never sit in memory at once; a send that stops keeps what went up (for 6
+hours: `p.sent`) and gives the files back to the box, so Send carries on from there; uploads wait as long as the
+server asks after "too many at once" (up to 2 minutes; longer, the send stops and says so); the screen stays on
+while more than 10 files go up. A message with more than 10 files shows its pictures as a grid of square tiles
+(`.msg-files.many`), and its videos, songs and pictures without a thumbnail over 2 MB wait for a click. Every
+download stops once a file is bigger than its message says (a thumbnail: 2 MB), so a message can't make readers
+download big files it calls small. A reply to a message longer than anyone else may send carries no copy of it
+(`quoteOf`): the app quotes it from the original. Forwarding one of the owner's albums that's too big for the
+forwarder's own limit forwards its first 10 files. Tests: `test/owner-many-files.test.js`,
+`test/files-retry.test.js`, the e2e flow "the owner sends 12 files".
+
 **Keyboard shortcuts** (`public/js/keybinds.js` `SHORTCUTS` and `shortcutGroups`; `openShortcuts` in app.js).
 Ctrl+/ (⌘+/) opens a sheet of every shortcut, in navigation, messages, calls (this person's own keybinds) and the
 picture viewer; pressed again, it closes. Also from Settings → Keybinds → See all shortcuts and the menu on your
@@ -1638,3 +1664,439 @@ name. Shift+Esc marks the server you're in as read (not in a group chat, nor whi
 **Tests**: `test/markdown-client.test.js`, `test/attachments-client.test.js`, `test/shortcuts-client.test.js` (every
 key `globalKeys` handles is in the sheet), the e2e flow "discord habits", and the shortcuts sheet and the attachment
 dialog in `npm run test:a11y`.
+
+## Spelling: checked and corrected as you type
+
+Settings → Chat → Spelling (`public/js/spelling.js`), on this device only: nothing typed is looked up anywhere, so it
+works the same in end-to-end encrypted conversations.
+- **Check spelling** (on by default) sets the `spellcheck` attribute of the message box and the edit boxes (a
+  message's, a scheduled message's): the browser's own checker underlines words it doesn't know. In the desktop app it
+  is also that app's spell checker switch (with suggestions and "Add to dictionary" in its right-click menu), so there
+  is one switch for it, not a second one in Apps & devices; if that was turned off before, this shows Off.
+- **Correct spelling as I type** (computers; phones and tablets have their keyboard's; on by default where the
+  browser's language is English, since the list is English: `im`, `dont` and `i` are words in other languages): when
+  a word is finished with a space, a new line or punctuation, a common typo is fixed (`CORRECTIONS`: about 430 typos
+  that aren't words themselves, missing apostrophes, `i` → `I`), keeping its capitals. Left out on purpose: real
+  words (`whys`, `underate`), typos of two different words (`hwo`, `wheather`, `wanst`), names (`Grammer`), other
+  languages' words (`posible`) and spellings people mean (`probly`). Two or three capitals (IM, CNA) are taken as an
+  abbreviation, and a word with a capital in the middle of a sentence as a name (Jony Ive; Mr. Noone, J. Noone and
+  A.J. Noone: a title's or an initial's full stop doesn't end a sentence, while those of "so do I.", U.S., P.S. and
+  p.m. do), so they're left, except words that always have one (Wensday). A word with a quote only before it is cut
+  short ('im for him) and left. A full stop waits for what comes after it, so file names and addresses (`dont.js`)
+  stay. Nothing is corrected inside `code` or ``` blocks, in @mentions, #channels, :emoji:, links, paths, words with
+  digits, a bot's /command, or a word that was pasted or dropped into the box (going by the text, line by line, as far
+  as it went in: a word that still has what came before it on its line, or what came after it, beside it, wherever
+  it has moved to; kept for the conversation, so a box made again for it still knows; a line is forgotten once none
+  of its words are there when something is typed, and all of them when the box is emptied or the message sent; at
+  worst a word typed exactly as something pasted, with the same words beside it, is left too), nor when the fix
+  wouldn't fit in the box's 4000 characters.
+- The last word is fixed when the message is sent (`correctSending`), as phones do, unless it was pasted. Saving an
+  edit fixes it only if it's new: not one that was already there, nor the word a fix made on sending put back by hand
+  (the old message's last word, after the same text; that word is then left alone, as below).
+- A fix is typed in as an edit of its own (`insertText`). Backspace right after it puts back what was typed, and that
+  word is left alone on this device from then on (`hearth.spellKept`). Ctrl+Z right after it does the same once
+  typing goes on (another Ctrl+Z goes on back through the typing instead, and keeps nothing). Ctrl+Z right after
+  that Backspace takes the fix after all (Ctrl+Z goes by the key's code too, so it works on a Cyrillic or Greek
+  keyboard). Each of these leaves the caret where it was; any other undo or redo is the browser's own. Tests: `test/spelling.test.js` (with a real box in Chromium when Playwright is installed), the e2e
+  flow "spelling".
+
+## Update notes ("What's new"): only the owner publishes them
+
+Hearth comes with no update notes of its own: nothing about an update is shown to anyone unless the server's owner
+publishes it. `public/js/whatsnew.js` holds no notes, the Android stores' changelog
+(`mobile/fastlane/.../changelogs/default.txt`) ships empty, and the release workflows don't make GitHub release notes
+up from commits (`test/update-notes.test.js` checks all three). In Admin → Owner → Update notes the owner writes a
+note (an optional title and up to 20 lines, plain text), previews it, publishes it, and can change or delete it later
+(`server/updatenotes.js`: `GET /api/update-notes` for everyone signed in, `POST/PUT/DELETE /api/admin/update-notes` for
+the owner alone; at most 50 kept, in `instance_settings`, so backups have them; each publish, change and deletion is
+in the audit log). A published note shows on each device in a "What's new" window until that window is closed
+(`unseenNotes`, `markNotesSeen`; by the note's id): at once in apps that are open (the `update-notes` event) and on
+every start and reconnect, but never on top of something the person is in the middle of (a dialog, sheet, menu, the
+picture viewer, typing) or while the app is out of sight: then it waits and looks again. A device that has never been
+here sees none from before; one that ran an older version sees what was published since. The owner's own notes count
+as seen on all their devices. Notes are drawn as text, never HTML or Markdown. A note can be kept out of the Android
+app ("Show it in the Android app too" off), for notes about paying, which Google Play doesn't allow there; switched on
+later, it shows there too.
+
+## Phones: held sideways, swipes and Back
+
+Phone-only: a desktop with a mouse looks and behaves as before. Two definitions decide, kept in one place
+(`public/js/device.js`, and the same media queries in `public/css/app.css`):
+- **Phone layout**: `(max-width: 760px), (pointer: coarse) and (max-height: 500px)`. A narrow window, as before, and
+  now also a phone held sideways (about 844×390), which used to get the desktop's server rail, channel list, chat and
+  member list side by side, leaving the chat a sliver. Sideways it gets the one-column layout with the drawer, a
+  slimmer header (44 px), and no header while the keyboard is up (the page is then only about 170 px tall). Rules for
+  wider screens use the opposite query.
+- **Touch UI**: `(pointer: coarse)`, phones and tablets: the swipes below, and a sideways swipe in the chat no longer
+  takes the browser back out of Hearth (`overscroll-behavior-x`).
+
+**Back closes what's open** (`backStack` in `public/js/phone-nav.js`, wired up by `phoneNav` in app.js; the one
+place Hearth adds history steps of its own). In the phone layout the drawer, the side panel (members, threads, pins,
+a voice channel's chat), a picture, a menu, a message's long-press actions and every dialog (settings too) cover the
+screen; on a touch tablet, pictures, menus, message actions and dialogs do (its side panel sits beside the chat, and
+Back leaves it). A voice message being recorded, a message being edited and a reply being written take the screen
+too, and Back cancels them as Esc or their own Cancel does (the recording is never sent; the edit leaves the message
+as it was). The top-most goes first: a menu, then the picture viewer (its More menu sits on it), the message
+actions, a dialog, whatever is under way in the side panel (a thread's), the side panel, the drawer, then whatever is
+under way in the chat: a recording, an edit, a reply. They come and go inside the chat, so `phoneNav` watches it (and
+the side panel) only while Back is Hearth's. While one is open, the page's history has one extra step at the same
+address; Back (the gesture, or the Android app's back button, which calls `WebView.goBack()`) lands on the page's own
+entry, and the one on top closes, as with its own close button (a thread opened from the Threads list goes back to
+the list; a dialog that can't be dismissed stays). While more stay open, the step comes back. Closing one with its own
+button, Esc or a tap beside it takes the step back out (`history.back()`), so the history never grows and the next
+Back after that leaves Hearth as before. Nothing is added on a desktop, before the page has been tapped (browsers
+skip such steps), or while a `#c/…` link waits for app.js to follow it (it rewrites that entry's address). A link
+followed while something is open isn't taken for Back. A step left over from before a reload is turned into an
+ordinary entry. Esc on a phone also closes the side panel (after the drawer); on a desktop it doesn't, as before.
+
+**Swipes** (`edgeSwipes`). Only in the phone layout on a touch screen, and only for swipes that start where they
+mean something: from the left 28 px of the screen, the drawer slides out under the finger; on the open drawer (or the
+dimmed chat beside it), a swipe left puts it away; with the side panel open, the swipe from the left edge closes the
+panel instead, like Back. Let go past halfway, or flick, and it finishes; otherwise it springs back. Swipes that go up
+and down, start a long press (selecting text), or begin anywhere else are left to the page. Every swipe has a button
+doing the same. Where Android's own back gesture takes the screen's edge, a touch that starts there never reaches the
+page, and Back closes things the same way.
+
+**Room for the text**: the phone layout's messages have a 40 px avatar column (32 px avatars) instead of 56 px, so a
+line of text gets about 22 px more; follow-up messages, replies and "Uploading…" notes line up with it. When the list
+gets shorter (the keyboard coming up, the phone turning) while you're at the newest messages, they stay in view.
+
+**Notches and the home bar**: with `viewport-fit=cover`, the header, drawer, side panel, settings, full-screen search,
+toasts and the message box keep `env(safe-area-inset-*)` away from the screen's edges (not the bottom one while the
+keyboard is up).
+
+**Tests**: `test/phone-nav-client.test.js` (the history and swipe logic, against stand-ins for the browser), and the
+e2e flow "phones" on an Android-sized touch phone: sideways it's the phone layout, an edge swipe opens the drawer,
+Back closes the drawer, the members panel, a picture, a menu and settings (then the drawer under it) and stays in Hearth,
+swipes and Esc close them, closing by their own buttons leaves `history.length` unchanged, and on a desktop opening
+members and settings adds nothing to the history; the flow "phone message actions": Back cancels a reply, an edit and
+a recording and stays in Hearth, and focus goes back to the message without a ring.
+
+## Photos & videos, comments on one photo, and tags
+
+What people asked for: a place in a DM to find every photo and video without scrolling up, and, when several photos
+go in one message, a way to comment on each and to tag them, in DMs and servers.
+
+### The Photos & videos panel
+`public/js/media-panel.js` (`createMediaPanel`) is a side panel (`S.panel = 'media'`, as wide as a thread). It is in
+DMs, group chats and channels. The way in is a header button in DMs and group chats on wider screens, and
+**⋯ → Photos & videos** everywhere.
+- **Paging.** It pages through `GET /api/dms/:id/media` and `/api/channels/:id/media` (`server/photos.js`). The
+  server can't tell a photo from a PDF, so these return the messages that listed any uploads (`files > 0`), newest
+  first, 30 at a time. The app keeps the photos and videos of each (`mediaEntries`: by type, leaving out voice
+  messages) and groups them by month.
+- **Filters.** All, Photos, Videos, and a tag. For a tag, `NOTES.tagIndex` lists its photos and any messages the panel
+  doesn't have yet come from `?ids=` (100 at a time).
+- **Live updates.**
+  - New messages, edits and deletes reach it, thread replies included.
+  - Disappearing messages leave on time: `armClientExpiry`, `purgeExpired` and `expiryListeners` cover messages only
+    the panel holds.
+  - Its state lives outside the draw, so the many presence-driven redraws of a DM's panel don't fetch again or lose the
+    scroll position.
+- **The chat's rules apply.**
+  - Spoilers stay covered.
+  - Word-filtered messages are hidden or blurred, but their thumbnails still load, so the server sees the same
+    downloads as in chat.
+  - Blocked people's and unreadable messages are left out.
+  - DMs and group chats are hidden while you share your screen.
+  - Tiles never carry `data-mid`, since `replaceMessageEl` would turn them into chat rows.
+
+### The viewer
+`openViewer` (app.js) takes a list of items (`{ m, f, fi, key, kind, thumb, full, name, alt, download }`). The panel
+passes its list, videos included. The chat builds the list from `img._item`, which `attachmentEl` sets on each picture.
+- **Videos** play in the stage, with no zoom. One over 20 MB, or of unknown size, waits for Play.
+- **Jump to message** is in the bar, and in More on phones.
+- **Side panel.** It hosts `NOTES.side(item)`: a column on the right, or a sheet over the bottom on a phone, behind a
+  Comments button.
+
+### Comments on one photo
+A comment is an ordinary encrypted reply, sent through the normal send path (`sendComment`).
+- **Inside the encryption**, it says which photo it is about: `ph: { i, u }`, the photo's index in the replied-to
+  message's files and its address, checked by `binding.js photoOf`. Edits and scheduled re-encryptions keep it; a
+  forward drops it.
+- **In the clear**, the request carries `replyFile: i`, so the server can count comments per photo (`reply_file`
+  column; `fileReplies` on every serialized message; `dm:file-replies` and `message:file-replies` when a comment is
+  posted, deleted or disappears).
+- **Which photo a comment is about** is only ever read from the decrypted `ph`. The viewer's list
+  (`GET /api/{dm-}messages/:id/comments?file=i`) keeps only replies whose binding says they reply to that message and
+  whose `ph` names that photo (`isCommentOn`).
+- **The viewer's list** loads 100 at a time, with Show more for the next. When a comment comes or goes it loads again
+  as far as it had been loaded (to the end when it had them all), so what Show more loaded and the comment you just
+  sent stay. Side panels on the same photo share one load. The comment box follows Settings → "Enter sends the
+  message", like the message box.
+- **In chat**, the quote shows a thumbnail of that exact photo. Tiles of messages with two or more photos or videos get
+  counts and a "Comment on this photo" button. The button isn't there on a spoiler nobody has opened yet.
+- **Where the server keeps none**: a photo past the message's `files` count (a forward from before v21, whose files
+  are the original's) gets no counts, button or side panel, since the server refuses comments and tags on it. A
+  message without `files` (an older server) is taken as keeping them.
+
+### Tags
+`public/js/photo-notes.js` covers labels on photos.
+- **Labels.** At most 40 characters, normalised (NFC; control and invisible characters removed) and compared without
+  case. At most 20 per photo and 300 per message. The box counts whole characters (an emoji once), in code: a
+  browser's `maxlength` would count an emoji twice.
+- **What counts.** On a photo, in the Photos & videos panel's chips and in what the box suggests, only tags that
+  opened with a key this device trusts, aren't by someone you blocked, and are on a photo or video that is still the
+  file they were sealed for (`labelOn`). The suggestions come from the conversation's tag index.
+- **Kept current.** Deleted and disappeared messages leave the index, the chips and the suggestions at once
+  (`NOTES.onDelete`, `expire`), and the copies fetched for the index go with them. A tag that didn't open is tried
+  again: a few times, less and less often, when its author's keys couldn't be looked up; when their keys are verified
+  or change; after reconnecting. The index keeps every message it needs, so working it out again after a change
+  fetches nothing.
+- **Storage.** Kept beside the message in `media_tags`, schema v21, through these routes:
+  - `GET /api/dms/:id/tags` and `/api/channels/:id/tags`;
+  - `POST /api/dm-messages/:id/tags` and `/api/messages/:id/tags`, with `{ id, fileIdx, ciphertext }`;
+  - `DELETE …/tags/:tagId`.
+
+  Events are `dm:tags` and `message:tags`.
+- **Sealing** (`e2ee.js`, `secure.js encryptTag` / `openTag`). The formats are new:
+  - `tc1:` in channels and group chats: the server's current key epoch, signed like messages;
+  - `td1:` in DMs.
+
+  Each has its own key derivation, and its additional data binds the conversation, epoch, message, file index, the
+  tag's id (picked by the app, the row's primary key) and its author. So the server can't move a tag or copy it under
+  another id, and a tag never opens as a message, nor a message as a tag. The payload `{ n, fu }` (label, the file's
+  address, checked against the photo on opening) is padded to exactly 256 bytes, so every tag is the same size. A tag
+  counts only when a key this device trusts for its author opened it.
+- **Who may tag and remove.** Adding needs what posting there needs: in a DM, not after a block either way; in a
+  channel, Send Messages and not timed out. Removing is for the tag's author, the photo's sender, or Manage Messages.
+
+Tests:
+- `test/photos.test.js` (routes, counts, permissions, clean-up on every delete path, query plans, the v20 → v21
+  upgrade);
+- `test/media-panel-client.test.js`;
+- `test/photo-notes-client.test.js` (sealing, binding, tampering, labels);
+- the e2e flows "photos & videos" and "photo comments and tags".
+
+## Chat backgrounds and Pin to side
+
+What people asked for: backgrounds "for DMs with friends and stuff", and to "pin messages on the side so people can
+look at messages and pictures at the same time".
+
+### Chat backgrounds (DMs and group chats)
+`public/js/chat-look.js` (`createChatLook`), with the server side in `server/looks.js` (schema v22).
+
+**Setting one.** The DM's and the group chat's ⋯ menus (`dmMenuItems`, `groupMenuItems`) have **Chat background…**.
+It opens a dialog with:
+- a live preview;
+- the app's presets (`BACKGROUNDS`);
+- "Your own picture", resized like a photo, encrypted, and uploaded as a blob;
+- Dim (0–0.8);
+- Remove.
+
+It's saved for everyone in the chat:
+- `PUT /api/dms/:id/look` or `PUT /api/groups/:id/look`, with `{ version, ciphertext, files }`;
+- `DELETE …/look`, with `{ version }`.
+
+`version` must be the stored one plus one; otherwise the answer is 409 `stale_look` with the current look, and the
+app takes it in and tries once more.
+
+**Who may set it.**
+- In a DM: either person, but not after a block either way, and not to a deleted account.
+- In a group chat: any member.
+
+**Encryption.**
+- Formats: `lkd1:` (DM) and `lkc1:` (group, signed, using the group's current key epoch), in `e2ee.js`. Each has
+  its own key derivation.
+- The additional data binds the conversation, the version, the author and (groups) the epoch, so the server can't
+  move a background to another chat, replay an older one, or claim someone else set it.
+- The payload is `{ bg, dim }`, padded to exactly 512 bytes, so a preset and a picture are the same size.
+  `cleanLook` (`secure.js`) lets through only a preset id, or a picture on this server: its address, its 32-byte
+  key, a whitelisted image type (no SVG), its width and height, and `dim`.
+- `openLook` only counts a background a key this device trusts for its author opened, the same rule as photo tags.
+- After a group chat's key changes (someone left, say), people who join are only handed the new key. So the first app
+  that opens the background and holds the new key seals the same background again with it (`reseal: true`, after a
+  random wait of up to 8 s so members don't all go at once; a 409 `stale_look` means someone else did it). The app
+  that made the new key does this too, even though for it the key was never "new". The server takes that only while
+  the stored one is sealed with an older key, with exactly the same uploads, and adds no line to the chat.
+- A background sealed again still counts as whoever set it: the server says so (`setBy`, the person on the newest
+  line), and blocking someone hides the backgrounds they set, not the ones their app happened to seal again.
+- The server can't see inside, and any member can replace the key by hand, so a member could pass another background
+  off as one sealed again. An app that had the background open checks: if it isn't the same one, it shows it as that
+  member's change, with a line in the chat (and counts it as theirs for a block). An app that opens it fresh can't
+  tell.
+- The picture is decrypted into a `blob:` URL this module made. Only such URLs reach CSS `url()`, and old ones are
+  revoked.
+
+**Showing it.** While a DM or group chat is open, the app shows its background as the backdrop. This uses the same
+place a server's theme background goes (`setServerTheme` in `renderAll`, `appearance.js`).
+- Settings → Appearance → **Show backgrounds people set for chats** (`chatLooks`, per device) turns it off.
+- Server themes and chat backgrounds each have their own switch.
+- While you share your screen, a DM or group chat that's covered has no background either (`applyServerTheme`), and
+  no "Chat background…" item (its dialog shows the picture; one that's open closes when the share starts), until you
+  pick "Show while sharing" or stop sharing.
+- Every change adds a line to the chat ("maya changed the chat background"). The lines come from `look_log` and
+  arrive as `lookEvents` with history pages, and live with `dm:look` / `group:look`.
+
+**On the server.**
+- `chat_looks` holds one row per conversation; `look_log` keeps the newest 50 entries.
+- A picture is linked with `blobs.look_conv`. The sweeps keep it while it's in use and remove it when it's replaced
+  or its chat is gone.
+
+### Pin to side
+`public/js/side-view.js` (`createSideView`).
+
+**Pinning.** "Pin to side" is in every message's menu (the hover toolbar's ⋯ and the phone's long-press sheet,
+`messageMenuItems`). The picture viewer has it too: the bar button, and More on a phone, for the picture or video
+shown.
+
+**The panel** is "Pinned to side" (`S.panel = 'side'`), as wide as a thread and resizable.
+- It stays open as you go from one conversation to another (on phones, where it covers the chat, going to another
+  chat closes it).
+- Ways in: a header button with the count, and the ⋯ menus.
+- Each card shows:
+  - who wrote it, when, and where it is;
+  - what its row in the chat says about who could have written it, from the same code (`messageTrust`): BOT and a
+    webhook's own name and picture, an older message nothing proves the author of, a key or signature that doesn't
+    check out, the server having moved, repeated or rolled it back. A card the word filter hides keeps the warnings,
+    as the chat's row does. A card is often a copy the panel fetched by itself, so a server could serve a message
+    there instead of in the chat: it never says less;
+  - the text, through the word filter, with blocked authors behind Show;
+  - the pinned picture as wide as the panel, or the message's pictures as thumbnails that open the viewer;
+  - Jump, and × to unpin.
+
+**What it keeps.** It's personal: `localStorage` `hearth.sideview.<userId>`, at most 25 items, never sent to the
+server, cleared on sign-out (`clearLocalCopies`).
+
+**Loading and live updates.**
+- A message the chat hasn't loaded comes from `GET /messages/:id/locate`, then that conversation's `?around=`
+  page, at most 2 at a time.
+- Edits, deletes, disappearing messages and new keys update the cards. Back online after being away, or opened
+  again, it starts over from the chat's copies and the server: the message just pinned is only handed over to the
+  next drawing, so an edit or delete missed meanwhile shows.
+- A flag turning up later shows on the card too: the chat loading another copy of the message (or deleting it), or
+  the server saying a reply's original is still there, draws the panel again, and only the cards whose flags changed
+  are drawn anew.
+- A disappearing message goes with everything kept of it (its decrypted pictures too) whether a redraw or the timer
+  finds it first.
+- Messages that are gone, or in a chat you can no longer open, say so.
+- Cards from DMs and group chats are hidden while you share your screen.
+
+Tests:
+- `test/chat-looks.test.js` (server);
+- `test/chat-look-client.test.js` (formats, tampering, trust, the version rule, blob URLs, the switch);
+- `test/side-view-client.test.js`;
+- the e2e flows "chat backgrounds" and "the side view".
+
+## The profile beside a DM folds away
+
+What the owner asked for: "make the side profile in dms fold in able so it's not always on the side". On a wide window
+a DM opens with the other person's profile in the side panel (`#members`, `dmProfilePanel` in `public/js/app.js`).
+- **Its own choice.** Whether it's shown is kept per device in `localStorage` `hearth.dmprofile` (`P.showDmProfile`),
+  apart from servers' and group chats' member lists (`hearth.members`, `P.showMembers`). It used to be that one choice,
+  so folding the profile hid member lists too and showing a member list brought the profile back. The first time an
+  app starts with it, it takes the member list's choice as it is then, so a profile someone had hidden stays hidden.
+  `restingPanel` decides the panel a channel or DM opens with, and goes back to when a thread closes (in a DM, also
+  when pinned messages, photos & videos or the side view close); going between a DM and a channel keeps an open panel
+  only if it's shown in both.
+- **Folding.** The panel has its own row with a fold button where it meets the chat ("Hide profile", mirrored when the
+  panel is on the left), and the header's person button ("Show profile" / "Hide profile", lit while it's open, with
+  `aria-expanded`) does the same. Folded with its own button, the focus goes to the header's button; unfolded from
+  there, it stays on it. The profile is drawn afresh whenever anyone's status or game changes; whatever had focus in
+  it (the fold button, a link, a mutual server) keeps it, and it stays scrolled where it was (`dmProfilePlace`).
+- **The slide.** Beside the chat it slides in about 180 ms (`slidePanel`, app.css `#members.panel-folding`): its width
+  and the gap beside it go to nothing and back, so the chat widens and narrows with it, and `keepPlace` holds the
+  newest message at the bottom as lines rewrap. A presence change meanwhile waits for it; going anywhere else stops it.
+  Pressed again before it's done, the slide under way turns back from where it got to (its animations reversed),
+  rather than the panel jumping to its full width first. With Reduce motion (the app's or the system's) it shows and
+  hides at once.
+- **Narrower windows and phones** are as before: it never opens by itself there, the header's button opens it over the
+  chat, and the fold button (or Back on a phone) closes it.
+
+Tests: `test/dm-profile-client.test.js` (the choice, taking it from the member list's once, DMs and servers apart,
+turning a slide back, focus and scroll kept through a redraw, the page) and the e2e flow "away and status"
+(`dmProfileFold`: focus kept on the fold button while Bob's status changes, fold, another DM, a server, a reload,
+unfold, focus, pressed twice each way, Reduce motion, a narrower window).
+
+## Member relays (help host)
+
+What the owner asked for: "when users join they can also host, like everyone that joins makes it stronger". Any member
+can run a call relay (coturn) for everyone here on a Linux machine of their own; it's used once the owner approves it,
+and if both agree it also keeps copies of the encrypted backups. It builds on linked regions (`server/regions.js`): a
+member's relay is a `regions` row with `kind = 'member'` (schema v23), with its own TURN secret.
+
+**The member's page** (Settings → Help host, `hostTab` in `public/js/settings.js`):
+- `GET /api/me/relays` lists their relays (at most 2) with status, traffic, bandwidth limit and backup copies, and
+  whether offers are on (when they're off: "The owner has turned off member relays.", and no offer button);
+- **Offer a machine**: a name, a bandwidth limit (10, 25, 50 or 100 Mbit/s, or no limit) and "Also keep encrypted
+  backup copies", then `POST /api/me/relays` and the install command in a dialog (`showCommand`, shared with
+  Admin → Regions);
+- **New install command** (`POST /api/me/relays/:id/reinstall`; for a relay that already checked in it asks first,
+  since the machine's check-in stops working until the new command runs there) and **Remove**
+  (`DELETE /api/me/relays/:id`, then `sudo hearth-relay-uninstall` to run on the machine);
+- a relay the owner removed (or that was dropped after a week offline while it waited for approval) stays listed,
+  *Removed by the owner*, with **How to uninstall** and **Dismiss** (`removed` in `GET /api/me/relays`; dismissing is
+  `DELETE /api/me/relays/:id` on it);
+- the name is shown only to the member and the owner: apps get "Member relay";
+- the page follows `relays:mine` (the server sends it when the owner changes one; `app.onSocket`) and asks again every
+  30 seconds while it's open, since a relay going offline sends nothing.
+
+The page lists what a relay sees and can't (the same list as README → Member relays).
+
+**Statuses** (`relayStatus` in `public/js/admin.js`, the same words on both pages):
+- *Waiting for install*;
+- *Waiting for approval*;
+- *Relaying calls*;
+- *Paused by the owner* (*Paused* in Admin);
+- *Offline since 3:12 PM*;
+- *Relay stopped*, when it checks in but coturn isn't running.
+
+**The owner's side** (Admin → Regions → Member relays, `memberRelays` in `admin.js`):
+- each row: who runs it, its IP (or "hasn't checked in", and where it was before if it changed in the last week),
+  status, load and traffic, limit, and backups (offered or not, on or off); the heading counts the ones waiting for
+  approval;
+- the page checks every 20 seconds and redraws only when something comes, goes or changes state; load, traffic and
+  free space are updated where they are (`data-live`), so keyboard focus and "Measure from this device" stay, and a
+  redraw puts focus back on the button it was on;
+- **Approve** (with "Keep encrypted backup copies on it" only when backup space was offered, off to start with),
+  **Resume** and **Backups on** ask for the password again (`withPassword`), as the server's step-up does;
+- **Pause**, **Backups off**, **Rename** and **Remove** don't;
+- "Let members offer relays" is `PATCH /api/admin/member-relays`.
+
+**Privacy & safety**: "Avoid relays run by members" sets `memberRelays: 'avoid'` (`PATCH /api/me/privacy`; the switch
+goes back if saving fails). The app then never uses, measures or connects through a member's relay, and drops the
+other side's candidates on one (`relays.js`, `voice.js`). `/api/ice` gives it no login for any member relay, only where
+every one is that anyone may still hold a login for (`community: true`, no username or credential), and the app never
+hands such an entry to WebRTC or measures it. Its offers and answers say `avoid: true`, and `voice:join` marks it in
+the list of who's in the call, so the other side's app builds that connection without member relays (`rtcConfig`), and
+starts it over without them if it learns this from an answer or a new offer. Changing the choice fetches `/api/ice`
+again at once on every device (`user:update`) and the relays are measured again; turned on during a call, every
+connection that may use a member relay starts over (`voice.avoidChanged`). Before a call, an avoider's list is fetched
+again when it's more than 10 minutes old. What it can't stop: someone running a modified app.
+
+**Keeping relay lists current**: the server emits `ice:changed` when a member relay comes into calls or leaves them, and
+every app fetches `/api/ice` again within 3 seconds (`iceChanged` in `app.js`): five in a row at once, then at most once
+a minute however often it's told; a list with member relays in it is also fetched again once it's 10 minutes old
+(checked every minute). Those waits and ages go by `performance.now()`, which setting the device's clock doesn't move,
+and logins' expiry is compared with the server's time (`S.clockOffset`). Next to its 8 with logins, an app that uses
+member relays is told where every other approved one is (no login: never used or measured), so a member relay that's no
+longer in the list at all left calls (paused, removed, its member suspended) and the connections set up with it start
+over (`voice.followMemberRelays`), while one that's only offline, or no longer among the person's 8, leaves calls alone.
+A list taken after a reconnect (the bootstrap's) is followed the same way, and so is an avoid choice made on another
+device meanwhile. Relays not measured yet are measured (otherwise every relay in the list would go into each call). The
+bootstrap's list makes way for one fetched while the bootstrap was on its way (told of a change during a reconnect),
+whichever answers first. Settings → Calls → Test relay tests this server's own relay only.
+
+**A member relay's address** (`POST /api/regions/:id/heartbeat`): an IPv4 address, the one its coturn hands out
+(`relayIp`), nobody else's relay's, and either the one the check-in comes from or one where the relay proves it is this
+relay: the server asks it for a relayed address under a login made with its own secret, and only a signed answer counts
+(`server/turnprobe.js`, with a login that runs out 12 hours later, so a relay whose clock is ahead still answers; for
+Hearth behind a proxy such as Cloudflare's, or a check-in over IPv6; never while the relay waits for a waiting place).
+It may change 4 times in 18 hours (then 429 until the oldest change is 18 hours old); changes of an approved relay go to
+the audit log. Check-ins are limited to 30 a minute per network (an IPv6 /64 as one) and per relay. An offer takes one
+of the 20 waiting places only once its machine checks in. The agent (version 5) checks in over IPv4 (any way that works
+when Hearth has no IPv4 address), and follows a new address on the machine's own network as well as a new public one
+(`relay-ip` and `external-ip`). On the machine, an nftables rule (`/etc/hearth-region/relay-guard.nft`, loaded by a
+drop-in each time coturn starts) keeps the relay from passing anything on to the machine itself, except to its own relay
+ports: coturn relays to its own addresses whatever `denied-peer-ip` says. It hooks output at priority -150, before
+destination NAT (-100), so a port Docker, Podman or Kubernetes publishes for a container counts as the machine's own.
+The agent puts it back within a minute if an nftables reload or update flushed it, and stops coturn if it can't.
+
+The rest of the server side (per-relay pseudonyms, at most 8 member relays per person, the uninstall script, the
+agent switching itself off after a day of refusals): README → Member relays, and SECURITY.md.
+
+Tests:
+- `test/member-relays.test.js` (server, the agent, the installer and uninstaller, the address check against coturn);
+- `test/relays-client.test.js` (choosing relays, dropping candidates, following the list);
+- `test/member-relays-ui.test.js` (the pages' words and wiring);
+- the e2e flow "member relays".

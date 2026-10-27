@@ -54,7 +54,7 @@ const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 module.exports = function setupUsability(ctx) {
   const { api, auth, db, fail, wrap, rateLimit, stepUp, auditLog, serverAudit, perms, PM, ALL, newId, now, emitTo, emitServer, brandName,
-    requireServer, requirePerm, requireChannel, requireDm, isMember, serverOf, serializeMessage, serializeDmMessage, reactionsFor,
+    requireServer, requirePerm, requireChannel, requireDm, isMember, serverOf, serializeMessage, serializeDmMessage, extrasFor,
     getUserRow, selfUser, nameOf, history } = ctx;
 
   // ---------------------------------------------------------------- helpers
@@ -86,12 +86,12 @@ module.exports = function setupUsability(ctx) {
     }
     return null;
   }
-  const serialize = (v, reactions) => (v.channel ? serializeMessage(v.row, v.channel, reactions, v.since) : serializeDmMessage(v.row, reactions));
+  const serialize = (v, extras) => (v.channel ? serializeMessage(v.row, v.channel, extras, v.since) : serializeDmMessage(v.row, extras));
 
   // ---------------------------------------------------------------- saved messages
-  const savedOut = (uid, r, reactions) => {
+  const savedOut = (uid, r, extras) => {
     const v = visibleMessage(uid, r.message_id);
-    return { messageId: r.message_id, note: r.note || null, savedAt: r.created_at, ...(v ? { conv: v.conv, message: serialize(v, reactions) } : { unavailable: true }) };
+    return { messageId: r.message_id, note: r.note || null, savedAt: r.created_at, ...(v ? { conv: v.conv, message: serialize(v, extras) } : { unavailable: true }) };
   };
   api.get('/me/saved', auth, (req, res) => {
     rateLimit('saved-read:' + req.userId, 120, 60000);
@@ -99,8 +99,9 @@ module.exports = function setupUsability(ctx) {
     const before = /^\d{1,16}$/.test(String(req.query.before || '')) ? Number(req.query.before) : Number.MAX_SAFE_INTEGER;
     const rows = db.prepare('SELECT * FROM saved_messages WHERE user_id = ? AND created_at < ? ORDER BY created_at DESC, message_id DESC LIMIT ?').all(req.userId, before, limit + 1);
     const page = rows.slice(0, limit);
-    const reactions = reactionsFor(page.map((r) => r.message_id));
-    res.json({ items: page.map((r) => savedOut(req.userId, r, reactions)), hasMore: rows.length > limit });
+    // Saved messages can be channel and DM messages alike.
+    const extras = extrasFor(page.map((r) => r.message_id));
+    res.json({ items: page.map((r) => savedOut(req.userId, r, extras)), hasMore: rows.length > limit });
   });
   api.get('/me/saved/ids', auth, (req, res) => {
     res.json(db.prepare('SELECT message_id FROM saved_messages WHERE user_id = ? ORDER BY created_at DESC').all(req.userId).map((r) => r.message_id));
@@ -464,7 +465,7 @@ module.exports = function setupUsability(ctx) {
       ? db.prepare('SELECT root_id, last_reply_id FROM thread_activity WHERE channel_id = ? AND last_reply_id < ? ORDER BY last_reply_id DESC LIMIT ?').all(c.id, before, limit + 1)
       : db.prepare('SELECT root_id, last_reply_id FROM thread_activity WHERE channel_id = ? ORDER BY last_reply_id DESC LIMIT ?').all(c.id, limit + 1);
     const page = rows.slice(0, limit);
-    const reactions = reactionsFor(page.map((r) => r.root_id));
+    const extras = extrasFor(page.map((r) => r.root_id), 'messages');
     const opts = { floor: threadFloor(req.userId, c.id), suppressAll: suppressedAll(req.userId, c) };
     const since = history.startOf(c.server_id, req.userId);
     const threads = [];
@@ -475,7 +476,7 @@ module.exports = function setupUsability(ctx) {
       // replied leave out replies whose time has passed. One started before your history in this server starts
       // (server/joinhistory.js) isn't listed: you can't open it.
       if (!alive(root) || !history.visible(root, since)) continue;
-      const msg = serializeMessage(root, c, reactions, since);
+      const msg = serializeMessage(root, c, extras, since);
       const { unread, mentions, lastReadId, lastId } = threadState(req.userId, root.id, c, opts);
       if (!lastId) continue;
       threads.push({
@@ -790,8 +791,8 @@ module.exports = function setupUsability(ctx) {
       ? db.prepare(`SELECT * FROM messages WHERE channel_id = ?${hist.sql} AND ${LIVE} AND id > ? ORDER BY id ASC LIMIT ?`).all(a.channel.id, ...hist.args, t, after, n)
       : db.prepare(`SELECT * FROM dm_messages WHERE dm_id = ? AND ${LIVE} AND id > ? ORDER BY id ASC LIMIT ?`).all(a.dm.id, t, after, n);
     e.served += rows.length;
-    const reactions = reactionsFor(rows.map((r) => r.id));
-    res.json({ messages: rows.map((r) => (a.kind === 'c' ? serializeMessage(r, a.channel, reactions, since) : serializeDmMessage(r, reactions))), hasMore: rows.length === n, served: e.served });
+    const extras = extrasFor(rows.map((r) => r.id), a.kind === 'c' ? 'messages' : 'dm_messages');
+    res.json({ messages: rows.map((r) => (a.kind === 'c' ? serializeMessage(r, a.channel, extras, since) : serializeDmMessage(r, extras))), hasMore: rows.length === n, served: e.served });
   });
 
   return { pushAllowed, shapePush, wantsAll, recordMentions, markSent, markThreadSent, threadStateWithBadge, threadStates, logPin, timeoutOf, dndActive, settingsOf };

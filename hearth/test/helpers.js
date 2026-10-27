@@ -96,6 +96,7 @@ async function startServer(extraEnv = {}) {
   try { await launch(); } catch (e) { await sink.close(); throw e; }
   const config = await (await fetch(base + '/api/config')).json();
 
+  let lastCall = 0; // when the last request ended
   const srv = {
     base, dir, port, config, get child() { return child; }, get log() { return log; },
     // Stops and starts the same server on the same data (like an update or a reboot), optionally with some
@@ -108,15 +109,26 @@ async function startServer(extraEnv = {}) {
       let payload;
       if (method === 'GET' || method === 'HEAD') { raw = undefined; body = undefined; }
       if (raw !== undefined) { payload = raw; if (!h['content-type']) h['content-type'] = 'application/json'; } else if (body !== undefined) { payload = JSON.stringify(body); h['content-type'] = 'application/json'; }
+      // After a pause (a test busy with synchronous work, spawnSync, holds up fetch's own idle timer) the kept-alive
+      // connection may be one the server is closing at its 5 s keep-alive just then. A request that changes something
+      // never goes again by itself (below), so a HEAD goes first: it finds out, and goes again on a new connection.
+      if (method !== 'GET' && method !== 'HEAD' && Date.now() - lastCall > 2000) await srv.call('HEAD', '/');
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), timeout);
       try {
-        const r = await fetch(base + (p.startsWith('/') ? p : '/' + p), { method, headers: h, body: payload, signal: ctl.signal, redirect: 'manual' });
+        const go = () => fetch(base + (p.startsWith('/') ? p : '/' + p), { method, headers: h, body: payload, signal: ctl.signal, redirect: 'manual' });
+        let r;
+        try { r = await go(); } catch (e) {
+          // A kept-alive connection the server closed (idle past its 5 s keep-alive, while a test was busy) just as it
+          // was used again: a request that changes nothing goes again, on a new one.
+          if (!((method === 'GET' || method === 'HEAD') && e.cause && e.cause.code === 'UND_ERR_SOCKET')) throw e;
+          r = await go();
+        }
         const text = await r.text();
         let json = null;
         try { json = JSON.parse(text); } catch { /* not JSON */ }
         return { status: r.status, json, text, headers: r.headers };
-      } finally { clearTimeout(timer); }
+      } finally { clearTimeout(timer); lastCall = Date.now(); }
     },
     api(method, p, opts) { return srv.call(method, '/api' + p, opts); },
     // Creates an account the way the app does (real P-256 identity key; the rest is opaque to the server).

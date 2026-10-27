@@ -222,10 +222,16 @@ public class MainActivity extends BridgeActivity {
             if (!request.isForMainFrame()) return false;
             String url = request.getUrl().toString();
             if (isOurs(url)) return false;
+            // No way to pay from the app, whatever the page links to (see BridgePolicy.isPaymentPage).
+            if (BridgePolicy.isPaymentPage(url)) {
+                Toast.makeText(MainActivity.this, "Payments aren't available in the Android app", Toast.LENGTH_SHORT).show();
+                return true;
+            }
             // Leaving the connect screen: that's the server the person just chose (covers old web views
-            // without window.HearthAndroid, which can't tell us directly).
+            // without window.HearthAndroid, which can't tell us directly). Its privacy policy link isn't: it goes
+            // to the browser below, like links from the server's pages.
             String from = view.getUrl() == null ? "" : originOf(view.getUrl());
-            if (from.equals(localOrigin()) && (url.startsWith("https://") || url.startsWith("http://"))) {
+            if (from.equals(localOrigin()) && (url.startsWith("https://") || url.startsWith("http://")) && !BridgePolicy.opensInBrowser(url)) {
                 setServerOrigin(originOf(url));
                 return false;
             }

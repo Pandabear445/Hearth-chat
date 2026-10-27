@@ -269,6 +269,54 @@ read(); setInterval(read, 25).unref(); Date.now = () => real() + off;\n`);
     assert.equal(r.status, 200, r.text);
   });
 
+  test('many people signing in from one network (a school, an office) aren’t locked out, but wrong passwords still are', async () => {
+    await setCaptcha('off'); // every attempt counts toward the limits (and failures don't make the puzzles harder)
+    try {
+      const shared = newIp();
+      // 25 people behind one address sign in, each with their own right password: more than the network's 20.
+      const people = [];
+      for (let i = 0; i < 25; i++) people.push(await srv.register());
+      for (const u of people) {
+        const r = await login(shared, u.authKey, {}, u);
+        assert.equal(r.status, 200, r.text);
+      }
+      // Guesses from that network are still capped at 20: a right password in between gives back only its own try.
+      const st = [];
+      for (let i = 0; i < 21; i++) {
+        const u = people[i % people.length];
+        st.push((await login(shared, hex(32), {}, u)).status);
+        if (i === 4 || i === 9 || i === 14) assert.equal((await login(shared, u.authKey, {}, u)).status, 200, 'a right password between the guesses');
+      }
+      assert.deepEqual(st, [...Array(20).fill(401), 429]);
+      // Once the network is at its limit, even a right password waits (the limit comes before the check)…
+      assert.equal((await login(shared, people[0].authKey, {}, people[0])).status, 429);
+      // …until the window is over.
+      await advance(10 * 60 * 1000 + 1000);
+      assert.equal((await login(shared, people[0].authKey, {}, people[0])).status, 200);
+    } finally { await setCaptcha('on'); }
+  });
+
+  test('right passwords still count toward a cap per network (password checks are slow), and a suspended account gets no try back', async () => {
+    await setCaptcha('off');
+    try {
+      // Four accounts signing in over and over from one address with their right passwords: 100 password checks every
+      // 10 minutes, then that network waits, however right the passwords are.
+      const net = newIp();
+      const four = [];
+      for (let i = 0; i < 4; i++) four.push(await srv.register());
+      const st = [];
+      for (let i = 0; i < 101; i++) { const u = four[i % 4]; st.push((await login(net, u.authKey, {}, u)).status); }
+      assert.deepEqual(st, [...Array(100).fill(200), 429]);
+      // A suspended account's right password is turned away and gives nothing back: after 20, the network waits. (From
+      // the account's own network, whose limit for that account is 100 a day, so it's the network's that shows.)
+      const s = await srv.register();
+      assert.equal((await srv.api('POST', `/admin/users/${s.id}/suspend`, { token: srv.owner.token, ip: srv.owner.ip, body: { reason: 'flood' } })).status, 200);
+      const got = [];
+      for (let i = 0; i < 21; i++) got.push((await login(s.ip, s.authKey, {}, s)).status);
+      assert.deepEqual(got, [...Array(20).fill(403), 429]);
+    } finally { await setCaptcha('on'); }
+  });
+
   test('wrong passwords with solved checks are still limited per account from new networks', async () => {
     const u = await srv.register();
     const st = [];

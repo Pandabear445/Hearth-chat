@@ -38,6 +38,12 @@ test("an outsider can't read, post to, or look into a server they aren't in", as
     ['GET', `/messages/${aliceMsg}/thread`], ['GET', `/messages/${aliceMsg}/locate`], ['POST', `/messages/${aliceMsg}/reactions`, { emoji: '👍' }],
     ['PATCH', `/messages/${aliceMsg}`, { ciphertext: cipher() }], ['DELETE', `/messages/${aliceMsg}`], ['POST', `/messages/${aliceMsg}/pin`],
     ['DELETE', `/servers/${server.id}`], ['POST', `/servers/${server.id}/transfer`, { userId: eve.id }],
+    // Photos & videos (server/photos.js).
+    ['GET', `/channels/${textChannel.id}/media`], ['GET', `/channels/${textChannel.id}/media?ids=${aliceMsg}`], ['GET', `/channels/${textChannel.id}/tags`],
+    ['GET', `/messages/${aliceMsg}/comments`], ['POST', `/messages/${aliceMsg}/tags`, { id: 'A'.repeat(22), fileIdx: 0, ciphertext: cipher() }],
+    ['DELETE', `/messages/${aliceMsg}/tags/${'A'.repeat(22)}`],
+    // Chat backgrounds (server/looks.js): a server isn't a group chat, and an outsider doesn't get to learn that.
+    ['PUT', `/groups/${server.id}/look`, { version: 1, ciphertext: cipher() }], ['DELETE', `/groups/${server.id}/look`, { version: 1 }],
   ]) {
     const r = await as(eve, m, p, b);
     assert.ok(DENIED.includes(r.status), `${m} ${p} → ${r.status}`);
@@ -49,6 +55,11 @@ test("an outsider can't read or touch someone else's DMs", async () => {
   for (const [m, p, b] of [
     ['GET', `/dms/${dm.id}/messages`], ['POST', `/dms/${dm.id}/messages`, { ciphertext: cipher() }], ['GET', `/dms/${dm.id}/pins`],
     ['PATCH', `/dm-messages/${aliceDmMsg}`, { ciphertext: cipher() }], ['DELETE', `/dm-messages/${aliceDmMsg}`],
+    // Photos & videos (server/photos.js).
+    ['GET', `/dms/${dm.id}/media`], ['GET', `/dms/${dm.id}/media?ids=${aliceDmMsg}`], ['GET', `/dms/${dm.id}/tags`], ['GET', `/dm-messages/${aliceDmMsg}/comments`],
+    ['POST', `/dm-messages/${aliceDmMsg}/tags`, { id: 'A'.repeat(22), fileIdx: 0, ciphertext: cipher() }], ['DELETE', `/dm-messages/${aliceDmMsg}/tags/${'A'.repeat(22)}`],
+    // Chat backgrounds (server/looks.js).
+    ['PUT', `/dms/${dm.id}/look`, { version: 1, ciphertext: cipher() }], ['DELETE', `/dms/${dm.id}/look`, { version: 1 }],
   ]) {
     const r = await as(eve, m, p, b);
     assert.ok(DENIED.includes(r.status), `${m} ${p} → ${r.status}`);
@@ -114,7 +125,8 @@ test('every admin endpoint refuses normal users (403) and anonymous callers (401
     + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'activity.js'), 'utf8')
     + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'money.js'), 'utf8')
     + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'memberships.js'), 'utf8')
-    + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'regions.js'), 'utf8');
+    + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'regions.js'), 'utf8')
+    + require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server', 'updatenotes.js'), 'utf8');
   const routes = [...src.matchAll(/api\.(get|post|put|patch|delete)\('(\/admin\/[^']*)'/g)].map((m) => [m[1].toUpperCase(), m[2].replace(/:(\w+)/g, (x, k) => (k === 'id' ? alice.id : 'x'))]);
   assert.ok(routes.length > 40, `found ${routes.length} admin routes`);
   for (const [m, p] of routes) {
@@ -157,4 +169,87 @@ test('a deleted account is gone: can’t sign in, its sessions are dead, its nam
   await srv.register(u.username); // the name can be used again
   assert.equal((await as(srv.owner, 'DELETE', '/me', { authKey: srv.owner.authKey, confirm: 'owner' })).status, 400, 'the instance owner must hand over first');
   assert.equal((await as(alice, 'DELETE', '/me', { authKey: alice.authKey, confirm: 'alice' })).json.code, 'owns_servers');
+});
+
+// Things of theirs the account row doesn't hold: settings and bookmarks, the comments on their profile page, which
+// servers they were in, and bots they made (turned off, since nobody can look after them any more).
+function giveThings(u) {
+  const t = Date.now();
+  srv.sql('INSERT INTO saved_messages (user_id, message_id, note, created_at) VALUES (?, ?, ?, ?)', u.id, aliceMsg, 'x1:' + hex(20), t);
+  srv.sql('INSERT INTO read_states (user_id, conv, last_read_id, updated_at) VALUES (?, ?, ?, ?)', u.id, textChannel.id, aliceMsg, t);
+  srv.sql('INSERT INTO mention_marks (message_id, conv, user_id) VALUES (?, ?, ?)', aliceMsg, textChannel.id, u.id);
+  srv.sql("INSERT INTO notify_prefs (user_id, target, level, updated_at) VALUES (?, ?, 'all', ?)", u.id, server.id, t);
+  srv.sql("INSERT INTO user_prefs (user_id, data, updated_at) VALUES (?, '{\"folders\":[]}', ?)", u.id, t);
+  srv.sql('INSERT INTO profile_comments (id, profile_id, author_id, text, created_at) VALUES (?, ?, ?, ?, ?)', 'c' + hex(8), u.id, bob.id, 'nice page', t);
+  srv.sql("UPDATE users SET stripe_customer = 'cus_test' WHERE id = ?", u.id);
+}
+const leftOver = (u) => ['saved_messages', 'read_states', 'mention_marks', 'notify_prefs', 'user_prefs', 'former_members']
+  .filter((t) => srv.sql(`SELECT COUNT(*) n FROM ${t} WHERE user_id = ?`, u.id)[0].n)
+  .concat(srv.sql('SELECT COUNT(*) n FROM profile_comments WHERE profile_id = ?', u.id)[0].n ? ['profile_comments'] : [])
+  .concat(srv.sql('SELECT stripe_customer FROM users WHERE id = ?', u.id)[0].stripe_customer ? ['stripe_customer'] : []);
+
+test('deleting your account also erases your settings, bookmarks and profile comments, and turns off bots you made', async () => {
+  const u = await srv.register();
+  const { code } = (await as(alice, 'POST', `/servers/${server.id}/invites`, {})).json;
+  assert.equal((await as(u, 'POST', `/invites/${code}/join`)).status, 200);
+  giveThings(u);
+  const made = await as(srv.owner, 'POST', '/bots', { name: 'helper', scopes: [] });
+  assert.equal(made.status, 200, made.text);
+  srv.sql('UPDATE bots SET owner_id = ? WHERE id = ?', u.id, made.json.bot.id);
+  assert.equal((await as(u, 'DELETE', '/me', { authKey: u.authKey, confirm: u.username })).status, 200);
+  assert.deepEqual(leftOver(u), []);
+  assert.equal(srv.sql('SELECT disabled FROM bots WHERE id = ?', made.json.bot.id)[0].disabled, 1, 'their bot is off');
+  assert.equal(srv.sql('SELECT COUNT(*) n FROM members WHERE user_id = ?', u.id)[0].n, 0);
+});
+
+test('staff can delete someone else’s account: admins and the owner only, below their rank, with their own password', async () => {
+  const mod = await srv.register(); const admin = await srv.register(); const admin2 = await srv.register();
+  for (const [x, role] of [[mod, 'moderator'], [admin, 'admin'], [admin2, 'admin']]) {
+    assert.equal((await as(srv.owner, 'PUT', '/admin/staff', { userId: x.id, role, authKey: srv.owner.authKey })).status, 200);
+  }
+  const kid = await srv.register();
+  const other = (await srv.login(kid)).json.token;
+  const { code } = (await as(alice, 'POST', `/servers/${server.id}/invites`, {})).json;
+  assert.equal((await as(kid, 'POST', `/invites/${code}/join`)).status, 200);
+  giveThings(kid);
+  const del = (who, target, body) => as(who, 'DELETE', `/admin/users/${target.id}`, body);
+  const ok = (who, target) => ({ confirm: target.username, authKey: who.authKey, reason: 'under 13' });
+  // Who may: not moderators, not on staff at your level or above, not on yourself.
+  assert.equal((await del(mod, kid, ok(mod, kid))).status, 403, 'moderators can suspend, not delete');
+  assert.equal((await del(admin, admin2, ok(admin, admin2))).status, 403, 'an admin can’t delete another admin');
+  assert.equal((await del(admin, srv.owner, ok(admin, srv.owner))).status, 403, 'nor the owner');
+  assert.equal((await del(admin, admin, ok(admin, admin))).status, 400, 'nor themselves (that’s Settings → Delete account)');
+  // The username typed out, and the staff member's own password.
+  assert.equal((await del(admin, kid, { ...ok(admin, kid), confirm: 'someone' })).json.code, 'confirm');
+  assert.equal((await del(admin, kid, { ...ok(admin, kid), authKey: kid.authKey })).json.code, 'bad_password', 'the account’s own password doesn’t do');
+  assert.equal((await del(admin, kid, { confirm: kid.username })).status, 401);
+  // A server they own is dealt with first, as when they delete it themselves.
+  const owned = (await as(kid, 'POST', '/servers', { name: 'Kid Club' })).json;
+  const refused = await del(admin, kid, ok(admin, kid));
+  assert.deepEqual([refused.status, refused.json.code], [400, 'owns_servers']);
+  assert.match(refused.json.error, /Kid Club/);
+  assert.equal((await as(admin, 'DELETE', `/admin/servers/${owned.id}`)).status, 200);
+  assert.equal(srv.sql('SELECT deleted_at FROM users WHERE id = ?', kid.id)[0].deleted_at, null, 'nothing happened while refused');
+
+  const r = await del(admin, kid, ok(admin, kid));
+  assert.equal(r.status, 200, r.text);
+  // The same as deleting it yourself: signed out everywhere, can't sign in, keys and email gone, name free.
+  assert.equal((await srv.api('GET', '/bootstrap', { token: kid.token, ip: kid.ip })).status, 401);
+  assert.equal((await srv.api('GET', '/bootstrap', { token: other, ip: kid.ip })).status, 401);
+  assert.equal((await srv.login(kid)).status, 401);
+  const row = srv.sql('SELECT username, public_key, enc_private_key, email, deleted_at FROM users WHERE id = ?', kid.id)[0];
+  assert.ok(row.deleted_at && row.enc_private_key === '' && !row.email && row.username !== kid.username);
+  assert.equal(row.public_key, kid.publicKey);
+  assert.deepEqual(leftOver(kid), []);
+  assert.equal(srv.sql('SELECT COUNT(*) n FROM members WHERE user_id = ?', kid.id)[0].n, 0);
+  // In the audit log as done by that admin, with the reason.
+  const log = srv.sql("SELECT admin_id, detail FROM admin_log WHERE action = 'account_deleted_by_staff' AND target = ?", kid.id);
+  assert.deepEqual(log, [{ admin_id: admin.id, detail: `${kid.username} — under 13` }]);
+  assert.equal((await as(admin, 'GET', `/admin/users/${kid.id}`)).json.deletedAt > 0, true, 'the admin window knows it’s deleted');
+  // Once only; and bot accounts aren't people's.
+  assert.equal((await del(admin, { id: kid.id, username: row.username }, { confirm: row.username, authKey: admin.authKey })).json.code, 'deleted');
+  const bot = (await as(srv.owner, 'POST', '/bots', { name: 'notaperson', scopes: [] })).json.bot;
+  const botName = srv.sql('SELECT username FROM users WHERE id = ?', bot.id)[0].username;
+  assert.equal((await del(admin, { id: bot.id }, { confirm: botName, authKey: admin.authKey })).json.code, 'bot');
+  await srv.register(kid.username); // the name can be used again
 });

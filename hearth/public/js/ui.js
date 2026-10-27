@@ -1,8 +1,9 @@
-// Modals, popovers and menus.
+// Modals, popovers, menus and bottom sheets.
 import { h, icon } from './util.js';
 
 const layer = () => document.getElementById('layer');
 let openPop = null;
+let openSheet = null;
 
 // Everything a keyboard user can reach inside `root`, in tab order.
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled):not([type=hidden]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
@@ -20,11 +21,31 @@ export function trapTab(e, root) {
   if (e.shiftKey && (at === first || !root.contains(at))) { e.preventDefault(); last.focus(); }
   else if (!e.shiftKey && (at === last || !root.contains(at))) { e.preventDefault(); first.focus(); }
 }
-// Puts focus back where it was before a dialog or popup opened, if that place still exists.
+// Puts focus back where it was before a dialog or popup opened, if that place still exists (quietly: quietFocus).
+const stillThere = (targets) => targets.find((el) => el && el.isConnected && el.getClientRects().length);
 function restoreFocus(...targets) {
-  const t = targets.find((el) => el && el.isConnected && el.getClientRects().length);
+  const t = stillThere(targets);
   if (t) t.focus({ preventScroll: true });
 }
+function restoreQuietly(...targets) {
+  const t = stillThere(targets);
+  if (t) quietFocus(t);
+}
+// Focus handed back after something done with a finger (a sheet put away, Back on a phone): it goes where it belongs,
+// for screen readers, but without the keyboard's focus ring, which a browser draws after typing in a text box and
+// which would be left as a stray box on the screen. The ring is back with the next key press (app.css .quiet-focus).
+export function quietFocus(el) {
+  el.classList.add('quiet-focus');
+  const off = () => { el.classList.remove('quiet-focus'); el.removeEventListener('blur', off); document.removeEventListener('keydown', off, true); };
+  el.addEventListener('blur', off);
+  document.addEventListener('keydown', off, true);
+  el.focus({ preventScroll: true, focusVisible: false });
+}
+// Whether the last thing done was a key press (or a finger, pen or mouse): a sheet opened from the keyboard gives focus
+// back as dialogs do, one opened with a finger quietly.
+let byKeys = false;
+document.addEventListener('keydown', () => { byKeys = true; }, true);
+document.addEventListener('pointerdown', () => { byKeys = false; }, true);
 
 export function closePopover() {
   if (!openPop) return;
@@ -43,6 +64,7 @@ document.addEventListener('mousedown', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (openPop) { const pop = openPop; const inside = pop.contains(document.activeElement); closePopover(); if (!inside) restoreFocus(pop._anchor, pop._returnTo); e.stopPropagation(); return; }
+  if (openSheet) { openSheet._close(); e.stopPropagation(); return; }
   const modals = document.querySelectorAll('.modal-backdrop:not(.closing)');
   const top = modals[modals.length - 1];
   if (top && top._close) top._close();
@@ -149,6 +171,74 @@ export function contextMenu(e, items) {
   return pop;
 }
 
+// ---- bottom sheets (phones and tablets)
+// A panel that slides up from the bottom of the screen, for picking with a finger (a message's long-press actions).
+// It closes on a tap outside it, a swipe down, Esc and the back gesture (app.js phoneNav: Back closes it like the
+// other things that cover the screen), keeps Tab inside while it's open, and when it closes with focus inside, focus
+// goes to returnTo (or back to what had it before): quietly when it was opened with a finger (quietFocus).
+export function sheet(content, { label = 'Actions', returnTo = null, onClose } = {}) {
+  closePopover();
+  const opener = document.activeElement;
+  const keys = byKeys;
+  if (openSheet) openSheet._close({ replaced: true });
+  let closed = false;
+  const box = h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': label, tabindex: '-1' },
+    h('div', { class: 'sheet-grip', 'aria-hidden': 'true' }), content);
+  const backdrop = h('div', { class: 'sheet-backdrop', onclick: (e) => { if (e.target === backdrop) close(); } }, box);
+  // replaced: another sheet takes this one's place (and its step in the history).
+  function close({ replaced = false } = {}) {
+    if (closed) return;
+    closed = true;
+    if (openSheet === backdrop) openSheet = null;
+    const hadFocus = backdrop.contains(document.activeElement) || document.activeElement === document.body;
+    backdrop.classList.add('closing');
+    setTimeout(() => backdrop.remove(), 180);
+    if (onClose) onClose({ replaced });
+    if (hadFocus && !replaced) (keys ? restoreFocus : restoreQuietly)(returnTo, opener);
+  }
+  backdrop._close = close;
+  box.addEventListener('keydown', (e) => trapTab(e, box));
+  swipeToClose(box, close);
+  layer().append(backdrop);
+  openSheet = backdrop;
+  // The sheet itself takes focus, so screen readers start at its name.
+  requestAnimationFrame(() => { if (!closed && !box.contains(document.activeElement)) box.focus({ preventScroll: true }); });
+  return { close: () => close(), box };
+}
+// Swiping a sheet down puts it away: it follows the finger and goes if pulled far or fast enough, else it springs
+// back. Only while its list is scrolled to the top, so a long list still scrolls.
+function swipeToClose(box, close) {
+  let g = null; // { y, dy, t, v, on }
+  box.addEventListener('touchstart', (e) => {
+    g = e.touches.length === 1 && box.scrollTop <= 0 ? { y: e.touches[0].clientY, dy: 0, t: e.timeStamp, v: 0, on: false } : null;
+  }, { passive: true });
+  box.addEventListener('touchmove', (e) => {
+    if (!g) return;
+    const dy = e.touches[0].clientY - g.y;
+    if (!g.on) {
+      // Upwards (or a move the page has already taken as a scroll) is the list's.
+      if (dy <= 0 || !e.cancelable) { g = null; return; }
+      g.on = true;
+      box.classList.add('dragging');
+    }
+    e.preventDefault();
+    const dt = e.timeStamp - g.t;
+    if (dt > 0) g.v = 0.6 * ((dy - g.dy) / dt) + 0.4 * g.v; // px per ms, smoothed
+    g.dy = dy; g.t = e.timeStamp;
+    box.style.transform = `translateY(${Math.max(0, dy)}px)`;
+  }, { passive: false });
+  const end = (e) => {
+    const was = g;
+    g = null;
+    if (!was || !was.on) return;
+    box.classList.remove('dragging');
+    // (The closing animation slides it on down from where the finger left it.)
+    if (e.type === 'touchend' && (was.dy > Math.min(120, box.offsetHeight / 3) || was.v > 0.5)) close();
+    else box.style.transform = '';
+  };
+  box.addEventListener('touchend', end);
+  box.addEventListener('touchcancel', end);
+}
 // Tooltips for anything with data-tip (icon buttons). Shown on hover and keyboard focus.
 let tipEl = null;
 let tipTimer = 0;

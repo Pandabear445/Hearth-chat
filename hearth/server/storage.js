@@ -28,7 +28,7 @@ const jobs = require('./jobs');
 
 module.exports = function setupStorage(ctx) {
   const { api, auth, db, fail, wrap, rateLimit, limitNet, HttpError, quotaOf, overLimit, uploadLimits, fmtMb, MB, getUserRow,
-    removeUpload, fileName, UPLOAD_DIR, DATA_DIR, unseal, auditLog, stepUp, adminOnly, brief } = ctx;
+    removeUpload, fileName, UPLOAD_DIR, DATA_DIR, unseal, auditLog, stepUp, adminOnly, brief, uploadPace = () => 1 } = ctx;
   const now = () => Date.now();
 
   const PART_DIR = path.join(DATA_DIR, 'upload-parts');
@@ -71,9 +71,11 @@ module.exports = function setupStorage(ctx) {
 
   // ------------------------------------------------------------------ start
   api.post('/uploads', auth, (req, res) => {
-    rateLimit('upsess:' + req.userId, 20, 60 * 1000);
-    rateLimit('upsessh:' + req.userId, 200, 3600 * 1000);
-    limitNet(req, 'upsess', 100, 60 * 1000);
+    // More for the owner, whose messages may carry 100 files (uploadPace in index.js).
+    const pace = uploadPace(req.userId);
+    rateLimit('upsess:' + req.userId, 20 * pace, 60 * 1000);
+    rateLimit('upsessh:' + req.userId, 200 * pace, 3600 * 1000);
+    if (pace === 1) limitNet(req, 'upsess', 100, 60 * 1000);
     const size = Number((req.body || {}).size);
     if (!Number.isSafeInteger(size) || size < 1) fail(400, 'Say how big the file is, in bytes.', 'bad_size');
     const q = quotaOf(req.userId);
@@ -182,7 +184,7 @@ module.exports = function setupStorage(ctx) {
     return hash.digest('hex');
   }
   api.post('/uploads/:id/complete', auth, wrap(async (req, res) => {
-    rateLimit('updone:' + req.userId, 60, 60 * 1000);
+    rateLimit('updone:' + req.userId, 60 * uploadPace(req.userId), 60 * 1000);
     const s = own(req);
     const want = String((req.body || {}).sha256 || '').toLowerCase();
     if (!SHA.test(want)) fail(400, 'Send the SHA-256 of the whole file (64 hex characters).', 'bad_hash');
@@ -268,8 +270,9 @@ module.exports = function setupStorage(ctx) {
   // ------------------------------------------------------------------ what is referenced
   // A file in data/uploads/ is in use if anything points at it. Built from what the database says, never from
   // guesses about names:
-  //   - attachment blobs whose message (or scheduled message, server/scheduled.js) still exists, and blobs not yet
-  //     attached that are younger than a day (the app uploads, then posts; see the hourly sweep in index.js);
+  //   - attachment blobs whose message (or scheduled message, server/scheduled.js) still exists, blobs not yet
+  //     attached that are younger than a day (the app uploads, then posts; see the hourly sweep in index.js), and
+  //     the pictures of chat backgrounds that are still there (v22, look_conv: server/looks.js);
   //   - the GIF library;
   //   - any "/uploads/<name>" written in any text column of any other table (avatars, banners, songs, server
   //     icons and themes, emoji, profile pages, settings…), so a new feature that stores a picture is covered
@@ -286,7 +289,8 @@ module.exports = function setupStorage(ctx) {
     const pendingCutoff = now() - Math.max(graceMs, 24 * 3600 * 1000);
     db.prepare(`SELECT name FROM blobs WHERE (message_id IS NULL AND created_at >= ?)
       OR EXISTS (SELECT 1 FROM messages WHERE id = blobs.message_id) OR EXISTS (SELECT 1 FROM dm_messages WHERE id = blobs.message_id)
-      OR EXISTS (SELECT 1 FROM scheduled_messages WHERE id = blobs.message_id)`).all(pendingCutoff)
+      OR EXISTS (SELECT 1 FROM scheduled_messages WHERE id = blobs.message_id)
+      OR (look_conv IS NOT NULL AND EXISTS (SELECT 1 FROM chat_looks WHERE conv = blobs.look_conv))`).all(pendingCutoff)
       .forEach((b) => refs.add(b.name));
     db.prepare('SELECT file FROM gif_library').all().forEach((g) => refs.add(path.basename(String(g.file))));
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name).filter((t) => !SKIP_TABLES.has(t));
@@ -353,7 +357,9 @@ module.exports = function setupStorage(ctx) {
       .map((r) => { const s = db.prepare('SELECT id, name, kind FROM servers WHERE id = ?').get(r.id) || { id: r.id, name: '', kind: 'server' }; return { server: { id: s.id, name: s.name, kind: s.kind }, files: r.files, bytes: r.bytes }; });
     const dms = sum(`SELECT COUNT(*) files, COALESCE(SUM(uf.size), 0) bytes FROM blobs b JOIN dm_messages d ON d.id = b.message_id
       LEFT JOIN user_files uf ON uf.name = b.name`);
-    const pending = sum('SELECT COUNT(*) files, COALESCE(SUM(uf.size), 0) bytes FROM blobs b LEFT JOIN user_files uf ON uf.name = b.name WHERE b.message_id IS NULL');
+    const pending = sum('SELECT COUNT(*) files, COALESCE(SUM(uf.size), 0) bytes FROM blobs b LEFT JOIN user_files uf ON uf.name = b.name WHERE b.message_id IS NULL AND b.look_conv IS NULL');
+    // The pictures of DMs' and group chats' backgrounds (server/looks.js): kept while they're the background.
+    const looks = sum('SELECT COUNT(*) files, COALESCE(SUM(uf.size), 0) bytes FROM blobs b LEFT JOIN user_files uf ON uf.name = b.name WHERE b.look_conv IS NOT NULL');
     // Files waiting with scheduled messages (server/scheduled.js): kept until they go out, up to 30 days ahead.
     const scheduled = sum(`SELECT COUNT(*) files, COALESCE(SUM(uf.size), 0) bytes FROM blobs b JOIN scheduled_messages s ON s.id = b.message_id
       LEFT JOIN user_files uf ON uf.name = b.name`);
@@ -361,7 +367,7 @@ module.exports = function setupStorage(ctx) {
     const o = findOrphans(graceMs);
     const disk = diskFree();
     res.json({
-      total, topUsers, topServers, dms, pending, scheduled, free: disk.free, diskTotal: disk.total,
+      total, topUsers, topServers, dms, pending, scheduled, looks, free: disk.free, diskTotal: disk.total,
       uploads: {
         count: sessions.length, reserved: sessions.reduce((a, s) => a + s.size, 0), received: sessions.reduce((a, s) => a + s.received, 0),
         list: sessions.slice(0, 50).map((s) => ({ user: brief(s.user_id), size: s.size, received: s.received, createdAt: s.created_at, updatedAt: s.updated_at, expiresAt: s.updated_at + IDLE_MS })),
@@ -396,12 +402,17 @@ module.exports = function setupStorage(ctx) {
   }));
 
   // ------------------------------------------------------------------ your own files (Settings → Storage)
+  // A chat background's picture: in that DM or group chat (no message: the apps show no Show button), look: true.
+  const lookWhere = (conv) => (typeof conv !== 'string' ? null
+    : conv.startsWith('d:') ? { type: 'dm', dmId: conv.slice(2), look: true }
+      : conv.startsWith('g:') ? { type: 'channel', serverId: conv.slice(2), channelId: null, look: true } : null);
   // Sizes, dates and where each file was posted: the server never knows names or types (they're inside the
   // encrypted message), so the app fills those in from messages it can open.
   api.get('/me/storage/files', auth, (req, res) => {
     rateLimit('myfiles:' + req.userId, 60, 60 * 1000);
-    // A file can also wait with one of your scheduled messages (server/scheduled.js) until it goes out.
-    const rows = db.prepare(`SELECT uf.name, uf.kind, uf.size, uf.created_at, b.message_id, m.channel_id, c.server_id, d.dm_id,
+    // A file can also wait with one of your scheduled messages (server/scheduled.js) until it goes out, or be the
+    // picture of a DM's or group chat's background (v22, server/looks.js: look_conv 'd:<dm>' or 'g:<group>').
+    const rows = db.prepare(`SELECT uf.name, uf.kind, uf.size, uf.created_at, b.message_id, b.look_conv, m.channel_id, c.server_id, d.dm_id,
           sm.id AS sched_id, sm.send_at AS sched_at, sm.server_id AS sched_server, sm.channel_id AS sched_channel, sm.dm_id AS sched_dm
         FROM user_files uf LEFT JOIN blobs b ON b.name = uf.name LEFT JOIN messages m ON m.id = b.message_id
         LEFT JOIN channels c ON c.id = m.channel_id LEFT JOIN dm_messages d ON d.id = b.message_id
@@ -414,7 +425,7 @@ module.exports = function setupStorage(ctx) {
         where: r.channel_id ? { type: 'channel', serverId: r.server_id, channelId: r.channel_id, messageId: r.message_id }
           : r.dm_id ? { type: 'dm', dmId: r.dm_id, messageId: r.message_id }
             : r.sched_id ? { type: 'scheduled', sendAt: r.sched_at, serverId: r.sched_server || null, channelId: r.sched_channel || null, dmId: r.sched_dm || null }
-              : r.kind === 'attachment' ? { type: 'unsent' } : null,
+              : lookWhere(r.look_conv) || (r.kind === 'attachment' ? { type: 'unsent' } : null),
       })),
       uploads: db.prepare('SELECT * FROM upload_sessions WHERE user_id = ? ORDER BY created_at').all(req.userId).map(sessionOut),
     });

@@ -42,7 +42,9 @@
 #     Windows, SignPath (free for open-source projects): secret SIGNPATH_API_TOKEN and variables
 #       SIGNPATH_ORGANIZATION_ID / SIGNPATH_PROJECT_SLUG (optional: SIGNPATH_POLICY_SLUG, default release-signing;
 #       SIGNPATH_ARTIFACT_CONFIG_SLUG, default initial). Release builds only: app-v* tags, the default branch and
-#       manual runs; approve each request on signpath.io.
+#       manual runs; approve each request on signpath.io. A manual run with "SignPath test signing" ticked signs with
+#       the test-signing policy instead (variable SIGNPATH_TEST_POLICY_SLUG, default test-signing), for SignPath's
+#       review before it issues the real certificate; nothing from that run is released or published.
 #     Windows: variable WINDOWS_REQUIRE_SIGNING=true fails the build instead of making an unsigned installer.
 #     Google Play: secret PLAY_SERVICE_ACCOUNT_JSON uploads the bundle to the internal testing track
 #       (needs the ANDROID_KEYSTORE_* secrets; variable PLAY_RELEASE_STATUS=draft while the app is still a draft).
@@ -62,17 +64,26 @@ on:
         description: 'Server address baked into these builds (empty: the HEARTH_SERVER variable, else the one in the app config files)'
         required: false
         default: ''
+      signpath_test:
+        description: 'SignPath test signing: sign the Windows app with your test certificate (SignPath checks this before it issues the real one). Nothing from this run is released, copied to your server or sent to Google Play.'
+        type: boolean
+        required: false
+        default: false
 
 # Least privilege: read-only unless a job says otherwise.
 permissions:
   contents: read
 
 concurrency:
-  group: hearth-apps-${{ github.ref }}
+  group: hearth-apps-${{ github.ref }}${{ github.event.inputs.signpath_test == 'true' && '-signpath-test' || '' }}
   cancel-in-progress: true
 
 env:
   SERVER: ${{ github.event.inputs.server || vars.HEARTH_SERVER }}
+  # A SignPath test-signing run (a manual run with "SignPath test signing" ticked): signed with the test certificate,
+  # which no computer trusts, so none of it may reach anyone. The jobs that sign update files, release or publish
+  # don't run for it.
+  SIGNPATH_TEST: ${{ github.event.inputs.signpath_test == 'true' }}
 
 jobs:
   desktop:
@@ -134,8 +145,8 @@ jobs:
           WIN_TIMESTAMP_SERVER: ${{ vars.WIN_TIMESTAMP_SERVER }}
           WINDOWS_REQUIRE_SIGNING: ${{ vars.WINDOWS_REQUIRE_SIGNING }}
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID || secrets.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG || secrets.SIGNPATH_PROJECT_SLUG }}
           SIGNPATH_PUBLISHER: ${{ vars.SIGNPATH_PUBLISHER }}
           SIGN_THIS_BUILD: ${{ startsWith(github.ref, 'refs/tags/app-v') || github.ref_name == github.event.repository.default_branch || github.event_name == 'workflow_dispatch' }}
       - name: Build installers
@@ -164,9 +175,9 @@ jobs:
         uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID || secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ steps.signing.outputs.test == '1' && (vars.SIGNPATH_TEST_POLICY_SLUG || 'test-signing') || (vars.SIGNPATH_POLICY_SLUG || 'release-signing') }}
           artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_SLUG || 'initial' }}
           github-artifact-id: ${{ steps.unsigned-app.outputs.artifact-id }}
           wait-for-completion: true
@@ -194,9 +205,9 @@ jobs:
         uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID || secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ steps.signing.outputs.test == '1' && (vars.SIGNPATH_TEST_POLICY_SLUG || 'test-signing') || (vars.SIGNPATH_POLICY_SLUG || 'release-signing') }}
           artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_SLUG || 'initial' }}
           github-artifact-id: ${{ steps.unsigned-setup.outputs.artifact-id }}
           wait-for-completion: true
@@ -208,22 +219,29 @@ jobs:
         run: |
           cp signed/setup/Hearth-Setup-*.exe dist/
           node build/after-signing.js dist
+      # A test run's files are signed with SignPath's self-signed test certificate, which Windows doesn't trust
+      # (UnknownError / NotTrusted): that's expected, but every file must still carry a signature.
       - name: Check the signature
         if: runner.os == 'Windows' && steps.signing.outputs.method != 'none'
         shell: pwsh
+        env:
+          TEST_SIGNING: ${{ steps.signing.outputs.test }}
         run: |
+          $test = $env:TEST_SIGNING -eq '1'
           $bad = $false
           foreach ($f in Get-ChildItem dist/*.exe, dist/win-unpacked/Hearth.exe) {
             $s = Get-AuthenticodeSignature $f.FullName
             Write-Host "$($f.Name): $($s.Status) - $($s.SignerCertificate.Subject)"
-            if ($s.Status -ne 'Valid') { $bad = $true }
+            $ok = $s.Status -eq 'Valid' -or ($test -and $s.SignerCertificate -and $s.Status -in @('UnknownError', 'NotTrusted'))
+            if (-not $ok) { $bad = $true }
           }
           if ($bad) { Write-Host "::error::An .exe is not validly signed."; exit 1 }
+          if ($test) { Write-Host "::notice title=SignPath test signing::Signed with the test certificate, which Windows doesn't trust (expected). Send this run's link and its signing requests to SignPath for review. Don't hand these files out." }
       # The update files are signed in the sign-updates job, after anything here that rewrites latest.yml
       # (SignPath's after-signing.js).
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: hearth-desktop-${{ runner.os }}
+          name: hearth-desktop-${{ runner.os }}${{ steps.signing.outputs.test == '1' && '-SIGNPATH-TEST' || '' }}
           path: |
             hearth/desktop/dist/*.exe
             hearth/desktop/dist/*.dmg
@@ -239,7 +257,9 @@ jobs:
   # update itself, so there's nothing to sign for it.
   sign-updates:
     needs: desktop
-    if: startsWith(github.ref, 'refs/tags/app-v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: >-
+      github.event.inputs.signpath_test != 'true' &&
+      (startsWith(github.ref, 'refs/tags/app-v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
     environment: production
     defaults:
@@ -343,6 +363,13 @@ jobs:
                   versionCode $VERSION_CODE
                   versionName "$VERSION_NAME"
               }
+              // Keep the build's list of libraries (encrypted so only Google can read it) out of the APK's signing
+              // block: IzzyOnDroid's scanner flags it and F-Droid's signature copying fails on it. The Play bundle
+              // keeps it, for Play Console's library checks.
+              dependenciesInfo {
+                  includeInApk = false
+                  includeInBundle = true
+              }
           }
           // Signed only with your own key (the ANDROID_KEYSTORE_* secrets); without one the release APK stays unsigned.
           if (System.getenv("HEARTH_KEYSTORE")) {
@@ -438,7 +465,7 @@ jobs:
   play-upload:
     needs: android
     if: >-
-      needs.android.outputs.signed == '1' &&
+      github.event.inputs.signpath_test != 'true' && needs.android.outputs.signed == '1' &&
       (startsWith(github.ref, 'refs/tags/app-v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
     environment: production
@@ -463,7 +490,7 @@ jobs:
 
   release:
     needs: [desktop, android, sign-updates]
-    if: startsWith(github.ref, 'refs/tags/app-v')
+    if: github.event.inputs.signpath_test != 'true' && startsWith(github.ref, 'refs/tags/app-v')
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -514,7 +541,7 @@ jobs:
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/*
-          generate_release_notes: true
+          generate_release_notes: false
           prerelease: ${{ steps.copies.outputs.prerelease }}
 
   # Only release builds reach everyone's apps (the desktop app updates itself from this folder): tags and the
@@ -522,7 +549,7 @@ jobs:
   publish-to-vps:
     needs: [desktop, android, sign-updates]
     if: >-
-      always() && (needs.sign-updates.result == 'success' || needs.android.result == 'success') &&
+      always() && github.event.inputs.signpath_test != 'true' && (needs.sign-updates.result == 'success' || needs.android.result == 'success') &&
       (startsWith(github.ref, 'refs/tags/app-v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
     environment: production

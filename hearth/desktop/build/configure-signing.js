@@ -14,7 +14,11 @@
 //   4. Otherwise unsigned, with a warning in the build log. WINDOWS_REQUIRE_SIGNING=true turns that warning
 //      into a failed build (use it once you sign: installed signed apps refuse unsigned updates).
 //
-// Writes "method=azure|pfx|signpath|none" to $GITHUB_OUTPUT when it exists.
+// SIGNPATH_TEST=true (a manual run with "SignPath test signing" ticked): SignPath signs with your self-signed test
+// certificate (the test-signing policy), which SignPath reviews before it issues the real one. It needs the
+// SignPath settings and uses nothing else; the workflow releases and publishes nothing from such a run.
+//
+// Writes "method=azure|pfx|signpath|none" and "test=1|0" to $GITHUB_OUTPUT when it exists.
 const fs = require('fs');
 const path = require('path');
 
@@ -31,8 +35,14 @@ const warn = (msg) => console.log(process.env.GITHUB_ACTIONS ? `::warning title=
 const fail = (msg) => { console.log(process.env.GITHUB_ACTIONS ? `::error title=Windows signing::${msg}` : `ERROR: ${msg}`); process.exit(1); };
 
 let method = 'none';
+const test = /^true$/i.test(env('SIGNPATH_TEST'));
 const azureSome = ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_SIGNING_PROFILE', 'AZURE_SIGNING_PUBLISHER'];
-if (has(...azureSome)) {
+if (test) {
+  if (!has('SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG')) fail(`SignPath test signing needs the SIGNPATH_API_TOKEN secret and SIGNPATH_ORGANIZATION_ID and SIGNPATH_PROJECT_SLUG (variables, or secrets of those names). Missing: ${['SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG'].filter((k) => !env(k)).join(', ')}. See hearth/docs/SIGNING.md.`);
+  // No publisher name for the app to expect on updates: these files are only for SignPath's review, never handed out.
+  method = 'signpath';
+  notice(`Test signing with SignPath (project ${env('SIGNPATH_PROJECT_SLUG')}, the test-signing policy). Approve the requests on signpath.io if the policy asks for it. Don't hand these files out.`);
+} else if (has(...azureSome)) {
   const endpoint = env('AZURE_SIGNING_ENDPOINT');
   if (!/^https:\/\/[a-z0-9]+\.codesigning\.azure\.net\/?$/i.test(endpoint)) fail(`AZURE_SIGNING_ENDPOINT should look like https://eus.codesigning.azure.net (got "${endpoint}").`);
   win.azureSignOptions = {
@@ -67,4 +77,4 @@ if (has(...azureSome)) {
 }
 
 fs.writeFileSync(pkgFile, JSON.stringify(pkg, null, 2) + '\n');
-if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `method=${method}\n`);
+if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `method=${method}\ntest=${test && method === 'signpath' ? 1 : 0}\n`);

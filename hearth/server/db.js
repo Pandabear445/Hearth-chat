@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 23;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1542,6 +1542,11 @@ if (hasData && fromVersion < 19) {
 addColumn('users', 'keys_reset_at', 'INTEGER');
 addColumn('users', 'keys_vouched_by', 'TEXT');
 addColumn('users', 'keys_vouched_at', 'INTEGER');
+// v20 (owner reset links): who made the reset link that gave an account its keys still waiting to be verified: the
+// owner, with a link from Admin → Users (server/accounts.js); NULL after an emailed link. That person can't be the one
+// who verifies them (POST /users/:id/keys/verify and /admin/users/:id/keys/verify): they could have opened the link
+// themselves.
+addColumn('users', 'keys_reset_by', 'TEXT');
 db.exec(`CREATE INDEX IF NOT EXISTS idx_users_keys_reset ON users(keys_reset_at) WHERE keys_reset_at IS NOT NULL;
 CREATE TABLE IF NOT EXISTS key_vouches (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1585,6 +1590,145 @@ CREATE INDEX IF NOT EXISTS idx_servers_join_rotate ON servers(join_rotate_at) WH
 // who aren't signed in and to link-preview bots (server/invitepreview.js). Off by default: the card then only says
 // "You're invited to a server on <instance>".
 addColumn('servers', 'invite_preview', 'INTEGER NOT NULL DEFAULT 0');
+
+// v21 (photos): the Photos & videos panel, comments on one photo and tags on photos (server/photos.js).
+//   files       how many uploads a message listed when it was posted (files and their thumbnails: the distinct
+//               well-formed /uploads/ addresses, up to what one message may carry). It counts what was posted, not
+//               what attachBlobs linked, so a forward (whose blobs stay the original's) counts too. The server can't
+//               tell a photo from a PDF (file types are inside the encrypted message), so this only says "has
+//               files"; the apps keep the photos and videos. Older messages get it from their linked blobs (a
+//               forward from before this version has none, so it stays 0).
+//   reply_file  for a reply that is a comment on one photo of the message it replies to: that photo's place in its
+//               file list (0-99); NULL for every other message. Only the per-photo counts depend on it: which
+//               photo a comment is about is also inside the encrypted reply, and the apps go by that.
+//   scheduled_messages.file_count and reply_file: the same two, kept until a scheduled message is posted (its
+//               files column lists only the blobs it holds, which leaves out a forward's).
+//   media_tags  one encrypted tag on one photo (file_idx) of one message, sealed on the device with the
+//               conversation's key. The server learns which photo of which message has a tag, who added it and
+//               when, never its words. id is the app's (bound into the ciphertext, so the server can't copy or move
+//               a tag); conv is 'c:<channel>' | 'd:<dm>' like read_states; epoch is the server key epoch a channel
+//               tag is locked with (NULL in DMs). No foreign key to the messages (channel and DM messages share it,
+//               as with reactions): every way of deleting messages deletes their tags (forgetMessages and the rest).
+// The partial indexes only hold messages with files, and comments: a Photos & videos page walks only those, newest
+// first, and a message's comment counts are one range per message.
+addColumn('messages', 'files', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('dm_messages', 'files', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('messages', 'reply_file', 'INTEGER');
+addColumn('dm_messages', 'reply_file', 'INTEGER');
+addColumn('scheduled_messages', 'file_count', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('scheduled_messages', 'reply_file', 'INTEGER');
+if (hasData && fromVersion < 21) {
+  for (const t of ['messages', 'dm_messages']) {
+    db.exec(`UPDATE ${t} SET files = (SELECT COUNT(*) FROM blobs WHERE blobs.message_id = ${t}.id)
+      WHERE id IN (SELECT message_id FROM blobs WHERE message_id IS NOT NULL)`);
+  }
+  db.exec("UPDATE scheduled_messages SET file_count = json_array_length(files) WHERE json_valid(files) AND json_array_length(files) > 0");
+}
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_messages_files ON messages(channel_id, id) WHERE files > 0;
+CREATE INDEX IF NOT EXISTS idx_dm_messages_files ON dm_messages(dm_id, id) WHERE files > 0;
+CREATE INDEX IF NOT EXISTS idx_messages_reply_file ON messages(reply_to, reply_file) WHERE reply_file IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dm_messages_reply_file ON dm_messages(reply_to, reply_file) WHERE reply_file IS NOT NULL;
+CREATE TABLE IF NOT EXISTS media_tags (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL,
+  conv TEXT NOT NULL,
+  file_idx INTEGER NOT NULL,
+  author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ciphertext TEXT NOT NULL,
+  epoch INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_tags_message ON media_tags(message_id, file_idx);
+CREATE INDEX IF NOT EXISTS idx_media_tags_conv ON media_tags(conv, created_at);
+`);
+
+// v22 (chat backgrounds): a background for a DM or a group chat, chosen by the people in it (server/looks.js).
+//   chat_looks  one row per conversation that has ever had one: conv is 'd:<dm>' or 'g:<group server>'; ciphertext
+//               is the look sealed on the device with the conversation's key (lkd1: in DMs, lkc1: signed in groups,
+//               padded so every look is the same size), bound to the conversation, its version and its author; epoch
+//               is the group key epoch it was sealed with (read from inside the ciphertext; NULL in DMs). version
+//               counts every change, 1, 2, 3…, and a change must name the next one, so two people changing it at once
+//               can't silently undo each other and a look sealed for an older version can never come back. Removing
+//               a background keeps the row (ciphertext '', files '[]') so the count carries on. files lists the
+//               upload addresses its picture uses (at most 2), the same ones whose blobs say look_conv.
+//   look_log    who changed or removed it and when (the line in the conversation's history), the newest 50 per
+//               conversation.
+//   blobs.look_conv  the conversation whose background a blob is (NULL for everything else): the sweeps that remove
+//               uploads never attached to a message leave these alone, and a message can't take one.
+// The server sees that a conversation has a background, how big its picture is, who changed it and when; never which.
+addColumn('blobs', 'look_conv', 'TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS chat_looks (
+  conv TEXT PRIMARY KEY,
+  ciphertext TEXT NOT NULL,
+  epoch INTEGER,
+  author_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  files TEXT NOT NULL DEFAULT '[]',
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS look_log (
+  id TEXT PRIMARY KEY,
+  conv TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_look_log_conv ON look_log(conv, created_at);
+CREATE INDEX IF NOT EXISTS idx_blobs_look ON blobs(look_conv) WHERE look_conv IS NOT NULL;
+`);
+
+// v23 (member relays): members can offer a machine of their own as a call relay (server/regions.js, Settings → Help
+// host). Nothing is used until the owner approves it in Admin → Regions. Rows from before are the owner's regions.
+//   regions.kind      'region' = the owner's own (Admin → Regions, as before); 'member' = offered by a member.
+//   regions.owner_id  the member who runs it (kind 'member'), else NULL. Deleting the account deletes their relays.
+//   regions.status    member relays: 'pending' until the owner approves it, then 'approved' or 'paused'. The owner's
+//                     regions are always 'approved'.
+//   regions.secret    a member relay's own TURN secret, sealed (sealSecret); NULL = the main one (the owner's regions).
+//                     A member's machine is someone else's: the main secret mints logins for the main relay and every
+//                     owner region, so it never goes there.
+//   regions.offer     what the member chose when offering it ({ capMbit, backups }), fixed from then on: the installer
+//                     is made from it, and must come out byte for byte the same each time it's downloaded.
+//   regions.backups   the owner lets it keep copies of the encrypted backups (1 for the owner's regions, as before;
+//                     a member relay starts at 0 and gets what the owner chooses when approving it).
+//   regions.approved_at, approved_by  when, and by which admin, a member relay was approved.
+addColumn('regions', 'kind', "TEXT NOT NULL DEFAULT 'region'");
+addColumn('regions', 'owner_id', 'TEXT');
+addColumn('regions', 'status', "TEXT NOT NULL DEFAULT 'approved'");
+addColumn('regions', 'secret', 'TEXT');
+addColumn('regions', 'offer', "TEXT NOT NULL DEFAULT '{}'");
+addColumn('regions', 'backups', 'INTEGER NOT NULL DEFAULT 1');
+addColumn('regions', 'approved_at', 'INTEGER');
+addColumn('regions', 'approved_by', 'TEXT');
+db.exec('CREATE INDEX IF NOT EXISTS idx_regions_owner ON regions(owner_id) WHERE owner_id IS NOT NULL');
+//   regions.install_hash  SHA-256 of the install link's own token (?k=), which only downloads the installer while the
+//                     link is open. The check-in token inside the installer is a different one (token_hash), so the link
+//                     in someone's shell history can't be used to check in. NULL for links made before (then ?k= was
+//                     the check-in token itself).
+//   member_relay_hosts  every address a member relay was handed out at, until the last login handed out for it runs
+//                     out. Someone who avoids member relays is given all of them: an app may still hold a login for a
+//                     relay that has since been paused, removed, or stopped checking in, and the relay still takes it.
+//   member_relays_gone  member relays that were removed (by the owner, their member, with the account, or swept as
+//                     abandoned), kept for 30 days. A check-in from one is told it's gone, which is what makes its
+//                     machine switch itself off after a day: a plain "unknown" (a rebuilt server with an empty
+//                     database) never does. notice = 1: removed by the owner, and its member hasn't seen it yet.
+addColumn('regions', 'install_hash', 'TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS member_relay_hosts (
+  ip TEXT PRIMARY KEY,
+  until INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS member_relays_gone (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT,
+  name TEXT NOT NULL DEFAULT '',
+  by TEXT NOT NULL,
+  notice INTEGER NOT NULL DEFAULT 0,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_member_relays_gone_owner ON member_relays_gone(owner_id) WHERE notice = 1;
+`);
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
 db.exec('COMMIT');
