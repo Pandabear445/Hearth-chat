@@ -1,8 +1,11 @@
 // Small admin command line, used by scripts (e.g. setup-turn.sh). Safe to run while Hearth is running.
-//   node server/cli.js set-turn "turn:203.0.113.7:3478?transport=udp,turn:203.0.113.7:3478?transport=tcp" SECRET
+//   node server/cli.js set-turn "turn:203.0.113.7:3478?transport=udp,turn:203.0.113.7:3478?transport=tcp" --secret-stdin
 //   node server/cli.js get-turn
 //   node server/cli.js get-turn-secret             (for setting up a relay in another region)
-//   node server/cli.js add-turn "turn:198.51.100.9:3478?transport=udp,…" [SECRET]   (adds, keeps the others)
+//   node server/cli.js add-turn "turn:198.51.100.9:3478?transport=udp,…" [--secret-stdin]   (adds, keeps the others)
+//   --secret-stdin reads the relay secret from standard input (printf '%s\n' "$SECRET" | node server/cli.js …), so
+//   it never sits on a command line, where other accounts can see it (ps) and shell history keeps it. A secret
+//   given as the last argument instead still works.
 //   node server/cli.js set-owner USERNAME          make this account the instance owner (when the owner's account
 //                                                  is lost; in the app the owner hands it over in Team & roles)
 // Encrypted backups (see server/backup.js):
@@ -16,6 +19,8 @@
 //                                                  it after a break-in; see docs/RECOVERY.md).
 //   node server/cli.js check-files                 compare the database with data/uploads: files it needs that
 //                                                  are missing, and files nothing refers to
+//   node server/cli.js who PSEUDONYM               the account behind a pseudonym in the logs: the access log's
+//                                                  uid, or a relay login (<expiry>:<pseudonym>) from a relay's log
 // Exit codes: 0 done; 1 failed; 2 restore refused (backup from a newer Hearth); 3 done, but files are missing.
 // Checking an install (server/doctor.js; read-only unless a --fix flag is given):
 //   node server/cli.js doctor [--relays] [--integrity] [--json] [--fix-permissions]
@@ -43,20 +48,27 @@ const newerWarning = (schema) => (codeSchema() && schema > codeSchema()
   : '');
 // Files the database refers to but that aren't there: those attachments and pictures can't be opened.
 const missingNote = (n, names, what) => `Warning: ${n} file${n === 1 ? '' : 's'} the database refers to ${what}: ${names.slice(0, 10).join(', ')}${n > 10 ? ', …' : ''}. Those attachments or pictures will show as unavailable.`;
+// The relay secret: from standard input with --secret-stdin (its first line), else the argument given.
+const secretArg = (given) => (flags.has('--secret-stdin') ? fs.readFileSync(0, 'utf8').split(/\r?\n/)[0].trim() : given);
 const settings = () => {
   const { db } = require('./db');
   return { db, set: (k, v) => db.prepare('INSERT OR REPLACE INTO instance_settings (key, value) VALUES (?, ?)').run(k, v), get: (k) => (db.prepare('SELECT value FROM instance_settings WHERE key = ?').get(k) || {}).value };
 };
 
 (async () => {
-  if (cmd === 'set-turn' && a && b) { const { set } = settings(); set('turnUrls', a); set('turnSecret', b); console.log('TURN relay saved. Calls use it right away.'); }
+  if (cmd === 'set-turn' && a && (b || flags.has('--secret-stdin'))) {
+    const secret = secretArg(b);
+    if (!secret) throw new Error('No relay secret given.');
+    const { set } = settings(); set('turnUrls', a); set('turnSecret', secret); console.log('TURN relay saved. Calls use it right away.');
+  }
   else if (cmd === 'get-turn') { const { get } = settings(); console.log(JSON.stringify({ urls: get('turnUrls') || null, secretSet: !!get('turnSecret') })); }
   else if (cmd === 'get-turn-secret') { const { get } = settings(); if (get('turnSecret')) console.log(get('turnSecret')); else process.exitCode = 1; }
   else if (cmd === 'add-turn' && a) {
     const { get, set } = settings();
     const urls = [...new Set([...(get('turnUrls') || '').split(','), ...a.split(',')].map((x) => x.trim()).filter((u) => /^turns?:/.test(u)))].slice(0, 12);
+    const secret = secretArg(b);
     set('turnUrls', urls.join(','));
-    if (b) set('turnSecret', b);
+    if (secret) set('turnSecret', secret);
     console.log(`TURN relays saved (${urls.length / 2 | 0 || urls.length} relay${urls.length > 2 ? 's' : ''}). Calls use them right away.`);
   } else if (cmd === 'set-owner' && a) {
     const { db, get, set } = settings();
@@ -113,6 +125,15 @@ const settings = () => {
     const f = BK.uploadReport(path.join(DATA_DIR, 'hearth.db'), path.join(DATA_DIR, 'uploads'));
     console.log(`Files: ${f.referenced} the database refers to, ${f.present} in uploads/, ${f.unreferencedCount} not referred to by anything.`);
     if (f.missingCount) { console.error(missingNote(f.missingCount, f.missing, 'are missing from uploads/')); process.exitCode = 3; }
+  } else if (cmd === 'who' && a) {
+    // Pseudonyms are keyed hashes of user ids (log.userHash), so the only way back is to hash every account's id.
+    const { db, atRestKey } = require('./db');
+    const log = require('./log');
+    log.setUserHashKey(atRestKey);
+    const want = a.trim().toLowerCase().replace(/^\d+:/, '');
+    const hits = db.prepare('SELECT id, username, deleted_at FROM users').all().filter((u) => log.userHash(u.id) === want);
+    if (!hits.length) { console.log('No account has that pseudonym on this server.'); process.exitCode = 1; }
+    hits.forEach((u) => console.log(`${u.username} (id ${u.id})${u.deleted_at ? ', deleted' : ''}`));
   } else if (cmd === 'doctor') {
     // Same .env as the server reads, so the checks see the configuration Hearth runs with.
     require('dotenv').config({ quiet: true });
@@ -121,7 +142,7 @@ const settings = () => {
     if (flags.has('--json')) console.log(JSON.stringify(r, null, 2)); else printReport(r);
     process.exitCode = r.exitCode;
   } else {
-    console.log('Usage: node server/cli.js doctor [--relays] [--integrity] [--json] [--fix-permissions] | set-turn <urls> <secret> | add-turn <urls> [secret] | get-turn | get-turn-secret | set-owner <username> | backup | verify-backup <file> [key] | restore <file> <new-data-dir> [key] [--sign-out-everyone] | check-files');
+    console.log('Usage: node server/cli.js doctor [--relays] [--integrity] [--json] [--fix-permissions] | set-turn <urls> --secret-stdin | add-turn <urls> [--secret-stdin] | get-turn | get-turn-secret | set-owner <username> | backup | verify-backup <file> [key] | restore <file> <new-data-dir> [key] [--sign-out-everyone] | check-files | who <pseudonym>');
     process.exitCode = 1;
   }
 })().catch((e) => { console.error(e.message); process.exitCode = 1; });

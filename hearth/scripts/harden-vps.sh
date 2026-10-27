@@ -106,7 +106,7 @@ if ! [[ " ${ID:-} ${ID_LIKE:-} " =~ \ (debian|ubuntu)\  ]]; then
   warn "This isn't Debian/Ubuntu (${PRETTY_NAME:-unknown}); the dry run continues, but a real run would stop here."
 fi
 
-# Find Hearth: the folder this script is in, the update tool's saved location, or a search.
+# Find Hearth: the folder this script is in, hearth-update's saved location, or a search.
 find_hearth() {
   local here d; here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
   for d in "${HEARTH_DIR:-}" "$here" "$(cat /etc/hearth-update.conf 2>/dev/null || true)"; do
@@ -123,7 +123,7 @@ envval() { # one setting from Hearth's .env (empty if not set)
 }
 PORT="$(envval PORT)"; PORT="${PORT:-3000}"
 
-# How does Hearth run? (same detection as the update tool)
+# How does Hearth run? (same detection as hearth-update)
 DC=""
 if docker compose version >/dev/null 2>&1; then DC="docker compose"; elif has docker-compose; then DC="docker-compose"; fi
 find_unit() {
@@ -394,7 +394,7 @@ q_unit() { printf '"%s"' "$(esc_unit "$1")"; }        # quoted, for lists that m
 abs_in() { case "$2" in /*) printf '%s' "$2" ;; *) printf '%s/%s' "$1" "${2#./}" ;; esac; }
 
 harden_systemd() {
-  local unit_file cur_user wd node exec_line data dl mail rw tmpl new reason="" envkeep
+  local unit_file cur_user wd node exec_line data dl rw tmpl new reason="" envkeep
   unit_file="$(systemctl show -p FragmentPath --value "$UNIT" 2>/dev/null || true)"
   [ -n "$unit_file" ] || unit_file="/etc/systemd/system/$UNIT"
   [ -f "$unit_file" ] || { warn "Couldn't find the file for $UNIT."; return 0; }
@@ -420,7 +420,6 @@ harden_systemd() {
   node="$(readlink -f "$node" 2>/dev/null || echo "$node")"
   data="$(abs_in "$wd" "$(envval DATA_DIR)")"; [ -n "$(envval DATA_DIR)" ] || data="$wd/data"
   dl="$(envval DOWNLOADS_DIR)"; [ -n "$dl" ] && dl="$(abs_in "$wd" "$dl")"
-  mail="$(envval MAIL_OUTBOX_DIR)"; [ -n "$mail" ] && mail="$(abs_in "$wd" "$mail")"
 
   # Things that would stop a non-root Hearth from working: say so instead of breaking the site.
   if [ -z "$node" ] || [ ! -x "$node" ]; then reason="Node.js wasn't found"
@@ -451,7 +450,6 @@ harden_systemd() {
   [ -f "$tmpl" ] || { warn "deploy/hearth.service not found; left alone."; return 0; }
   rw="$(q_unit "$data")"
   [ -n "$dl" ] && [[ "$dl" != "$data"/* ]] && rw="$rw $(q_unit "$dl")"
-  [ -n "$mail" ] && [[ "$mail" != "$data"/* ]] && rw="$rw $(q_unit "$mail")"
   envkeep="$(sed -nE '/^\s*\[Service\]/,/^\s*\[/{/^\s*(Environment|EnvironmentFile)\s*=/p}' "$unit_file" | grep -v 'NODE_ENV=production' || true)"
   new="$(awk -v wd="$(esc_unit "$wd")" -v ex="$(esc_unit "$node") server/index.js" -v rw="$rw" -v env="$envkeep" \
              -v home="$( [[ "$wd" == /home/* ]] && echo read-only || echo yes)" -v low="$low_port" '
@@ -491,7 +489,6 @@ harden_systemd() {
     install -d -o hearth -g hearth -m 0700 "$data"
     chown -R hearth:hearth "$data"
     if [ -n "$dl" ]; then mkdir -p "$dl"; chown -R hearth:hearth "$dl"; fi
-    if [ -n "$mail" ]; then mkdir -p "$mail"; chown -R hearth:hearth "$mail"; fi
     if [ -f "$env_file" ]; then
       env_mode="$(stat -c %a "$env_file")"; env_group="$(stat -c %g "$env_file")"
       chgrp hearth "$env_file"; chmod 640 "$env_file"   # Hearth can read its settings; other users can't
@@ -526,7 +523,7 @@ harden_docker() {
     say "Hearth's container runs as root."
   elif [ -n "$uid" ]; then ok "Hearth's container already runs as an unprivileged user (uid $uid)."; fi
   if ! grep -qE '^\s*user:\s*"?1000' "$DIR/docker-compose.yml" 2>/dev/null; then
-    say "Your docker-compose.yml is from before the security update (the update tool never replaces it, so your own changes are kept). The new one in this download runs Hearth as an unprivileged user on a read-only filesystem without any root powers, keeps port $PORT private behind Caddy, and fixes the data folder's owner by itself. To switch:"
+    say "Your docker-compose.yml is from before the security update (hearth-update never replaces it, so your own changes are kept). The new one in this download runs Hearth as an unprivileged user on a read-only filesystem without any root powers, keeps port $PORT private behind Caddy, and fixes the data folder's owner by itself. To switch:"
     say "  cd '$DIR' && cp docker-compose.yml docker-compose.yml.old"
     say "  copy docker-compose.yml from the new Hearth download over it (re-add any changes you made)"
     say "  docker compose up -d --build        (with a domain: docker compose --profile domain up -d --build)"
