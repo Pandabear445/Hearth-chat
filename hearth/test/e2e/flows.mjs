@@ -926,7 +926,8 @@ function fakeAndroidBridge({ invite }) {
 async function androidApp(t) {
   const code = t.state.invite.split('/invite/')[1];
   const droid = await t.open('droid');
-  await droid.register('droid', newPassword());
+  t.pw.droid = newPassword(); // the iPhone flow signs in to this account again
+  await droid.register('droid', t.pw.droid);
   const subs = [];
   await droid.page.route('**/api/push/subscribe', (route) => { subs.push(route.request().postDataJSON()); route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }); });
   await droid.context.addInitScript(fakeAndroidBridge, { invite: code });
@@ -1039,6 +1040,44 @@ async function androidApp(t) {
 }
 
 // ------------------------------------------------------------------ 11b. changes that need the password again
+// An iPhone (iOS 17.5): Safari, or Hearth opened from the Home Screen when localStorage says so.
+function fakeIPhone() {
+  const ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+  Object.defineProperty(navigator, 'userAgent', { get: () => ua });
+  Object.defineProperty(navigator, 'standalone', { get: () => localStorage.getItem('e2e.standalone') === '1' });
+  Object.defineProperty(Notification, 'permission', { get: () => 'default' });
+}
+// It signs in to the Android flow's account rather than signing up (sign-ups from one network are limited, see
+// run.mjs): the tip and the offer are remembered by the browser, not the account, so a new browser shows both.
+async function iPhoneNotifications(t) {
+  const phone = await t.open('iphone');
+  await phone.login('droid', t.pw.droid);
+  await phone.context.addInitScript(fakeIPhone);
+  const restart = async () => { await phone.page.reload(); await phone.waitApp(); await phone.page.waitForTimeout(400); };
+  await restart();
+  // In Safari: push only works from the Home Screen, so the page says how, once.
+  const tip = phone.$('.push-offer', { hasText: 'add Hearth to your Home Screen' });
+  await tip.waitFor();
+  check(/this iPhone/.test(await tip.textContent()), 'The tip should name the device.');
+  await tip.locator('button', { hasText: 'Got it' }).click();
+  await tip.waitFor({ state: 'detached' });
+  await restart();
+  check(!(await phone.$('.push-offer').count()), 'The Home Screen tip should show only once.');
+  // Opened from the Home Screen: notifications are offered once, as in the Android app.
+  await phone.page.evaluate(() => localStorage.setItem('e2e.standalone', '1'));
+  await restart();
+  const offer = phone.$('.push-offer', { hasText: 'Get notifications when Hearth is closed?' });
+  await offer.waitFor();
+  check(!(await phone.$('.push-offer', { hasText: 'Home Screen' }).count()), 'Once on the Home Screen, the Safari tip should not show.');
+  await offer.locator('button', { hasText: 'Not now' }).click();
+  await offer.waitFor({ state: 'detached' });
+  await restart();
+  check(!(await phone.$('.push-offer').count()), 'After "Not now" the offer should not come back.');
+  // droid is in E2E Hall: put the phone away so it isn't online there for the flows after this one.
+  await phone.close();
+  delete t.people.iphone;
+}
+
 async function stepUp(t) {
   const { alice, bob } = t.people;
   // Deleting a server: the app asks for the password; a wrong one is refused in place, the right one deletes.
@@ -3304,6 +3343,7 @@ export const FLOWS = [
   ['dm call: ring, accept, hang up, decline', dmCall],
   ['group chat: create, talk both ways, call rings', groupChat],
   ['android app: push through a push app, call notification and hang up, invite link (native side simulated)', androidApp],
+  ['iphone: Home Screen tip in Safari, notifications offered once from the Home Screen (iPhone simulated)', iPhoneNotifications],
   ['step-up: delete and hand over a server, staff, relay, region, backups, owner', stepUp],
   ['account deletion: a throwaway account deletes itself', deleteAccount],
   ['recovery: recovery key, email, password change, reset by email keeps messages', recovery],
