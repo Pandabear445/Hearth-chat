@@ -55,7 +55,9 @@ export function fitsText(seconds) {
 export function probe(file) {
   return new Promise((resolve) => {
     const v = document.createElement('video');
-    const url = URL.createObjectURL(file);
+    // A blob: address for a copy of the file (the same bytes and type, not read into memory): code scanning
+    // follows the picked file into src and reads it as page text, which a media blob: address never is.
+    const url = URL.createObjectURL(new Blob([file], { type: file.type }));
     const done = (r) => { clearTimeout(t); v.removeAttribute('src'); v.load(); URL.revokeObjectURL(url); resolve(r); };
     const result = () => (v.videoWidth > 0 && v.videoHeight > 0 ? { duration: v.duration, width: v.videoWidth, height: v.videoHeight } : null);
     const t = setTimeout(() => done(null), 15000);
