@@ -5739,20 +5739,20 @@ async function community(t) {
   await bob.toast('Main server set.');
   await bob.$('.admin-body strong', { hasText: `everyone who signs up joins ${GUILD}` }).waitFor();
 
-  const dana = await t.open('dana');
-  await dana.register('dana', t.pw.alice + 'd');
-  await dana.page.locator(`#rail button[aria-label="${GUILD}"]`).waitFor();
+  const nova = await t.open('nova');
+  await nova.register('nova', t.pw.alice + 'n');
+  await nova.page.locator(`#rail button[aria-label="${GUILD}"]`).waitFor();
   await alice.railButton(GUILD);
   await alice.openChannel('general');
-  await alice.send('Welcome aboard, dana: apricot');
-  await dana.railButton(GUILD);
-  await dana.openChannel('general');
-  await dana.message('Welcome aboard, dana: apricot').waitFor({ timeout: 60000 });
+  await alice.send('Welcome aboard, nova: apricot');
+  await nova.railButton(GUILD);
+  await nova.openChannel('general');
+  await nova.message('Welcome aboard, nova: apricot').waitFor({ timeout: 60000 });
 
   await bob.$('.admin-body button', { hasText: exact('Turn off') }).click();
   await bob.toast('New accounts no longer join a server.');
-  await dana.close();
-  delete t.people.dana;
+  await nova.close();
+  delete t.people.nova;
 }
 
 export const FLOWS = [
