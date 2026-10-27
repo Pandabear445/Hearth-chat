@@ -48,8 +48,8 @@ concurrency:
 jobs:
   tests:
     runs-on: ubuntu-latest
-    # The tests start real servers; they take a few minutes.
-    timeout-minutes: 20
+    # The tests start real servers, one file at a time: about 20 minutes on GitHub's runners, so this leaves room.
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: hearth
