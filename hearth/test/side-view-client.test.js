@@ -798,7 +798,7 @@ test('app.js: the side panel stays open across conversations, is as wide as a th
   assert.match(rp, /if \(S\.panel !== 'side'\) SIDE\.reset\(\);/);
   assert.match(rp, /if \(mode === 'side' && el\.dataset\.mode === 'side' && SIDE\.drawn\(el\)\) \{\n {4}SIDE\.draw\(el\);\n {4}return;\n {2}\}/);
   assert.ok(rp.indexOf('SIDE.drawn(el)') < rp.indexOf('clear(el);'), 'before the panel is emptied');
-  assert.ok(rp.indexOf("if (mode === 'side') return SIDE.draw(el);") < rp.indexOf("if (S.view.type === 'dm') return dmProfilePanel(el);"));
+  assert.ok(rp.indexOf("if (mode === 'side') return SIDE.draw(el);") < rp.indexOf('dmProfilePanel(el);'));
   assert.match(fn('resizeHandle'), /panelMode\(\) === 'side'/);
   // The header: a button with the count in every chat, once something is pinned; the ⋯ menus have it.
   const head = fn('drawHeader');

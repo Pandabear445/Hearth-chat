@@ -2744,11 +2744,13 @@ async function awayAndStatus(t) {
 // keyboard, slides it shut: the chat widens with it rather than at once, keeps its newest message at the bottom, and
 // the keyboard carries on from the header's "Show profile". It stays folded in another DM and after a reload. It's a
 // choice of its own: a server's member list is still shown, and hiding that doesn't bring the profile back (it used to
-// be one choice for both). The header's button brings it back the same way, keeping the focus. With Reduce motion it
+// be one choice for both). The header's button brings it back the same way, keeping the focus. Before the fold, Bob's
+// status changing draws the panel afresh and Alice's focus stays on its fold button; pressed twice in a row either way,
+// the slide turns back from where it got to rather than jumping. With Reduce motion it
 // goes and comes at once; a narrower window never opens it by itself, opens it over the chat from the header, and its
 // fold button closes it. Alice is in her new DM with Dana, on a wide window, with the profile beside it.
 async function dmProfileFold(t) {
-  const { alice } = t.people;
+  const { alice, bob } = t.people;
   const { page } = alice;
   const pane = alice.$('#members');
   const profile = alice.$('#members .dm-profile');
@@ -2817,9 +2819,18 @@ async function dmProfileFold(t) {
   check((await atNewest()).scrolls, 'The DM should have enough in it to scroll.');
   await stillAtNewest('Before folding');
 
-  // Folded from the keyboard with its own button.
+  // Folded from the keyboard with its own button. Before Alice presses it, Bob goes Do not disturb and back, which
+  // draws her DM's panel afresh each time (anyone's status or game does): the focus stays on the fold button, so Enter
+  // still folds it.
   const narrow = await chatWidth();
   await foldBtn.focus();
+  for (const status of ['Do not disturb', 'Online']) {
+    await page.evaluate(() => { window.e2eFold = document.querySelector('#members .dm-fold'); });
+    await bob.$('#user-panel .me-btn').click();
+    await bob.$('.popover .status-menu .menu-item', { hasText: new RegExp(`^${status}`) }).click();
+    await page.waitForFunction(() => !window.e2eFold.isConnected, null, { timeout: 15000 });
+    check(await focused() === 'Hide profile', `Bob going ${status} should leave Alice’s focus on the profile’s fold button (it’s on ${await focused()}).`);
+  }
   await watch();
   await page.keyboard.press('Enter');
   await page.waitForSelector('#members', { state: 'hidden' });
@@ -2868,10 +2879,59 @@ async function dmProfileFold(t) {
   await alice.showMembers();
   check(await chosen() === 'on/on', `Shown again (got ${await chosen()}).`);
 
-  // With Reduce motion (the app's), it goes and comes at once.
+  // Pressed again before it's done (the header's button twice in a row), it turns back from where it got to: the panel
+  // doesn't jump to its full width, or the chat to its narrow one, to start over from there.
   await alice.railButton('Direct messages');
   await toDm('dana');
   await profile.waitFor();
+  const settled = () => page.waitForFunction(() => !document.querySelector('#members.panel-folding, #members.panel-unfolding'));
+  await page.waitForTimeout(300);
+  const [full, chatBeside] = [Math.round((await pane.boundingBox()).width), await chatWidth()];
+  // The header's button pressed, and again once `again` says (the time since, or how wide the panel has got), with the
+  // panel's width and the chat's on every frame for 700 ms. turn: the last frame before the second press.
+  const pressTwice = (again) => page.evaluate(({ ms, from }) => new Promise((resolve) => {
+    const el = document.querySelector('#members'); const sc = document.querySelector('#messages');
+    const press = () => document.querySelector('#main-head button.head-profile').click();
+    const frames = []; let turn = -1;
+    press();
+    const t0 = performance.now();
+    const tick = () => {
+      const t = performance.now() - t0;
+      const f = { panel: el.hidden ? 0 : Math.round(el.getBoundingClientRect().width), chat: Math.round(sc.getBoundingClientRect().width) };
+      frames.push(f);
+      if (turn < 0 && (ms ? t >= ms : f.panel >= from)) { turn = frames.length - 1; press(); }
+      if (t < 700) requestAnimationFrame(tick); else resolve({ frames, turn });
+    };
+    requestAnimationFrame(tick);
+  }), again);
+  const framesSeen = (r) => `panel ${r.frames.map((f) => f.panel).join(', ')}; chat ${r.frames.map((f) => f.chat).join(', ')}; turned after frame ${r.turn}`;
+  // Folding, and back partway (well into it: going back takes as long as it had gone, so a few frames to see).
+  let r = await pressTwice({ ms: 100 });
+  let at = r.frames[r.turn];
+  let after = r.frames.slice(r.turn + 1);
+  check(r.turn >= 0 && at.panel > 0 && at.panel < full - 20, `The second press should come partway through folding (${framesSeen(r)}).`);
+  check(after.every((f) => f.panel >= at.panel - 2) && after.some((f) => f.panel > at.panel + 2 && f.panel < full - 2) && after.some((f) => f.chat < at.chat - 2 && f.chat > chatBeside + 2),
+    `Turned back partway through folding, the profile should slide back from where it got to, not jump (${framesSeen(r)}).`);
+  check(after.at(-1).panel === full && after.at(-1).chat === chatBeside, `It should end shown as it was (${framesSeen(r)}).`);
+  await settled();
+  check(await headBtn.getAttribute('aria-expanded') === 'true' && await chosen() === 'on/on', `Back again, it should be shown and remembered so (got ${await chosen()}).`);
+  // Unfolding, and back partway.
+  await headBtn.click();
+  await page.waitForSelector('#members', { state: 'hidden' });
+  await settled();
+  const chatAlone = await chatWidth();
+  r = await pressTwice({ from: Math.round(full * 0.3) });
+  at = r.frames[r.turn];
+  after = r.frames.slice(r.turn + 1);
+  check(r.turn >= 0 && at.panel < full - 20, `The second press should come partway through unfolding (${framesSeen(r)}).`);
+  check(after.every((f) => f.panel <= at.panel + 2 && f.chat >= at.chat - 2), `Turned back partway through unfolding, the profile should fold from where it got to, not from its full width (${framesSeen(r)}).`);
+  check(after.at(-1).panel === 0 && after.at(-1).chat === chatAlone && await pane.isHidden(), `It should end folded as it was (${framesSeen(r)}).`);
+  check(await headBtn.getAttribute('aria-expanded') === 'false' && await chosen() === 'off/on', `Back again, it should be folded and remembered so (got ${await chosen()}).`);
+  await headBtn.click();
+  await profile.waitFor();
+  await settled();
+
+  // With Reduce motion (the app's), it goes and comes at once.
   await page.evaluate(() => document.documentElement.classList.add('reduce-motion'));
   await watch();
   await foldBtn.click();

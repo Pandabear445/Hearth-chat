@@ -755,7 +755,7 @@ test('app.js: the panel is a side panel of DMs, group chats and channels, and ke
   // The panel: drawn by media-panel.js, hidden while sharing your screen (DMs and groups), as wide as a thread.
   const rp = fn('renderPanel');
   assert.match(rp, /mode === 'media'\) && hiddenWhileSharing\(privateKey\(\)\)/);
-  assert.ok(rp.indexOf("if (mode === 'media') {") > 0 && rp.indexOf("if (mode === 'media') {") < rp.indexOf("if (S.view.type === 'dm') return dmProfilePanel(el);"), 'before the profile panel of a DM');
+  assert.ok(rp.indexOf("if (mode === 'media') {") > 0 && rp.indexOf("if (mode === 'media') {") < rp.indexOf('dmProfilePanel(el);'), 'before the profile panel of a DM');
   assert.match(rp, /if \(mode !== 'media'\) MEDIA\.reset\(\);/);
   assert.match(fn('resizeHandle'), /panelMode\(\) === 'media'/);
   // Another conversation closes it.

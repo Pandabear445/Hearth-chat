@@ -1992,17 +1992,21 @@ a DM opens with the other person's profile in the side panel (`#members`, `dmPro
 - **Folding.** The panel has its own row with a fold button where it meets the chat ("Hide profile", mirrored when the
   panel is on the left), and the header's person button ("Show profile" / "Hide profile", lit while it's open, with
   `aria-expanded`) does the same. Folded with its own button, the focus goes to the header's button; unfolded from
-  there, it stays on it.
+  there, it stays on it. The profile is drawn afresh whenever anyone's status or game changes; whatever had focus in
+  it (the fold button, a link, a mutual server) keeps it, and it stays scrolled where it was (`dmProfilePlace`).
 - **The slide.** Beside the chat it slides in about 180 ms (`slidePanel`, app.css `#members.panel-folding`): its width
   and the gap beside it go to nothing and back, so the chat widens and narrows with it, and `keepPlace` holds the
   newest message at the bottom as lines rewrap. A presence change meanwhile waits for it; going anywhere else stops it.
-  With Reduce motion (the app's or the system's) it shows and hides at once.
+  Pressed again before it's done, the slide under way turns back from where it got to (its animations reversed),
+  rather than the panel jumping to its full width first. With Reduce motion (the app's or the system's) it shows and
+  hides at once.
 - **Narrower windows and phones** are as before: it never opens by itself there, the header's button opens it over the
   chat, and the fold button (or Back on a phone) closes it.
 
-Tests: `test/dm-profile-client.test.js` (the choice, taking it from the member list's once, DMs and servers apart, the
-page) and the e2e flow "away and status" (`dmProfileFold`: fold, another DM, a server, a reload, unfold, focus,
-Reduce motion, a narrower window).
+Tests: `test/dm-profile-client.test.js` (the choice, taking it from the member list's once, DMs and servers apart,
+turning a slide back, focus and scroll kept through a redraw, the page) and the e2e flow "away and status"
+(`dmProfileFold`: focus kept on the fold button while Bob's status changes, fold, another DM, a server, a reload,
+unfold, focus, pressed twice each way, Reduce motion, a narrower window).
 
 ## Member relays (help host)
 

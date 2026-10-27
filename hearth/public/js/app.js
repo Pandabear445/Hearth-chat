@@ -3303,6 +3303,8 @@ function togglePanel(mode) {
   const dm = S.view.type === 'dm';
   const shown = !!el && !el.hidden;
   const profileShown = dm && shown && panelMode() === 'members';
+  // Still sliding shut: shown again, it turns back from where it got to (slidePanel) rather than jumping to its width.
+  const folding = dm && shown && !!sliding && sliding.shut;
   const fromPanel = shown && el.contains(document.activeElement);
   S.panel = S.panel === mode ? null : mode;
   // In a DM, closing something else (pinned messages, photos & videos, the side view) goes back to its profile when
@@ -3313,6 +3315,7 @@ function togglePanel(mode) {
   if (S.panel !== 'thread') S.thread = null;
   if (profileShown && !S.panel && slidesPanel()) slidePanel(el, true, () => renderPanel());
   else {
+    if (folding && S.panel === 'members' && slidesPanel()) slidePanel(el, false);
     document.body.classList.toggle('panel-open', !!panelMode());
     renderPanel();
     if (dm && !shown && S.panel === 'members' && !el.hidden && slidesPanel()) slidePanel(el, false);
@@ -3328,10 +3331,13 @@ function togglePanel(mode) {
 // floats it over the chat and a phone covers the chat with it, so there it shows and hides as before, as it does with
 // Reduce motion (the app's or the system's).
 const FOLD_MS = 180;
-let sliding = null; // { shut, key, end(finished) }
+let sliding = null; // { shut, key, turn(done), end(finished) }
 const slidesPanel = () => wideEnoughForPanel() && !document.documentElement.classList.contains('reduce-motion') && !matchMedia('(prefers-reduced-motion: reduce)').matches;
 // shut: folding away (done, once it's shut, closes it); otherwise coming back, drawn already.
 function slidePanel(el, shut, done = null) {
+  // Pressed again before it's done: the slide under way goes back the way it came, from where it got to, rather than
+  // the panel jumping to its full width (and the chat with it) and starting over from there.
+  if (sliding && sliding.shut !== shut && sliding.key === currentKey() && sliding.turn(done)) return;
   if (sliding) sliding.end(false);
   const main = $('#main');
   // The gap between the chat and the panel, and the panel's borders (all that's left of it at the end), go and come
@@ -3350,6 +3356,19 @@ function slidePanel(el, shut, done = null) {
   const onEnd = (e) => { if (e.target === el && /^panel-(un)?fold$/.test(e.animationName)) s.end(true); };
   const s = {
     shut, key: currentKey(),
+    // The panel's slide and the chat's, played backwards from where they are. They keep their classes (a new animation
+    // would start over from its own beginning), and each is held where it ends up until the slide's over: the panel at
+    // nothing until done closes it, as a fold is.
+    turn(then) {
+      if (!el.getAnimations) return false;
+      const runs = [el, main].flatMap((x) => x.getAnimations()).filter((a) => /^(panel|main)-(un)?fold$/.test(a.animationName));
+      if (runs.length !== 2 || runs.some((a) => a.playState !== 'running')) return false;
+      for (const a of runs) { a.effect.updateTiming({ fill: 'both' }); a.reverse(); }
+      s.shut = !s.shut; done = then; el.inert = s.shut;
+      clearTimeout(timer);
+      timer = setTimeout(() => s.end(true), FOLD_MS + 150);
+      return true;
+    },
     end(finished) {
       if (sliding !== s) return;
       sliding = null;
@@ -6448,6 +6467,9 @@ function renderPanel() {
     SIDE.draw(el);
     return;
   }
+  // A DM's profile is drawn afresh whenever anyone's status or game changes (automatic Away makes that often): what
+  // had focus in it gets it back, and it stays scrolled where it was.
+  const dmPlace = mode === 'members' && S.view.type === 'dm' ? dmProfilePlace(el) : null;
   clear(el);
   delete el.dataset.key;
   document.body.classList.toggle('panel-open', !!mode);
@@ -6466,8 +6488,32 @@ function renderPanel() {
     if (mediaFocus && mediaFocus.isConnected) mediaFocus.focus({ preventScroll: true });
     return;
   }
-  if (S.view.type === 'dm') return dmProfilePanel(el);
+  if (S.view.type === 'dm') {
+    dmProfilePanel(el);
+    if (dmPlace) dmPlace();
+    return;
+  }
   return membersPanel(el);
+}
+// Where you were in a DM's profile before it's drawn afresh, and a function that puts you back there once it is: the
+// control that had focus (its fold button, a link, a mutual server) and how far it was scrolled. The control is found
+// again by what it is and says, the nth of those alike, so a game showing up above it doesn't hand focus to another.
+function dmProfilePlace(el) {
+  if (el.dataset.mode !== 'members' || el.dataset.key !== currentKey()) return null;
+  const box = el.querySelector(':scope > .dm-profile');
+  const top = box ? box.scrollTop : 0;
+  const a = document.activeElement;
+  const had = a && a !== el && el.contains(a) ? a : null;
+  const like = (n) => `${n.tagName}|${n.className}|${n.getAttribute('aria-label') || ''}|${n.getAttribute('href') || ''}|${n.matches('a, button') ? n.textContent : ''}`;
+  const alike = (sig) => [...el.querySelectorAll(had.tagName)].filter((n) => like(n) === sig);
+  const sig = had ? like(had) : '';
+  const nth = had ? alike(sig).indexOf(had) : -1;
+  return () => {
+    const now = el.querySelector(':scope > .dm-profile');
+    if (now && top) now.scrollTop = top;
+    const n = nth >= 0 ? alike(sig)[nth] : null;
+    if (n && !el.contains(document.activeElement)) n.focus({ preventScroll: true });
+  };
 }
 function panelHead(title, sub, extra, close = null) {
   return h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('h2', null, title), sub ? h('span', null, sub) : null),
@@ -6678,6 +6724,7 @@ function dmProfilePanel(el) {
   if (!d) return;
   const u = getUser(d.userId);
   const mutual = realServers().filter((s) => s.memberIds.includes(u.id));
+  el.dataset.key = currentKey(); // drawn for this DM (dmProfilePlace)
   // Its fold button sits where the panel meets the chat (app.css puts it on the other end of the row when the panel is
   // on the left), and folds it away until the header's profile button brings it back.
   el.append(h('div', { class: 'panel-head dm-profile-head' },

@@ -93,7 +93,9 @@ test('the two choices are independent: one changing leaves the other as it was',
 
 // The side panel's choices as the app makes them: panelMode, restingPanel, togglePanel and setView's lines about it,
 // with the page, the slide and the redraws stubbed. wide: the window has room for the panel beside the chat.
-function panels({ view, panel = null, members = 'on', dmprofile = 'on', wide = true, shown = !!panel, focusInPanel = false }) {
+// slides: it would slide here (wide, no Reduce motion); sliding: a slide under way ({ shut }). log: what was drawn and
+// slid, in order.
+function panels({ view, panel = null, members = 'on', dmprofile = 'on', wide = true, shown = !!panel, focusInPanel = false, slides = false, sliding = null }) {
   const ls = storage({ 'hearth.members': members, 'hearth.dmprofile': dmprofile });
   const P = start(ls);
   const S = { view, panel, thread: null };
@@ -102,18 +104,20 @@ function panels({ view, panel = null, members = 'on', dmprofile = 'on', wide = t
   const headProfile = { focus: () => focused.push('head-profile') };
   const $ = (sel) => (sel === '#members' ? panelEl : sel === '#main-head .head-profile' ? headProfile : null);
   const drawn = [];
+  const log = [];
   const document = { activeElement: {}, body: { classList: { toggle() {}, add() {} } } };
   const src = [fn('panelMode'), fn('restingPanel'), fn('togglePanel')].join('\n');
-  const api = new Function('S', 'P', '$', 'document', 'wideEnoughForPanel', 'slidesPanel', 'slidePanel', 'renderPanel', 'renderHeader',
+  const api = new Function('S', 'P', '$', 'document', 'wideEnoughForPanel', 'slidesPanel', 'slidePanel', 'renderPanel', 'renderHeader', 'sliding',
     `${src}\nreturn { panelMode, restingPanel, togglePanel };`)(
-    S, P, $, document, () => wide, () => false, () => assert.fail('no slide here'),
-    () => { drawn.push(S.panel); panelEl.hidden = !api.panelMode(); }, () => {});
+    S, P, $, document, () => wide, () => slides,
+    slides ? (el, shut) => log.push(shut ? 'slide shut' : 'slide open') : () => assert.fail('no slide here'),
+    () => { drawn.push(S.panel); log.push(`draw ${S.panel}`); panelEl.hidden = !api.panelMode(); }, () => {}, sliding);
   // setView's lines that choose the panel for where you're going.
   const at = APP.indexOf("  // A DM's profile and a member list are two choices");
   assert.ok(at > 0 && at < APP.indexOf('\nfunction goHome('), 'in setView');
   const lines = APP.slice(APP.indexOf('\n', APP.indexOf('\n', at) + 1) + 1, APP.indexOf("  document.body.classList.remove('nav-open');", at));
   const arrive = new Function('S', 'P', 'restingPanel', 'v', `S.view = v;\n${lines}`);
-  return { ...api, S, P, ls, focused, drawn, go: (v) => arrive(S, P, api.restingPanel, v) };
+  return { ...api, S, P, ls, focused, drawn, log, go: (v) => arrive(S, P, api.restingPanel, v) };
 }
 const DM = { type: 'dm', dmId: 'd1' };
 const DM2 = { type: 'dm', dmId: 'd2' };
@@ -240,4 +244,216 @@ test('the page: a fold button on the profile, the header’s button says whether
   // And the reduced-motion rules cover every animation (these among them) as a second guard.
   assert.match(CSS, /@media \(prefers-reduced-motion: reduce\) \{\n {2}\*:not\(\.spinner\), \*::before, \*::after \{ animation-duration: \.001ms !important;/);
   assert.match(CSS, /html\.reduce-motion \*:not\(\.spinner\), html\.reduce-motion \*::before, html\.reduce-motion \*::after \{ animation-duration: \.001ms !important;/);
+});
+
+test('pressed again while the profile slides, it turns back rather than starting over', () => {
+  // Sliding shut (still shown): shown again, the slide under way turns round before the panel is drawn, and the choice
+  // is remembered.
+  const x = panels({ view: DM, panel: null, shown: true, slides: true, sliding: { shut: true } });
+  x.togglePanel('members');
+  assert.equal(x.S.panel, 'members');
+  assert.deepEqual(x.log, ['slide open', 'draw members']);
+  assert.equal(x.ls.m.get('hearth.dmprofile'), 'on');
+  // Sliding open: folded again, slidePanel is asked to fold it (and turns the slide under way, below).
+  const y = panels({ view: DM, panel: 'members', slides: true, sliding: { shut: false } });
+  y.togglePanel('members');
+  assert.equal(y.S.panel, null);
+  assert.deepEqual(y.log, ['slide shut']);
+  assert.equal(y.ls.m.get('hearth.dmprofile'), 'off');
+  // Where it doesn't slide (Reduce motion turned on meanwhile, a narrower window): shown at once, as before.
+  const z = panels({ view: DM, panel: null, shown: true, sliding: { shut: true } });
+  z.togglePanel('members');
+  assert.deepEqual(z.log, ['draw members']);
+});
+
+// slidePanel as it is, with the panel, the chat, their animations and the timer stubbed.
+function slider() {
+  let key = 'd:d1';
+  const timers = new Map();
+  let seq = 0;
+  const anim = (name, playState = 'running') => ({
+    animationName: name, playState, calls: [],
+    effect: { updateTiming(t) { this.owner.calls.push(`fill ${t.fill}`); } },
+    reverse() { this.calls.push('reverse'); },
+  });
+  const withOwner = (a) => { a.effect.owner = a; return a; };
+  const node = (box) => {
+    const cls = new Set();
+    const props = {};
+    const on = {};
+    return {
+      ...box, cls, props, anims: [], inert: false,
+      classList: { add: (c) => cls.add(c), remove: (c) => cls.delete(c), contains: (c) => cls.has(c) },
+      style: { setProperty: (k, v) => { props[k] = v; }, removeProperty: (k) => { delete props[k]; } },
+      addEventListener: (t, f) => { on[t] = f; }, removeEventListener: (t) => { delete on[t]; },
+      fire: (t, e) => on[t] && on[t](e),
+      getAnimations() { return this.anims; },
+    };
+  };
+  const el = node({ offsetLeft: 808, offsetWidth: 272, clientWidth: 271 });
+  const main = node({ offsetLeft: 0, offsetWidth: 800, clientWidth: 800 });
+  const $ = (sel) => (sel === '#main' ? main : sel === '#app' ? {} : null);
+  assert.match(APP, /^const FOLD_MS = 180;$/m);
+  const api = new Function('$', 'currentKey', 'getComputedStyle', 'setTimeout', 'clearTimeout',
+    `const FOLD_MS = 180;\nlet sliding = null;\n${fn('slidePanel')}\nreturn { slidePanel, sliding: () => sliding };`)(
+    $, () => key, () => ({ columnGap: '8px' }), (f) => { timers.set(++seq, f); return seq; }, (id) => timers.delete(id));
+  // The animations app.css starts for a slide each way.
+  const runs = (shut, state) => {
+    el.anims = [withOwner(anim('panel-in')), withOwner(anim(shut ? 'panel-fold' : 'panel-unfold', state))];
+    main.anims = [withOwner(anim(shut ? 'main-fold' : 'main-unfold', state))];
+  };
+  return { ...api, el, main, runs, timeUp: () => [...timers.values()].forEach((f) => f()), go: (k) => { key = k; } };
+}
+
+test('turned back partway, the slide under way plays backwards from where it is, and ends the way it’s now going', () => {
+  const z = slider();
+  const closed = [];
+  // Folding, then shown again before it's shut: the same slide, its animations reversed and held where they end up;
+  // its classes stay (new animations would start over from their beginning), and it's in reach again.
+  z.runs(true);
+  z.slidePanel(z.el, true, () => closed.push('closed'));
+  const s = z.sliding();
+  assert.equal(z.el.inert, true);
+  z.slidePanel(z.el, false);
+  assert.equal(z.sliding(), s, 'the same slide');
+  assert.equal(s.shut, false);
+  assert.deepEqual(z.el.anims.map((a) => a.calls), [[], ['fill both', 'reverse']], 'the fold only, not panel-in');
+  assert.deepEqual(z.main.anims[0].calls, ['fill both', 'reverse']);
+  assert.ok(z.el.cls.has('panel-folding') && z.main.cls.has('panel-folding') && !z.el.cls.has('panel-unfolding'));
+  assert.equal(z.el.inert, false);
+  // Back where it started: over, and not closed.
+  z.el.fire('animationend', { target: z.el, animationName: 'panel-fold' });
+  assert.equal(z.sliding(), null);
+  assert.deepEqual(closed, []);
+  assert.ok(!z.el.cls.has('panel-folding') && !z.main.cls.has('panel-folding') && !('--fold-w' in z.el.props));
+  // Unfolding, then folded again: out of reach, and closed once it's shut (by the timer, should the end not come).
+  z.runs(false);
+  z.slidePanel(z.el, false);
+  z.slidePanel(z.el, true, () => closed.push('closed'));
+  assert.equal(z.sliding().shut, true);
+  assert.equal(z.el.inert, true);
+  assert.ok(z.el.cls.has('panel-unfolding'));
+  z.timeUp();
+  assert.deepEqual(closed, ['closed']);
+  assert.equal(z.sliding(), null);
+  // Turned twice: back to folding, and closed then.
+  z.runs(true);
+  z.slidePanel(z.el, true, () => closed.push('closed again'));
+  z.slidePanel(z.el, false);
+  z.slidePanel(z.el, true, () => closed.push('closed again'));
+  assert.deepEqual(z.el.anims[1].calls, ['fill both', 'reverse', 'fill both', 'reverse']);
+  z.el.fire('animationend', { target: z.el, animationName: 'panel-fold' });
+  assert.deepEqual(closed, ['closed', 'closed again']);
+  // Already over (its animations done), or in another conversation by then: stopped, and a new slide starts as before.
+  for (const [state, k] of [['finished', 'd:d1'], ['running', 'd:d2']]) {
+    z.go('d:d1');
+    z.runs(true, state);
+    z.slidePanel(z.el, true, () => closed.push('not this'));
+    const old = z.sliding();
+    z.go(k);
+    z.slidePanel(z.el, false);
+    assert.notEqual(z.sliding(), old, `${state} in ${k}`);
+    assert.ok(z.el.cls.has('panel-unfolding') && !z.el.cls.has('panel-folding'));
+    assert.deepEqual(z.el.anims[1].calls, []);
+    z.sliding().end(false);
+  }
+  assert.deepEqual(closed, ['closed', 'closed again']);
+});
+
+// A small page for dmProfilePlace: elements with a tag, a class, a label, a link and text, found by their tag.
+function page() {
+  const doc = { activeElement: null };
+  const make = (tag, { cls = '', label = null, href = null, text = '' } = {}, kids = []) => {
+    const n = {
+      tagName: tag.toUpperCase(), className: cls, kids, scrollTop: 0, dataset: {},
+      get textContent() { return text + kids.map((k) => k.textContent).join(''); },
+      getAttribute: (k) => (k === 'aria-label' ? label : k === 'href' ? href : null),
+      matches: (sel) => sel.split(',').map((x) => x.trim().toUpperCase()).includes(n.tagName),
+      all: () => kids.flatMap((k) => [k, ...k.all()]),
+      contains: (x) => x === n || n.all().includes(x),
+      querySelectorAll: (t) => n.all().filter((k) => k.tagName === t.toUpperCase()),
+      querySelector: (sel) => { assert.equal(sel, ':scope > .dm-profile'); return kids.find((k) => k.className === 'dm-profile') || null; },
+      focus: (o) => { assert.deepEqual(o, { preventScroll: true }); doc.activeElement = n; },
+    };
+    return n;
+  };
+  return { doc, make };
+}
+
+test('a DM’s profile drawn afresh (anyone’s status or game changing) keeps the focus where it was, and its scroll', () => {
+  const { doc, make } = page();
+  // The profile as dmProfilePanel draws it; game: what someone's playing, now shown above the rest.
+  const draw = (game = false) => [
+    make('div', { cls: 'panel-head dm-profile-head' }, [make('button', { cls: 'icon-btn dm-fold', label: 'Hide profile' })]),
+    make('div', { cls: 'dm-profile' }, [
+      ...(game ? [make('button', { cls: 'act-join', text: 'Join' }), make('a', { cls: 'pc-link', href: 'https://game.example', text: 'Store page' })] : []),
+      make('a', { cls: 'pc-link', href: 'https://example.org', text: 'example.org' }),
+      make('button', { cls: 'pc-mutual', text: 'Alpha' }),
+      make('button', { cls: 'pc-mutual', text: 'Beta' }),
+    ]),
+  ];
+  const panel = make('div', {}, draw());
+  panel.dataset.mode = 'members';
+  panel.dataset.key = 'd:d1';
+  let key = 'd:d1';
+  const place = () => new Function('document', 'currentKey', `${fn('dmProfilePlace')}\nreturn dmProfilePlace;`)(doc, () => key)(panel);
+  // renderPanel: emptied (the focus falls to the page), then drawn again.
+  const redraw = (game) => { panel.kids.splice(0, panel.kids.length, ...draw(game)); doc.activeElement = { tagName: 'BODY' }; };
+  const fold = () => panel.kids[0].kids[0];
+  const box = () => panel.querySelector(':scope > .dm-profile');
+  const named = (text) => box().kids.find((k) => k.textContent === text);
+
+  // Its fold button: the new one has the focus.
+  doc.activeElement = fold();
+  let back = place();
+  redraw();
+  back();
+  assert.equal(doc.activeElement, fold());
+  // A mutual server further down, scrolled to: the same one, scrolled the same, though a game's buttons and links
+  // show up above it.
+  box().scrollTop = 240;
+  doc.activeElement = named('Beta');
+  back = place();
+  redraw(true);
+  back();
+  assert.equal(doc.activeElement, named('Beta'));
+  assert.equal(box().scrollTop, 240);
+  doc.activeElement = named('example.org');
+  back = place();
+  redraw(false);
+  back();
+  assert.equal(doc.activeElement, named('example.org'));
+  // Focus somewhere else (the message box): only the scroll, and nothing taken from it.
+  const composer = make('textarea');
+  doc.activeElement = composer;
+  box().scrollTop = 120;
+  back = place();
+  redraw();
+  doc.activeElement = composer;
+  back();
+  assert.equal(doc.activeElement, composer);
+  assert.equal(box().scrollTop, 120);
+  // Gone from it (no longer a mutual server): the focus isn't put on anything else.
+  doc.activeElement = named('Alpha');
+  back = place();
+  panel.kids.splice(0, panel.kids.length, ...draw());
+  box().kids.splice(1, 1);
+  doc.activeElement = { tagName: 'BODY' };
+  back();
+  assert.equal(doc.activeElement.tagName, 'BODY');
+  // Drawn for another conversation (setView forgets what it was drawn for), or showing something else: drawn as new.
+  key = 'd:d2';
+  assert.equal(place(), null);
+  key = 'd:d1';
+  panel.dataset.mode = 'pins';
+  assert.equal(place(), null);
+
+  // renderPanel notes it before emptying the panel and puts it back once the profile's drawn; dmProfilePanel says
+  // which conversation it's drawn for.
+  const rp = fn('renderPanel');
+  const noted = rp.indexOf("const dmPlace = mode === 'members' && S.view.type === 'dm' ? dmProfilePlace(el) : null;");
+  assert.ok(noted > 0 && noted < rp.indexOf('clear(el);'), 'noted before the panel is emptied');
+  assert.match(rp, /dmProfilePanel\(el\);\n {4}if \(dmPlace\) dmPlace\(\);/);
+  assert.match(fn('dmProfilePanel'), /el\.dataset\.key = currentKey\(\);/);
+  assert.match(fn('setView'), /if \(panelEl\) delete panelEl\.dataset\.key;/);
 });
