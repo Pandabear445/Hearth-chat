@@ -1841,6 +1841,9 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
    closes what's open first: js/phone-nav.js). */
 @media (pointer: coarse) {
   html { overscroll-behavior-x: none; }
+  /* Nothing hovers on a touch screen, so a pressed row or button answers the finger instead of the grey tap flash. */
+  html { -webkit-tap-highlight-color: transparent; }
+  .ch-row:active, .dm-row:active, .member:active, .nav-row:active, .menu-item:active, .set-nav-btn:active { background: var(--active); }
   /* A phone held sideways (the short half of the phone layout): a slimmer header leaves more of the short screen to
      the chat, and none while the keyboard is up (the header comes back with the keyboard gone). Android makes the page
      shorter for the keyboard; iOS covers it (html.kb-open, js/viewport.js). */
