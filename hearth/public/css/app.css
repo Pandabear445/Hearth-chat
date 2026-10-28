@@ -717,9 +717,9 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 .welcome { padding: 28px 20px 16px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .welcome h2 { font-size: 28px; font-weight: 800; letter-spacing: -.025em; }
 .welcome p { margin: 0; color: var(--text-2); max-width: 60ch; }
-.welcome .welcome-note { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); padding: 4px 10px 4px 8px; border-radius: 8px; background: var(--hover); }
+.welcome .welcome-note { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); padding: 4px 12px 4px 9px; border-radius: 999px; background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); }
 .welcome-note .ic { width: 14px; height: 14px; color: var(--ok); }
-.welcome-ic { width: 64px; height: 64px; border-radius: 18px; display: grid; place-items: center; color: var(--text-2); background: var(--active); }
+.welcome-ic { width: 64px; height: 64px; border-radius: 20px; display: grid; place-items: center; color: var(--text-2); background: linear-gradient(145deg, var(--active), var(--hover)); box-shadow: var(--hl), inset 0 0 0 1px var(--line); }
 .welcome-ic .ic { width: 32px; height: 32px; }
 .day-div { display: flex; align-items: center; gap: 10px; margin: 16px 20px 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
 .day-div::before, .day-div::after { content: ''; flex: 1; height: 1px; background: var(--line); }
@@ -758,7 +758,9 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 /* messages: comfortable (default) */
 .msg {
   position: relative; display: grid; grid-template-columns: 56px minmax(0, 1fr); grid-template-areas: 'reply reply' 'gutter body';
-  padding: 2px 20px 2px 12px; margin-top: 16px; transition: background .08s;
+  /* Inset from the panel's edges with rounded corners, so the hover highlight reads as a soft card;
+     the padding gives back the margin, so the text sits where it always did. */
+  padding: 2px 12px 2px 4px; margin-top: 16px; margin-inline: 8px; border-radius: var(--r-md); transition: background var(--dur-1);
 }
 .msg.grouped { margin-top: 0; }
 .msg:hover, .msg:focus-within { background: var(--hover); }
@@ -769,8 +771,8 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 @keyframes flash { 0%, 50% { background: rgb(var(--accent-rgb) / .2); } 100% { background: transparent; } }
 .msg-gutter { grid-area: gutter; display: flex; justify-content: center; padding-top: 2px; }
 /* bulk delete: a checkbox on each message while picking */
-.messages.selecting .msg { padding-left: 40px; }
-.msg-select { position: absolute; left: 14px; top: 6px; width: 17px; height: 17px; margin: 0; accent-color: var(--danger); cursor: pointer; }
+.messages.selecting .msg { padding-left: 32px; }
+.msg-select { position: absolute; left: 6px; top: 6px; width: 17px; height: 17px; margin: 0; accent-color: var(--danger); cursor: pointer; }
 .msg-select:disabled { cursor: not-allowed; opacity: .45; }
 .msg.selected { background: color-mix(in oklab, var(--danger) 10%, transparent); box-shadow: inset 2px 0 0 var(--danger); }
 .select-bar { flex: none; display: flex; align-items: center; gap: 8px; margin: 0 16px 6px; padding: 8px 10px 8px 14px; border-radius: 10px; background: rgb(var(--elev)); border: 1px solid var(--line-2); font-size: 13.5px; }
@@ -848,7 +850,7 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 .mention { background: rgb(var(--accent-rgb) / .16); color: var(--accent-ink); padding: 0 4px; border-radius: 5px; font-weight: 600; }
 .mention-me { background: rgb(var(--accent-rgb) / .28); color: var(--text); }
 .md-code { font: 0.87em var(--mono); background: rgb(var(--field)); border: 1px solid var(--line); padding: 1px 5px; border-radius: 6px; }
-.md-pre { background: rgb(var(--field)); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 4px 0; overflow-x: auto; font: 13px/1.5 var(--mono); white-space: pre; max-width: 100%; }
+.md-pre { background: rgb(var(--field)); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 14px; box-shadow: inset 0 1px 2px rgb(0 0 0 / .12); margin: 4px 0; overflow-x: auto; font: 13px/1.5 var(--mono); white-space: pre; max-width: 100%; }
 .md-quote { display: block; border-left: 3px solid var(--line-2); padding-left: 10px; color: var(--text-2); }
 .md-spoiler { background: rgb(var(--text-rgb) / .85); color: transparent; border-radius: 5px; cursor: pointer; padding: 0 3px; transition: color .15s, background .15s; }
 .md-spoiler .mention { visibility: hidden; }
@@ -935,10 +937,10 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .reaction {
-  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border-radius: 8px;
-  background: var(--hover); border: 1px solid var(--line); font-size: 13.5px; transition: border-color .12s, transform .1s;
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 999px;
+  background: var(--hover); border: 1px solid var(--line); font-size: 13.5px; transition: border-color var(--dur-1), background var(--dur-1), transform var(--dur-1) var(--ease-out);
 }
-.reaction:hover { border-color: var(--line-2); }
+.reaction:hover { border-color: var(--line-2); background: var(--active); }
 .reaction:active { transform: scale(.95); }
 .reaction.mine { background: rgb(var(--accent-rgb) / .14); border-color: rgb(var(--accent-rgb) / .55); }
 .r-count { font-weight: 700; font-size: 12.5px; color: var(--text-2); }
@@ -951,13 +953,13 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 
 /* hover toolbar */
 .msg-tools {
-  position: absolute; right: 16px; top: -16px; z-index: 3;
-  display: flex; align-items: center; padding: 2px; border-radius: 10px; gap: 1px;
-  background: rgb(var(--elev)); border: 1px solid var(--line-2); box-shadow: 0 6px 18px rgb(0 0 0 / .18);
-  opacity: 0; transform: translateY(3px); pointer-events: none; transition: opacity .1s, transform .1s;
+  position: absolute; right: 8px; top: -16px; z-index: 3;
+  display: flex; align-items: center; padding: 3px; border-radius: var(--r-md); gap: 1px;
+  background: rgb(var(--elev)); border: 1px solid var(--line-2); box-shadow: var(--hl), 0 2px 4px rgb(0 0 0 / .1), 0 8px 20px -4px rgb(0 0 0 / .3);
+  opacity: 0; transform: translateY(3px); pointer-events: none; transition: opacity var(--dur-1), transform var(--dur-1) var(--ease-out);
 }
 .msg:hover .msg-tools, .msg:focus-within .msg-tools, .msg-tools:has([aria-expanded='true']) { opacity: 1; transform: none; pointer-events: auto; }
-.tool { width: 30px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: var(--text-2); font-size: 15px; }
+.tool { width: 30px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: var(--text-2); font-size: 15px; transition: background var(--dur-1), color var(--dur-1); }
 .tool:hover { background: var(--active); color: var(--text); }
 .tool .ic { width: 17px; height: 17px; }
 .edit-wrap { margin-top: 4px; }
@@ -1007,10 +1009,12 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .upload-status.retrying .bar { background: var(--idle); }
 .upload-status.retrying .upload-text { color: var(--text); }
 .composer {
-  display: flex; align-items: flex-end; gap: 2px; padding: 5px; border-radius: 14px;
-  background: rgb(var(--s3) / .65); border: 1px solid var(--line-2); transition: border-color .15s, box-shadow .15s;
+  display: flex; align-items: flex-end; gap: 2px; padding: 5px; border-radius: 16px;
+  background: rgb(var(--s3) / .65); border: 1px solid var(--line-2); box-shadow: var(--hl), var(--shadow-sm);
+  transition: border-color var(--dur-2), box-shadow var(--dur-2);
 }
-.composer:focus-within { border-color: rgb(var(--accent-rgb) / .55); box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / .1); }
+.composer:hover:not(:focus-within) { border-color: rgb(var(--text-rgb) / .18); }
+.composer:focus-within { border-color: rgb(var(--accent-rgb) / .55); box-shadow: var(--hl), 0 0 0 3px rgb(var(--accent-rgb) / .12), 0 8px 24px -10px rgb(0 0 0 / .4); }
 .composer textarea {
   flex: 1; min-width: 0; background: transparent; border: 0; outline: none; resize: none;
   padding: 7px 6px; line-height: 1.45; max-height: 260px; min-height: 34px;
@@ -1022,11 +1026,14 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .composer-tools .icon-btn .ic { width: 20px; height: 20px; }
 .send-btn {
   width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; margin-left: 2px;
-  background: var(--accent); color: var(--on-accent); transition: opacity .15s, filter .15s, background .15s;
+  background: var(--accent) linear-gradient(180deg, rgb(255 255 255 / .1), rgb(255 255 255 / 0)); color: var(--on-accent);
+  box-shadow: 0 1px 0 rgb(255 255 255 / .2) inset, 0 1px 2px rgb(0 0 0 / .18);
+  transition: opacity var(--dur-1), filter var(--dur-1), background var(--dur-1), transform var(--dur-1) var(--ease-out);
 }
+.send-btn:active:not(:disabled) { transform: scale(.93); }
 .send-btn .ic { width: 17px; height: 17px; }
 .send-btn:hover { filter: brightness(1.08); }
-.send-btn:disabled { background: transparent; color: var(--muted); opacity: .6; }
+.send-btn:disabled { background: transparent; color: var(--muted); opacity: .6; box-shadow: none; }
 .typing { height: 20px; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); padding-left: 6px; }
 .dots { display: inline-flex; gap: 3px; }
 .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-2); animation: bounce 1.2s infinite; }
@@ -1120,8 +1127,8 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .pin-text { font-size: 14px; color: var(--msg-text); overflow-wrap: anywhere; max-height: 160px; overflow: hidden; }
 .pin-actions { display: flex; justify-content: space-between; align-items: center; }
 .thread-list { flex: 1; overflow-y: auto; padding: 8px 0; }
-.thread-list .msg { padding-right: 12px; }
-.thread-list .msg-tools { right: 8px; }
+.thread-list .msg { padding-right: 4px; }
+.thread-list .msg-tools { right: 4px; }
 .thread-divider { display: flex; align-items: center; gap: 10px; margin: 8px 16px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .thread-divider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 .thread-list > .btn { margin: 0 16px 8px; }
@@ -1768,8 +1775,8 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   #main-head { gap: 4px; padding: 0 6px 0 10px; }
   .head-tools .icon-btn { width: 32px; }
   .head-badge { display: none; }
-  .msg { padding-right: 8px; }
-  .msg-tools { right: 6px; }
+  .msg { padding-right: 4px; margin-inline: 4px; }
+  .msg-tools { right: 2px; }
   .composer-wrap { padding: 0 8px 4px; }
   .friends, .saved { padding: 4px 10px 20px; }
   .home-view { padding: 18px 14px 30px; }
@@ -1819,7 +1826,7 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   body.nav-swiping #rail, body.nav-swiping #sidebar, body.panel-swiping #members { transition: none; }
   body.nav-swiping .nav-scrim { display: block; position: fixed; inset: 0; z-index: 25; background: var(--scrim); }
   /* Messages: a narrower avatar column, so the text gets the width (follow-up messages line up with it). */
-  .msg { grid-template-columns: 40px minmax(0, 1fr); padding-left: 6px; }
+  .msg { grid-template-columns: 40px minmax(0, 1fr); padding-left: 2px; }
   .msg-av { height: 32px; }
   .msg-av .av { --size: 32px !important; }
   .msg-hover-time { font-size: 9.5px; }
