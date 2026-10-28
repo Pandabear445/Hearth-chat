@@ -248,6 +248,8 @@ export async function runExport(ctx) {
   zip.add('account.json', JSON.stringify(account, null, 2));
   // Your word filter, as this device decrypted it (the server only has it sealed).
   if (ctx.wordFilter) zip.add('word-filter.json', JSON.stringify(ctx.wordFilter, null, 2));
+  // Your nicknames for people, as this device decrypted them (likewise sealed on the server).
+  if (ctx.personalNicknames && ctx.personalNicknames.length) zip.add('personal-nicknames.json', JSON.stringify(ctx.personalNicknames, null, 2));
   const people = new Map();
   const nameOf = (id) => { const u = S.users[id]; return u ? { id, username: u.username, displayName: (u.profile && u.profile.displayName) || u.username } : { id }; };
   const convs = [];

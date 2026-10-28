@@ -222,4 +222,30 @@ function resetProof(user, challenge) {
 }
 const resetTokenFrom = (mail) => /#reset=([\w-]+)/.exec(mail.text)[1];
 
-module.exports = { startServer, confirmEmail, enable2fa, freshCode, totp, resetProof, resetTokenFrom, newIp, hex, b64, sleep, solveCaptcha, solveCaptchas };
+// A GIF built by hand (not by server/emojiimage.js, which tests shrink with it): a global table of 128 colours, a
+// looping block, then each frame with its own timing and transparency. Frames: { x, y, w, h, color(x, y) -> 0-127,
+// delay, transparent (an index, or undefined), interlace }. The image data is written as plain codes with a clear
+// code every 120, so no LZW compressor is involved.
+function gifOf({ width, height, frames }) {
+  const u16 = (n) => [n & 255, (n >> 8) & 255];
+  const out = [...Buffer.from('GIF89a'), ...u16(width), ...u16(height), 0xf6, 0, 0];
+  for (let i = 0; i < 128; i++) out.push((i * 2) & 255, (255 - i * 2) & 255, (i * 37) & 255);
+  out.push(0x21, 0xff, 11, ...Buffer.from('NETSCAPE2.0'), 3, 1, 0, 0, 0);
+  for (const f of frames) {
+    const t = f.transparent;
+    out.push(0x21, 0xf9, 4, (2 << 2) | (t === undefined ? 0 : 1), ...u16(f.delay || 10), t === undefined ? 0 : t, 0);
+    out.push(0x2c, ...u16(f.x || 0), ...u16(f.y || 0), ...u16(f.w), ...u16(f.h), f.interlace ? 0x40 : 0, 7);
+    const rows = [];
+    if (f.interlace) { for (const [start, step] of [[0, 8], [4, 8], [2, 4], [1, 2]]) for (let y = start; y < f.h; y += step) rows.push(y); } else for (let y = 0; y < f.h; y++) rows.push(y);
+    const codes = [];
+    let n = 0;
+    for (const y of rows) for (let x = 0; x < f.w; x++, n++) { if (n % 120 === 0) codes.push(128); codes.push(f.color(x, y) & 127); }
+    codes.push(129);
+    for (let i = 0; i < codes.length; i += 255) { const part = codes.slice(i, i + 255); out.push(part.length, ...part); }
+    out.push(0);
+  }
+  out.push(0x3b);
+  return Buffer.from(out);
+}
+
+module.exports = { gifOf, startServer, confirmEmail, enable2fa, freshCode, totp, resetProof, resetTokenFrom, newIp, hex, b64, sleep, solveCaptcha, solveCaptchas };

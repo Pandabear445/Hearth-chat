@@ -1570,6 +1570,17 @@ CREATE TABLE IF NOT EXISTS word_filters (
 `);
 addColumn('servers', 'word_filter', 'TEXT');
 
+// Personal nicknames (server/personalnames.js): names someone gave other people that only they see, sealed by their
+// app with their personal vault key like their word filter (ciphertext only); data NULL once they delete it. A new
+// table only, which older versions leave alone, so the schema version stays.
+db.exec(`
+CREATE TABLE IF NOT EXISTS personal_nicknames (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  data TEXT,
+  updated_at INTEGER NOT NULL
+);
+`);
+
 // v19 (join history): "New members can't read messages from before they joined", a server setting (off by default;
 // server/joinhistory.js). hide_history: the setting. join_rotate_at: when a join that's waiting for the next key may
 // have it (joins close together share one new key; NULL when nobody is waiting). members.key_from: for someone who

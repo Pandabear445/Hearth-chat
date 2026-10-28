@@ -29,7 +29,7 @@ const { sanitizeProfile, parseProfile } = require('./profile');
 const { sanitizePage, parsePage } = require('./page');
 const { PERMS: PM, ALL: ALL_PERMS, DEFAULT_EVERYONE, CHANNEL_SCOPED, makePerms } = require('./perms');
 const TEMPLATES = require('./templates');
-const { stripFile, ImageRejected, StripTimedOut } = require('./imagemeta');
+const { stripFile, fitEmojiFile, ImageRejected, StripTimedOut } = require('./imagemeta');
 // files-10: signed links for the news, webhook-avatar and music-art picture proxies (server/mediasign.js). The server
 // signs each picture's address when it hands it to an app, so the proxies only fetch what this server chose to show.
 const MEDIA_LINKS = require('./mediasign').mediaLinks(atRestKey);
@@ -2469,7 +2469,7 @@ function eraseAccount(row) {
     // Their settings and bookmarks (saved messages with their notes, read positions, mention counts, notification
     // choices, folders and other preferences), and which servers they were in (former_members only matters to
     // someone who could come back).
-    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters',
+    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters', 'personal_nicknames',
       'saved_messages', 'read_states', 'mention_marks', 'notify_prefs', 'user_prefs', 'former_members']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(row.id);
     db.prepare('DELETE FROM profile_comments WHERE profile_id = ?').run(row.id); // the comments on their profile page go with it
     // Call relays they offered (Settings → Help host) leave everyone's calls and backups (everyone's apps are told to
@@ -4685,24 +4685,27 @@ api.post('/servers/:id/voice/:uid/mute', auth, (req, res) => setVoiceMute(req, r
 api.delete('/servers/:id/voice/:uid/mute', auth, (req, res) => setVoiceMute(req, res, false));
 
 // ---------------------------------------------------------------- custom emoji
-// Animated emoji: GIF, animated WebP and APNG all keep animating. We look inside the file rather than
-// trusting its type, so an animated WebP or APNG is recognised too.
-function isAnimatedImage(buf) {
-  if (buf.slice(0, 3).toString('latin1') === 'GIF') {
-    let frames = 0; // count image descriptors (0x2C) that follow a graphic control extension
-    for (let i = 0; i < buf.length - 1 && frames < 2; i++) if (buf[i] === 0x21 && buf[i + 1] === 0xF9) frames++;
-    return frames > 1;
-  }
-  if (buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') return buf.indexOf('ANIM', 12, 'latin1') !== -1;
-  if (buf[0] === 0x89 && buf.slice(1, 4).toString('latin1') === 'PNG') { const idat = buf.indexOf('IDAT', 8, 'latin1'); const actl = buf.indexOf('acTL', 8, 'latin1'); return actl !== -1 && (idat === -1 || actl < idat); }
-  return false;
-}
-const EMOJI_MAX = 2 * 1024 * 1024;
+// Every emoji is stored at most 128×128 and 512 KB (server/emojiimage.js). The app shrinks still pictures before
+// uploading them; here a GIF that's too big is shrunk (still animated), and anything else too big is refused, so a
+// call straight to the API can't store a bigger one. The check runs in the picture worker, after the metadata is
+// removed. GIF, animated WebP and APNG all keep animating: we look inside the file rather than trusting its type.
+const EMOJI_MAX = 2 * 1024 * 1024; // what may be uploaded (a big GIF is shrunk to well under this)
 const emojiName = (n) => String(n || '').trim().replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 32);
 function checkEmojiRoom(s, name) {
   if (name.length < 2) fail(400, 'Emoji names need at least 2 letters, numbers or underscores.');
   if (db.prepare('SELECT COUNT(*) AS n FROM emojis WHERE server_id = ?').get(s.id).n >= 200) fail(400, 'A server can have up to 200 emoji.');
   if (db.prepare('SELECT 1 FROM emojis WHERE server_id = ? AND name = ?').get(s.id, name)) fail(409, `There's already an emoji called :${name}:.`);
+}
+// Makes the stored file fit (in place) and returns whether it's animated. Refuses with a message for the person.
+async function fitStoredEmoji(file) {
+  let r;
+  try { r = await fitEmojiFile(uploadPath(file)); } catch (e) {
+    if (e instanceof StripTimedOut) fail(503, 'Making that emoji fit took too long, so it wasn\u2019t saved. Try again in a moment, or try a smaller picture.', 'too_slow');
+    if (e instanceof ImageRejected) fail(400, e.message, 'bad_emoji');
+    throw e;
+  }
+  if (r.size != null) db.prepare('UPDATE user_files SET size = ? WHERE name = ?').run(r.size, file);
+  return r.animated;
 }
 function addEmoji(s, name, url, animated, userId) {
   checkEmojiRoom(s, name);
@@ -4710,19 +4713,21 @@ function addEmoji(s, name, url, animated, userId) {
   db.prepare('INSERT INTO emojis (id, server_id, name, url, animated, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, s.id, name, url, animated ? 1 : 0, userId, now());
   serverAudit(s, userId, 'emoji_create', id, { name, animated: animated ? true : undefined });
   emitServer(s.id);
-  return { id, name, animated: !!animated };
+  return { id, name, url, animated: !!animated };
 }
-api.post('/servers/:id/emojis', auth, limited('image', uploadImage, 'file'), (req, res) => {
+api.post('/servers/:id/emojis', auth, limited('image', uploadImage, 'file'), wrap(async (req, res) => {
   const s = requirePerm(req.params.id, req.userId, PM.MANAGE_EMOJIS, 'You need the Manage Emoji permission.');
   if (!req.file) fail(400, 'Choose an image.');
   const url = '/uploads/' + req.file.filename;
   try {
     if (req.file.size > EMOJI_MAX) fail(400, 'Emoji images can be up to 2 MB.');
-    const animated = isAnimatedImage(fs.readFileSync(uploadPath(req.file.filename)));
-    res.json(addEmoji(s, emojiName((req.body || {}).name), url, animated, req.userId));
+    const name = emojiName((req.body || {}).name);
+    checkEmojiRoom(s, name); // before the work of shrinking it
+    const animated = await fitStoredEmoji(req.file.filename);
+    res.json(addEmoji(s, name, url, animated, req.userId));
   } catch (e) { removeUpload(url); throw e; }
-});
-// Turn a GIPHY GIF or sticker into a server emoji (uses a small rendition so it stays light).
+}));
+// Turn a GIPHY GIF or sticker into a server emoji (uses a small rendition, shrunk to fit like any other).
 api.post('/servers/:id/emojis/from-giphy', auth, wrap(async (req, res) => {
   const s = requirePerm(req.params.id, req.userId, PM.MANAGE_EMOJIS, 'You need the Manage Emoji permission.');
   if (!gifKey()) fail(400, 'GIF search isn\u2019t set up on this server yet.');
@@ -4744,12 +4749,17 @@ api.post('/servers/:id/emojis/from-giphy', auth, wrap(async (req, res) => {
   if (!r.ok) { cancelBody(r.body); fail(502, 'Couldn\u2019t download that GIF from GIPHY.'); }
   const buf = await readLimited(r, EMOJI_MAX).catch(() => fail(502, 'Couldn\u2019t download that GIF from GIPHY.'));
   if (!buf) fail(400, 'That GIF is too big to use as an emoji.');
+  if (buf.toString('latin1', 0, 3) !== 'GIF') fail(502, 'GIPHY sent something that isn\u2019t a GIF.');
   const over = overLimit(req.userId, q, buf.length);
   if (over) throw over;
   const file = `${newId()}${crypto.randomBytes(8).toString('hex')}.gif`;
   fs.writeFileSync(path.join(UPLOAD_DIR, file), buf);
   recordFile(req.userId, file, 'emoji', buf.length);
-  try { res.json(addEmoji(s, name, '/uploads/' + file, isAnimatedImage(buf), req.userId)); } catch (e) { removeUpload('/uploads/' + file); throw e; }
+  try {
+    await stripUploadedImage({}, uploadPath(file));
+    const animated = await fitStoredEmoji(file);
+    res.json(addEmoji(s, name, '/uploads/' + file, animated, req.userId));
+  } catch (e) { removeUpload('/uploads/' + file); throw e; }
 }));
 api.patch('/emojis/:id', auth, (req, res) => {
   const e = db.prepare('SELECT * FROM emojis WHERE id = ?').get(req.params.id);
@@ -5167,16 +5177,17 @@ async function gifCategories() {
     return (json.data || []).slice(0, 30).map((c) => ({ name: c.name, preview: c.gif ? gifItem(c.gif).preview : null })).filter((c) => c.preview);
   });
 }
-// One GIF by id, as a small file suitable for a custom emoji.
+// One GIF by id, as a small file suitable for a custom emoji (the server then shrinks it to fit 128×128).
 async function gifForEmoji(id) {
+  const pick = (list) => list.find((x) => x && x.url && (+x.size || 0) <= 2 * 1024 * 1024);
   if (gifProvider() === 'klipy') {
     const json = await klipy('/v2/posts', { ids: id, media_filter: 'tinygif,nanogif,gif,tinygif_transparent' });
     const f = ((json.results || [])[0] || {}).media_formats || {};
-    return [f.tinygif_transparent, f.tinygif, f.nanogif, f.gif].find((x) => x && x.url && (+x.size || 0) <= 2 * 1024 * 1024);
+    return pick([f.tinygif_transparent, f.tinygif, f.nanogif, f.gif]);
   }
   const json = await giphy(`/v1/gifs/${id}`, {});
   const im = (json.data && json.data.images) || {};
-  return [im.fixed_height_small, im.fixed_width_small, im.fixed_height, im.downsized].find((x) => x && x.url && (+x.size || 0) <= 2 * 1024 * 1024);
+  return pick([im.fixed_height_small, im.fixed_width_small, im.fixed_height, im.downsized]);
 }
 
 api.get('/gifs', auth, wrap(async (req, res) => {
@@ -6860,6 +6871,8 @@ NICK = require('./nicknames')({ api, auth, db, fail, rateLimit, limitNet, requir
 // suggested one (plain). Matching happens only in the apps.
 WFILTER = require('./wordfilter')({ api, auth, db, fail, rateLimit, limitNet, requireServer, perms, PM, serverAudit, getIo: () => io,
   emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
+// Personal nicknames (server/personalnames.js): names you give people that only you see, sealed by your app.
+require('./personalnames')({ api, auth, db, fail, rateLimit, limitNet, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
 function fundingTotals() {
   const f = funding();
   const auto = MONEY.raisedThisMonth();

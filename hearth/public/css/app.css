@@ -1970,7 +1970,10 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .rail-btn.shape-square, .rail-btn.shape-square > img { border-radius: 8px; }
 .role-icon { font-size: 13px; line-height: 1; cursor: default; }
 .role-mention { background: color-mix(in srgb, var(--rc, var(--accent)) 18%, transparent); color: var(--rc, var(--accent-ink)); }
-img.cemoji { display: inline-block; width: 1.4em; height: 1.4em; object-fit: contain; vertical-align: -0.35em; margin: 0 1px; }
+/* Custom emoji are stored at most 128×128 (server/emojiimage.js) and always drawn in a fixed box, whatever size the
+   file is (older uploads can be bigger): 22 px in a line of text (1.375em of the 16 px message text), 48 px on their
+   own, 16-17 px in reactions. object-fit keeps a wide or tall one's shape inside the box. */
+img.cemoji { display: inline-block; width: 1.375em; height: 1.375em; min-width: 0; max-width: none; object-fit: contain; vertical-align: -0.3em; margin: 0 1px; }
 .msg-text.jumbo img.cemoji { width: 48px; height: 48px; }
 .reaction img.cemoji { width: 17px; height: 17px; vertical-align: middle; }
 .emoji-btn img.cemoji { width: 26px; height: 26px; }
@@ -3543,3 +3546,20 @@ textarea.pn-box { flex: 1; min-height: 38px; max-height: 140px; padding: 8px 11p
 }
 
 /* (end of the side view) */
+
+/* Nicknames only you see (personal-names.js): the note under the name on a profile, and the settings list. */
+.pc-personal { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; font-size: 12.5px; color: var(--text-2); }
+.pc-personal .pn-badge { padding: 1px 7px; border-radius: 999px; background: rgb(var(--accent-rgb) / .16); color: var(--accent-ink, var(--accent)); font-weight: 700; font-size: 11px; letter-spacing: .02em; }
+.pc-personal .pn-real { overflow-wrap: anywhere; }
+.mys-personal { margin-top: 6px; }
+.pn-list .pn-name { font-weight: 700; }
+
+/* Emoji upload (emoji-upload.js): each picked picture as it will be stored, at the sizes it's shown. */
+.pending-emoji { flex-wrap: wrap; }
+.pending-emoji .ep-sizes { display: flex; align-items: flex-end; gap: 6px; }
+.pending-emoji .ep-sizes img.cemoji { margin: 0; }
+.pending-emoji .ep-sizes .s-inline { width: 22px; height: 22px; }
+.pending-emoji .ep-sizes .s-jumbo { width: 48px; height: 48px; }
+.pending-emoji .ep-info { flex-basis: 100%; font-size: 12px; color: var(--muted); }
+.pending-emoji .ep-info.bad { color: var(--danger, #e5484d); }
+.pending-emoji.bad { border-color: var(--danger, #e5484d); }

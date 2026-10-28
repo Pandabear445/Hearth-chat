@@ -23,6 +23,7 @@
 // Uploads are cleaned in a worker thread (stripFile), so even a big picture never holds up chat for anyone else.
 const fs = require('fs');
 const { AudioRejected, stripAudioFile } = require('./audiometa');
+const { fitEmoji, EmojiRejected } = require('./emojiimage');
 
 const SOI = 0xd8;
 const EOI = 0xd9;
@@ -365,16 +366,16 @@ let jobSeq = 0;
 function lane() {
   let worker = null;
   let watchdog = null;
-  const jobs = new Map(); // id -> { file, audio, resolve, reject }, oldest first
+  const jobs = new Map(); // id -> { file, task, resolve, reject }, oldest first
   function startWorker() {
     const { Worker } = require('worker_threads');
     // The file data itself is outside this limit; the cleaning code needs very little memory of its own.
     const w = new Worker(__filename, { workerData: { imageStripper: true }, resourceLimits: { maxOldGenerationSizeMb: 64 } });
-    w.on('message', ({ id, size, err, rejected }) => {
+    w.on('message', ({ id, size, info, err, rejected }) => {
       const job = jobs.get(id);
       if (job) {
         jobs.delete(id);
-        if (err) job.reject(rejected ? new ImageRejected(err) : new Error(err)); else job.resolve(size);
+        if (err) job.reject(rejected ? new ImageRejected(err) : new Error(err)); else job.resolve(job.task === 'emoji' ? { size, ...info } : size);
       }
       arm(); // it's making progress
     });
@@ -391,12 +392,12 @@ function lane() {
       const job = jobs.get(first.value);
       jobs.delete(first.value);
       fs.promises.unlink(job.file + '.tmp').catch(() => {});
-      job.reject(timedOut ? new StripTimedOut('Checking this file took too long.') : new ImageRejected(job.audio ? 'This song couldn\u2019t be checked.' : 'This picture couldn\u2019t be checked.'));
+      job.reject(timedOut ? new StripTimedOut('Checking this file took too long.') : new ImageRejected(job.task === 'audio' ? 'This song couldn\u2019t be checked.' : 'This picture couldn\u2019t be checked.'));
     }
     if (jobs.size) {
       try {
         worker = startWorker();
-        for (const [id, job] of jobs) worker.postMessage({ id, file: job.file, audio: job.audio });
+        for (const [id, job] of jobs) worker.postMessage({ id, file: job.file, task: job.task });
       } catch (e) {
         worker = null;
         for (const job of jobs.values()) job.reject(e);
@@ -414,11 +415,11 @@ function lane() {
     watchdog = setTimeout(() => replaceWorker(worker, true), STRIP_LIMIT_MS);
     watchdog.unref();
   }
-  return (file, audio) => new Promise((resolve, reject) => {
+  return (file, task) => new Promise((resolve, reject) => {
     const id = ++jobSeq;
     try { if (!worker) worker = startWorker(); } catch (e) { return reject(e); }
-    jobs.set(id, { file, audio, resolve, reject });
-    worker.postMessage({ id, file, audio });
+    jobs.set(id, { file, task, resolve, reject });
+    worker.postMessage({ id, file, task });
     if (!watchdog) arm(); else worker.ref();
   });
 }
@@ -427,16 +428,31 @@ const lanes = { pictures: lane(), songs: lane() };
 // null if nothing had to be removed. Rejects with ImageRejected for a file that can't be cleaned (StripTimedOut when
 // it took too long).
 function stripFile(file, { audio = false } = {}) {
-  return (audio ? lanes.songs : lanes.pictures)(file, !!audio);
+  return audio ? lanes.songs(file, 'audio') : lanes.pictures(file, 'strip');
+}
+// A custom emoji, made to fit (server/emojiimage.js): a GIF over 128×128 is shrunk in place, anything else that's too
+// big is refused (ImageRejected with a message for the person). Resolves to { size, type, width, height, animated },
+// size null when the file was left as it was. Runs in the pictures worker, after stripFile, with the same time limit.
+function fitEmojiFile(file) {
+  return lanes.pictures(file, 'emoji');
 }
 {
   const { isMainThread, parentPort, workerData } = require('worker_threads');
   if (!isMainThread && workerData && workerData.imageStripper) {
-    parentPort.on('message', ({ id, file, audio }) => {
+    parentPort.on('message', ({ id, file, task }) => {
       const tmp = file + '.tmp';
       try {
         let size = null;
-        if (audio) {
+        let info;
+        if (task === 'emoji') {
+          const r = fitEmoji(fs.readFileSync(file));
+          info = r.info;
+          if (r.changed) {
+            fs.writeFileSync(tmp, r.buf);
+            fs.renameSync(tmp, file);
+            size = r.buf.length;
+          }
+        } else if (task === 'audio') {
           // Songs are copied piece by piece (they can be much bigger than pictures), never read whole.
           size = stripAudioFile(file, tmp);
           if (size != null) fs.renameSync(tmp, file);
@@ -448,13 +464,13 @@ function stripFile(file, { audio = false } = {}) {
             size = clean.length;
           }
         }
-        parentPort.postMessage({ id, size });
+        parentPort.postMessage({ id, size, info });
       } catch (e) {
         try { fs.unlinkSync(tmp); } catch { /* not written */ }
-        parentPort.postMessage({ id, err: String(e.message || e), rejected: e instanceof ImageRejected || e instanceof AudioRejected });
+        parentPort.postMessage({ id, err: String(e.message || e), rejected: e instanceof ImageRejected || e instanceof AudioRejected || e instanceof EmojiRejected });
       }
     });
   }
 }
 
-module.exports = { stripImageMetadata, stripFile, ImageRejected, StripTimedOut, tiffOrientation, crc32 };
+module.exports = { stripImageMetadata, stripFile, fitEmojiFile, ImageRejected, StripTimedOut, tiffOrientation, crc32 };
