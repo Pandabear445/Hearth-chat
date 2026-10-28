@@ -402,10 +402,10 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 .rail-btn:hover { color: var(--text); background-color: rgb(var(--s3) / var(--glass)); transform: translateY(-1px); box-shadow: var(--hl), 0 6px 14px -6px rgb(0 0 0 / .45); }
 .rail-btn:active { transform: translateY(0) scale(.97); }
 /* Active: a soft accent "socket" around the tile — clear, and not a left-edge pill. */
-.rail-btn.active { color: var(--text); border-color: transparent; box-shadow: 0 0 0 2px rgb(var(--accent-rgb)), 0 0 0 5px rgb(var(--accent-rgb) / .15); }
+.rail-btn.active { color: var(--text); border-color: transparent; box-shadow: 0 0 0 2px rgb(var(--accent-rgb)), 0 0 0 5px rgb(var(--accent-rgb) / .15), 0 6px 18px -4px rgb(var(--accent-rgb) / .45); }
 .rail-btn.home { color: var(--accent); }
 .rail-btn.home .ic { width: 24px; height: 24px; }
-.rail-btn.home.active { background: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / .2); }
+.rail-btn.home.active { background: var(--accent) linear-gradient(145deg, rgb(255 255 255 / .22), rgb(255 255 255 / 0) 60%); color: var(--on-accent); box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / .2), 0 6px 18px -4px rgb(var(--accent-rgb) / .55); }
 .rail-btn.nav .ic { width: 20px; height: 20px; }
 .rail-btn.add { color: var(--ok); border-style: dashed; border-color: var(--line-2); background: transparent; box-shadow: none; }
 .rail-btn.add:hover { background: rgb(63 207 131 / .12); }
@@ -725,6 +725,7 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 .welcome-ic .ic { width: 32px; height: 32px; }
 .day-div { display: flex; align-items: center; gap: 10px; margin: 16px 20px 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
 .day-div::before, .day-div::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.day-div span { padding: 2px 10px; border-radius: 999px; background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); line-height: 1.4; }
 .new-div { display: flex; align-items: center; margin: 10px 20px 2px; height: 1px; background: var(--danger); position: relative; }
 /* Disappearing messages: "Alice turned on disappearing messages: 1 week", between the messages. */
 .sys-line { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; margin: 10px 20px; color: var(--muted); font-size: 12.5px; text-align: center; }
@@ -1172,7 +1173,7 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
   background: rgb(var(--elev) / .92); border: 1px solid var(--line-2); box-shadow: var(--pop-shadow);
   backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4);
 }
-.menu { min-width: 220px; max-width: 300px; padding: 6px; border-radius: var(--r-lg); display: flex; flex-direction: column; gap: 1px; }
+.menu { min-width: 220px; max-width: 300px; padding: 5px; border-radius: var(--r-lg); display: flex; flex-direction: column; }
 .menu-item {
   display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: var(--r-sm); text-align: left; font-size: 14px; font-weight: 500; color: var(--text-2);
   transition: background var(--dur-1), color var(--dur-1);
