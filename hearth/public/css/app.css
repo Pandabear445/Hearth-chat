@@ -2039,6 +2039,33 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   body.m-ui .composer { border-radius: 22px; }
   body.m-ui .msg { margin-inline: 6px; }
 
+  /* Dialogs come up from the bottom, as cards the width of the screen, above the keyboard. */
+  body.m-ui .modal-backdrop:not(:has(.modal-full, .modal-search, .modal-lightbox)) { padding: env(safe-area-inset-top) 0 0; place-items: end stretch; }
+  html.kb-open body.m-ui .modal-backdrop:not(:has(.modal-full, .modal-search, .modal-lightbox)) { bottom: auto; height: var(--app-h, 100%); }
+  /* (A full-screen dialog, Settings, hides the app under it: the levels' own visibility mustn't show through.) */
+  body.m-ui:has(.modal-full) #rail, body.m-ui:has(.modal-full) #sidebar, body.m-ui:has(.modal-full) #main, body.m-ui:has(.modal-full) #tabbar, body.m-ui:has(.modal-full) #m-callbar { visibility: hidden; }
+  body.m-ui .modal:not(.modal-full):not(.modal-search):not(.modal-lightbox) {
+    max-width: none; border-radius: 24px 24px 0 0; border-bottom: 0; animation: sheet-up .24s var(--m-ease);
+    max-height: calc(var(--app-h, 100dvh) - env(safe-area-inset-top) - 12px); padding-bottom: env(safe-area-inset-bottom);
+  }
+  html.kb-open body.m-ui .modal:not(.modal-full):not(.modal-search):not(.modal-lightbox) { padding-bottom: 0; }
+  body.m-ui .modal:not(.modal-full):not(.modal-search):not(.modal-lightbox) .modal-head { padding: 16px 10px 4px 20px; }
+  body.m-ui .modal:not(.modal-full):not(.modal-search):not(.modal-lightbox) .modal-head h2 { font-size: 20px; }
+  body.m-ui .modal:not(.modal-full):not(.modal-search):not(.modal-lightbox) .modal-body { padding: 12px 20px 18px; }
+  body.m-ui .modal:not(.modal-full):not(.modal-search):not(.modal-lightbox) .modal-foot { flex-wrap: wrap; padding: 12px 16px; border-radius: 0; background: none; }
+  body.m-ui .modal:not(.modal-full):not(.modal-search):not(.modal-lightbox) .modal-foot .btn { flex: 1 1 40%; min-height: 50px; font-size: 15.5px; border-radius: 14px; }
+
+  /* Collisions with the tab bar and the call bar. */
+  body.m-ui.m-list .wt-dock.mini { bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 84px); }
+  body.m-ui .ring-card { left: 10px; right: 10px; width: auto; bottom: calc(12px + env(safe-area-inset-bottom)); }
+  body.m-ui.m-list .ring-card { bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 12px); }
+  body.m-ui .ring-actions .round-btn { width: 52px; height: 52px; }
+  body.m-ui .cs-controls { gap: 4px; }
+  body.m-ui .cs-controls .round-btn { width: min(44px, calc((100vw - 84px) / 7)); height: min(44px, calc((100vw - 84px) / 7)); } /* (7 in a row from 360px up) */
+  body.m-ui .emoji-tab { width: 40px; height: 40px; }
+  body.m-ui .xp-back, body.m-ui .xp-clear { width: 40px; height: 40px; }
+  body.m-ui #toasts { top: calc(70px + env(safe-area-inset-top)); }
+
   /* Sideways (a short screen): a slimmer tab bar, its labels beside the icons, and a smaller call bar. */
   @media (max-height: 500px) {
     body.m-ui { --tab-h: 48px; }
