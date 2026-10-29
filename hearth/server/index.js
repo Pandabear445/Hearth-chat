@@ -921,12 +921,13 @@ app.use(express.json({ limit: '2mb', type: jsonBody, verify: (req, res, buf) => 
 //                 barrier: injected markup could still send data out in an https: image or media address, the
 //                 allowed video frames or a navigation. It limits what an XSS bug can do; it doesn't make leaks
 //                 impossible.
-//   frames        Recall (this server) and the YouTube, Vimeo and Twitch players only
+//   frames        Recall (this server) and the YouTube, Vimeo, Twitch, TikTok and Instagram players only (the last
+//                 two: exactly www.tiktok.com and www.instagram.com, server/social.js FRAME_ORIGINS)
 //   framing       nobody can put Hearth inside their page (clickjacking); no plugins; forms only post here
 const CSP_BASE = [
   "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "script-src-attr 'none'", "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:", "img-src 'self' data: blob: https:", "media-src 'self' blob: data: https:",
-  "worker-src 'self' blob:", "frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com https://player.vimeo.com https://player.twitch.tv", "object-src 'none'", "base-uri 'none'",
+  "worker-src 'self' blob:", "frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com https://player.vimeo.com https://player.twitch.tv https://www.tiktok.com https://www.instagram.com", "object-src 'none'", "base-uri 'none'",
   "form-action 'self'", "frame-ancestors 'none'", "manifest-src 'self'",
 ].join('; ');
 // 'self' covers the live connection (wss://) in current browsers; the host is named too for older Safari.
@@ -7247,6 +7248,7 @@ const watchRooms = new Map(); // room -> { item, queue, playing, position, rate,
 const WATCH_URL_MAX = 2048;
 const WATCH_STATE_MAX = 64 * 1024;
 const { youtubeId } = require('./linkpreview');
+const social = require('./social');
 function parseWatchUrl(raw) {
   let u;
   const text = String(raw || '').trim();
@@ -7270,16 +7272,27 @@ function parseWatchUrl(raw) {
     if (!/^[a-z0-9_]{3,25}$/i.test(ch) || ['videos', 'directory', 'settings'].includes(ch)) fail(400, 'Paste the link of a live Twitch channel (twitch.tv/name).');
     return { kind: 'twitch', src: ch.toLowerCase(), start: 0, link: `https://twitch.tv/${ch}`, live: true };
   }
+  // TikTok and Instagram (server/social.js): only the checked id is kept; the app builds the player from it.
+  // Instagram's player can't be controlled from outside, so its items are `manual` (start together, a ready
+  // check, next by vote) rather than kept in step.
+  const so = social.parseSocial(u);
+  if (so && so.short) fail(400, 'Open that short TikTok link once (or paste the full link): this server needs the video\u2019s own link.');
+  if (so && so.kind === 'tiktok') return { kind: 'tiktok', src: so.id, start: 0, link: so.link };
+  if (so && so.kind === 'instagram') return { kind: 'instagram', src: so.id, postType: so.type, start: 0, link: so.link, manual: true };
+  if (['tiktok.com', 'instagram.com'].includes(host)) fail(400, 'That link doesn\u2019t point to one TikTok video or Instagram reel or post.');
   if (/\.(mp4|webm|ogv|ogg|mov|m4v)$/i.test(u.pathname) && /^https?:$/.test(u.protocol)) {
     if (u.href.length > WATCH_URL_MAX) fail(400, 'That link is too long.'); // URL() can lengthen it (escaping)
     return { kind: 'video', src: u.href, start: 0, link: u.href };
   }
-  fail(400, 'That site isn\u2019t supported yet. YouTube, Vimeo, Twitch (live) and direct video files (.mp4, .webm) work. For anything else, share your screen.');
+  fail(400, 'That site isn\u2019t supported yet. YouTube, Vimeo, Twitch (live), TikTok, Instagram reels and direct video files (.mp4, .webm) work. For anything else, share your screen.');
 }
 async function watchTitle(item) {
   try {
     const api = item.kind === 'youtube' ? `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(item.link)}`
-      : item.kind === 'vimeo' ? `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(item.link)}` : null;
+      : item.kind === 'vimeo' ? `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(item.link)}`
+        : item.kind === 'tiktok' ? `https://www.tiktok.com/oembed?url=${encodeURIComponent(item.link)}` : null;
+    // Instagram's oEmbed needs a Meta app token, so its items keep a plain name.
+    if (item.kind === 'instagram') return item.postType === 'p' ? 'Instagram post' : 'Instagram reel';
     if (!api) return item.kind === 'twitch' ? `${item.src} (live on Twitch)` : decodeURIComponent(item.src.split('/').pop()).slice(0, 120);
     const r = await fetch(api, { signal: AbortSignal.timeout(4000) });
     if (!r.ok) return '';
@@ -7287,7 +7300,17 @@ async function watchTitle(item) {
     return String(j.title || '').slice(0, 150);
   } catch { return ''; }
 }
-const watchOut = (room) => { const w = watchRooms.get(room); if (!w) return null; const { votes, ...out } = w; return { ...out, serverNow: Date.now() }; };
+// ready: who in the call said they're ready for the current video (a manual one: Instagram), as a list.
+const watchOut = (room) => {
+  const w = watchRooms.get(room); if (!w) return null;
+  const { votes, ready, ...out } = w;
+  const m = voiceChannels.get(room);
+  return { ...out, ready: ready && ready.item === w.item.id ? [...ready.users].filter((u) => m && m.has(u)) : [], serverNow: Date.now() };
+};
+// A manual video (Instagram) has no player to move: "play" means everyone presses play together, at startAt.
+const WATCH_COUNTDOWN_MS = 3000;
+// The second video shown beside the first (side by side): TikTok and Instagram only, both upright.
+const SIDE_KINDS = new Set(['tiktok', 'instagram']);
 // Changes are sent at most 4 times a second per call: quick bursts (dragging through a video, a stream of
 // controls) go out as one update carrying the latest state, so a flood of tiny events can't turn into a
 // flood of full-state broadcasts.
@@ -7302,7 +7325,8 @@ function emitWatch(room) {
 }
 const dropWatch = (room) => { const e = watchEmits.get(room); if (e) clearTimeout(e.timer); watchEmits.delete(room); watchRooms.delete(room); };
 // Where the video is right now, according to the shared state.
-const watchPos = (w) => w.position + (w.playing ? ((Date.now() - w.updatedAt) / 1000) * w.rate : 0);
+// (A countdown's updatedAt is when it ends, so until then the video stays where it is.)
+const watchPos = (w) => w.position + (w.playing ? (Math.max(0, Date.now() - w.updatedAt) / 1000) * w.rate : 0);
 
 // Takes someone out of the voice room they're in (and ends the room's watch-together when it empties).
 // notifyUser: also tell their app (voice:kicked), e.g. when they lost access to the channel.
@@ -7614,7 +7638,7 @@ function setupSockets(server) {
         cur.queue.push(item);
       } else {
         if (cur && !mayControl(room, cur)) fail(403, 'Only the host can change the video.');
-        watchRooms.set(room, { item, queue: cur ? cur.queue : [], playing: true, position: item.start || 0, rate: 1, updatedAt: Date.now(), by: cur && cur.hostOnly ? cur.by : uid, hostOnly: cur ? cur.hostOnly : !!p.hostOnly, seq: ((cur && cur.seq) || 0) + 1, lastBy: uid, lastAction: 'start' });
+        watchRooms.set(room, { item, queue: cur ? cur.queue : [], playing: !item.manual, position: item.start || 0, rate: 1, updatedAt: Date.now(), by: cur && cur.hostOnly ? cur.by : uid, hostOnly: cur ? cur.hostOnly : !!p.hostOnly, seq: ((cur && cur.seq) || 0) + 1, lastBy: uid, lastAction: 'start', side: cur && cur.side && SIDE_KINDS.has(item.kind) ? cur.side : null, startAt: 0 });
       }
       emitWatch(room);
       watchTitle(item).then((t) => { if (t && watchRooms.has(room)) { item.title = t; emitWatch(room); } });
@@ -7627,13 +7651,19 @@ function setupSockets(server) {
       if (!mayControl(room, w)) fail(403, 'Only the host controls playback.');
       if (p.itemId && p.itemId !== w.item.id) return { ok: true }; // about an older video
       const pos = Number.isFinite(+p.position) ? Math.max(0, +p.position) : watchPos(w);
-      if (p.action === 'play') { w.playing = true; w.position = pos; }
+      if (p.action === 'play') { w.playing = true; w.position = pos; w.startAt = w.item.manual || w.side ? Date.now() + WATCH_COUNTDOWN_MS : 0; }
       else if (p.action === 'pause') { w.playing = false; w.position = pos; }
       else if (p.action === 'seek') { w.position = pos; }
       else if (p.action === 'rate' && [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].includes(+p.rate)) { w.position = watchPos(w); w.rate = +p.rate; }
       else if (p.action === 'hostOnly' && (w.by === uid || isStaff(uid))) { w.hostOnly = !!p.value; }
       else return { ok: true };
-      w.updatedAt = Date.now();
+      // (Who controls changes nothing about where the video is.)
+      // A seek or a new speed during a "start together" countdown keeps the countdown; a pause ends it.
+      if (p.action !== 'hostOnly') {
+        const counting = w.playing && w.startAt > Date.now();
+        if (p.action !== 'play' && !counting) w.startAt = 0;
+        w.updatedAt = w.startAt || Date.now();
+      }
       // Who did what, so everyone else's app can say "ana jumped to 12:30".
       w.seq = (w.seq || 0) + 1; w.lastBy = uid; w.lastAction = p.action;
       emitWatch(room);
@@ -7657,8 +7687,38 @@ function setupSockets(server) {
       w.votes = null;
       if (!w.queue.length) { w.playing = false; w.position = watchPos(w); w.updatedAt = Date.now(); emitWatch(room); return { ok: true }; }
       w.item = w.queue.shift();
-      Object.assign(w, { playing: true, position: w.item.start || 0, rate: 1, updatedAt: Date.now() });
+      Object.assign(w, { playing: !w.item.manual, position: w.item.start || 0, rate: 1, updatedAt: Date.now(), startAt: 0, ready: null });
+      if (w.side && !SIDE_KINDS.has(w.item.kind)) w.side = null;
       emitWatch(room);
+      return { ok: true };
+    }));
+    // "I'm ready" for a manual video (Instagram): loaded and tapped, so the countdown can start.
+    socket.on('watch:ready', guard((p = {}) => {
+      const room = myWatchRoom();
+      const w = watchRooms.get(room);
+      if (!w || p.itemId !== w.item.id) return { ok: true };
+      if (!w.ready || w.ready.item !== w.item.id) w.ready = { item: w.item.id, users: new Set() };
+      if (p.ready === false) w.ready.users.delete(uid); else w.ready.users.add(uid);
+      emitWatch(room);
+      return { ok: true };
+    }));
+    // A second upright video beside the first (a TikTok next to a reel): started together with it, and on its own
+    // after that. url null takes it away.
+    socket.on('watch:side', guard((p = {}) => {
+      if (!features().watch) fail(403, 'Watch together is turned off on this server.');
+      const room = myWatchRoom();
+      const w = watchRooms.get(room);
+      if (!w) fail(404, 'Nothing is playing.');
+      if (!mayControl(room, w)) fail(403, 'Only the host can change the videos.');
+      if (p.url == null) { w.side = null; emitWatch(room); return { ok: true }; }
+      if (!SIDE_KINDS.has(w.item.kind)) fail(400, 'Side by side works for TikTok videos and Instagram reels.');
+      const item = { ...parseWatchUrl(p.url), id: newId(), title: '', addedBy: uid };
+      if (!SIDE_KINDS.has(item.kind)) fail(400, 'Side by side works for TikTok videos and Instagram reels.');
+      w.side = item;
+      w.playing = false; w.position = watchPos(w); w.updatedAt = Date.now(); w.startAt = 0;
+      w.seq = (w.seq || 0) + 1; w.lastBy = uid; w.lastAction = 'side';
+      emitWatch(room);
+      watchTitle(item).then((t) => { if (t && watchRooms.get(room) === w && w.side === item) { item.title = t; emitWatch(room); } });
       return { ok: true };
     }));
     socket.on('watch:remove', guard((p = {}) => {

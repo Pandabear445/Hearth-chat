@@ -2616,6 +2616,46 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 .watch-chip:hover { background: rgb(var(--accent-rgb) / .22); }
 .watch-chip .ic { width: 14px; height: 14px; }
 .wt-queue:empty { display: none; }
+/* TikTok and Instagram (social.js): upright 9:16 players. In watch together the stage gets taller and the
+   video sits in the middle; side by side, two of them share it. */
+.wt-slot { position: absolute; inset: 0; }
+.wt-stage.wt-upright { display: flex; justify-content: center; gap: 8px; aspect-ratio: auto; height: max(240px, min(68vh, calc(100vh - 380px), 640px, calc(100vw * 16 / 9))); max-height: none; }
+.wt-stage.wt-upright .wt-slot { position: relative; inset: auto; height: 100%; aspect-ratio: 9 / 16; max-width: 100%; }
+.wt-stage.wt-split { height: max(240px, min(68vh, calc(100vh - 380px), 640px, calc((100vw - 48px) / 2 * 16 / 9))); }
+.wt-stage.wt-split .wt-slot { max-width: calc(50% - 4px); }
+.wt-dock.mini .wt-stage.wt-upright { height: 300px; }
+.wt.wt-is-full .wt-stage.wt-upright { height: auto; }
+.wt-count { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 2; pointer-events: none;
+  font-size: clamp(32px, 9vw, 88px); font-weight: 800; color: #fff; text-shadow: 0 2px 18px rgb(0 0 0 / .8); background: rgb(0 0 0 / .25); }
+.wt-count[hidden] { display: none; }
+.wt-manual { flex-wrap: wrap; gap: 6px; }
+.wt-manual .btn.active { background: rgb(var(--accent-rgb) / .18); }
+.wt-note { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--muted); }
+/* in a message: a placeholder (the sender's preview picture, or a plain panel) until tapped, then the player */
+.msg-socials { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 6px; }
+.soc-embed { position: relative; width: min(325px, 100%); aspect-ratio: 9 / 16; max-height: 78vh; border-radius: 12px; overflow: hidden; background: #000; color: #f4f1fa; flex: 0 1 auto; }
+.soc-embed.kind-instagram { aspect-ratio: 9 / 19; background: #111; }
+.soc-embed.kind-instagram.post { aspect-ratio: 4 / 6; }
+.msg-socials.many .soc-embed { width: min(325px, calc(50% - 4px)); }
+.soc-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+.soc-thumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: brightness(.55); }
+.soc-blank { position: absolute; inset: 0; background: radial-gradient(circle at 30% 20%, rgb(var(--accent-rgb) / .45), transparent 60%), linear-gradient(160deg, #1d1726, #0b0910); }
+.kind-tiktok .soc-blank { background: radial-gradient(circle at 25% 25%, rgb(37 244 238 / .35), transparent 55%), radial-gradient(circle at 75% 80%, rgb(254 44 85 / .35), transparent 55%), #0b0b0f; }
+.kind-instagram .soc-blank { background: radial-gradient(circle at 20% 100%, rgb(253 186 63 / .45), transparent 55%), radial-gradient(circle at 80% 0%, rgb(131 58 180 / .5), transparent 60%), linear-gradient(160deg, #3a1630, #120b14); }
+.soc-over { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 14px; text-align: center; }
+.soc-site { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; opacity: .85; }
+.soc-title { font-weight: 600; font-size: 14px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.soc-play { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; min-height: 44px; border-radius: 999px; border: 0; background: rgb(255 255 255 / .92); color: #111; font-weight: 700; font-size: 14px; cursor: pointer; }
+.soc-play:hover { background: #fff; }
+.soc-play:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.soc-play[disabled] { opacity: .6; cursor: progress; }
+.soc-play-ic .ic { width: 16px; height: 16px; }
+.soc-note { font-size: 11.5px; line-height: 1.35; opacity: .8; max-width: 250px; }
+.soc-open { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: inherit; opacity: .85; }
+.soc-open .ic { width: 13px; height: 13px; }
+.soc-close { position: absolute; top: 6px; right: 6px; z-index: 1; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: rgb(0 0 0 / .6); color: #fff; cursor: pointer; }
+.soc-close .ic { width: 15px; height: 15px; }
+@media (max-width: 760px) { .soc-embed { width: min(300px, 100%); } }
 /* Watch together, full screen: the video fills the screen and the shared controls fade away when the mouse is
    still. .wt-full is the fallback where the browser can't do real full screen. */
 .wt.wt-full { position: fixed; inset: 0; z-index: 1000; }

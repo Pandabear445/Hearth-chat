@@ -4,7 +4,7 @@ Generated from the code by enumerating every `api.*`/`app.*` route and `socket.o
 then annotated during the security audit (which middleware and checks actually run, limits, tests). "Gaps" lists
 what the audit found missing at the time; items fixed since are tracked in [ENGINEERING-REPORT.md](ENGINEERING-REPORT.md).
 
-Routes: 387 HTTP, 15 socket events.
+Routes: 388 HTTP, 17 socket events.
 
 ## HTTP routes
 
@@ -287,6 +287,7 @@ Routes: 387 HTTP, 15 socket events.
 | GET | `/invite/:code` | server/invitepreview.js:133 |  |  |  |  |  |  |
 | GET | `/api/invites/:code/preview` | server/invitepreview.js:141 |  |  |  |  |  |  |
 | POST | `/api/link-previews` | server/linkpreview.js:642 | session |  |  |  |  |  |
+| POST | `/api/social/resolve` | server/linkpreview.js | session | none (any signed-in account) | server/social.js parseSocial (TikTok/Instagram video links only) | 20/min per account, 60/min per network | social-embeds.test.js |  |
 | POST | `/api/pay/memberships` | server/memberships.js:168 | none (webhook; Stripe-Signature HMAC) | HMAC-SHA256 v1, 300 s tolerance; metadata tier must belong to metadata server; user must exist; role only if member | event type switch; subscription re-fetched from Stripe for invoice.paid | memberships-hook:<ip> 600/min | memberships.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | none beyond admin-10 (tier role perms not re-checked at grant time) |
 | GET | `/api/servers/:id/memberships` | server/memberships.js:196 | session | member of server (requireServer); owner view if owner_id; yes | none | none | memberships.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | none |
 | POST | `/api/servers/:id/memberships/tiers/:tid/checkout` | server/memberships.js:221 | session | member of server; not the server owner; tier belongs to server and active; not already live | price/currency/fee/destination from DB | membership-checkout:<uid> 20/h | memberships.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | success_url uses Host header when PUBLIC_URL unset (self-only effect). |
@@ -419,6 +420,8 @@ Routes: 387 HTTP, 15 socket events.
 | EVENT | `watch:next` | server/index.js:7275 | session (handshake token) | in room; skip needs mayControl; yes | itemId | socket bucket | none | none |
 | EVENT | `watch:remove` | server/index.js:7296 | session (handshake token) | in room; adder or mayControl; yes | itemId | socket bucket | none | none |
 | EVENT | `watch:stop` | server/index.js:7304 | session (handshake token) | in room + mayControl; yes | none | socket bucket | none | none |
+| EVENT | `watch:ready` | server/index.js | session (handshake token) | in room; yes | itemId must be the current one | socket bucket | social-embeds.test.js | none |
+| EVENT | `watch:side` | server/index.js | session (handshake token) | in room + mayControl; yes | parseWatchUrl; TikTok/Instagram only | socket bucket | social-embeds.test.js | none |
 | EVENT | `voice:leave` | server/index.js:7314 | session (handshake token) | own state only; yes | none | socket bucket | none | none |
 | EVENT | `disconnect` | server/index.js:7321 | n.a. | n.a.; n.a. | n.a. | n.a. | sessions.test.js (indirect) | A socket drop ends the call on every side; no grace period or rejoin (voice-13). |
 

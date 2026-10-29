@@ -531,6 +531,7 @@ edits used to drop); a link added in an edit gets none. Forwarding carries the c
 
 | Route | Auth | Notes |
 |---|---|---|
+| `POST /social/resolve` `{ url }` | session | A TikTok or Instagram video link → `{ kind, id, type?, link }`; a short TikTok link is looked up first ([design/SOCIAL-EMBEDS.md](design/SOCIAL-EMBEDS.md)). 400 `bad_url`; 404 `none` (it doesn't lead to a video) or `off` (link previews off); 429 past 20/min per account or 60/min per network. |
 | `POST /link-previews` `{ url }` | session | 404 `off` when the owner switched it off; 400 `bad_url` / `own_server`; 429 `rate_limited` (20/min per account and per session, 60/min per network, 100 fetches/hour per account) or `busy` (2 in flight per account, 8 on the server; `Retry-After: 2`). Fetch problems answer 200 `{ preview: null, reason }` with `none`, `not_html`, `blocked`, `unreachable`, `timeout`, `challenge` or `busy` (over 60 fetches a minute to one site, from everyone together). |
 
 Fetch limits: https on port 443 only, at most 4 redirects for the page and 3 for the picture (each hop checked

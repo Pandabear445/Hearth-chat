@@ -1031,6 +1031,131 @@ async function watchTogether(t) {
   await bob.page.waitForSelector('#voice-panel', { state: 'hidden' });
 }
 
+// ------------------------------------------------------------------ TikTok and Instagram, in a message and watched together
+// The players are stand-ins (page.route): a TikTok player that speaks TikTok's postMessage API and records the
+// commands it gets, and a plain Instagram embed page. Nothing reaches the real sites.
+const TT_ID = '7234567890123456789';
+const FAKE_TIKTOK = `<!doctype html><html><body style="margin:0;background:#111;color:#fff;font:14px sans-serif"><div id="s">fake tiktok</div><script>
+  const log = window.__cmds = []; let state = -1; let t = 0; let at = 0;
+  const post = (type, value) => parent.postMessage({ type, value, 'x-tiktok-player': true }, '*');
+  const now = () => (state === 1 ? t + (Date.now() - at) / 1000 : t);
+  addEventListener('message', (e) => {
+    const d = e.data; if (!d || d['x-tiktok-player'] !== true) return; log.push(d.type);
+    if (d.type === 'play') { t = now(); at = Date.now(); state = 1; post('onStateChange', 1); }
+    else if (d.type === 'pause') { t = now(); state = 2; post('onStateChange', 2); }
+    else if (d.type === 'seekTo') { t = +d.value; at = Date.now(); }
+    document.getElementById('s').textContent = 'state ' + state;
+  });
+  post('onPlayerReady');
+  setInterval(() => post('onCurrentTime', { currentTime: now(), duration: 60 }), 250);
+</script></body></html>`;
+async function fakeSocialSites(p) {
+  const asked = [];
+  await p.context.route(/^https:\/\/www\.(tiktok|instagram)\.com\//, (route) => {
+    const u = route.request().url();
+    asked.push(u);
+    const tt = u.startsWith('https://www.tiktok.com/player/v1/');
+    return route.fulfill({ status: 200, contentType: 'text/html', body: tt ? FAKE_TIKTOK : '<!doctype html><body style="background:#222;color:#fff">fake reel</body>' });
+  });
+  return asked;
+}
+// The commands a stand-in TikTok player got.
+async function tiktokCommands(p, sel) {
+  const frame = await (await p.$(sel).first().elementHandle()).contentFrame();
+  return frame.evaluate(() => window.__cmds || []);
+}
+async function socialVideos(t) {
+  const { alice, bob } = t.people;
+  const bobAsked = await fakeSocialSites(bob);
+  const aliceAsked = await fakeSocialSites(alice);
+  await alice.openChannel('general');
+  await bob.openChannel('general');
+  const text = `Two at once: https://www.tiktok.com/@hearth/video/${TT_ID} and https://www.instagram.com/reel/C9abc_DEF-1/`;
+  await alice.send(text);
+  const msg = bob.message('Two at once:');
+  await msg.locator('.soc-embed').nth(1).waitFor();
+  // Placeholders: nothing from TikTok or Instagram loads until Bob taps, and each says who will see him.
+  const tt = msg.locator('.soc-embed.kind-tiktok');
+  const ig = msg.locator('.soc-embed.kind-instagram');
+  await tt.locator('.soc-note', { hasText: 'Loads from tiktok.com, which sees your IP address.' }).waitFor();
+  await ig.locator('.soc-note', { hasText: 'Loads from instagram.com' }).waitFor();
+  check(!bobAsked.length, `Nothing should load from TikTok or Instagram before a tap (got ${bobAsked.join(', ')}).`);
+  check(!(await msg.locator('iframe').count()), 'No player before a tap.');
+  const box = await tt.boundingBox();
+  check(Math.abs(box.height / box.width - 16 / 9) < 0.05, `The TikTok player is upright, 9:16 (got ${box.width}×${box.height}).`);
+  // Tap: the player loads in place, sandboxed, with no referrer, from the checked id only.
+  await tt.locator('button.soc-play').click();
+  const frame = tt.locator('iframe.soc-frame');
+  await frame.waitFor();
+  const src = await frame.getAttribute('src');
+  check(src.startsWith(`https://www.tiktok.com/player/v1/${TT_ID}?`) && src.includes('autoplay=1'), `TikTok's player, from the id (got ${src}).`);
+  check((await frame.getAttribute('sandbox')) === 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox', 'The player is sandboxed.');
+  check((await frame.getAttribute('referrerpolicy')) === 'no-referrer', 'The player gets no referrer.');
+  check(bobAsked.length === 1 && bobAsked[0].startsWith(`https://www.tiktok.com/player/v1/${TT_ID}`), `Only the TikTok player loaded (got ${bobAsked.join(', ')}).`);
+  await ig.locator('button.soc-play').click();
+  check((await ig.locator('iframe.soc-frame').getAttribute('src')) === 'https://www.instagram.com/reel/C9abc_DEF-1/embed/', 'Instagram’s embed page, from the code.');
+  // Both play at once, side by side; closing one puts its placeholder back.
+  const [a, b] = [await tt.boundingBox(), await ig.boundingBox()];
+  check(Math.abs(a.y - b.y) < 2 && b.x > a.x + a.width - 1, 'Two players in one message sit side by side.');
+  await tt.locator('button.soc-close').click();
+  await tt.locator('button.soc-play').waitFor();
+  await ig.locator('button.soc-close').click();
+  // "Always load": players load as messages show.
+  await bob.openSettings('Chat');
+  await bob.$('select[aria-label="TikTok and Instagram players"]').selectOption('always');
+  await bob.closeSettings();
+  await msg.locator('.soc-embed.kind-tiktok iframe.soc-frame').waitFor();
+  await msg.locator('.soc-embed.kind-instagram iframe.soc-frame').waitFor();
+  await bob.openSettings('Chat');
+  await bob.$('select[aria-label="TikTok and Instagram players"]').selectOption('ask');
+  await bob.closeSettings();
+  await msg.locator('.soc-embed.kind-tiktok button.soc-play').waitFor();
+
+  // Watch together: a TikTok kept in step through its player's messages.
+  for (const p of [alice, bob]) { await p.channelRow('Lounge').locator('.ch-main').click(); await p.$('.voice-room .cs-controls').waitFor(); }
+  await alice.$('.voice-room .cs-tile', { hasText: 'bob' }).waitFor();
+  await alice.openChannel('general');
+  await alice.message('Two at once:').locator('.watch-chip', { hasText: 'Watch together · TikTok video' }).click();
+  await alice.toast('Playing for everyone in the call.');
+  const stage = '.wt-stage.wt-upright iframe.wt-frame';
+  for (const p of [alice, bob]) await p.$(stage).first().waitFor();
+  check((await bob.$(stage).first().getAttribute('src')).startsWith(`https://www.tiktok.com/player/v1/${TT_ID}?`), 'Watch together plays the same TikTok.');
+  for (let i = 0; i < 100 && !(await tiktokCommands(bob, stage)).includes('play'); i++) await bob.page.waitForTimeout(100);
+  check((await tiktokCommands(bob, stage)).includes('play'), 'Bob’s player was told to play.');
+  await bob.$('.wt-controls button[aria-label="Pause for everyone"]').first().click();
+  for (let i = 0; i < 100 && !(await tiktokCommands(alice, stage)).includes('pause'); i++) await alice.page.waitForTimeout(100);
+  check((await tiktokCommands(alice, stage)).includes('pause'), 'Bob’s pause reached Alice’s TikTok player.');
+  await bob.$('.wt-controls button[aria-label="Play for everyone"]').first().waitFor();
+
+  // A queue mixing both: the reel next. Instagram can't be controlled, so it's "start together" with a ready check.
+  await alice.message('Two at once:').locator('.watch-chip', { hasText: 'Watch together · Instagram reel' }).click();
+  await alice.toast('Added to the watch queue.');
+  await bob.$('.wt-queue .wt-qi').first().waitFor();
+  await bob.$('.wt-actions button', { hasText: 'Skip' }).first().click();
+  for (const p of [alice, bob]) await p.$('.wt-stage.wt-upright iframe[src="https://www.instagram.com/reel/C9abc_DEF-1/embed/"]').first().waitFor();
+  await bob.$('.wt-note', { hasText: 'Instagram doesn’t let other apps control its player' }).first().waitFor();
+  await bob.$('.wt-manual button', { hasText: 'I’m ready' }).first().click();
+  await bob.$('.wt-manual button', { hasText: '✓ Ready' }).first().waitFor();
+  await alice.channelRow('Lounge').locator('.ch-main').click();
+  await alice.$('.wt-manual .wt-time', { hasText: '1 ready' }).first().waitFor();
+  await alice.$('.wt-manual button', { hasText: 'Start together' }).first().click();
+  await bob.$('.wt-count:not([hidden])').first().waitFor();
+  await bob.$('.wt-count', { hasText: 'Press play now' }).first().waitFor({ timeout: 8000 });
+
+  // Side by side: the TikTok and the reel at once, for everyone.
+  await alice.openChannel('general');
+  await alice.message('Two at once:').locator('.watch-chip', { hasText: 'Watch side by side' }).click();
+  await alice.toast('Side by side for everyone in the call.');
+  for (const p of [alice, bob]) await p.page.waitForFunction(() => document.querySelectorAll('.wt-stage.wt-split .wt-slot iframe').length === 2);
+  check(!aliceAsked.some((u) => !/^https:\/\/www\.(tiktok\.com\/player\/v1\/|instagram\.com\/reel\/C9abc_DEF-1\/embed\/)/.test(u)), `Only the two players were loaded (got ${aliceAsked.join(', ')}).`);
+  await bob.$('.wt-actions button', { hasText: 'Stop' }).first().click();
+  for (const p of [alice, bob]) await p.$('.wt-title').first().waitFor({ state: 'detached' });
+  await bob.$('#voice-panel button[aria-label="Leave call"]').click();
+  await alice.$('#voice-panel button[aria-label="Leave call"]').click();
+  for (const p of [alice, bob]) await p.page.waitForSelector('#voice-panel', { state: 'hidden' });
+  for (const p of [alice, bob]) await p.context.unroute(/^https:\/\/www\.(tiktok|instagram)\.com\//);
+}
+
 // ------------------------------------------------------------------ the server's own audit log and report inbox
 async function auditAndReports(t) {
   const { alice, bob } = t.people;
@@ -5784,6 +5909,7 @@ export const FLOWS = [
   ['voice: two people connected in a call', voiceCall],
   ['moderator toolkit: server mute in and out of a call, bulk delete', moderatorTools],
   ['watch together: start, pause for everyone, stop; a video file from another site says so before it loads; leave the call', watchTogether],
+  ['tiktok and instagram: tap to load in place (nothing before), sandboxed, side by side, Always; watch together keeps a TikTok in step, a reel starts together after a ready check, a mixed queue, side by side', socialVideos],
   ['audit log and reports: moderation as sentences, filters, live entries; a report reaches the server’s moderators', auditAndReports],
   ['dm call: ring, accept, hang up, decline', dmCall],
   ['group chat: create, talk both ways, call rings', groupChat],

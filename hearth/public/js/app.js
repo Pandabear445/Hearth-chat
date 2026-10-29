@@ -21,6 +21,8 @@ import { createSecure, mergeUser, callRefusedText, noSafetyNumbersText } from '.
 import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong, songPlaying } from './profile-ui.js';
 import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
+import { socialLinks, parseSocialUrl, playerMode } from './social.js';
+import { socialEmbedEl, resolveSocial } from './social-embed.js';
 import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice, voicePlaying } from './features.js';
 import { rankRelays, chooseIce, relayTime, iceStale, usableIce, memberRelayHosts, avoidsMemberRelays, isMemberRelay, isRelay } from './relays.js';
 import { watchConnection } from './conn.js';
@@ -4807,8 +4809,18 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
       out.append(h('div', { class: `msg-text${chat.jumbo && isJumbo(text) ? ' jumbo' : ''}`, html: html + (m.editedAt ? '<span class="edited" title="Edited">(edited)</span>' : '') }));
     }
     // A link preview built by the sender: it came inside the encrypted message, so nothing is fetched to show it.
-    const links = chat.linkCards !== false && senderMayEmbed(m) ? linksOf(m) : [];
+    const cards = chat.linkCards !== false && senderMayEmbed(m) ? linksOf(m) : [];
+    // TikTok videos and Instagram reels play in place (social-embed.js): a placeholder until tapped. One with a
+    // preview card shows the card's picture and title instead of the card.
+    const socials = playerMode(chat) !== 'off' && senderMayEmbed(m) ? socialLinks(text) : [];
+    const links = cards.filter((l) => !socials.some((p) => p.url === l.url));
     if (links.length) out.append(h('div', { class: 'msg-links' }, links.map(linkCardEl)));
+    if (socials.length) {
+      out.append(h('div', { class: `msg-socials${socials.length > 1 ? ' many' : ''}` }, socials.map((p) => socialEmbedEl(p, {
+        // Blurred by the word filter: always a placeholder, so nothing loads for a message you chose to hide.
+        key: `${m.id}|${p.kind}:${p.id || p.short}`, card: cards.find((l) => l.url === p.url) || null, mode: blur ? 'ask' : playerMode(chat),
+      }))));
+    }
     // Image links wait for a click unless they load from here or you chose Always (embedEl). Blurred, the Load button
     // is under the blur with the rest; hidden, the row drawn out of sight (filteredEl) has only the placeholder, so a
     // picture from another site loads for it only when it would have loaded anyway.
@@ -10613,7 +10625,20 @@ const watchCtx = (room) => ({
   socket, me: S.me, isStaff: !!S.me.staffRole,
   userName: (id) => (id ? nameInServer(serverOfChannel(room), getUser(id)) : 'someone'),
   openStart: (queue) => openWatchStart(room, queue),
+  openSide: () => openWatchSide(room),
 });
+// Put a second TikTok or reel beside the one playing (watch:side).
+function openWatchSide(room) {
+  const url = h('input', { class: 'input', placeholder: 'Paste a TikTok or Instagram reel link', autocomplete: 'off', spellcheck: 'false' });
+  modal({
+    title: 'Side by side', size: 'sm',
+    body: h('div', { class: 'stack' },
+      h('p', { class: 'muted-p' }, 'A second upright video next to this one, for everyone in the call. Both start together; after that each plays on its own.'),
+      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Link'), url)),
+    actions: [{ label: 'Cancel' }, { label: 'Show side by side', kind: 'primary', action: async () => emitAck('watch:side', { url: await watchLink(url.value) }) }],
+  });
+  setTimeout(() => url.focus(), 50);
+}
 // Open the page of the call you're in (voice channel, DM or group).
 function goToCall(room) {
   if (!room) return;
@@ -10720,25 +10745,34 @@ function watchKind(raw) {
   if (/^(youtube\.com|youtube-nocookie\.com|youtu\.be)$/.test(host)) return 'YouTube video';
   if (/^(player\.)?vimeo\.com$/.test(host)) return 'Vimeo video';
   if (host === 'twitch.tv') return 'Twitch live stream';
+  const so = parseSocialUrl(u);
+  if (so) return so.kind === 'tiktok' ? 'TikTok video' : so.type === 'p' ? 'Instagram post' : 'Instagram reel';
   if (/\.(mp4|webm|ogv|ogg|mov|m4v)$/i.test(u.pathname)) return 'Video file';
   return null;
 }
 const watchRecent = () => { try { return JSON.parse(localStorage.getItem('hearth.watchRecent') || '[]').slice(0, 6); } catch { return []; } };
 function rememberWatch(link) { try { localStorage.setItem('hearth.watchRecent', JSON.stringify([link, ...watchRecent().filter((x) => x !== link)].slice(0, 6))); } catch { /* private mode */ } }
-function startWatching(room, link, queue) {
-  return new Promise((resolve, reject) => {
-    socket.emit('watch:start', { url: link, queue }, (r) => {
-      if (r && r.error) return reject(new Error(r.error));
-      rememberWatch(String(link).trim());
-      resolve();
-    });
-  });
+// A short TikTok link is opened first (this server asks TikTok where it goes), so watch together gets the
+// video's own link.
+async function watchLink(link) {
+  const p = parseSocialUrl(String(link || '').trim());
+  return p && p.short ? (await resolveSocial(p)).link : String(link || '').trim();
+}
+const emitAck = (ev, data) => new Promise((resolve, reject) => socket.emit(ev, data, (r) => (r && r.error ? reject(new Error(r.error)) : resolve(r))));
+async function startWatching(room, link, queue, extra = {}) {
+  await emitAck('watch:start', { url: await watchLink(link), queue, ...extra });
+  rememberWatch(String(link).trim());
+}
+// Two upright videos side by side (a TikTok and a reel): the first plays, the second sits beside it.
+async function startSideBySide(room, a, b) {
+  await startWatching(room, a, false);
+  await emitAck('watch:side', { url: await watchLink(b) });
 }
 function openWatchStart(room, queue = false) {
-  const url = h('input', { class: 'input', placeholder: 'Paste a YouTube, Vimeo or Twitch link', autocomplete: 'off', spellcheck: 'false' });
-  const kind = h('span', { class: 'field-hint' }, 'YouTube, Vimeo, Twitch (live) and video files (.mp4, .webm). For anything else (like Netflix), share your screen.');
+  const url = h('input', { class: 'input', placeholder: 'Paste a YouTube, Vimeo, Twitch, TikTok or Instagram link', autocomplete: 'off', spellcheck: 'false' });
+  const kind = h('span', { class: 'field-hint' }, 'YouTube, Vimeo, Twitch (live), TikTok, Instagram reels and video files (.mp4, .webm). For anything else (like Netflix), share your screen.');
   const hostOnly = h('input', { type: 'checkbox' });
-  const check = () => { const k = watchKind(url.value); kind.textContent = url.value.trim() ? (k ? `✓ ${k}` : 'That link isn’t a video this can play. Try a YouTube, Vimeo or Twitch link.') : kind.textContent; kind.classList.toggle('ok', !!k); };
+  const check = () => { const k = watchKind(url.value); kind.textContent = url.value.trim() ? (k ? `✓ ${k}${k.startsWith('Instagram') ? ' (Instagram’s player can’t be kept in step: everyone starts it together)' : ''}` : 'That link isn’t a video this can play. Try a YouTube, Vimeo, Twitch, TikTok or Instagram link.') : kind.textContent; kind.classList.toggle('ok', !!k); };
   url.addEventListener('input', check);
   let m;
   const submit = () => startWatching(room, url.value, queue).then(() => m && m.close());
@@ -10753,9 +10787,9 @@ function openWatchStart(room, queue = false) {
       recent.length ? h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Watched recently'),
         h('div', { class: 'wt-recent' }, recent.map((link) => h('button', { class: 'chip', type: 'button', title: link, onclick: () => { url.value = link; check(); submit().catch((x) => toast(x.message, 'error')); } }, link.replace(/^https?:\/\/(www\.)?/, '').slice(0, 40))))) : null,
       queue ? null : h('label', { class: 'row gap' }, hostOnly, 'Only I can play, pause and skip'),
-      h('p', { class: 'field-hint' }, 'The video loads straight from YouTube/Vimeo/Twitch, so they can see each viewer’s IP address, like when you watch there. A video file on another site does too, so each viewer is told before it loads.')),
+      h('p', { class: 'field-hint' }, 'The video loads straight from YouTube/Vimeo/Twitch/TikTok/Instagram, so they can see each viewer’s IP address, like when you watch there. A video file on another site does too, so each viewer is told before it loads.')),
     actions: [{ label: 'Cancel' }, { label: queue ? 'Add to queue' : 'Start watching', kind: 'primary', action: () => new Promise((resolve, reject) => {
-      socket.emit('watch:start', { url: url.value, queue, hostOnly: hostOnly.checked }, (r) => { if (r && r.error) return reject(new Error(r.error)); rememberWatch(url.value.trim()); resolve(); });
+      startWatching(room, url.value, queue, { hostOnly: hostOnly.checked }).then(resolve, reject);
     }) }],
   });
   setTimeout(() => url.focus(), 50);
@@ -10764,17 +10798,37 @@ function openWatchStart(room, queue = false) {
 const WATCH_LINK = /https?:\/\/(?:www\.|m\.|music\.)?(?:youtube\.com\/(?:watch\?[^\s<>"']*v=|shorts\/|live\/)[\w-]{11}[^\s<>"']*|youtu\.be\/[\w-]{11}[^\s<>"']*|vimeo\.com\/\d{5,12}[^\s<>"']*|twitch\.tv\/[a-z0-9_]{3,25}(?=[\s/?#]|$)|[^\s<>"']+\.(?:mp4|webm|m4v)(?=[\s?#]|$))/gi;
 function watchChips(text) {
   if ((S.config.features || {}).watch === false || !text) return null;
-  const links = [...new Set(String(text).match(WATCH_LINK) || [])].slice(0, 2);
+  // TikTok and Instagram links too (social.js), counted once each however they're written.
+  const socials = socialLinks(text).map((p) => p.url);
+  const links = [...new Set([...(String(text).match(WATCH_LINK) || []), ...socials])].slice(0, 4);
   if (!links.length) return null;
-  return h('div', { class: 'watch-chips' }, links.map((link) => h('button', {
+  const inCall = () => {
+    const room = voice && voice.channelId;
+    if (!room) toast('Join a voice channel or call first, then press this to watch it together.');
+    return room;
+  };
+  const chips = links.map((link) => h('button', {
     class: 'watch-chip', 'data-tip': 'Play it for everyone in your call',
     onclick: () => {
-      const room = voice && voice.channelId;
-      if (!room) return toast('Join a voice channel or call first, then press this to watch it together.');
+      const room = inCall();
+      if (!room) return;
       const queued = !!S.watch[room];
       startWatching(room, link, queued).then(() => toast(queued ? 'Added to the watch queue.' : 'Playing for everyone in the call.')).catch((e) => toast(e.message, 'error'));
     },
-  }, icon('play'), `Watch together${links.length > 1 ? ` · ${watchKind(link) || 'video'}` : ''}`)));
+  }, icon('play'), `Watch together${links.length > 1 ? ` · ${watchKind(link) || 'video'}` : ''}`));
+  // Two upright videos (a TikTok and a reel, say): both at once, side by side, or all of them in the queue.
+  if (socials.length >= 2) {
+    chips.push(h('button', { class: 'watch-chip', 'data-tip': 'Both at once, next to each other, for everyone in your call', onclick: () => {
+      const room = inCall();
+      if (room) startSideBySide(room, socials[0], socials[1]).then(() => toast('Side by side for everyone in the call.')).catch((e) => toast(e.message, 'error'));
+    } }, icon('play'), 'Watch side by side'));
+    chips.push(h('button', { class: 'watch-chip', 'data-tip': 'One after the other, for everyone in your call', onclick: async () => {
+      const room = inCall();
+      if (!room) return;
+      try { for (const [i, link] of socials.entries()) await startWatching(room, link, i > 0 || !!S.watch[room]); toast(`${socials.length} videos in the watch queue.`); } catch (e) { toast(e.message, 'error'); }
+    } }, icon('play'), `Queue all ${socials.length}`));
+  }
+  return h('div', { class: 'watch-chips' }, chips);
 }
 function renderCallStages() { $$('.call-stage').forEach(fillStage); }
 // What the diagnostics panel needs: names, and the relays' region names (never their addresses).
