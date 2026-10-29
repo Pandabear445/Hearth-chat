@@ -22,7 +22,9 @@ globalThis.window = globalThis.window || { crypto: globalThis.crypto, hashwasm: 
 let E;
 before(async () => { E = await import(pathToFileURL(path.join(__dirname, '..', 'public', 'js', 'e2ee.js')).href); });
 
-const key = () => crypto.randomBytes(65).toString('base64');
+// A public key in the one spelling the app accepts (e2ee.js canonicalKey): an uncompressed P-256 SPKI, 91 bytes.
+const SPKI_HEAD = Buffer.from('3059301306072a8648ce3d020106082a8648ce3d03010703420004', 'hex');
+const key = () => Buffer.concat([SPKI_HEAD, crypto.randomBytes(64)]).toString('base64');
 const person = (over = {}) => ({ id: 'u' + crypto.randomBytes(4).toString('hex'), publicKey: key(), signPublicKey: key(), ...over });
 const ME = 'me-1';
 const pinsOf = (me = ME) => JSON.parse(store.get(`hearth.pins.${me}`) || '{}');

@@ -1,6 +1,7 @@
 // Accessibility and responsive-layout checks in a real browser (npm run test:a11y). Separate from
 // `npm test`: it needs Chromium and Playwright (see test/browser/harness.mjs). Each check below guards a
 // fix described in docs/ACCESSIBILITY.md, so it doesn't quietly come back.
+import nodeCrypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { launch, signUp, createServer, sendMessage, settle, closeNav, PASSWORD, ROOT } from '../browser/harness.mjs';
@@ -16,6 +17,8 @@ function check(cond, what, detail = '') {
 const section = (name) => { current = name; console.log(`\n${name}`); };
 
 // The audit must find nothing on this screen.
+// A public key in the one spelling the app accepts (e2ee.js canonicalKey): an uncompressed P-256 SPKI, 91 bytes.
+const fakeKey = () => Buffer.concat([Buffer.from('3059301306072a8648ce3d020106082a8648ce3d03010703420004', 'hex'), nodeCrypto.randomBytes(64)]).toString('base64');
 async function audit(page, label) {
   const issues = await page.evaluate(auditDom);
   check(!issues.length, `no audit issues: ${label}`, issues.slice(0, 8).map((i) => `${i.rule} ${i.el}: ${i.detail}`).join('\n         '));
@@ -450,7 +453,7 @@ try {
     for (let i = 0; i < 300; i++) {
       const id = (Date.now() + i).toString(36).padStart(9, '0') + randomBytes(5).toString('hex');
       memberIds.push(id);
-      uins.run(...ucols.map((c) => (c === 'id' ? id : c === 'username' ? `crowd${i}` : c === 'email' ? null : c === 'profile' ? '{}' : c === 'public_key' ? randomBytes(65).toString('base64') : me[c])));
+      uins.run(...ucols.map((c) => (c === 'id' ? id : c === 'username' ? `crowd${i}` : c === 'email' ? null : c === 'profile' ? '{}' : c === 'public_key' ? fakeKey() : me[c])));
       mins.run(sid, id, Date.now());
     }
   })();
@@ -491,7 +494,7 @@ try {
   // A member whose key changes after this device pinned it still gets the warning (the batch check).
   const victim = memberIds[7];
   const db3 = H.srv.db();
-  db3.prepare('UPDATE users SET public_key = ? WHERE id = ?').run(randomBytes(65).toString('base64'), victim);
+  db3.prepare('UPDATE users SET public_key = ? WHERE id = ?').run(fakeKey(), victim);
   db3.close();
   await lp.reload(); await lp.waitForSelector('#app:not([hidden]):not(.loading)');
   await lp.click('#rail button[aria-label^="Quality checks"]'); await settle(lp, 400);
