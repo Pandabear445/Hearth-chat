@@ -87,7 +87,12 @@ export function noSafetyNumbersText(user, name) {
     : `The server lists no security key for ${name}, so there are no safety numbers to compare. Calls with them stay blocked until it lists their key again.`;
 }
 
-export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () => {} }) {
+// S.pqSeed: this device's copy of the account's post-quantum (ML-KEM-768) seed, or null (none yet: the password gives
+// it, from the envelope). onDmKeys(null): the seed arrived, so DM messages waiting for it can be opened now.
+// onNeedPassword(why): this device needs the password once to finish setting up the post-quantum key ('seed': it
+// doesn't have it; 'publish': it isn't published; 'upgrade': the account has none yet), or null once it doesn't. onPqUpgraded(): this account just got its
+// post-quantum key (a recovery key made before then doesn't hold it).
+export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () => {}, onDmKeys = () => {}, onNeedPassword = () => {}, onPqUpgraded = () => {} }) {
   // A link preview the sender put in the message (linkpreview.js cleanLinks), as { l } or nothing at all.
   // Never throws: a bad preview must not make the message itself unreadable.
   const linksIn = (payload) => {
@@ -117,6 +122,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   const reported = new Set(); // keys we couldn't unlock and asked to be re-shared
   const rewrapped = new Set(); // `${serverId}|${epoch}`: keys already re-wrapped to ourselves this session
   const unverified = new Set(); // `${serverId}|${epoch}`: keys only a server-listed past key vouched for (reading only)
+  const waitingPq = new Set(); // serverIds with a key locked to the post-quantum seed this device doesn't have yet
 
   // ---------------------------------------------------------------- people + trust
   async function userWithKeys(id) {
@@ -146,19 +152,20 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     if (!user || user.id === S.me.id) return true;
     const ok = E2EE.checkPin(S.me.id, user) === 'ok';
     if (!ok && !warned.has(user.id)) { warned.add(user.id); onKeyWarning(user); }
+    if (ok) E2EE.notePqListed(S.me.id, user); // (their post-quantum key, if listed: see e2ee.js listPq)
     return ok;
   }
   const keyChanged = (user) => !!user && user.id !== S.me.id && E2EE.checkPin(S.me.id, user) === 'changed';
   // keyChanged for a whole list at once (the member list): a Set of the ids whose keys changed.
   const keysChanged = (users) => E2EE.checkPins(S.me.id, users);
   // false (and nothing trusted) for a record with no identity key: there's nothing to verify.
-  function acceptKeys(user) { const ok = E2EE.acceptPin(S.me.id, user); if (ok) warned.delete(user.id); return ok; }
+  function acceptKeys(user) { const ok = E2EE.acceptPin(S.me.id, user); if (ok) { warned.delete(user.id); pqChecked.clear(); } return ok; }
   // Someone's keys to open (which: 'e', identity keys) or check (which: 's', signing keys) what they wrote at
   // `at` (ms; 0 if unknown), best first, each with how far it's trusted:
   //   'now'     their current key, or the one this device pinned for them (the same one unless it changed)
   //   'new'     their current key when it changed and you haven't verified it yet
-  //   'pinned'  a key this device trusted for them before they changed keys; only for what was written while
-  //             they still had it (when the server says it was replaced, if it says so)
+  //   'pinned'  a key this device trusted for them before they changed keys; only for what was written before this
+  //             device saw the change (by its own clock)
   //   'listed'  a key the server says they had before a password reset, that this device never saw as theirs.
   //             Nothing vouches for it (the server could list a key of its own), so whatever only it opens or
   //             checks out is shown as "older key, not verified", and it never vouches for the key to write with.
@@ -177,12 +184,14 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     if (p[which]) {
       if (!changed) add(p[which], 'now');
       else {
-        // Pinned here, but the server now lists other keys for them: theirs until it says they were replaced.
-        const gone = E2EE.listedRetiredAt(user, p.e);
+        // Pinned here, but the server now lists other keys for them: theirs for what was written before this device
+        // first saw that (its own clock), or before the server says it happened if that's earlier.
+        const gone = E2EE.pinnedUntil(S.me.id, user, { local: at > 0 });
         if (!gone || (at > 0 && at <= gone)) add(p[which], 'pinned');
       }
     }
-    if (changed) add(user[field], 'new');
+    // (A key this device already took as replaced is never "new" again, as a record from before the change still lists it.)
+    if (changed && !E2EE.retiredPins(S.me.id, user).some((k) => k[which] === user[field])) add(user[field], 'new');
     p.old.forEach((k) => add(k[which], 'pinned'));
     E2EE.listedPastKeys(user, at).forEach((k) => add(k[which], 'listed'));
     return out;
@@ -309,6 +318,264 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     return { ...me, publicKey: e, signPublicKey: s };
   }
 
+  // ---------------------------------------------------------------- your post-quantum key
+  // The account's ML-KEM-768 key (e2ee.js pqKeyPair). Its seed is inside the password envelope and comes from nowhere
+  // else: at sign-up, at a sign-in with the password, or when this device asks for the password once (unlock: a device
+  // that was signed in before the account had the key, or before another device of yours replaced it). It's never handed
+  // from one device to another: that could only be authenticated with P-256 keys, which a quantum computer could
+  // recompute, and the seed would then protect nothing. Accounts from before get theirs at their next sign-in with the
+  // password. Its public half is published signed by your signing key.
+  const myPq = () => (S.pqSeed instanceof Uint8Array ? E2EE.pqKeyPair(S.pqSeed) : null);
+  // Whether the post-quantum key the server lists for you is signed by your own (proven) signing key: one of your
+  // devices published it.
+  let ownPq = null; // { pq, sig, s, ok }
+  async function listedPqIsMine() {
+    const pq = S.me && S.me.pqPublicKey;
+    if (!pq || !(await ownKeysOk()) || !proven) return false;
+    if (!ownPq || ownPq.pq !== pq || ownPq.sig !== S.me.pqSig || ownPq.s !== proven.s) {
+      ownPq = { pq, sig: S.me.pqSig, s: proven.s, ok: E2EE.verifyPqKey(proven.s, S.me.id, proven.e, pq, S.me.pqSig).then(Boolean, () => false) };
+    }
+    return ownPq.ok;
+  }
+  // Signs on this device that the account has a post-quantum key, whatever the server lists in your own record right
+  // now: the seed here, your own pin (seen published before), a fingerprint in your user record, or a copy of a server key
+  // or a DM epoch made for your post-quantum key. A server that leaves your key out of one record doesn't make this
+  // device take the account for P-256 only.
+  let pqEvidence = false;
+  const notePqEvidence = () => { pqEvidence = true; if (pqNeed === 'upgrade') needPassword('seed'); };
+  const accountHasPq = () => pqEvidence || !!myPq() || E2EE.ownPqPinned(S.me.id) || !!S.me.pqPublicKey
+    || !!(S.users[S.me.id] && typeof S.users[S.me.id].pq === 'string' && S.users[S.me.id].pq)
+    || E2EE.anyDmPq(S.me.id); // (a DM of yours went post-quantum: both of you had a key)
+  function needPasswordError() {
+    const err = new Error('Your account’s post-quantum key isn’t on this device yet, so nothing was sent. Enter your password once on this device (the bar above the message box).');
+    err.code = 'need_password';
+    return err;
+  }
+  // The post-quantum key this device writes with for you (your own copies of server keys and DM epochs, and DM epochs
+  // with others): your published key, signed by you, when this device holds its seed.
+  //   null     the account has no post-quantum key (nothing on this device says it has one): P-256, as before
+  //   throws   your own keys don't check out (own_key_mismatch); or the account has one that this device can't use yet
+  //            (need_password): then it writes nothing that involves it until the password is entered (read-only)
+  async function myPqForWriting() {
+    if (!(await ownKeysOk())) throw ownKeysMismatch();
+    const listed = (await listedPqIsMine()) ? S.me.pqPublicKey : null;
+    const mine = myPq();
+    if (listed && mine && mine.publicKey === listed) {
+      E2EE.pinOwnPq(S.me.id, await E2EE.pqFingerprint(listed));
+      return listed;
+    }
+    // (Another tab of this browser may have just got it.)
+    if (listed && !mine) {
+      const stored = await E2EE.loadPqSeed(S.me.id);
+      if (stored && E2EE.pqKeyPair(stored).publicKey === listed) { adoptPq(stored, listed); return listed; }
+    }
+    if (!accountHasPq()) return null;
+    throw needPasswordError();
+  }
+  // Whether this device may write copies for you at all (either the account is P-256 only, or it holds the seed).
+  const canWriteForMyself = () => myPqForWriting().then(() => true, () => false);
+  let pqNeed = null; // why this device needs the password once ('seed' | 'publish' | 'upgrade'), or null
+  let pqError = null; // why the last attempt with the password didn't finish
+  const neededPassword = () => pqNeed;
+  const lastPqError = () => pqError;
+  function needPassword(why) {
+    if (pqNeed === why) return;
+    pqNeed = why;
+    onNeedPassword(why);
+  }
+  let adopted = null; // the public key of the seed last taken up here (holdSeed doesn't count)
+  function adoptPq(seed, pub, { fresh = false } = {}) {
+    const mine = E2EE.pqKeyPair(seed).publicKey;
+    const changed = adopted !== mine;
+    adopted = mine;
+    S.pqSeed = seed;
+    // (Stored, then the browser's other tabs are told, so they take it from there: app.js.)
+    E2EE.storePqSeed(S.me.id, seed).then(() => { try { localStorage.setItem(`hearth.pqseed.${S.me.id}`, String(Date.now())); } catch { /* storage blocked */ } }, () => {});
+    if (pub) E2EE.pqFingerprint(pub).then((fp) => E2EE.pinOwnPq(S.me.id, fp));
+    if (pqNeed) { pqNeed = null; onNeedPassword(null); }
+    pqError = null;
+    if (fresh) onPqUpgraded();
+    if (!changed) return;
+    // What waited for the seed: server keys locked to it (looked at again), and DMs.
+    for (const sid of [...waitingPq]) { waitingPq.delete(sid); refresh(sid); }
+    onDmKeys(null);
+  }
+  // A seed from the envelope that isn't published yet: kept, so this device is read-only rather than P-256-only meanwhile.
+  function holdSeed(seed) {
+    S.pqSeed = seed;
+    E2EE.storePqSeed(S.me.id, seed).catch(() => {});
+  }
+  function dropSeed() {
+    if (!S.pqSeed) return;
+    S.pqSeed = null;
+    adopted = null;
+    E2EE.storePqSeed(S.me.id, null).catch(() => {});
+  }
+  // (Only what was published, and whether the recovery key is out of date now, are taken from the answer.)
+  const publishPq = async (body) => {
+    const me = await api('POST', '/me/pq-key', body);
+    const fp = await E2EE.pqFingerprint(body.pqPublicKey);
+    S.me = { ...S.me, pqPublicKey: body.pqPublicKey, pqSig: body.pqSig, ...(me && typeof me.recoveryStale === 'boolean' ? { recoveryStale: me.recoveryStale } : {}) };
+    S.users[S.me.id] = { ...S.users[S.me.id], pq: fp };
+  };
+  // Run after the signing key is ready: at start-up, whenever the server lists a new post-quantum key for you, and with
+  // ctx when the password was just entered: { authKey, wrapKey, encPrivateKey, pqSeed (the envelope's, or null) }, from
+  // a sign-in, a password change or this device's unlock.
+  let pqBusy = null;
+  function ensurePqKey(ctx = null) {
+    const run = async () => {
+      if (!S.signKey || !S.me || !(await ownKeysOk())) return;
+      // A listed key you didn't sign is ignored (a server's own, or garbage): it never replaces the seed held here.
+      const pub = (await listedPqIsMine()) ? S.me.pqPublicKey : null;
+      if (S.me.pqPublicKey && !pub) console.warn('The server lists a post-quantum key for you that you didn’t sign: ignored');
+      const fits = (x) => x instanceof Uint8Array && !!pub && E2EE.pqKeyPair(x).publicKey === pub;
+      if (ctx) {
+        const envSeed = ctx.pqSeed instanceof Uint8Array ? ctx.pqSeed : null;
+        const sign = (pq) => E2EE.signPqKey(S.signKey, S.me.id, proven.e, pq); // (ownKeysOk above: proven is set)
+        const fromEnvelope = await E2EE.envelopeHash(ctx.encPrivateKey);
+        if (pub) {
+          if (fits(envSeed)) return adoptPq(envSeed, pub);
+          // The envelope lost the seed this device has (an old app re-locked an older envelope): put it back.
+          if (fits(S.pqSeed)) {
+            const { encPrivateKey } = await E2EE.addPqToEnvelope(ctx.wrapKey, ctx.encPrivateKey, { seed: S.pqSeed, replace: true });
+            await publishPq({ pqPublicKey: pub, pqSig: await sign(pub), encPrivateKey, fromEnvelope, authKey: ctx.authKey });
+            return adoptPq(S.pqSeed, pub);
+          }
+          // Neither the envelope nor this device has the published key's seed, so nobody can open what's locked to it:
+          // replaced below with a new one, in the envelope.
+        } else {
+          // Nothing listed: the envelope's seed (a new account, new keys after a reset, an interrupted first start), else
+          // the one this device holds (a server restored from before it was published: put back into the envelope, so
+          // every device keeps the key it has). Held here before it's published: if that's refused, this device
+          // stays read-only, never P-256 alone.
+          const seed = envSeed || (S.pqSeed instanceof Uint8Array ? S.pqSeed : null);
+          if (seed) {
+            holdSeed(seed);
+            const pq = E2EE.pqKeyPair(seed).publicKey;
+            const env = envSeed ? {} : { encPrivateKey: (await E2EE.addPqToEnvelope(ctx.wrapKey, ctx.encPrivateKey, { seed, replace: true })).encPrivateKey, fromEnvelope };
+            await publishPq({ pqPublicKey: pq, pqSig: await sign(pq), ...env, authKey: ctx.authKey });
+            return adoptPq(seed, pq);
+          }
+        }
+        // The one-time upgrade: a new seed, locked inside the envelope, and its public key published with it.
+        const up = await E2EE.addPqToEnvelope(ctx.wrapKey, ctx.encPrivateKey, { replace: true });
+        const pq = E2EE.pqKeyPair(up.pqSeed).publicKey;
+        await publishPq({ pqPublicKey: pq, pqSig: await sign(pq), encPrivateKey: up.encPrivateKey, fromEnvelope, authKey: ctx.authKey, ...(S.me.pqPublicKey ? { replace: true } : {}) });
+        return adoptPq(up.pqSeed, pq, { fresh: true });
+      }
+      // No password here.
+      if (pub && fits(S.pqSeed)) return adoptPq(S.pqSeed, pub);
+      if (pub) {
+        // (Remembered: from now on this device knows the account has one, whatever the server lists later.)
+        E2EE.pinOwnPq(S.me.id, await E2EE.pqFingerprint(pub));
+        // Another tab of this browser may have just unlocked it.
+        const stored = await E2EE.loadPqSeed(S.me.id);
+        if (fits(stored)) return adoptPq(stored, pub);
+        // This device doesn't have the published key's seed (it was signed in before the key existed, or another device
+        // replaced it): the password unlocks it from the envelope.
+        dropSeed();
+        return needPassword('seed');
+      }
+      // A seed from the envelope that was never published (the first start after sign-up or a reset was interrupted):
+      // the password publishes it.
+      if (myPq()) return needPassword('publish');
+      // Signs that the account has one which the server doesn't list for you now: the password sorts it out.
+      if (accountHasPq()) return needPassword('seed');
+      // No post-quantum key at all (an account from before, on a device that was signed in before; or a reset whose first
+      // start was interrupted, in a new browser): the password makes one.
+      return needPassword('upgrade');
+    };
+    pqBusy = (pqBusy || Promise.resolve()).then(run, run).catch(async (e) => {
+      // Another device published one meanwhile: take it as listed now (if you signed it), and its seed from the envelope
+      // that device just saved, with the password this one has right now.
+      if (e.code === 'pq_exists') {
+        try {
+          const k = await api('GET', `/users/${S.me.id}/pq-key`);
+          if (!proven || !(await E2EE.verifyPqKey(proven.s, S.me.id, proven.e, k.pqPublicKey, k.pqSig))) return;
+          S.me = { ...S.me, pqPublicKey: k.pqPublicKey, pqSig: k.pqSig };
+          if (ctx && ctx.authKey) {
+            const r = await api('POST', '/me/keys/wrapped', { authKey: ctx.authKey }).catch(() => null);
+            const got = r && await E2EE.unwrapIdentity(ctx.wrapKey, r.encPrivateKey).catch(() => null);
+            if (got && got.pqSeed && E2EE.pqKeyPair(got.pqSeed).publicKey === k.pqPublicKey) return adoptPq(got.pqSeed, k.pqPublicKey);
+          }
+          needPassword('seed');
+        } catch { /* next start */ }
+        return;
+      }
+      console.warn('Post-quantum key', e.message);
+      // With the password, but it didn't go through (the network, a limit): the bar stays, and says why when asked.
+      if (ctx) { pqError = e; needPassword(S.me.pqPublicKey ? 'seed' : myPq() ? 'publish' : 'upgrade'); }
+    });
+    return pqBusy;
+  }
+
+  // The server says your post-quantum key changed (another device published one): fetched and checked here, as no
+  // socket record ever sets your own keys (app.js setUser), then taken up as at start-up.
+  async function ownPqChanged() {
+    try {
+      const k = await api('GET', `/users/${S.me.id}/pq-key`);
+      if (!(await ownKeysOk()) || !proven) return;
+      const ok = !!(k && k.pqPublicKey) && await E2EE.verifyPqKey(proven.s, S.me.id, proven.e, k.pqPublicKey, k.pqSig).catch(() => false);
+      S.me = { ...S.me, pqPublicKey: ok ? k.pqPublicKey : null, pqSig: ok ? k.pqSig : null };
+    } catch { return; }
+    await ensurePqKey();
+  }
+
+  // ---------------------------------------------------------------- other people's post-quantum keys
+  // Someone's post-quantum public key, checked: signed with their signing key (the one this device trusts for them now)
+  // over their id and identity key, and the one whose fingerprint the server lists for them. null when they have none
+  // yet. Throws (code 'untrusted') when the server lists one that doesn't check out, or lists none for someone this
+  // device has seen one for (a downgrade to P-256 alone): nothing is then encrypted to them.
+  const pqFetched = new Map(); // `${id}|${fp}` -> Promise<{ publicKey, pqPublicKey, pqSig }>
+  const pqChecked = new Map(); // `${id}|${fp}|${publicKey}` -> Promise<pq public key | null>
+  function pqRefused(user, missing) {
+    const err = new Error(missing
+      ? `${user.username}’s post-quantum key isn’t listed right now, so nothing was encrypted to them. If they just reset their password, their app adds it as soon as it starts; if it keeps happening, the server may be hiding it: tell its owner.`
+      : `${user.username}’s post-quantum key didn’t check out, so nothing was encrypted to them. Reload the page; if it keeps happening, tell the server’s owner.`);
+    err.code = 'untrusted';
+    return err;
+  }
+  async function prefetchPq(users) {
+    const todo = users.filter((u) => u && u.id !== S.me.id && typeof u.pq === 'string' && u.pq && !pqFetched.has(`${u.id}|${u.pq}`));
+    for (let i = 0; i < todo.length; i += 500) {
+      const part = todo.slice(i, i + 500);
+      const all = api('POST', '/users/pq-keys', { ids: part.map((u) => u.id) }).then((r) => (r && r.keys) || {});
+      part.forEach((u) => {
+        const k = `${u.id}|${u.pq}`;
+        pqFetched.set(k, all.then((keys) => keys[u.id] || null));
+        pqFetched.get(k).catch(() => pqFetched.delete(k));
+      });
+    }
+  }
+  async function pqKeyOf(user) {
+    if (!user) return null;
+    if (user.id === S.me.id) return myPqForWriting();
+    const fp = typeof user.pq === 'string' && user.pq ? user.pq : null;
+    if (!fp) {
+      if (E2EE.pinnedPq(S.me.id, user)) throw pqRefused(user, true);
+      return null;
+    }
+    const k = `${user.id}|${fp}`;
+    if (!pqFetched.has(k)) {
+      pqFetched.set(k, api('GET', `/users/${user.id}/pq-key`));
+      pqFetched.get(k).catch(() => pqFetched.delete(k));
+    }
+    const ck = `${k}|${user.publicKey}`;
+    if (!pqChecked.has(ck)) {
+      pqChecked.set(ck, (async () => {
+        const r = await pqFetched.get(k);
+        const signs = signKeysFor(user, { past: false });
+        if (!r || r.publicKey !== user.publicKey || !signs.length || (await E2EE.pqFingerprint(r.pqPublicKey)) !== fp) return null;
+        return (await E2EE.verifyPqKey(signs, user.id, user.publicKey, r.pqPublicKey, r.pqSig)) ? r.pqPublicKey : null;
+      })());
+      pqChecked.get(ck).catch(() => pqChecked.delete(ck));
+    }
+    const pq = await pqChecked.get(ck);
+    if (!pq) { pqChecked.delete(ck); pqFetched.delete(k); throw pqRefused(user, false); }
+    E2EE.pinPq(S.me.id, user, fp);
+    return pq;
+  }
+
   // A record the server hands over for one account but labelled as another: never used (see mergeUser).
   function wrongAccount() {
     const err = new Error('The server answered with a different account than the one asked for, so nothing was encrypted to it. Reload the page; if it keeps happening, tell the server’s owner.');
@@ -346,6 +613,13 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     const server = S.servers.find((s) => s.id === st.serverId);
     let added = false;
     const fresh = []; // keys someone else handed us (re-wrapped to ourselves below)
+    // Copies for ourselves only from a device that can write them (canWriteForMyself). While
+    // the account's recovery key is older than its post-quantum key (it doesn't hold the seed), a copy that opens with
+    // the identity key alone (w1) is never replaced by one that needs the seed: a reset with that recovery key would
+    // otherwise lose it, history from before the upgrade included.
+    const canKeep = await canWriteForMyself();
+    const lockPq = canKeep ? await myPqForWriting().catch(() => null) : null;
+    const staleRecovery = !!(S.me.hasRecovery && S.me.recoveryStale);
     for (const k of st.keys || []) {
       const current = k.epoch === st.keyEpoch;
       const tag = `${st.serverId}|${k.epoch}`;
@@ -374,7 +648,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
         const listed = current ? [] : keys.filter((x) => x.trust === 'listed').map((x) => x.key);
         if (!trusted.length && !listed.length) throw new Error('untrusted sharer');
         const unwrap = (pubs) => E2EE.unwrapGroupKey({
-          wrapped: k.wrapped, serverId: st.serverId, epoch: k.epoch, myId: S.me.id, myPriv: S.privateKey,
+          wrapped: k.wrapped, serverId: st.serverId, epoch: k.epoch, myId: S.me.id, myPriv: S.privateKey, myPub: proven ? proven.e : S.me.publicKey, myPq: myPq(),
           wrapperId: k.wrapperId, wrapperSignPub: pubs,
         });
         let raw;
@@ -394,8 +668,15 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
         if (onlyListed) unverified.add(tag); else unverified.delete(tag);
         added = true;
         generation.set(st.serverId, (generation.get(st.serverId) || 0) + 1);
-        if (!self && !onlyListed) fresh.push({ epoch: k.epoch, raw });
+        const w1 = E2EE.wrapFormat(k.wrapped) === 'w1';
+        if (!w1) notePqEvidence(); // (a hybrid copy for you: the account has a post-quantum key)
+        if (!self && !onlyListed && canKeep && !(staleRecovery && w1 && lockPq)) fresh.push({ epoch: k.epoch, raw, w1 });
+        // Our own copy from before post-quantum keys: stored again with the hybrid, so what the server keeps from now on
+        // is safe from a quantum computer too (a copy taken before can't be helped).
+        else if (self && lockPq && w1 && !staleRecovery) fresh.push({ epoch: k.epoch, raw, w1 });
       } catch (e) {
+        // Locked to the post-quantum key this device is still waiting for: looked at again once it's here.
+        if (e.code === 'no_pq') { waitingPq.add(st.serverId); notePqEvidence(); continue; }
         console.warn('Could not unlock a server key', st.serverId, k.epoch, e.message);
         // Locked for keys this account no longer has (or damaged): ask for it to be shared again. Once per
         // key per session, and only the current key (nobody can share an older one again, so the server keeps
@@ -426,10 +707,14 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       const pub = proven.e;
       const signKey = S.signKey;
       const myId = S.me.id;
-      for (let i = 0; i < todo.length; i += 100) {
+      const recipientPq = await myPqForWriting(); // (throws on a device that can't write for you yet)
+      // Decided again now, with the key it's wrapped with: a copy that opens with the identity key alone isn't replaced
+      // by a hybrid one while the recovery key is older than the post-quantum key (the upgrade may have just landed).
+      const keep = todo.filter((k) => !(k.w1 && recipientPq && S.me.hasRecovery && S.me.recoveryStale));
+      for (let i = 0; i < keep.length; i += 100) {
         const wraps = {};
-        for (const k of todo.slice(i, i + 100)) {
-          wraps[k.epoch] = await E2EE.wrapGroupKey({ raw: k.raw, serverId, epoch: k.epoch, recipientId: myId, recipientPub: pub, wrapperId: myId, signKey });
+        for (const k of keep.slice(i, i + 100)) {
+          wraps[k.epoch] = await E2EE.wrapGroupKey({ raw: k.raw, serverId, epoch: k.epoch, recipientId: myId, recipientPub: pub, recipientPq, wrapperId: myId, signKey });
         }
         if (!S.me || S.me.publicKey !== pub) throw ownKeysMismatch();
         await api('POST', `/servers/${serverId}/keys/self`, { wraps });
@@ -461,14 +746,21 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     const shareWith = (st.missing || []).filter((id) => id !== S.me.id && !heldBack(serverId, id));
     // Held back here yourself: the server takes no key from you to pass on (it might be one you made alone).
     const needsShare = !needsRotate && !isHeld(serverId, S.me.id) && shareWith.length > 0 && currentKey(serverId);
-    if (!needsRotate && !needsShare) return;
+    // Older keys owed to members who were left out of them (their post-quantum key wasn't listed then), that we hold.
+    // Only to those this device's own rotation left out (its local record, never just the server's word: a server
+    // could otherwise list a member of its own as owed every old key), and only keys it holds as its own.
+    const owed = isHeld(serverId, S.me.id) ? [] : Object.entries(st.owed || {})
+      .map(([e, ids]) => ({ epoch: Number(e), raw: keysFor(serverId).get(Number(e)), ids: (Array.isArray(ids) ? ids : []).filter((id) => id !== S.me.id && !heldBack(serverId, id) && E2EE.deferredHere(S.me.id, serverId, Number(e), id)) }))
+      .filter((o) => o.raw && o.ids.length && !unverified.has(`${serverId}|${o.epoch}`));
+    if (!needsRotate && !needsShare && !owed.length) return;
     busy.add(serverId);
     // Runs right away (no timers: background tabs throttle them). If several members do this at once,
     // the server keeps the first rotation and ignores duplicate shares.
     (async () => {
       try {
         if (needsRotate) await rotate(serverId);
-        else await share(serverId, shareWith);
+        else if (needsShare) await share(serverId, shareWith);
+        for (const o of owed) await share(serverId, o.ids, { epoch: o.epoch, raw: o.raw });
       } catch (e) {
         if (!['epoch', 'members', 'keys_unverified', ...LIMITED].includes(e.code)) console.warn('Key maintenance failed', e.message);
       } finally { busy.delete(serverId); }
@@ -483,26 +775,46 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   const holds = new Map(); // serverId -> time we may try to rotate again
   const held = (serverId) => (holds.get(serverId) || 0) > Date.now();
 
+  // Each copy is the hybrid (w2) for anyone with a post-quantum key that checks out (pqKeyOf), else P-256 alone (w1).
+  // Someone whose post-quantum key this device has seen but which doesn't check out now (left out, or not signed by
+  // them) gets no copy at all, rather than a P-256 one: they're deferred (the server shares them the key later, once
+  // it's back), so they don't hold the key up for everyone else.
   async function wrapFor(serverId, epoch, raw, userIds) {
     const wraps = {};
     const pubs = {}; // the public key each one is wrapped for, so the server can refuse stale ones
-    for (const uid of userIds) {
-      // Our own copy goes only to keys proven to be ours (see ownKeysOk), never to whatever the server lists for us
-      // just now: a server that pushed its own public key as ours would otherwise get every new server key.
-      if (uid === S.me.id && !(await ownKeysOk())) throw ownKeysMismatch();
-      const u = uid === S.me.id ? { ...S.me, publicKey: proven.e } : await userWithKeys(uid);
+    const pqs = {}; // …and the post-quantum key's fingerprint (null: none), likewise (not for our own copy)
+    const deferred = [];
+    const users = [];
+    for (const uid of userIds) users.push(uid === S.me.id ? S.me : await userWithKeys(uid));
+    await prefetchPq(users);
+    for (const u of users) {
+      const uid = u && u.id;
       if (!u || !u.publicKey) throw new Error(`Missing encryption key for a member.`);
       if (!trust(u)) {
         const err = new Error(`${u.username}'s security key changed. Verify them before sharing keys.`);
         err.code = 'untrusted';
         throw err;
       }
-      wraps[uid] = await E2EE.wrapGroupKey({ raw, serverId, epoch, recipientId: uid, recipientPub: u.publicKey, wrapperId: S.me.id, signKey: S.signKey });
-      pubs[uid] = u.publicKey;
+      // Our own copy goes only to keys proven to be ours (see ownKeysOk), never to whatever the server lists for us just
+      // now: a server that pushed its own public key as ours would otherwise get every new server key. And with our
+      // post-quantum key whenever the account has one (myPqForWriting throws rather than fall back: a device that can't
+      // use it yet makes no keys for anyone).
+      const self = uid === S.me.id;
+      if (self && !(await ownKeysOk())) throw ownKeysMismatch();
+      const recipientPub = self ? proven.e : u.publicKey;
+      let recipientPq;
+      try { recipientPq = await pqKeyOf(u); } catch (e) {
+        if (self || e.code !== 'untrusted') throw e;
+        deferred.push(uid);
+        continue;
+      }
+      wraps[uid] = await E2EE.wrapGroupKey({ raw, serverId, epoch, recipientId: uid, recipientPub, recipientPq, wrapperId: S.me.id, signKey: S.signKey });
+      pubs[uid] = recipientPub;
+      if (uid !== S.me.id) pqs[uid] = recipientPq ? u.pq : null;
     }
     // (As in keepForMyself: a batch with our own copy isn't sent once the server lists another key for us.)
     if (pubs[S.me.id] && S.me.publicKey !== pubs[S.me.id]) throw ownKeysMismatch();
-    return { wraps, pubs };
+    return { wraps, pubs, pqs, deferred };
   }
   // Someone's keys changed under us: fetch them fresh before trying again.
   async function refreshUsers(ids) {
@@ -516,25 +828,26 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     const epoch = st.keyEpoch + 1;
     const raw = E2EE.newGroupKey();
     // Everyone but whoever waits to be verified (the server wouldn't keep their copy).
-    const { wraps, pubs } = await wrapFor(serverId, epoch, raw, server.memberIds.filter((id) => !heldBack(serverId, id)));
+    const { wraps, pubs, pqs, deferred } = await wrapFor(serverId, epoch, raw, server.memberIds.filter((id) => !heldBack(serverId, id)));
     const check = await E2EE.keyCheck(raw, serverId, epoch);
-    const next = await api('POST', `/servers/${serverId}/keys/rotate`, { epoch, check, wraps, pubs }).catch(async (e) => {
+    const next = await api('POST', `/servers/${serverId}/keys/rotate`, { epoch, check, wraps, pubs, pqs, deferred }).catch(async (e) => {
       if (e.code === 'stale_keys') { await refreshUsers(server.memberIds.filter((id) => id !== S.me.id)); setTimeout(() => maintain(serverId), 500); }
       if (LIMITED.includes(e.code)) holds.set(serverId, Date.now() + 60000);
       throw e;
     });
     keysFor(serverId).set(epoch, raw);
+    E2EE.noteDeferred(S.me.id, serverId, epoch, deferred);
     await applyState(next);
   }
 
-  async function share(serverId, userIds) {
-    const ck = currentKey(serverId);
+  async function share(serverId, userIds, ck = currentKey(serverId)) {
     const server = S.servers.find((s) => s.id === serverId);
     if (!ck || !server || !userIds.length) return;
     const ids = userIds.filter((id) => server.memberIds.includes(id) && !heldBack(serverId, id));
     if (!ids.length) return;
-    const { wraps, pubs } = await wrapFor(serverId, ck.epoch, ck.raw, ids);
-    const r = await api('POST', `/servers/${serverId}/keys/share`, { epoch: ck.epoch, wraps, pubs });
+    const { wraps, pubs, pqs } = await wrapFor(serverId, ck.epoch, ck.raw, ids);
+    if (!Object.keys(wraps).length) return;
+    const r = await api('POST', `/servers/${serverId}/keys/share`, { epoch: ck.epoch, wraps, pubs, pqs });
     if (r && r.stale && r.stale.length) { await refreshUsers(r.stale); setTimeout(() => maintain(serverId), 500); }
   }
 
@@ -562,6 +875,11 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       }
       await refresh(serverId);
       if (!currentKey(serverId) && !rolledBack(serverId)) await waitForState(serverId, 1500);
+    }
+    if (waitingPq.has(serverId)) {
+      const err = new Error('This server’s key is locked to your account’s post-quantum key, which this device gets with your password: enter it once (the bar above the message box) to read and write here.');
+      err.code = 'need_password';
+      throw err;
     }
     if (rolledBack(serverId)) {
       const err = new Error('This server offered an older encryption key than the one you already use, so nothing was sent. Reload the page; if it keeps happening, tell the server\u2019s owner.');
@@ -601,6 +919,8 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       // Only the current key is ever handed out later (keys/share), so a missing key older than one we hold
       // never arrives: written before we joined, or while we were away (a rejoin always gets a new key).
       const held = [...mine.keys()];
+      // (Locked to your post-quantum key, which this device gets with your password: says so instead.)
+      if (waitingPq.has(serverId)) return { pending: true, pq: true, t: '', f: [] };
       return { pending: true, before: held.length > 0 && epoch < Math.max(...held), t: '', f: [] };
     }
     try {
@@ -761,10 +1081,80 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     trust(peer);
     return peer;
   }
+  // Once you both have post-quantum keys, each message is d3: its own key, wrapped inside it for both of you with the
+  // hybrid (e2ee.js encryptDm3); until then with the key from your two identity keys (d2), as before. A DM is
+  // post-quantum on this device once it has seen a d3 message there or written one (E2EE.noteDmPq): from then on
+  // nothing is written in it with P-256 alone, not if the server leaves their key out, nor yours, nor after accepting
+  // their new keys. A device without the account's seed writes nothing that needs it (myPqForWriting throws
+  // need_password): read-only until the password is entered.
+  const tsOf = (payload) => (payload && Number.isSafeInteger(payload.ts) && payload.ts > 0 ? payload.ts : 0);
+  // When a d3 message dates this DM going post-quantum: a new message's own time. An edit keeps the time of the message
+  // it edits (binding.js bindEdit), which can be days before the conversation went post-quantum: dating it from that
+  // would flag the other person's honest P-256 messages in between (d2AfterPq). An edit only says the DM is post-quantum.
+  const writtenAt = (payload) => (payload && Number(payload.v) > 0 ? 0 : tsOf(payload));
   async function encryptDm(dmId, payload) {
     const peer = await writablePeer(dmId);
-    return E2EE.encryptDm({ myPriv: S.privateKey, theirPub: peer.publicKey, dmId, authorId: S.me.id, payload });
+    const peerPq = await pqKeyOf(peer);
+    const pqDm = E2EE.dmPqSeen(S.me.id, dmId);
+    const d2 = () => E2EE.encryptDm({ myPriv: S.privateKey, theirPub: peer.publicKey, dmId, authorId: S.me.id, payload });
+    if (!peerPq && !pqDm) return d2();
+    const minePq = await myPqForWriting();
+    if (!minePq && !pqDm) return d2(); // (your account has none)
+    if (!minePq) throw needPasswordError();
+    if (!peerPq) {
+      const err = new Error(`${peer.username}’s post-quantum key isn’t listed right now, so nothing was sent: this conversation is post-quantum encrypted. If they just reset their password, their app adds it as soon as it starts; if it keeps happening, tell the server’s owner.`);
+      err.code = 'untrusted';
+      throw err;
+    }
+    if (!(await ownKeysOk())) throw ownKeysMismatch();
+    const text = await E2EE.encryptDm3({ dmId, authorId: S.me.id, myPriv: S.privateKey, myPub: proven.e, myPq: minePq, peerId: peer.id, peerPub: peer.publicKey, peerPq, payload });
+    if (payload && Number(payload.v) > 0) E2EE.noteDmPq(S.me.id, dmId);
+    else E2EE.noteDmFirst(S.me.id, dmId, writtenAt(payload) || Date.now());
+    return text;
   }
+  // A d3 message: opened with this device's post-quantum key and whichever identity key of theirs made it (yours, for
+  // your own), judged by its date exactly as a d2 is (keysOf). { pending: true } while this device has no seed.
+  async function openDm3(dmId, authorId, text, at) {
+    E2EE.noteDmPq(S.me.id, dmId);
+    const mine = myPq();
+    if (!mine) return { pending: true };
+    if (!(await ownKeysOk())) throw ownKeysMismatch();
+    const keys = authorId === S.me.id ? [{ key: proven.e, trust: 'now' }] : await dmKeys(dmId, at);
+    if (!keys.length) throw new Error('Missing key');
+    const { payload, index } = await E2EE.decryptDm3({ text, dmId, authorId, myId: S.me.id, myPriv: S.privateKey, myPub: proven.e, myPq: mine, authorPubs: keys.map((k) => k.key) });
+    const how = keys[index].trust;
+    // Only a key this device trusts dates the DM going post-quantum (not one the server merely lists).
+    if (how === 'now' || how === 'pinned') E2EE.noteDmFirst(S.me.id, dmId, writtenAt(payload));
+    // Written by them with their current key: they have a post-quantum key, so it's checked and pinned now (in a batch,
+    // a moment later: no request per message), and a server that hides it later gets nothing P-256 alone for them.
+    if (how === 'now' && authorId !== S.me.id) pinSoon(S.dms.find((x) => x.id === dmId));
+    return { payload, how };
+  }
+  const toPin = new Set();
+  let pinTimer = null;
+  function pinSoon(d) {
+    let id;
+    try { id = d && boundPeerId(d); } catch { return; }
+    const u = id && S.users[id];
+    if (!u || typeof u.pq !== 'string' || !u.pq || E2EE.pinnedPq(S.me.id, u)) return;
+    toPin.add(u.id);
+    pinTimer ||= setTimeout(async () => {
+      pinTimer = null;
+      const users = [...toPin].map((id) => S.users[id]).filter(Boolean);
+      toPin.clear();
+      await prefetchPq(users).catch(() => {});
+      for (const u2 of users) await pqKeyOf(u2).catch(() => {});
+    }, 50);
+  }
+  // A d2 message from them written after this DM went post-quantum, as both messages say it themselves (their
+  // authenticated times, never the server's, give or take clocks): their app wouldn't write that, so it's flagged.
+  const PQ_SKEW = 10 * 60 * 1000;
+  function d2AfterPq(dmId, payload) {
+    const first = E2EE.dmFirstAt(S.me.id, dmId);
+    const ts = tsOf(payload);
+    return !!first && !!ts && ts > first + PQ_SKEW;
+  }
+
   // The other person's identity keys a DM written at `at` may be locked with, best first (see keysOf): it's
   // locked with whichever key they had then (before a password reset, or before they deleted their account).
   async function dmKeys(dmId, at) {
@@ -778,22 +1168,31 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   // keyNote says when that wasn't their current trusted key, so the message can say so.
   async function openDm(dmId, authorId, text, at = 0) {
     try {
-      for (const { key, trust: how } of await dmKeys(dmId, at)) {
-        try {
-          const { payload, legacy } = await E2EE.decryptDm({ myPriv: S.privateKey, theirPub: key, dmId, authorId, text });
-          return { t: String(payload.t || ''), f: cleanFiles(payload.f), p: cleanPoll(payload.p), x: cleanX(payload.x), ...linksIn(payload), ...bindIn(payload), ...photoIn(payload), legacyFormat: !!legacy, ...(how !== 'now' ? { keyNote: how } : {}) };
-        } catch { /* not this key */ }
+      // Which key opens it: the message's own (d3), else the one from your two identity keys (d2, v1).
+      let opened = null;
+      const d3 = E2EE.isDm3(text);
+      if (d3) {
+        const r = await openDm3(dmId, authorId, text, at);
+        if (r.pending) return { pending: true, pq: true, t: '', f: [] };
+        opened = r;
+      } else {
+        for (const { key, trust: how } of await dmKeys(dmId, at)) {
+          try { opened = { ...(await E2EE.decryptDm({ myPriv: S.privateKey, theirPub: key, dmId, authorId, text })), how }; break; } catch { /* not this key */ }
+        }
       }
-      throw new Error('Missing key');
+      if (!opened) throw new Error('Missing key');
+      const { payload, legacy, how } = opened;
+      const noPq = !d3 && authorId !== S.me.id && d2AfterPq(dmId, payload);
+      return { t: String(payload.t || ''), f: cleanFiles(payload.f), p: cleanPoll(payload.p), x: cleanX(payload.x), ...linksIn(payload), ...bindIn(payload), ...photoIn(payload), legacyFormat: !!legacy, ...(noPq ? { noPq } : {}), ...(how !== 'now' ? { keyNote: how } : {}) };
     } catch {
       return { error: true, t: '', f: [] };
     }
   }
   async function decryptDmMessage(m) {
-    if (m.dec) return;
+    if (m.dec && !m.dec.pending) return;
     m.dec = await openDm(m.dmId, m.authorId, m.ciphertext, Number(m.createdAt) || 0);
     if (m.reply && m.reply.big && !m.reply.dec) m.reply.dec = BIG_QUOTE;
-    if (m.reply && m.reply.ciphertext && !m.reply.dec) m.reply.dec = await openDm(m.dmId, m.reply.authorId, m.reply.ciphertext, Number(m.reply.createdAt) || 0);
+    if (m.reply && m.reply.ciphertext && (!m.reply.dec || m.reply.dec.pending)) m.reply.dec = await openDm(m.dmId, m.reply.authorId, m.reply.ciphertext, Number(m.reply.createdAt) || 0);
   }
 
   // ---------------------------------------------------------------- attachments
@@ -1000,11 +1399,14 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
 
   function reset() {
     groupKeys.clear(); states.clear(); busy.clear(); warned.clear(); rewrapped.clear(); keeping.clear(); unverified.clear(); holds.clear();
-    ownCheck = null; proven = null; E2EE.clearCaches();
+    waitingPq.clear(); pqFetched.clear(); pqChecked.clear();
+    ownCheck = null; proven = null; ownPq = null; pqBusy = null; pqNeed = null; adopted = null; E2EE.clearCaches();
     peers = { key: '', map: new Map() }; peerStore = { key: '', raw: null, all: {} };
   }
 
   return {
+    ensurePqKey, ownPqChanged, neededPassword, lastPqError, pqKeyOf, myPqForWriting,
+    waitingForPq: (serverId) => waitingPq.has(serverId),
     proveOwnKeys, ownKeys, applyState, stateOf, currentKey, ready, refresh, forceRotate, maintain, awaitingVerify, heldBack, isHeld,
     encryptChannel, decryptChannelMessage, encryptDm, decryptDmMessage, decryptAttachment, encryptTag, openTag, encryptLook, openLook,
     dmWith, callPeer, callRoom, dmForCall, mayCall, signSdp, verifySdp, checkSdp, keyChanged, keysChanged, acceptKeys, trust, userWithKeys, reset,

@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 25;
+const SCHEMA_VERSION = 26;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1789,6 +1789,32 @@ CREATE TABLE IF NOT EXISTS soundboard_items (
 `);
 addColumn('soundboard_items', 'audio_at', 'INTEGER NOT NULL DEFAULT 0');
 if (hasData && fromVersion < 25) db.prepare('UPDATE roles SET permissions = permissions | ? WHERE id = server_id').run(1 << 22);
+
+// v26 (post-quantum keys, public/js/e2ee.js): each account's ML-KEM-768 public key, published next to its identity key
+// and signed with its signing key (the apps check that signature; so does POST /me/pq-key). The seed it comes from is
+// inside enc_private_key, locked with the password like the identity key.
+//   users.pq_public_key   ML-KEM-768 public key (base64, 1184 bytes), or NULL until the account's next sign-in
+//   users.pq_sig          its signature: ECDSA over hearth-pq-key-v1|<id>|<public_key>|<pq_public_key>
+// key_owed: a server key a member was left out of because the post-quantum key their sharer's app knew for them wasn't
+//   listed then (secure.js wrapFor); any member holding that key may share it with them once it is (keys/share), and
+//   the row goes when they have it.
+// scheduled_messages.peer_pq: the fingerprint of the other person's post-quantum key a scheduled DM was written for
+//   (NULL: none), so one written for a key they no longer have waits to be re-encrypted (server/scheduled.js).
+addColumn('users', 'pq_public_key', 'TEXT');
+addColumn('users', 'pq_sig', 'TEXT');
+// users.recovery_pq: 1 when the recovery key was made while the account had its post-quantum key (so it holds the seed);
+// 0 for ones from before, which Settings asks to replace.
+addColumn('users', 'recovery_pq', 'INTEGER NOT NULL DEFAULT 0');
+db.exec(`
+CREATE TABLE IF NOT EXISTS key_owed (
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  epoch INTEGER NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (server_id, epoch, user_id)
+);
+`);
+addColumn('scheduled_messages', 'peer_pq', 'TEXT');
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
 db.exec('COMMIT');

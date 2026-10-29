@@ -36,7 +36,7 @@ import { autocorrect, correctSending, isCommand, englishHere, lastWordPasted } f
 import { initKeybinds, getKeybinds, comboLabel, reportCall, flashTaskbar, installUpdate, shortcutGroups, comboParts, keyName } from './keybinds.js';
 import { initActivity, activityLine, openActivityPicker, startDesktopDetection } from './activity.js';
 import { modal, popover, closePopover, menu, contextMenu, sheet, quietFocus, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
-import { openSettings, applyAppearance, confirmedCall, displayNameDialog } from './settings.js';
+import { openSettings, applyAppearance, confirmedCall, displayNameDialog, askPassword } from './settings.js';
 import { createFolders, dragDrop } from './folders.js';
 import { createUpdates } from './updates.js';
 import { createRecall } from './recall-host.js';
@@ -76,6 +76,7 @@ const S = {
   config: null,
   me: null,
   privateKey: null,
+  pqSeed: null, // the account's post-quantum seed on this device (secure.js ensurePqKey)
   users: {},
   servers: [],          // includes group DMs (kind: 'group')
   dms: [],
@@ -133,7 +134,7 @@ function boardBlocked(room) {
   return '';
 }
 let away = null; // automatic Away (presence.js)
-const sec = createSecure({ S, onKeysChanged, onKeyWarning });
+const sec = createSecure({ S, onKeysChanged, onKeyWarning, onDmKeys, onNeedPassword: (why) => pqUnlockBar(why), onPqUpgraded: () => pqUpgraded() });
 // Who's typing where (typing.js): drawn under the open conversation's box and in the conversation lists.
 const TYPING = createTyping({ onChange: (key) => typingChanged(key) });
 // Word filter (wordfilter-app.js): your own list and your servers' suggested ones, applied on this device only.
@@ -158,7 +159,11 @@ const LS = {
   set(k, v) { lsCache.set(k, v); try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* full or blocked */ } },
 };
 // Another tab changed something: forget our copy so the next read picks it up.
-window.addEventListener('storage', (e) => { if (e.key) lsCache.delete(e.key); else lsCache.clear(); });
+window.addEventListener('storage', (e) => {
+  if (e.key) lsCache.delete(e.key); else lsCache.clear();
+  // Another tab of this browser took up the account's post-quantum seed (secure.js adoptPq): this one loads it too.
+  if (S.me && e.key === `hearth.pqseed.${S.me.id}`) sec.ensurePqKey();
+});
 
 // Several things asking to redraw the same part in one go (a burst of messages, people coming
 // online) redraw it once, on the next frame.
@@ -209,6 +214,12 @@ try { if (localStorage.getItem('hearth.dmprofile') === null) P.showDmProfile = P
 export const app = {
   S,
   sec,
+  // The password was just entered (a password change, an unlock): the post-quantum key from the envelope it opened.
+  // keys: { authKey, wrapKey, encPrivateKey }.
+  async unlockPq(keys) {
+    const { pqSeed } = await E2EE.unwrapIdentity(keys.wrapKey, keys.encPrivateKey);
+    await sec.ensurePqKey({ authKey: keys.authKey, wrapKey: keys.wrapKey, encPrivateKey: keys.encPrivateKey, pqSeed });
+  },
   P,
   get voice() { return voice; },
   soundboard: board,
@@ -291,7 +302,7 @@ async function init() {
   const uid = localStorage.getItem('hearth.userId');
   if (getToken() && uid) {
     const key = await E2EE.loadKey(uid).catch(() => null);
-    if (key) { S.privateKey = key; return startApp(uid); }
+    if (key) { S.privateKey = key; S.pqSeed = await E2EE.loadPqSeed(uid); return startApp(uid); }
   }
   showSignIn();
 }
@@ -403,7 +414,9 @@ function showSignIn() {
         });
       saveDeviceNote(username, res.device);
       totpField.hidden = true; loginForm.totp.value = ''; derived = null;
-      const priv = await E2EE.unwrapPrivateKey(wrapKey, res.encPrivateKey);
+      const { privateKey: priv, pqSeed } = await E2EE.unwrapIdentity(wrapKey, res.encPrivateKey);
+      // For the post-quantum key's one-time set-up (secure.js ensurePqKey), which needs the password's keys.
+      let pq = { authKey, wrapKey, encPrivateKey: res.encPrivateKey, pqSeed };
       if (params.kdf !== 'argon2id') {
         // Older account: upgrade password hashing from PBKDF2 to Argon2id. Same password, same keys.
         btn.textContent = 'Upgrading your encryption…';
@@ -415,10 +428,11 @@ function showSignIn() {
         const encPrivateKey = await E2EE.rewrapPrivateKey(wrapKey, next.wrapKey, res.encPrivateKey);
         // (With two-factor on, the sign-in's step-up ticket stands in for the code just used.) The session gets a
         // new token with the re-saved password.
-        const up = await api('POST', '/me/password', { oldAuthKey: authKey, newAuthKey: next.authKey, encPrivateKey, salt, keepSessions: true, ...(res.stepUpTicket ? { stepUpTicket: res.stepUpTicket } : {}) });
+        const up = await api('POST', '/me/password', { oldAuthKey: authKey, newAuthKey: next.authKey, encPrivateKey, salt, keepSessions: true, fromEnvelope: await E2EE.envelopeHash(res.encPrivateKey), ...(res.stepUpTicket ? { stepUpTicket: res.stepUpTicket } : {}) });
         if (up.token) res.token = up.token;
+        pq = { authKey: next.authKey, wrapKey: next.wrapKey, encPrivateKey, pqSeed };
       }
-      await finishLogin(res, priv);
+      await finishLogin(res, priv, pq);
     } catch (ex) {
       err.textContent = ex.message;
       // Point the error at the field it's about, so screen readers read them together.
@@ -450,7 +464,7 @@ function showSignIn() {
       const send = (c) => api('POST', '/auth/register', { captcha: c, ...body }).finally(() => regCap.reset());
       const res = await send(captcha).catch(async (ex) => (ex.code === 'captcha_harder' ? send(await regCap.token()) : Promise.reject(ex)));
       saveDeviceNote(username, res.device);
-      await finishLogin(res, id.privateKey);
+      await finishLogin(res, id.privateKey, { authKey, wrapKey, encPrivateKey: id.encPrivateKey, pqSeed: id.pqSeed });
     } catch (ex) {
       err.textContent = ex.message;
       const bad = /username|name/i.test(ex.message) ? regForm.username : /code/i.test(ex.code || ex.message) && regForm.code && !$('#reg-code-field').hidden ? regForm.code : null;
@@ -495,34 +509,58 @@ async function openReset(token) {
       const c = code.value.trim();
       if (info.need2fa) { if (!c) throw new Error('Enter your two-factor code.'); Object.assign(body, /^\d{6}$/.test(c.replace(/\s/g, '')) ? { totp: c } : { backupCode: c }); }
       let privateKey;
+      let pqSeed = null;
       if (info.hasRecovery && !noRec.checked) {
         // Unlock the old key with the recovery key and lock it again with the new password.
         const rk = await E2EE.recoveryWrapKey(rec.value, info.recoverySalt);
         try { body.encPrivateKey = await E2EE.rewrapPrivateKey(rk, next.wrapKey, info.encPrivateKeyRecovery); } catch { throw new Error('That recovery key isn\u2019t right.'); }
-        privateKey = await E2EE.unwrapPrivateKey(next.wrapKey, body.encPrivateKey);
+        ({ privateKey, pqSeed } = await E2EE.unwrapIdentity(next.wrapKey, body.encPrivateKey));
+        // A recovery key from before the account's post-quantum key doesn't hold its seed, and one from before that key
+        // was replaced holds an older seed: only a seed for the key published now counts (E2EE.pickResetSeed). This
+        // browser may still have that one (it was signed in here): then it goes into the new envelope and nothing is
+        // lost. Otherwise the server drops the key, which nobody could open any more, and this app publishes a new one
+        // as it starts (secure.js ensurePqKey); an older seed still in the envelope keeps opening what was locked to it.
+        const pick = E2EE.pickResetSeed(pqSeed, await E2EE.loadPqSeed(info.userId).catch(() => null), info.pqPublicKey);
+        if (pick.putKept) body.encPrivateKey = (await E2EE.addPqToEnvelope(next.wrapKey, body.encPrivateKey, { seed: pick.seed, replace: true })).encPrivateKey;
+        pqSeed = pick.seed;
         body.keepKeys = true;
+        body.pqInEnvelope = pick.inEnvelope;
         body.keyProof = await E2EE.resetKeyProof(privateKey, info.keyChallenge.serverPublicKey, info.keyChallenge.nonce, info.userId);
       } else {
         const id = await E2EE.createIdentity(next.wrapKey);
         Object.assign(body, { encPrivateKey: id.encPrivateKey, publicKey: id.publicKey });
         privateKey = id.privateKey;
+        pqSeed = id.pqSeed;
       }
       const res = await api('POST', '/auth/reset', body);
       history.replaceState(null, '', '/');
-      toast(body.keepKeys ? 'Password reset. All your messages are still here.'
+      // The server dropped the account's post-quantum key (new keys, or a recovery key older than it): this browser
+      // forgets that it saw it, or it would refuse every DM until the new one is published.
+      if (!body.keepKeys || !body.pqInEnvelope) E2EE.forgetOwnPq(info.userId);
+      // What a reset with a recovery key older than the account's post-quantum key loses, exactly: what was locked to
+      // that key alone (secure.js keeps older copies as they were while the recovery key is older).
+      toast(body.keepKeys && info.hasPq && !body.pqInEnvelope ? 'Password reset. Your messages are still here, except direct messages, and server and group messages, encrypted to your account’s post-quantum key since you first signed in after Hearth added it: your recovery key is older than that key, so those can’t be opened on your account any more (the people you talked to still have them). Each server’s and group’s current key is shared with you again. Make a new recovery key in Settings.'
+        : body.keepKeys ? 'Password reset. All your messages are still here.'
         : res.user && res.user.keysReset ? 'Password reset with new keys. Ask a member to verify you so you can read your servers and groups again, and add a recovery key in Settings so this can\u2019t happen again.'
           : 'Password reset with new keys. Add a recovery key in Settings so this can\u2019t happen again.');
-      await finishLogin(res, privateKey);
+      await finishLogin(res, privateKey, { authKey: next.authKey, wrapKey: next.wrapKey, encPrivateKey: body.encPrivateKey, pqSeed });
     } }] });
 }
 
-async function finishLogin(res, privateKey) {
+// pq: { authKey, wrapKey, encPrivateKey, pqSeed } from a sign-in with the password, for secure.js ensurePqKey.
+let pendingPq = null;
+async function finishLogin(res, privateKey, pq = null) {
   // Whose sign-in this browser holds goes first: another tab still signed in as someone else sees the new token only
   // after it, and so never takes it for its own (api.js sameOwner).
   localStorage.setItem('hearth.userId', res.user.id);
   setToken(res.token);
   await E2EE.storeKey(res.user.id, privateKey);
   S.privateKey = privateKey;
+  // The envelope's seed, else the one this browser kept for the account (an envelope a racing password change saved
+  // without it gets it back: secure.js ensurePqKey).
+  S.pqSeed = (pq && pq.pqSeed) || await E2EE.loadPqSeed(res.user.id);
+  if (S.pqSeed) await E2EE.storePqSeed(res.user.id, S.pqSeed).catch(() => {});
+  pendingPq = pq;
   startApp(res.user.id);
 }
 
@@ -794,7 +832,11 @@ function startApp(account) {
     const wasWaiting = sec.awaitingVerify(S.users[u.id]) || (u.id === S.me.id && sec.awaitingVerify(S.me));
     const keysNow = () => { const x = S.users[u.id]; return x ? `${x.publicKey || ''}|${x.signPublicKey || ''}` : ''; };
     const keysBefore = keysNow();
+    const pqBefore = S.me.pqPublicKey || null;
+    const pqNow = u.id === S.me.id && 'pqPublicKey' in u ? u.pqPublicKey || null : pqBefore;
     setUser(u); sec.trust(u); refreshUserBits(u.id);
+    // Your account's post-quantum key changed on another device: fetched and checked (a record never sets it, setUser).
+    if (u.id === S.me.id && pqNow !== pqBefore) sec.ownPqChanged();
     if (keysNow() !== keysBefore) { NOTES.onTrust(u.id); LOOK.onTrust(u.id); } // photo tags and backgrounds that didn't open with the keys known before
     // Outside images changed on another device: the image links on screen follow the new choice.
     if (u.id === S.me.id && outsideMode(S.me.privacy) !== outsideBefore) later(redrawImageLinks);
@@ -1304,6 +1346,11 @@ async function loadBootstrap() {
   // comments, tags or edits made while this app was away aren't in them.)
   MEDIA.reset({ all: true });
   SIDE.reset(); // (and the side view loads what's pinned there again: edited or deleted meanwhile)
+  // The post-quantum key: made, published or handed over from another device (secure.js). Before the server keys are
+  // opened, as some may be locked to it, but never holding the start up for long.
+  const pqCtx = pendingPq;
+  pendingPq = null;
+  await Promise.race([sec.ensurePqKey(pqCtx), new Promise((r) => setTimeout(r, 8000))]);
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(b.keyStates || {})) await sec.applyState(st);
   LOOK.fromBootstrap(b.dms, b.servers); // (after the keys: a group chat's background opens with its group's)
@@ -1383,13 +1430,17 @@ async function showUpdateNotes() {
   }
 }
 
+// Your own keys are never taken from a record the server pushes (a socket event, a member list, a profile): they change
+// only by a reset, which signs this device out, and the post-quantum one is fetched and checked (secure.js).
+const OWN_KEYS = ['publicKey', 'signPublicKey', 'pqPublicKey', 'pqSig'];
 function setUser(u) {
   if (!u || !u.id) return;
   // Your own keys only ever come from a start-up the app checked (bootstrap, through sec.proveOwnKeys's proof): a
   // record pushed for you later can't swap them, or the app would lock what it keeps for itself to the server's key.
+  // The post-quantum one is fetched and checked by secure.js (ownPqChanged).
   if (S.me && u.id === S.me.id) {
     const rest = { ...u };
-    delete rest.publicKey; delete rest.signPublicKey;
+    OWN_KEYS.forEach((k) => { delete rest[k]; });
     S.users[u.id] = mergeUser(S.users[u.id], { ...rest, publicKey: S.me.publicKey, signPublicKey: S.me.signPublicKey });
     S.me = mergeUser(S.me, rest);
     return;
@@ -4658,7 +4709,11 @@ function bindingFlag(m, st) {
 }
 async function decryptAll(key) {
   const store = S.msgs[key];
-  if (store) await Promise.all(store.list.map(decryptMessage));
+  if (!store) return;
+  // In a DM the post-quantum ones first: the others are judged by when the first of those was written.
+  const d3 = (m) => typeof m.ciphertext === 'string' && m.ciphertext.startsWith('d3:');
+  if (key.startsWith('d:')) await Promise.all(store.list.filter(d3).map(decryptMessage));
+  await Promise.all(store.list.map(decryptMessage));
 }
 const textOf = (m) => (m.dec && m.dec.t) || '';
 // A message's words for a snippet (the inbox): the word filter's note instead, when it hides or blurs the message.
@@ -4684,6 +4739,29 @@ function mentionKind(m) {
   return null;
 }
 const mentionsMe = (m) => !!mentionKind(m);
+
+// A DM's epoch keys arrived (or, with no dmId, this device's post-quantum seed did): open the messages that waited.
+async function onDmKeys(dmId) {
+  if (!S.me) return;
+  for (const [key, store] of Object.entries(S.msgs)) {
+    if (!key.startsWith('d:') || (dmId && key !== 'd:' + dmId)) continue;
+    let waited = false;
+    store.list.forEach((m) => {
+      if (m.dec && m.dec.pending) { m.dec = null; waited = true; }
+      if (m.reply && m.reply.dec && m.reply.dec.pending) { m.reply.dec = null; waited = true; }
+    });
+    if (!waited) continue;
+    await decryptAll(key);
+    if (store.loaded && currentKey() === key) {
+      const sc = $('#messages');
+      const atBottom = sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80;
+      const top = sc ? sc.scrollTop : 0;
+      renderMessages(atBottom);
+      if (sc && !atBottom) sc.scrollTop = top;
+    }
+  }
+  if (!S.view.serverId) later(renderSidebar);
+}
 
 async function onKeysChanged(serverId, added, heldChanged) {
   if (!S.me) return;
@@ -5127,6 +5205,7 @@ function messageTrust(m, author, bind = bindingOfMessage(m)) {
   else if (d && d.verified === false && !m.dmId) notes.push({ warn: true, label: '\u26a0 Sender could not be verified', tip: 'The signature on this message does not match the sender\u2019s key.' });
   if (bind && bind.issues.length) notes.push({ warn: true, bind });
   // The first DM format bound nothing in (not even who wrote it): say so, quietly.
+  else if (m.dmId && d && d.noPq) notes.push({ warn: true, label: '\u26a0 Without post-quantum encryption', tip: 'This conversation is post-quantum encrypted, but this message was encrypted with P-256 alone. The other person\u2019s app wouldn\u2019t fall back like that by itself, so the server may have tricked it, or held it back until now.' });
   else if (m.dmId && d && d.legacyFormat) notes.push({ label: 'Older encryption format', tip: 'Encrypted by an early version of Hearth that didn\u2019t bind the conversation or the sender into the message, so the server could show it as written by either of you.' });
   const bot = isBotPost(author, m);
   return {
@@ -5239,9 +5318,12 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
   else if (m.dec && m.dec.forged) body.append(h('div', { class: 'msg-text undecryptable', 'data-tip': 'Members\u2019 apps can\u2019t send messages without end-to-end encryption, so only the server could have written this one.' }, icon('shield'), 'Hidden: a message without end-to-end encryption, dated after this server turned it on.'));
   else if (m.dec && m.dec.error) body.append(h('div', { class: 'msg-text undecryptable' }, icon('lock'), 'This message could not be decrypted on this device.'));
   else if (m.dec && m.dec.pending) {
-    body.append(h('div', { class: 'msg-text undecryptable' }, icon('lock'), m.dec.before
-      ? 'Sent before you joined. Only members who had the key then can read it.'
-      : 'Waiting for the encryption key from another member\u2026'));
+    body.append(h('div', { class: 'msg-text undecryptable' }, icon('lock'), m.dec.pq
+      ? h('span', null, 'Locked to your account\u2019s post-quantum key: enter your password once on this device to read it. ',
+        h('button', { class: 'link-btn', type: 'button', onclick: () => unlockPq().catch((e) => { if (!e.cancelled) toast(e.message, 'error'); }) }, 'Enter password'))
+      : m.dec.before
+        ? 'Sent before you joined. Only members who had the key then can read it.'
+        : 'Waiting for the encryption key from another member\u2026'));
   } else {
     const chat = P.chat;
     // A message that's only an image link shows just the picture, once the picture is really shown.
@@ -8401,6 +8483,8 @@ function createComposer({ id, key, threadId, placeholder }) {
       if (e.code === 'slowmode' && wait) startSlow(+wait[1]);
       if (e.cancelled) toast('Upload cancelled. Your message and files are back in the box.');
       else toast(e.message, 'error');
+      // The password bar comes back if it was put off: this message needs it.
+      if (e.code === 'need_password') { pqLater.clear(); if (composers.main) composers.main.renderExtras(); }
       // Give the files and words back so nothing is lost: to this box if it still shows the conversation, else to the
       // one that shows it now or next (takeBack, renderExtras).
       if (!poll && !files.some((f) => f.voice)) {
@@ -8454,9 +8538,9 @@ function keyNotice() {
         h('span', null, `${displayName(u)} reset their password without their recovery key, so their keys are new. Compare safety numbers before you share anything private.`),
         h('button', { class: 'btn sm ghost', onclick: () => openSafetyNumber(u) }, 'Verify'));
     }
-    return null;
+    return pqNotice();
   }
-  if (S.view.type !== 'channel' && !(S.view.type === 'voice' && S.view.chat)) return null;
+  if (S.view.type !== 'channel' && !(S.view.type === 'voice' && S.view.chat)) return pqNotice();
   // crypto-2: waiting to be verified here yourself, nobody shares this conversation's key with you (a voice channel's
   // chat uses its server's key, so the same there).
   const here = S.servers.find((x) => x.id === S.view.serverId);
@@ -8466,7 +8550,11 @@ function keyNotice() {
       h('button', { class: 'btn sm ghost', onclick: () => openGetVerified() }, 'Ask a member to verify you'));
   }
   const st = sec.stateOf(S.view.serverId);
-  if (!st || sec.currentKey(S.view.serverId) || st.needsRotation || !st.keyEpoch) return null;
+  if (!st || sec.currentKey(S.view.serverId) || st.needsRotation || !st.keyEpoch) return pqNotice();
+  // This account's copy of the key is locked to its post-quantum key, which this device doesn't have yet: nobody
+  // else can help, only the password (shown even after "Later", as nothing can be read or written here until then).
+  const pqBar = sec.waitingForPq(S.view.serverId) && pqNotice({ always: true });
+  if (pqBar) return pqBar;
   // Joined a server where new members can't read what came before (since: where your history starts): the key you
   // get is the next one, which the members' apps make for you; nobody can share you the current one.
   if (st.since && st.since.epoch > st.keyEpoch) {
@@ -11594,6 +11682,45 @@ async function updateAndReload() {
 }
 
 // ======================================================================= announcement banner (from the admins)
+// This device needs the password once for the account's post-quantum key (secure.js ensurePqKey): it was signed in
+// before the account had it, or the key isn't published yet. Shown above the message box (pqNotice), where it covers
+// nothing; "Later" hides it until this tab closes. Until then this device reads what it can and writes nothing that
+// would need the key. why: 'seed' | 'publish' | 'upgrade', or null once it's done.
+function pqUnlockBar() {
+  if (composers.main) composers.main.renderExtras();
+}
+const pqLater = {
+  get() { try { return sessionStorage.getItem('hearth.pqLater') === '1'; } catch { return pqLaterHere; } },
+  set() { pqLaterHere = true; try { sessionStorage.setItem('hearth.pqLater', '1'); } catch { /* the tab remembers it */ } },
+  clear() { pqLaterHere = false; try { sessionStorage.removeItem('hearth.pqLater'); } catch { /* as above */ } },
+};
+let pqLaterHere = false;
+function pqNotice({ always = false } = {}) {
+  const why = sec.neededPassword();
+  if (!why || (!always && pqLater.get())) return null;
+  const go = () => unlockPq().catch((e) => { if (!e.cancelled) toast(e.message, 'error'); });
+  return h('div', { class: 'key-bar pq-bar', id: 'pq-unlock', role: 'status' }, icon('shield'),
+    h('span', null, why === 'seed'
+      ? 'Hearth added post-quantum encryption to your account. Enter your password once on this device to read and write what’s locked with it.'
+      : why === 'upgrade' ? 'Hearth can protect your messages against future quantum computers too. Enter your password once to turn it on for your account.'
+        : 'Enter your password once on this device to finish setting up your account’s post-quantum encryption.'),
+    h('span', { class: 'pq-bar-actions' },
+      always ? null : h('button', { class: 'btn sm ghost', onclick: () => { pqLater.set(); if (composers.main) composers.main.renderExtras(); } }, 'Later'),
+      h('button', { class: 'btn sm primary', onclick: go }, 'Enter password')));
+}
+async function unlockPq() {
+  const keys = await askPassword(app, { title: 'Unlock your encryption keys', text: 'Your post-quantum key is locked with your password, like the rest of your keys. Nothing else changes.', button: 'Unlock' });
+  if (!keys) return;
+  await app.unlockPq(keys);
+  // Still needed: what went wrong (the publish was refused, the network dropped), not a silent close.
+  if (sec.neededPassword()) throw sec.lastPqError() || new Error('That didn’t finish. Try again in a moment.');
+  toast('Done: this device has your post-quantum key.');
+}
+// The account just got its post-quantum key: a recovery key made before can't open what's locked to it.
+function pqUpgraded() {
+  if (S.me && S.me.hasRecovery) setTimeout(() => toast('Your account now has post-quantum encryption keys. Make a new recovery key in Settings → Security: the one you have is older than these keys, so a reset with it couldn’t open what’s locked to them.'), 1500);
+}
+
 function renderAnnouncement() {
   const a = S.config.announcement;
   let el = $('#announce');

@@ -548,11 +548,14 @@ function accountTab(app, setDirty, go) {
       let enc;
       try { enc = await E2EE.rewrapPrivateKey(oldK.wrapKey, newK.wrapKey, locked.encPrivateKey); } catch { throw new Error('Your current password is not right.'); }
       let r;
-      try { r = await withCode((x) => api('POST', '/me/password', { oldAuthKey: oldK.authKey, newAuthKey: newK.authKey, encPrivateKey: enc, salt, ...x }), locked.stepUpTicket); } catch (x) { throw pwCode.error(x) || x; }
+      try { r = await withCode(async (x) => api('POST', '/me/password', { oldAuthKey: oldK.authKey, newAuthKey: newK.authKey, encPrivateKey: enc, salt, fromEnvelope: await E2EE.envelopeHash(locked.encPrivateKey), ...x }), locked.stepUpTicket); } catch (x) { throw pwCode.error(x) || x; }
       // This device stays signed in with a new token (a copy of the old one stops working); every tab of this
       // browser switches to it and reconnects.
       if (r.token) setToken(r.token);
       S.me = { ...S.me, kdf: 'argon2id', kdfSalt: salt };
+      // The other devices were just signed out: this one takes the post-quantum key from the envelope it re-locked, in case
+      // it didn't have it yet (it was signed in before the account got it).
+      app.unlockPq({ authKey: newK.authKey, wrapKey: newK.wrapKey, encPrivateKey: enc }).catch(() => {});
       oldPw.value = ''; newPw.value = ''; confirmPw.value = ''; pwCode.input.value = '';
       toast('Password changed. Other devices were logged out.');
     } catch (e) {
@@ -692,7 +695,7 @@ async function lockedKey(authKey, code = {}) {
 // this device (a recovery key) or is confirmed in a second step (deleting the account). The password must unlock
 // your key here. Resolves with the derived keys, the locked private key (encPrivateKey) and the step-up ticket for
 // the next request (ticket: pass it to withCode), or null if cancelled.
-function askPassword(app, { title = 'Confirm it’s you', text = '', button = 'Continue' } = {}) {
+export function askPassword(app, { title = 'Confirm it’s you', text = '', button = 'Continue' } = {}) {
   const S = app.S;
   return new Promise((resolve) => {
     const pw = h('input', { class: 'input', type: 'password', autocomplete: 'current-password' });
@@ -845,7 +848,7 @@ function securitySections(app) {
     const code = E2EE.newRecoveryCode();
     const salt = E2EE.newKdfSalt();
     const sealed = await E2EE.rewrapPrivateKey(keys.wrapKey, await E2EE.recoveryWrapKey(code, salt), keys.encPrivateKey);
-    const u = await withCode((x) => api('PUT', '/me/recovery', { authKey: keys.authKey, encPrivateKeyRecovery: sealed, recoverySalt: salt, ...x }), keys.ticket);
+    const u = await withCode(async (x) => api('PUT', '/me/recovery', { authKey: keys.authKey, encPrivateKeyRecovery: sealed, recoverySalt: salt, fromEnvelope: await E2EE.envelopeHash(keys.encPrivateKey), ...x }), keys.ticket);
     await showSecretOnce({ title: `${S.config.name} recovery key for ${S.me.username}`, intro: 'Save this key. If you forget your password, the email reset plus this key brings back everything, including your old messages. It’s shown only now.',
       secret: code, filename: `${S.config.name.replace(/\W+/g, '-')}-recovery-key-${S.me.username}.txt`, note: 'Anyone with this key AND access to your email could get into your account, so keep it private (a password manager is ideal).' });
     refresh(u);
@@ -853,7 +856,10 @@ function securitySections(app) {
   const drawRec = () => {
     clear(recBox);
     recBox.append(S.me.hasRecovery
-      ? h('div', { class: 'kv' }, h('span', null, 'Recovery key'), h('span', { class: 'rpill ok' }, 'Saved'))
+      ? h('div', { class: 'stack' }, h('div', { class: 'kv' }, h('span', null, 'Recovery key'), h('span', { class: 'rpill ok' }, 'Saved')),
+        // Made before the account's post-quantum key (e2ee.js): it doesn't hold that key, so a reset with it couldn't open
+        // direct messages written since. Only said then.
+        S.me.recoveryStale ? h('p', { class: 'field-hint' }, 'Your recovery key is older than your account’s newest encryption keys. Make a new one so a reset with it keeps every message.') : '')
       : h('p', { class: 'warn-box' }, 'No recovery key yet. If you forget your password, an email reset gets you back in, but your old direct messages would be lost for good.'),
     h('div', { class: 'row gap' }, h('button', { class: `btn ${S.me.hasRecovery ? 'sm' : 'primary'}`, onclick: () => makeRecovery().catch(quiet) }, S.me.hasRecovery ? 'Make a new one' : 'Create a recovery key'),
       S.me.hasRecovery ? h('button', { class: 'btn ghost sm', onclick: () => confirmedCall(app, (x) => api('DELETE', '/me/recovery', x), { text: 'Without a recovery key, a password reset by email can’t bring back your old messages.', button: 'Remove recovery key' }).then((u) => { if (u) { refresh(u); toast('Recovery key removed.'); } }).catch(quiet) }, 'Remove') : ''));
@@ -942,9 +948,10 @@ function securitySections(app) {
         // Joined a server that hides older messages from new members: their key is the next one, not shared.
         const fresh = st && st.since && st.since.epoch > st.keyEpoch;
         return { name: sv.name || 'group chat', ok, why: ok ? '' : fresh ? 'your key is on its way: this server gives new members a fresh key, which can take a few minutes'
+          : app.sec.waitingForPq(sv.id) ? 'locked to your account’s post-quantum key: enter your password once on this device'
           : 'waiting for another member to share it (happens automatically when one is online)' };
       });
-      const mine = await runAccountChecks({ me: S.me, privateKey: S.privateKey, signKey: S.signKey, serverKeys });
+      const mine = await runAccountChecks({ me: S.me, privateKey: S.privateKey, signKey: S.signKey, serverKeys, pqSeed: S.pqSeed });
       const all = [...generic, ...mine];
       const bad = all.filter((x) => !x.ok);
       clear(checkBox).append(h('p', { class: bad.length ? 'warn-box' : 'support-now' }, bad.length ? `${bad.length} of ${all.length} checks need attention.` : `All ${all.length} checks passed. Your encryption is working as it should.`),

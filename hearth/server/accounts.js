@@ -211,7 +211,11 @@ module.exports = function setupAccounts(ctx) {
     if (!isB64ish(b.encPrivateKeyRecovery, 4000) || !isSalt(b.recoverySalt)) fail(400, 'Bad key material.'); // (before a code is used up)
     // The step-up ticket from fetching the locked key stands in for the code.
     const row = await stepUp(req, b, 'authKey', { ticket: 'recovery' });
-    db.prepare('UPDATE users SET enc_private_key_recovery = ?, recovery_salt = ? WHERE id = ?').run(b.encPrivateKeyRecovery, b.recoverySalt, req.userId);
+    // recovery_pq: made while the account had its post-quantum key, so (made from the envelope then) it holds its seed.
+    // Only when the app says which envelope it made it from (fromEnvelope) and that's the one stored now: one made from
+    // an envelope another device was just upgrading holds no seed.
+    const fromNow = typeof b.fromEnvelope === 'string' && b.fromEnvelope === crypto.createHash('sha256').update(String(row.enc_private_key || ''), 'utf8').digest('hex');
+    db.prepare('UPDATE users SET enc_private_key_recovery = ?, recovery_salt = ?, recovery_pq = ? WHERE id = ?').run(b.encPrivateKeyRecovery, b.recoverySalt, row.pq_public_key && fromNow ? 1 : 0, req.userId);
     auditLog(req, row.enc_private_key_recovery ? 'recovery_key_replaced' : 'recovery_key_created', req.userId, row.username);
     notify(row, 'a recovery key was created', `A new recovery key was made for ${row.username}. Any older recovery key stopped working.`);
     res.json(selfUser(getUserRow(req.userId)));
@@ -375,7 +379,9 @@ module.exports = function setupAccounts(ctx) {
       const link = `${mailCfg().publicUrl}/#reset=${raw}`;
       sendMail({ to: row.email, subject: `${brandName()}: reset your password`, text:
         `Someone (hopefully you) asked to reset the password for ${row.username} on ${brandName()}.\n\nOpen this link within 30 minutes to choose a new one:\n\n${link}\n\n`
-        + (row.enc_private_key_recovery ? 'Have your recovery key ready: with it, all your old messages stay readable.\n\n' : 'Without a recovery key, your old direct messages won\'t be readable after the reset.\n\n')
+        + (!row.enc_private_key_recovery ? 'Without a recovery key, your old direct messages won\'t be readable after the reset.\n\n'
+          : row.pq_public_key && !row.recovery_pq ? 'Have your recovery key ready: with it, your old messages stay readable, except ones encrypted to your account\'s post-quantum key since you got it (your recovery key is older than that key). Make a new recovery key once you\'re back in.\n\n'
+            : 'Have your recovery key ready: with it, all your old messages stay readable.\n\n')
         + 'If you didn\'t ask for this, ignore this email: your password stays the same.' }).catch(() => {});
       secEvent('reset_requested', cleanIp(req.ip), row.username);
       auditLog(req, 'password_reset_requested', row.id, row.username, null);
@@ -395,7 +401,10 @@ module.exports = function setupAccounts(ctx) {
     const eph = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
     const nonce = crypto.randomBytes(24).toString('base64url');
     db.prepare('UPDATE auth_tokens SET data = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(t.data || '{}'), proof: { priv: seal({ k: eph.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64') }), nonce } }), t.id);
+    // hasPq / recoveryPq: whether the account has a post-quantum key, and whether its recovery key was made since (so
+    // holds its seed), so the app can say exactly what a reset with it keeps.
     res.json({ username: row.username, userId: row.id, hasRecovery: !!row.enc_private_key_recovery, recoverySalt: row.recovery_salt || null, encPrivateKeyRecovery: row.enc_private_key_recovery || null, need2fa: !!row.totp_enabled,
+      hasPq: !!row.pq_public_key, pqPublicKey: row.pq_public_key || null, recoveryPq: !!row.recovery_pq,
       keyChallenge: { serverPublicKey: eph.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'), nonce } });
   });
   function keyProofOk(t, row, proof) {
@@ -426,13 +435,18 @@ module.exports = function setupAccounts(ctx) {
     const servers = db.prepare('SELECT server_id FROM members WHERE user_id = ?').all(row.id).map((m) => m.server_id);
     db.transaction(() => {
       db.prepare("UPDATE users SET auth_hash = ?, kdf = 'argon2id', kdf_salt = ?, enc_private_key = ? WHERE id = ?").run(hash, b.kdfSalt, b.encPrivateKey, row.id);
+      // Keeping the keys with a recovery key made before the account's post-quantum key: that envelope doesn't hold its
+      // seed (the app says so: pqInEnvelope false). The key it published goes, rather than stay listed with nobody able to
+      // open what's locked to it; the app publishes a new one as it starts. (Apps that don't say are taken as before.)
+      if (keep && b.pqInEnvelope === false) db.prepare('UPDATE users SET pq_public_key = NULL, pq_sig = NULL WHERE id = ?').run(row.id);
       if (!keep) {
         // New keys: the old ones are gone for good. Friends' apps see the change (and say so), and re-share
         // every server's current key with the new one once someone verifies it. The old PUBLIC keys are kept on
         // record: key handoffs and posts signed with them still check out, and the people this account talked
         // to can still open their old direct messages (they hold their own half of those keys).
         if (row.public_key) db.prepare('INSERT INTO user_key_history (user_id, public_key, sign_public_key, retired_at) VALUES (?, ?, ?, ?)').run(row.id, row.public_key, row.sign_public_key || null, now());
-        db.prepare('UPDATE users SET public_key = ?, sign_public_key = NULL, enc_sign_private_key = NULL, enc_private_key_recovery = NULL, recovery_salt = NULL WHERE id = ?').run(b.publicKey, row.id);
+        // (The post-quantum key goes too: it's signed with the old signing key, and its seed was in the old envelope.)
+        db.prepare('UPDATE users SET public_key = ?, sign_public_key = NULL, enc_sign_private_key = NULL, enc_private_key_recovery = NULL, recovery_salt = NULL, pq_public_key = NULL, pq_sig = NULL WHERE id = ?').run(b.publicKey, row.id);
         db.prepare('DELETE FROM server_keys WHERE user_id = ?').run(row.id);
         // crypto-2: an email link alone made these keys, so it could be anyone who got into the inbox. Nobody's app
         // hands them a server's or group's key until someone there who knew this person before checks them
@@ -510,6 +524,6 @@ module.exports = function setupAccounts(ctx) {
   });
 
   // What selfUser() adds about these settings (only ever sent to the account itself).
-  const selfExtras = (row) => ({ email: row.email || null, emailVerified: !!row.email_verified, emailMasked: mask(row.email), hasRecovery: !!row.enc_private_key_recovery, totpEnabled: !!row.totp_enabled, backupCodesLeft: row.totp_enabled ? JSON.parse(row.backup_codes || '[]').length : 0 });
+  const selfExtras = (row) => ({ email: row.email || null, emailVerified: !!row.email_verified, emailMasked: mask(row.email), hasRecovery: !!row.enc_private_key_recovery, recoveryStale: !!row.enc_private_key_recovery && !!row.pq_public_key && !row.recovery_pq, totpEnabled: !!row.totp_enabled, backupCodesLeft: row.totp_enabled ? JSON.parse(row.backup_codes || '[]').length : 0 });
   return { require2fa, selfExtras, mailReady, sendMail, mask, notify, dropResetLinks, ownerLinkUntil: (uid, viewer) => { const l = ownerLinkOf(uid); return l && l.by === viewer ? l.expiresAt : null; } };
 };
