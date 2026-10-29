@@ -728,9 +728,9 @@ test('chat-look.js: the app that replaces the group’s key seals the background
   const S = { me: { id: 'alice' }, view: {}, servers: [], msgs: {}, panel: null };
   const stub = { onKeys() {} };
   const onKeysChanged = new Function('S', 'later', 'renderPanel', 'renderHeader', 'composers', 'LOOK', 'NOTES', 'MEDIA', 'SIDE', 'SCHED', 'isGroup', 'previewGroup',
-    'renderSidebar', 'decryptAll', 'currentKey', '$', 'renderMessages', `${src}\nreturn onKeysChanged;`)(
+    'renderSidebar', 'decryptAll', 'currentKey', '$', 'renderMessages', 'REELS', `${src}\nreturn onKeysChanged;`)(
     S, () => {}, () => {}, () => {}, {}, { onKeys: (id) => { if (look) look.onKeys(id); } }, stub, stub, stub, stub, (s) => !!s && s.kind === 'group', async () => {},
-    () => {}, async () => {}, () => null, () => null, () => {});
+    () => {}, async () => {}, () => null, () => null, () => {}, stub);
   const dev = await device(alice, [carol], { raw, epochs: [1], onKeysChanged: (id, added, held) => { calls.push(added); return onKeysChanged(id, added, held); } });
   S.servers = dev.S.servers;
   const A = app(dev, srv);

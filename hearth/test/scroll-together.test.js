@@ -210,3 +210,17 @@ test('scroll together: in a DM, and someone who loses access stops hearing', asy
   assert.equal((await ack(sb, 'reels:leave', {})).ok, true);
   assert.equal((await as(guest, 'POST', `/invites/${code}/join`)).status, 200);
 });
+
+test('reels: keys arriving (the post-quantum seed, a server key) open what the Reels feed was waiting for, its own copies too', () => {
+  const fs = require('node:fs');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'reels-ui.js'), 'utf8');
+  const fn = (name) => { const i = app.search(new RegExp(`^async function ${name}\\(`, 'm')); assert.ok(i > 0, name); return app.slice(i, app.indexOf('\n}\n', i) + 2); };
+  assert.match(fn('onDmKeys'), /await REELS\.onKeys\(\(k\) => k\.startsWith\('d:'\) && \(!dmId \|\| k === 'd:' \+ dmId\)\);/);
+  assert.match(fn('onKeysChanged'), /await REELS\.onKeys\(\(k\) => !!server && server\.channels\.some\(\(c\) => k === 'c:' \+ c\.id\)\);/);
+  const on = ui.slice(ui.indexOf('async function onKeys('), ui.indexOf('\n  return {', ui.indexOf('async function onKeys(')));
+  assert.match(on, /m\.dec && m\.dec\.pending\) m\.dec = null/, 'what was pending is opened again');
+  assert.match(on, /deps\.decrypt\(m\)/);
+  assert.match(on, /if \(st === cur\) rebuild\(\);/, 'and the feed is made again (unless another conversation opened meanwhile)');
+  assert.match(ui, /setMode, onKeys,/);
+});

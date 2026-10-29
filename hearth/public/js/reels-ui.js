@@ -758,8 +758,22 @@ export function createReels(deps) {
   function rejoin() { if (st && !st.mine) deps.socket().emit('reels:join', { key: st.key, follow: !st.left }, (r) => { if (st && r && r.state) onState(r.state); }); }
   function setMode() { if (!st) return; drawCover(); for (const k of [...st.players.keys()]) dropPlayer(k); for (const c of st.cards.values()) drawPlaceholder(c); players(); }
 
+  // Keys arrived (this device's post-quantum seed, a server's key): what the feed holds that was waiting for them is
+  // opened again, its own copies included (older pages it fetched itself aren't in the chat's lists), and the feed is
+  // made again. which(key): whether the open conversation is one the keys are for.
+  async function onKeys(which) {
+    const cur = st;
+    if (!cur || cur.mine || (which && !which(cur.key))) return;
+    const waiting = [...cur.msgs.values()].filter((m) => (m.dec && m.dec.pending) || (m.reply && m.reply.dec && m.reply.dec.pending));
+    for (const m of waiting) {
+      if (m.dec && m.dec.pending) m.dec = null;
+      if (m.reply && m.reply.dec && m.reply.dec.pending) m.reply.dec = null;
+    }
+    await Promise.all(waiting.map((m) => deps.decrypt(m).catch(() => {})));
+    if (st === cur) rebuild();
+  }
   return {
-    show, hide, onState, onNew, onUpdate, onDelete, onReactions, rejoin, setMode,
+    show, hide, onState, onNew, onUpdate, onDelete, onReactions, rejoin, setMode, onKeys,
     key: () => (st ? st.key : null),
     // Tests and the app's checks: how many players are alive.
     stats: () => ({ players: st ? [...st.players.values()].filter((p) => !p.pending).length : 0, items: st ? st.items.length : 0, index: st ? st.index : -1 }),

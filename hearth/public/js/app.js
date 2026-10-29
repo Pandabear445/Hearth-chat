@@ -4760,6 +4760,8 @@ async function onDmKeys(dmId) {
       if (sc && !atBottom) sc.scrollTop = top;
     }
   }
+  // (The Reels tab of a DM, likewise: its feed holds its own copies too.)
+  await REELS.onKeys((k) => k.startsWith('d:') && (!dmId || k === 'd:' + dmId));
   if (!S.view.serverId) later(renderSidebar);
 }
 
@@ -4796,6 +4798,7 @@ async function onKeysChanged(serverId, added, heldChanged) {
     // Photos & videos: what was waiting for this key shows there now (its own copies are opened; the chat's just were).
     MEDIA.onKeys(serverId);
     SIDE.onKeys(serverId); // (and in the side view)
+    await REELS.onKeys((k) => !!server && server.channels.some((c) => k === 'c:' + c.id)); // (and in a Reels tab)
     if (server && isGroup(server)) { await previewGroup(server); if (!S.view.serverId) renderSidebar(); }
   }
   if (S.view.serverId === serverId && composers.main) { composers.main.renderExtras(); renderHeader(); }
