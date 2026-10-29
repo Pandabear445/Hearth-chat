@@ -1046,55 +1046,6 @@ test('a key in any other spelling is no key: never yours under another id, never
   assert.deepEqual(E.listedPastKeys({ pastKeys: [{ publicKey: respelled(X.publicKey).spaces, retiredAt: Date.now() - 1 }] }, Date.now() - 1000), []);
 });
 
-test('a sign-in or reset answered as another account than this device knows the username as is refused', async () => {
-  const A = await person(uname('alice')); const B = await person(uname('bob')); const X = await serverKeys();
-  await serverWith(A, [B]);
-  const pins = new Map();
-  const d = await device(A, pins); // a proven start records @alice… as Alice's id
-  assert.equal(d.boot.me.username, A.username);
-  assert.equal(d.sec.acceptKeys(d.S.users[B.id]), true, 'Bob verified on this device');
-  const names = () => JSON.parse(pins.get('hearth.accountNames') || '{}');
-  assert.deepEqual(names(), { [A.username.toLowerCase()]: A.id });
-  // A reset without the recovery key gives Alice a new identity key that nothing on this device knows: the server
-  // answers it (or a sign-in) under a fresh id. Refused, whatever the username's case or a leading @.
-  const fresh = 'x' + H.hex(10);
-  for (const typed of [A.username, A.username.toUpperCase(), '@' + A.username, ` ${A.username} `]) {
-    assert.throws(() => d.sec.signInFor(typed, fresh), (e) => e.code === 'own_key_mismatch' && /different account than the one this device knows by that name/.test(e.message), typed);
-    assert.throws(() => d.sec.signInFor(typed, B.id), (e) => e.code === 'own_key_mismatch', typed);
-  }
-  assert.throws(() => d.sec.signInFor(A.username, undefined), (e) => e.code === 'own_key_mismatch', 'an answer with no account');
-  assert.deepEqual(names(), { [A.username.toLowerCase()]: A.id }, 'nothing recorded for them');
-  // Her own id goes through; so does a username this device doesn't know yet, which is then recorded.
-  d.sec.signInFor(A.username, A.id);
-  d.sec.signInFor(B.username, B.id);
-  assert.equal(names()[B.username.toLowerCase()], B.id);
-  assert.throws(() => d.sec.signInFor(B.username, fresh));
-  // A start-up never moves a username to another id, nor adds one for an account that has one (its username is the
-  // server's word: new ones at every start would push the real records out).
-  await d.sec.proveOwnKeys({ ...d.boot.me, username: B.username }, d.boot.encSignPrivateKey, { account: A.id });
-  assert.equal(names()[B.username.toLowerCase()], B.id);
-  for (let i = 0; i < 60; i++) await d.sec.proveOwnKeys({ ...d.boot.me, username: `flood${i}` }, d.boot.encSignPrivateKey, { account: A.id });
-  assert.deepEqual(names(), { [A.username.toLowerCase()]: A.id, [B.username.toLowerCase()]: B.id });
-  // The real reset (new keys, the same id) goes through, and Bob is still pinned.
-  const A2 = await resetWithoutRecovery(A);
-  d.sec.signInFor(A.username, A2.id);
-  const after = await device(A2, pins);
-  assert.equal(after.sec.keyChanged({ ...after.S.users[B.id], publicKey: X.publicKey, signPublicKey: X.signPublicKey }), true);
-  // app.js: the sign-in is checked before anything of its answer is stored; the reset before it's sent and again for
-  // the account it answered with, before finishLogin.
-  const app = src('app.js');
-  const login = app.slice(app.indexOf('loginForm.onsubmit = async'), app.indexOf('regForm.onsubmit = async'));
-  assert.ok(login.indexOf('sec.signInFor(username, res.user && res.user.id);') > 0);
-  for (const later of ['saveDeviceNote(username, res.device);', 'setToken(res.token);', "localStorage.setItem('hearth.userId'", 'await finishLogin(res, priv);']) {
-    assert.ok(login.indexOf('sec.signInFor(') < login.indexOf(later), later);
-  }
-  const reset = app.slice(app.indexOf('async function openReset(token)'), app.indexOf('async function finishLogin('));
-  assert.ok(reset.indexOf('sec.signInFor(info.username, info.userId, { record: false });') < reset.indexOf("await api('POST', '/auth/reset', body);"));
-  const sent = reset.indexOf("await api('POST', '/auth/reset', body);");
-  assert.ok(sent < reset.indexOf('sec.signInFor(info.username, res.user && res.user.id);'));
-  assert.ok(reset.indexOf('sec.signInFor(info.username, res.user && res.user.id);') < reset.indexOf('await finishLogin(res, privateKey);'));
-});
-
 test('an older account’s sign-in upgrade names its account before its token too, so another tab never takes it', () => {
   // Tab A is signed in as Alice; in tab B Carl signs in to an account still on PBKDF2, and the upgrade stores his
   // first token before finishLogin. Tab A takes a stored token only while the shared record names Alice (api.js).

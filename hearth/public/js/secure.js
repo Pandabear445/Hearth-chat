@@ -306,47 +306,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     proven = { e, s };
     ownCheck = { e, s, signKey, ok: Promise.resolve(true) };
     rememberAccount(e, me.id);
-    rememberName(me.username, me.id, { once: true });
     return { ...me, publicKey: e, signPublicKey: s };
-  }
-
-  // Which account each username this device signed in, reset or started as is: { [lowercased username]: account id },
-  // kept through sign-outs like hearth.accounts. A password reset without the recovery key gives you a new identity
-  // key, which nothing in hearth.accounts knows yet: a server that answered it (or a sign-in) under another id would
-  // start every pin and DM record from nothing again. So a sign-in or reset answered as another account than the one
-  // this device knows that username as is refused before anything of it is stored (signInFor). A record is only ever
-  // added, never moved to another id. A start-up's username is the server's word, so it adds one only for an account
-  // this device has none for yet (one signed in before this version): a server can't push the real records out with
-  // a new username at every start.
-  const NAMES = 'hearth.accountNames';
-  const nameKey = (username) => (typeof username === 'string' ? username.trim().replace(/^@/, '').toLowerCase() : '');
-  function knownNames() {
-    try {
-      const all = JSON.parse(localStorage.getItem(NAMES) || '{}');
-      return all && typeof all === 'object' && !Array.isArray(all) ? all : {};
-    } catch { return {}; }
-  }
-  function rememberName(username, id, { once = false } = {}) {
-    const n = nameKey(username);
-    if (!n || typeof id !== 'string' || !id) return;
-    const all = knownNames();
-    if (all[n] || (once && Object.values(all).includes(id))) return; // kept as it is (see above)
-    all[n] = id;
-    const names = Object.keys(all);
-    names.slice(0, Math.max(0, names.length - 50)).forEach((k) => delete all[k]); // the 50 most recent
-    try { localStorage.setItem(NAMES, JSON.stringify(all)); } catch { /* storage off: nothing is kept (as above) */ }
-  }
-  // Whether the server may sign this device in as `id` for `username` (the one you typed, or the one the reset link
-  // is for): throws unless it's the account this device knows that username as, or one it doesn't know yet.
-  // { record: true } also records it (the sign-in or reset went through as that account).
-  function signInFor(username, id, { record = true } = {}) {
-    const known = knownNames()[nameKey(username)];
-    if (typeof id !== 'string' || !id || (known && known !== id)) {
-      const err = new Error(`The server answered for @${nameKey(username)} as a different account than the one this device knows by that name, so nothing was stored or opened. Tell the server’s owner. (Only if that username really belongs to someone else now, renamed or deleted, sign in from another browser.)`);
-      err.code = 'own_key_mismatch';
-      throw err;
-    }
-    if (record) rememberName(username, id);
   }
 
   // A record the server hands over for one account but labelled as another: never used (see mergeUser).
@@ -1047,7 +1007,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   return {
     proveOwnKeys, ownKeys, applyState, stateOf, currentKey, ready, refresh, forceRotate, maintain, awaitingVerify, heldBack, isHeld,
     encryptChannel, decryptChannelMessage, encryptDm, decryptDmMessage, decryptAttachment, encryptTag, openTag, encryptLook, openLook,
-    signInFor, dmWith, callPeer, callRoom, dmForCall, mayCall, signSdp, verifySdp, checkSdp, keyChanged, keysChanged, acceptKeys, trust, userWithKeys, reset,
+    dmWith, callPeer, callRoom, dmForCall, mayCall, signSdp, verifySdp, checkSdp, keyChanged, keysChanged, acceptKeys, trust, userWithKeys, reset,
     heldEpochs: (serverId) => [...keysFor(serverId).keys()],
     keysSaved: (serverId) => keeping.get(serverId) || Promise.resolve(), // our own copies are stored back
     signKeysFor,

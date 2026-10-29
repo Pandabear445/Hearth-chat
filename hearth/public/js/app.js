@@ -389,9 +389,6 @@ function showSignIn() {
           if (ex.code === 'need_2fa' || ex.code === 'bad_2fa') { totpField.hidden = false; setTimeout(() => loginForm.totp.focus(), 30); }
           throw ex;
         });
-      // Only as the account this device knows that username as, if it knows it (secure.js signInFor), before
-      // anything of the answer is stored.
-      sec.signInFor(username, res.user && res.user.id);
       saveDeviceNote(username, res.device);
       totpField.hidden = true; loginForm.totp.value = ''; derived = null;
       const priv = await E2EE.unwrapPrivateKey(wrapKey, res.encPrivateKey);
@@ -480,9 +477,6 @@ async function openReset(token) {
     actions: [{ label: 'Cancel' }, { label: 'Reset password', kind: 'primary', action: async () => {
       if (pw.value.length < 8) throw new Error('Use at least 8 characters.');
       if (pw.value !== pw2.value) throw new Error('The passwords do not match.');
-      // A reset for an account this device knows by another id than the username's is refused (secure.js signInFor),
-      // before it's sent, and again for the account the answer is for.
-      sec.signInFor(info.username, info.userId, { record: false });
       const kdfSalt = E2EE.newKdfSalt();
       const next = await E2EE.deriveKeys(info.username, pw.value, { kdf: 'argon2id', salt: kdfSalt });
       const body = { token, authKey: next.authKey, kdfSalt };
@@ -502,7 +496,6 @@ async function openReset(token) {
         privateKey = id.privateKey;
       }
       const res = await api('POST', '/auth/reset', body);
-      sec.signInFor(info.username, res.user && res.user.id);
       history.replaceState(null, '', '/');
       toast(body.keepKeys ? 'Password reset. All your messages are still here.'
         : res.user && res.user.keysReset ? 'Password reset with new keys. Ask a member to verify you so you can read your servers and groups again, and add a recovery key in Settings so this can\u2019t happen again.'

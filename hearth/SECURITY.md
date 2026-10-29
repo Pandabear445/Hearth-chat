@@ -231,6 +231,11 @@ Found a problem? Please tell the server owner privately (not in a public channel
   - **run the server on a machine you trust, keep it updated, and use `scripts/harden-vps.sh`** (firewall,
     SSH keys only, automatic security updates, Hearth as an unprivileged sandboxed user, see §5).
 - **A malicious server can also:**
+  - answer a password reset without the recovery key (which makes a new identity key) under another account id, so
+    that device's pins and DM records for you start from nothing and contacts are trusted again on first sight.
+    Usernames aren't recorded against account ids on the device to catch this, because a name can honestly pass to a
+    new account (deleted and registered again, a reinstalled server at the same address). After such a reset,
+    compare safety numbers with the people who matter;
   - even without changing the app's code (above), give a fresh DM a contact's look: the app remembers who each DM
     is with, and pins each person's keys, by the account id the server gives them, not by @username, and the server
     doesn't have to keep usernames unique. So it can list a new DM (or push a message in one) with an account of its
