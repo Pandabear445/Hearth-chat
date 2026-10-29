@@ -232,7 +232,7 @@ function app({ me = 'me', dms = [], servers = [], view = { type: 'home' }, lists
     WF: { check: () => null }, previewLabel: (x) => x, readableText: (t) => t, displayName: (u) => u.name, getUser: (id) => ({ name: id }),
     replaceMessageEl() {},
     // Photos & videos, photo tags, the side view and who's typing: not what's tested here.
-    MEDIA: { onNew() {}, onUpdate() {}, onDelete() {}, repliesTo: () => [] }, NOTES: { onDelete() {}, repliesTo: () => [] },
+    MEDIA: { onNew() {}, onUpdate() {}, onDelete() {}, repliesTo: () => [] }, REELS: { onNew() {}, onUpdate() {}, onDelete() {}, onReactions() {} }, NOTES: { onDelete() {}, repliesTo: () => [] },
     SIDE: { onUpdate() {}, onDelete() {} },
     // Who's typing: typing.js's own tracker, whose typing lapses only when a test says (stop).
     TYPING: TY.createTyping({ onChange: (key) => fns.typingChanged(key), timers: { set: () => 0, clear() {} } }), typingPreview: TY.typingPreview,

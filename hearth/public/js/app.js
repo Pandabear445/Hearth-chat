@@ -6377,9 +6377,9 @@ function onDeleteMessage(key, id, { expired = false } = {}) {
     : named;
   forgetBindings(key, gone);
   MEDIA.onDelete(key, gone); // their tiles in Photos & videos, and the decrypted copies it had of them
-  REELS.onDelete(key, gone);
   NOTES.onDelete(key, gone); // their photos' tags (the chips, the suggestions) and comments, and as comments
   SIDE.onDelete(key, gone); // their cards in the side view say they're gone, and its decrypted copies of them go
+  REELS.onDelete(key, gone); // and their videos leave the Reels tab
   // Threads these messages started go with them (their counts, and their cards in the Threads panel), and so does
   // what was loaded of them: nothing finds their replies any more (loadedMessage, which Photos & videos takes copies
   // from). One open in the side panel closes.
