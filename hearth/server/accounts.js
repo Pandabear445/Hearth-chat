@@ -212,7 +212,10 @@ module.exports = function setupAccounts(ctx) {
     // The step-up ticket from fetching the locked key stands in for the code.
     const row = await stepUp(req, b, 'authKey', { ticket: 'recovery' });
     // recovery_pq: made while the account had its post-quantum key, so (made from the envelope then) it holds its seed.
-    db.prepare('UPDATE users SET enc_private_key_recovery = ?, recovery_salt = ?, recovery_pq = ? WHERE id = ?').run(b.encPrivateKeyRecovery, b.recoverySalt, row.pq_public_key ? 1 : 0, req.userId);
+    // Only when the app says which envelope it made it from (fromEnvelope) and that's the one stored now: one made from
+    // an envelope another device was just upgrading holds no seed.
+    const fromNow = typeof b.fromEnvelope === 'string' && b.fromEnvelope === crypto.createHash('sha256').update(String(row.enc_private_key || ''), 'utf8').digest('hex');
+    db.prepare('UPDATE users SET enc_private_key_recovery = ?, recovery_salt = ?, recovery_pq = ? WHERE id = ?').run(b.encPrivateKeyRecovery, b.recoverySalt, row.pq_public_key && fromNow ? 1 : 0, req.userId);
     auditLog(req, row.enc_private_key_recovery ? 'recovery_key_replaced' : 'recovery_key_created', req.userId, row.username);
     notify(row, 'a recovery key was created', `A new recovery key was made for ${row.username}. Any older recovery key stopped working.`);
     res.json(selfUser(getUserRow(req.userId)));
@@ -376,7 +379,9 @@ module.exports = function setupAccounts(ctx) {
       const link = `${mailCfg().publicUrl}/#reset=${raw}`;
       sendMail({ to: row.email, subject: `${brandName()}: reset your password`, text:
         `Someone (hopefully you) asked to reset the password for ${row.username} on ${brandName()}.\n\nOpen this link within 30 minutes to choose a new one:\n\n${link}\n\n`
-        + (row.enc_private_key_recovery ? 'Have your recovery key ready: with it, all your old messages stay readable.\n\n' : 'Without a recovery key, your old direct messages won\'t be readable after the reset.\n\n')
+        + (!row.enc_private_key_recovery ? 'Without a recovery key, your old direct messages won\'t be readable after the reset.\n\n'
+          : row.pq_public_key && !row.recovery_pq ? 'Have your recovery key ready: with it, your old messages stay readable, except ones encrypted to your account\'s post-quantum key since you got it (your recovery key is older than that key). Make a new recovery key once you\'re back in.\n\n'
+            : 'Have your recovery key ready: with it, all your old messages stay readable.\n\n')
         + 'If you didn\'t ask for this, ignore this email: your password stays the same.' }).catch(() => {});
       secEvent('reset_requested', cleanIp(req.ip), row.username);
       auditLog(req, 'password_reset_requested', row.id, row.username, null);

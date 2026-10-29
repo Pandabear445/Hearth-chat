@@ -3338,11 +3338,17 @@ function isWrapped(w) {
 // Apps that know about post-quantum keys also send pqs ({ userId: the fingerprint wrapped for, or null for w1 }): a key
 // wrapped without the post-quantum key someone has now (or for one they no longer have) is stale too, so the sharer's
 // app fetches it and wraps again. That's how a person's first post-quantum key reaches every server they're in.
-function staleWraps(pubs, ids, pqs = null) {
-  if (!pubs || typeof pubs !== 'object') return [];
+// And a w1 copy (P-256 alone) for someone who has a post-quantum key is stale whatever the app says (wraps), so no app,
+// an old cached one included, hands out copies a recorded database could open with P-256 alone.
+function staleWraps(pubs, ids, pqs = null, wraps = null) {
   const get = db.prepare('SELECT public_key, pq_public_key FROM users WHERE id = ?');
   const pqStale = (uid, row) => !!pqs && typeof pqs === 'object' && Object.hasOwn(pqs, uid) && (pqs[uid] || null) !== pqFp(row.pq_public_key);
-  return ids.filter((uid) => { const row = get.get(uid) || {}; return typeof pubs[uid] === 'string' && (row.public_key !== pubs[uid] || pqStale(uid, row)); });
+  const w1ToPq = (uid, row) => !!wraps && typeof wraps[uid] === 'string' && wraps[uid].startsWith('w1:') && !!row.pq_public_key;
+  const listed = !!pubs && typeof pubs === 'object';
+  return ids.filter((uid) => {
+    const row = get.get(uid) || {};
+    return w1ToPq(uid, row) || (listed && typeof pubs[uid] === 'string' && (row.public_key !== pubs[uid] || pqStale(uid, row)));
+  });
 }
 // Someone who was in this server before is back, e.g. after a kick with an invite they kept: switch to a new key,
 // so they can't read what was said while they were away. Known from former_members (kept through a password
@@ -3445,7 +3451,7 @@ api.post('/servers/:id/keys/rotate', auth, (req, res) => {
     const given = members.filter((m) => m === req.userId || !held.includes(m));
     const ids = Object.keys(wraps);
     if (!ids.every((id) => members.includes(id)) || !given.every((m) => isWrapped(wraps[m]))) fail(409, 'The member list changed. Try again.', 'members');
-    const stale = staleWraps(pubs, given, pqs);
+    const stale = staleWraps(pubs, given, pqs, wraps);
     if (stale.length) fail(409, 'A member\u2019s keys just changed. Try again.', 'stale_keys');
     const t = now();
     db.prepare('INSERT INTO server_epochs (server_id, epoch, key_check, creator_id, created_at) VALUES (?, ?, ?, ?, ?)').run(s.id, cur.key_epoch + 1, check, req.userId, t);
@@ -3477,7 +3483,7 @@ api.post('/servers/:id/keys/share', auth, (req, res) => {
   if (held.includes(req.userId)) fail(403, KEYS_UNVERIFIED, 'keys_unverified');
   const ins = db.prepare('INSERT OR IGNORE INTO server_keys (server_id, epoch, user_id, wrapped, wrapper_id, created_at) VALUES (?, ?, ?, ?, ?, ?)');
   let n = 0;
-  const stale = staleWraps(pubs, Object.keys(wraps || {}), pqs);
+  const stale = staleWraps(pubs, Object.keys(wraps || {}), pqs, wraps);
   const waiting = new Set(HIST.waitingFor(s.id, cur));
   for (const [uid, w] of Object.entries(wraps || {}).slice(0, 200)) {
     if (stale.includes(uid) || held.includes(uid) || waiting.has(uid)) continue;
@@ -3532,11 +3538,13 @@ api.post('/servers/:id/keys/self', auth, (req, res) => {
   // Not rows from before your history here starts (an earlier membership, server/joinhistory.js): they're never
   // handed back, so they aren't yours to touch either (and the count doesn't tell you which you still have).
   const from = (db.prepare('SELECT key_from FROM members WHERE server_id = ? AND user_id = ?').get(s.id, req.userId) || {}).key_from || 0;
+  const hasPq = !!getUserRow(req.userId).pq_public_key;
   let n = 0;
   db.transaction(() => {
     for (const [e, w] of Object.entries(wraps).slice(0, 500)) {
       const ep = Number(e);
-      if (Number.isInteger(ep) && ep > 0 && ep >= from && isWrapped(w)) n += upd.run(w, req.userId, s.id, req.userId, ep).changes;
+      // (Never a P-256-only copy over the one there for an account with a post-quantum key: an old cached app's.)
+      if (Number.isInteger(ep) && ep > 0 && ep >= from && isWrapped(w) && !(hasPq && w.startsWith('w1:'))) n += upd.run(w, req.userId, s.id, req.userId, ep).changes;
     }
   })();
   res.json({ updated: n });

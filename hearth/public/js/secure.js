@@ -369,7 +369,9 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       // A seed from the envelope that was never published (the first start after sign-up or a reset was interrupted),
       // or one this device has seen published that the server no longer lists: the password publishes it again.
       if (myPq() || E2EE.ownPqPinned(S.me.id)) return needPassword('publish');
-      // No post-quantum key at all yet: it's made at the next sign-in with the password.
+      // No post-quantum key at all (an account from before, on a device that was signed in before; or a reset whose first
+      // start was interrupted, in a new browser): the password makes one.
+      return needPassword('upgrade');
     };
     pqBusy = (pqBusy || Promise.resolve()).then(run, run).catch(async (e) => {
       // Another device published one meanwhile: take it as listed now (if you signed it); the password unlocks it here.
@@ -392,7 +394,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   const pqChecked = new Map(); // `${id}|${fp}|${publicKey}` -> Promise<pq public key | null>
   function pqRefused(user, missing) {
     const err = new Error(missing
-      ? `The server stopped listing ${user.username}’s post-quantum key, which their app wouldn’t do. Nothing was encrypted to them. Reload the page; if it keeps happening, tell the server’s owner.`
+      ? `${user.username}’s post-quantum key isn’t listed right now, so nothing was encrypted to them. If they just reset their password, their app adds it as soon as it starts; if it keeps happening, the server may be hiding it: tell its owner.`
       : `${user.username}’s post-quantum key didn’t check out, so nothing was encrypted to them. Reload the page; if it keeps happening, tell the server’s owner.`);
     err.code = 'untrusted';
     return err;
@@ -837,7 +839,18 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   async function encryptDm(dmId, payload) {
     const peer = await writablePeer(dmId);
     const [peerPq, minePq] = await Promise.all([pqKeyOf(peer), myPublishedPq()]);
-    if (!peerPq || !minePq) return E2EE.encryptDm({ myPriv: S.privateKey, theirPub: peer.publicKey, dmId, authorId: S.me.id, payload });
+    if (!peerPq || !minePq) {
+      // A DM this device has seen go post-quantum stays so: not even after accepting someone's new keys (which starts
+      // their pin over) does the server get to have it written with P-256 alone by leaving their new key out.
+      if (E2EE.dmHighWater(S.me.id, dmId) > 0) {
+        const err = new Error(!peerPq
+          ? `${peer.username}’s post-quantum key isn’t listed right now, so nothing was sent: this conversation is post-quantum encrypted. If they just reset their password, their app adds it as soon as it starts; if it keeps happening, tell the server’s owner.`
+          : 'Your post-quantum key isn’t published yet, so nothing was sent: this conversation is post-quantum encrypted. Enter your password once on this device (the bar at the top).');
+        err.code = 'untrusted';
+        throw err;
+      }
+      return E2EE.encryptDm({ myPriv: S.privateKey, theirPub: peer.publicKey, dmId, authorId: S.me.id, payload });
+    }
     const k = await dmSendKey(dmId, peer, peerPq, minePq);
     return E2EE.encryptDm3({ raw: k.raw, epoch: k.epoch, dmId, authorId: S.me.id, payload });
   }
@@ -887,7 +900,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
         try { got = await E2EE.unwrapDmKey({ wrapped: e.wrapped, dmId, epoch: e.epoch, myId: S.me.id, myPriv: S.privateKey, myPub: proven.e, myPq: mine, senderId: e.wrapperId, senderPub: key }); } catch { continue; }
         const how = peerMade ? ((await dmKeys(dmId, got.madeAt)).find((k) => k.key === key) || {}).trust : 'now';
         if (!how) throw new Error('Made with a key that wasn’t theirs then');
-        if (how === 'now' || how === 'pinned') E2EE.noteDmEpoch(S.me.id, dmId, e.epoch);
+        if (how === 'now') E2EE.noteDmEpoch(S.me.id, dmId, e.epoch);
         return { ...got, trust: how, key };
       }
       throw new Error('Missing key');
@@ -903,9 +916,18 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     for (let i = 0; i < 4; i++) {
       const list = await dmKeyList(dmId, i > 0);
       const hw = E2EE.dmHighWater(S.me.id, dmId);
+      const listedTop = Math.max(0, ...list.map((e) => (Number.isSafeInteger(e.epoch) ? e.epoch : 0)));
+      if (i > 0 && hw > listedTop) {
+        // The server lists fewer epochs than this device has seen (restored from an old backup, or hiding the newest):
+        // nothing is written in an older one.
+        const err = new Error('This server lists an older state of this conversation’s encryption than this device has seen (it may have been restored from a backup), so nothing was sent. Tell the server’s owner.');
+        err.code = 'rollback';
+        throw err;
+      }
       const top = Math.max(hw, 0, ...list.map((e) => (Number.isSafeInteger(e.epoch) ? e.epoch : 0)));
       const cur = list.find((e) => e.epoch === top);
-      const now = Date.now() + (S.clockOffset || 0);
+      // (This device's own clock: the server can nudge clockOffset, which must never decide an epoch's age.)
+      const now = Date.now();
       if (cur) {
         // Only an epoch that you made, or that their current trusted key vouches for, made for the keys you both have
         // now, and less than a week old, all as your own copy says (the server can't change those).
@@ -964,7 +986,11 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     const peer = d && S.users[d.userId];
     if (!peer || !E2EE.pinnedPq(S.me.id, peer)) return false;
     const list = await dmKeyList(dmId).catch(() => []);
-    const first = list.reduce((t, e) => Math.min(t, Number(e.createdAt) || Infinity), Infinity);
+    if (!list.length) return false;
+    const e = list.reduce((x, y) => (y.epoch < x.epoch ? y : x));
+    // When the first epoch was made, as its own copy says (the server's date for it only when this device can't open it).
+    const got = await openDmEpoch(dmId, e).catch(() => null);
+    const first = got && got.madeAt ? got.madeAt : Number(e.createdAt) || Infinity;
     return at > first;
   }
 

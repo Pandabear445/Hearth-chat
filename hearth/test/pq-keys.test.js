@@ -185,7 +185,7 @@ test('an account from before post-quantum keys and a new one: P-256 until both h
   srv.sql('UPDATE users SET pq_public_key = NULL, pq_sig = NULL WHERE id = ?', alice.id);
   await fresh(bobD, alice.id);
   use(bobD);
-  await assert.rejects(() => bobD.sec.encryptDm(dm.id, { t: 'x' }), (e) => e.code === 'untrusted' && /stopped listing/.test(e.message));
+  await assert.rejects(() => bobD.sec.encryptDm(dm.id, { t: 'x' }), (e) => e.code === 'untrusted' && /isn’t listed right now/.test(e.message));
   // Nor one that swaps in a post-quantum key of its own (it can't sign it as Alice).
   const mallory = E.pqKeyPair(E.newPqSeed()).publicKey;
   srv.sql('UPDATE users SET pq_public_key = ?, pq_sig = ? WHERE id = ?', mallory, row.pq_sig, alice.id);
@@ -210,8 +210,11 @@ test('DM epochs: a new one once the week is up, one at a time, only as the serve
   srv.sql('UPDATE dm_keys SET created_at = created_at - ? WHERE dm_id = ?', 8 * 24 * 3600 * 1000, dm.id);
   bD.sec.dmKeysChanged(dm.id);
   assert.match(await sendDm(bD, dm.id, 'still one'), /^d3:1:/);
-  // A week later by the clock: the next message starts epoch 2.
-  bD.S.clockOffset = 8 * 24 * 3600 * 1000; aD.S.clockOffset = bD.S.clockOffset;
+  // A week later by the devices' own clocks (not the server's offset, which must not decide it): the next message
+  // starts epoch 2.
+  const realNow = Date.now;
+  Date.now = () => realNow() + 8 * 24 * 3600 * 1000;
+  bD.S.clockOffset = -8 * 24 * 3600 * 1000; // (what the server says is ignored here)
   assert.match(await sendDm(bD, dm.id, 'three'), /^d3:2:/);
   assert.deepEqual(texts(await readDms(aD, dm.id)), ['one', 'two', 'still one', 'three']);
   assert.match(await sendDm(aD, dm.id, 'four'), /^d3:2:/);
@@ -225,6 +228,7 @@ test('DM epochs: a new one once the week is up, one at a time, only as the serve
   assert.equal((await as(outsider, 'GET', `/dms/${dm.id}/keys`)).status, 404);
   assert.deepEqual(texts(await readDms(bD, dm.id)), ['one', 'two', 'still one', 'three', 'four']);
 
+  Date.now = realNow; // (the planted epoch below is dated by the real clock)
   // The server plants an epoch "from b", made with a key it lists as one of b's past keys (its own): a's app reads
   // what's in it only as "older key, not verified", and never writes in it.
   const fake = await E.createIdentity(a.wrapKey);
@@ -241,7 +245,6 @@ test('DM epochs: a new one once the week is up, one at a time, only as the serve
   const forged = await E.encryptDm3({ raw: planted, epoch: 3, dmId: dm.id, authorId: b.id, payload: { t: 'planted' } });
   srv.sql('INSERT INTO dm_messages (id, dm_id, author_id, ciphertext, created_at) VALUES (?, ?, ?, ?, ?)', `zz${H.hex(8)}`, dm.id, b.id, forged, t0 - 100000);
   aD.sec.dmKeysChanged(dm.id);
-  aD.S.clockOffset = 0;
   await fresh(aD, b.id);
   const seen = (await readDms(aD, dm.id)).find((m) => m.dec.t === 'planted');
   assert.equal(seen && seen.dec.keyNote, 'listed', 'shown as not verified');
@@ -295,6 +298,14 @@ test('server keys: hybrid (w2) to members with a post-quantum key, P-256 (w1) to
   const w1 = await E.wrapGroupKey({ raw, serverId: s.id, epoch: epoch + 1, recipientId: pq.id, recipientPub: pq.publicKey, wrapperId: owner.id, signKey: owner.signKey });
   const r = await as(owner, 'POST', `/servers/${s.id}/keys/share`, { epoch, wraps: { [pq.id]: w1 }, pubs: { [pq.id]: pq.publicKey }, pqs: { [pq.id]: null } });
   assert.deepEqual(r.json.stale, [pq.id]);
+  // …and whatever the app says, or if it says nothing (an old cached app): a w1 copy for someone with one is stale.
+  for (const body of [{ pubs: { [pq.id]: pq.publicKey } }, {}]) {
+    const r2 = await as(owner, 'POST', `/servers/${s.id}/keys/share`, { epoch, wraps: { [pq.id]: w1 }, ...body });
+    assert.deepEqual(r2.json.stale, [pq.id]);
+  }
+  // Nor does an own copy go back to w1 over a w2 one.
+  const w1own = await E.wrapGroupKey({ raw, serverId: s.id, epoch, recipientId: owner.id, recipientPub: owner.publicKey, wrapperId: owner.id, signKey: owner.signKey });
+  assert.equal((await as(owner, 'POST', `/servers/${s.id}/keys/self`, { wraps: { [epoch]: w1own } })).json.updated, 0);
   // Junk in the w2 shape is refused like junk w1.
   const bad = rows[pq.id].split(':'); bad[2] = bad[2].slice(8);
   assert.equal((await as(owner, 'POST', `/servers/${s.id}/keys/self`, { wraps: { [epoch]: bad.join(':') } })).json.updated, 0);
@@ -328,8 +339,13 @@ test('publishing a post-quantum key: signed by the account, never replaced witho
   const env = (await as(u, 'POST', '/me/keys/wrapped', { authKey: u.authKey })).json.encPrivateKey;
   const recSalt = E.newKdfSalt();
   const encPrivateKeyRecovery = await E.rewrapPrivateKey(u.wrapKey, await E.recoveryWrapKey(E.newRecoveryCode(), recSalt), env);
-  assert.equal((await as(u, 'PUT', '/me/recovery', { encPrivateKeyRecovery, recoverySalt: recSalt, authKey: u.authKey })).status, 200);
+  assert.equal((await as(u, 'PUT', '/me/recovery', { encPrivateKeyRecovery, recoverySalt: recSalt, authKey: u.authKey, fromEnvelope: await E.envelopeHash(env) })).status, 200);
   const me = async () => (await as(u, 'GET', '/bootstrap')).json.me;
+  assert.equal((await me()).recoveryStale, false);
+  // Second review, N9: one that doesn't say which envelope it was made from (or names an older one) counts as older.
+  assert.equal((await as(u, 'PUT', '/me/recovery', { encPrivateKeyRecovery, recoverySalt: recSalt, authKey: u.authKey })).status, 200);
+  assert.equal((await me()).recoveryStale, true);
+  assert.equal((await as(u, 'PUT', '/me/recovery', { encPrivateKeyRecovery, recoverySalt: recSalt, authKey: u.authKey, fromEnvelope: await E.envelopeHash(env) })).status, 200);
   assert.equal((await me()).recoveryStale, false);
   srv.sql('UPDATE users SET recovery_pq = 0 WHERE id = ?', u.id);
   assert.equal((await me()).recoveryStale, true);
@@ -482,7 +498,7 @@ test('review 4, 5 and 7: an epoch is reused only by what your own copy says; a h
   srv.sql('DELETE FROM dm_keys WHERE dm_id = ? AND epoch = 5', dm.id);
   aD.sec.dmKeysChanged(dm.id);
   use(aD);
-  await assert.rejects(() => aD.sec.encryptDm(dm.id, { t: 'x' }));
+  await assert.rejects(() => aD.sec.encryptDm(dm.id, { t: 'x' }), (e) => e.code === 'rollback', 'said as a rollback, not "try again"');
   assert.deepEqual(epochsOf(dm.id), [1, 2, 3, 4]);
 
   // b resets with new keys and a accepts them: a's next message is in a new epoch, even when the server rewrites an
@@ -499,6 +515,16 @@ test('review 4, 5 and 7: an epoch is reused only by what your own copy says; a h
   assert.equal(aD2.sec.acceptKeys(u), true);
   aD2.sec.dmKeysChanged(dm2.id);
   assert.match(await sendDm(aD2, dm2.id, 'after'), /^d3:2:/);
+  // Second review, N2: had the server left b's new post-quantum key out when a accepted his new keys, a's app still
+  // wouldn't write P-256 alone in a DM it has seen go post-quantum.
+  const pqRow = srv.sql('SELECT pq_public_key, pq_sig FROM users WHERE id = ?', b2.id)[0];
+  srv.sql('UPDATE users SET pq_public_key = NULL, pq_sig = NULL WHERE id = ?', b2.id);
+  const stripped = await fresh(aD2, b2.id);
+  aD2.sec.acceptKeys(stripped);
+  use(aD2);
+  await assert.rejects(() => aD2.sec.encryptDm(dm2.id, { t: 'x' }), (e) => e.code === 'untrusted');
+  srv.sql('UPDATE users SET pq_public_key = ?, pq_sig = ? WHERE id = ?', pqRow.pq_public_key, pqRow.pq_sig, b2.id);
+  await fresh(aD2, b2.id);
   // Review 5: an epoch "from b" made with b's old (pinned) key, dated just before the reset: messages in it dated after
   // the reset don't open; one dated before does, as written with an older key.
   const retired = srv.sql('SELECT retired_at FROM user_key_history WHERE user_id = ?', b2.id)[0].retired_at;
@@ -556,7 +582,7 @@ test('review 10, 11 and 13: a device never locks things for itself to a key it c
   assert.equal((await read(laptop2)).t, 'from before the upgrade');
   // A new recovery key holds the seed: then the copy goes hybrid.
   const env1 = (await as(o, 'POST', '/me/keys/wrapped', { authKey: o.authKey })).json.encPrivateKey;
-  assert.equal((await as(o, 'PUT', '/me/recovery', { encPrivateKeyRecovery: await E.rewrapPrivateKey(o.wrapKey, await E.recoveryWrapKey(E.newRecoveryCode(), recSalt), env1), recoverySalt: recSalt, authKey: o.authKey })).status, 200);
+  assert.equal((await as(o, 'PUT', '/me/recovery', { encPrivateKeyRecovery: await E.rewrapPrivateKey(o.wrapKey, await E.recoveryWrapKey(E.newRecoveryCode(), recSalt), env1), recoverySalt: recSalt, authKey: o.authKey, fromEnvelope: await E.envelopeHash(env1) })).status, 200);
   const other2 = await device(o, { ctx: await passwordCtx(o), pins: other.pins });
   await other2.sec.keysSaved(s.id);
   assert.ok(await until(() => E.wrapFormat(own()) === 'w2'), 'upgraded once the recovery key holds the seed');
@@ -606,6 +632,8 @@ test('review 12 and 15: a reset with an old recovery key leaves no key published
   assert.equal(rr.status, 200, rr.text);
   assert.equal(srv.sql('SELECT pq_public_key FROM users WHERE id = ?', u.id)[0].pq_public_key, null, 'no key left published that nobody holds');
   const nu = { ...u, ip, token: rr.json.token, authKey: k.authKey, wrapKey: k.wrapKey, privateKey };
+  // Second review, N1: a browser that never saw the key asks too.
+  assert.equal((await device(nu, { pins: new Map() })).sec.neededPassword(), 'upgrade');
   const next = await device(nu, { pins: d.pins });
   assert.equal(next.sec.neededPassword(), 'publish', 'the next start asks for the password');
   use(next);

@@ -4744,6 +4744,7 @@ function messageTrust(m, author, bind = bindingOfMessage(m)) {
   else if (d && d.verified === false && !m.dmId) notes.push({ warn: true, label: '\u26a0 Sender could not be verified', tip: 'The signature on this message does not match the sender\u2019s key.' });
   if (bind && bind.issues.length) notes.push({ warn: true, bind });
   // The first DM format bound nothing in (not even who wrote it): say so, quietly.
+  else if (m.dmId && d && d.noPq) notes.push({ warn: true, label: '\u26a0 Without post-quantum encryption', tip: 'This conversation is post-quantum encrypted, but this message was encrypted with P-256 alone. The other person\u2019s app wouldn\u2019t fall back like that by itself, so the server may have tricked it, or held it back until now.' });
   else if (m.dmId && d && d.legacyFormat) notes.push({ label: 'Older encryption format', tip: 'Encrypted by an early version of Hearth that didn\u2019t bind the conversation or the sender into the message, so the server could show it as written by either of you.' });
   const bot = isBotPost(author, m);
   return {
@@ -11083,7 +11084,8 @@ function pqUnlockBar(why) {
   clear(el).append(icon('shield'),
     h('span', { class: 'announce-text' }, why === 'seed'
       ? 'Hearth added post-quantum encryption to your account. Enter your password once on this device to read what’s locked with it.'
-      : 'Enter your password once on this device to finish setting up your account’s post-quantum encryption.'),
+      : why === 'upgrade' ? 'Hearth can protect your messages against future quantum computers too. Enter your password once to turn it on for your account.'
+        : 'Enter your password once on this device to finish setting up your account’s post-quantum encryption.'),
     h('button', { class: 'btn sm primary', onclick: () => unlockPq().catch((e) => { if (!e.cancelled) toast(e.message, 'error'); }) }, 'Enter password'));
 }
 async function unlockPq() {

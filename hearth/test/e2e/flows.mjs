@@ -4593,6 +4593,31 @@ async function postQuantum(t) {
   const keys = t.server.rows('SELECT user_id, wrapped FROM dm_keys WHERE dm_id = (SELECT dm_id FROM dm_messages WHERE author_id = ? LIMIT 1)', olgaId);
   check(keys.length === 2 && keys.every((k) => /^dk1:/.test(k.wrapped)), 'The epoch key should be kept wrapped for each of them.');
 
+  // A device of olga's that doesn't have the seed (as one signed in before her account got it): a bar asks for her
+  // password once; then it reads the hybrid DMs. (Here: a second browser that signs in, then forgets the seed.)
+  const olgaOld = await t.open('olga-old');
+  await olgaOld.login('olga', pw);
+  await olgaOld.page.evaluate((uid) => new Promise((ok, no) => {
+    const r = indexedDB.open('hearth', 1);
+    r.onsuccess = () => { const tx = r.result.transaction('keys', 'readwrite'); tx.objectStore('keys').delete(`${uid}|pq`); tx.oncomplete = ok; tx.onerror = () => no(tx.error); };
+    r.onerror = () => no(r.error);
+  }), olgaId);
+  await olgaOld.page.reload();
+  await olgaOld.waitApp();
+  const bar = olgaOld.$('#pq-unlock');
+  await bar.waitFor();
+  await olgaOld.railButton('Direct messages');
+  await olgaOld.dmRow(aliceShown).click();
+  await olgaOld.$('#messages .undecryptable', { hasText: 'enter your password once' }).first().waitFor();
+  await bar.locator('button', { hasText: 'Enter password' }).click();
+  const unlock = olgaOld.modal('Unlock your encryption keys');
+  await unlock.locator('input[type=password]').fill(pw);
+  await unlock.locator('.modal-foot .btn.primary').click();
+  await bar.waitFor({ state: 'detached' });
+  await olgaOld.message('Hybrid both ways: medlar').waitFor();
+  check(!(await olgaOld.$('#messages .undecryptable').count()), 'After the password, nothing should be left locked on that device.');
+  await olgaOld.close();
+
   // A server's key, handed to olga when she joins: the hybrid kind, and she reads the channel.
   await alice.createServer('Quantum club');
   const link = await alice.inviteLink();
