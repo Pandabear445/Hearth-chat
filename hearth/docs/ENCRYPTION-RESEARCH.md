@@ -198,23 +198,29 @@ identity key. It is covered transitively by the existing safety numbers, which c
   is deliberately **not** locked with anything derived from the P-256 identity key, the way the signing key is.
   Shor's algorithm would recover that key from the public one, and the PQ key would then protect nothing.
 - **Devices already signed in** (they don't keep the password) show a bar asking for the password once: it opens
-  the envelope and gives them the seed. Until then they show "enter your password once" on what's locked to the
-  new key, and can still write DMs (that only needs public keys). An earlier version of this change handed the seed
+  the envelope and gives them the seed (it sits above the message box and can be put off for the session). Until
+  then they show "enter your password once" on what's locked to the new key and are **read-only for anything
+  post-quantum**: they make no DM epoch and no server key, and write no P-256 DM into a conversation that went
+  post-quantum. That's simpler and safer than writing to public keys: a second review found that every rule letting a
+  seedless device write had a way for the server to steer it into P-256 (hide your own key from it, or the peer's)
+  or into minting epochs it couldn't reuse after a reload. An earlier version of this change handed the seed
   between devices automatically; a review showed why that's wrong. The only thing that could authenticate such a
   request is your P-256 signing key, so whoever can forge P-256 (a future quantum computer, recomputing your keys
   from your public ones) could have asked your devices for the seed and then decrypted everything recorded. The
   seed now comes only from the password envelope.
 - **Never re-locked to a key you don't hold.** A device re-stores copies "for itself" only with a post-quantum key
-  whose seed it holds, so a device without the seed never replaces a copy it can read with one it can't. What it
-  makes new before it has the seed (a server's next key, a DM epoch) is locked to your published key, which is
-  always the one in your envelope: the password opens it.
+  whose seed it holds, so a device without the seed never replaces a copy it can read with one it can't, and it
+  makes nothing new for you before it has the seed (above).
 - **Devices signed in before the account had any PQ key** show the same bar ("turn it on"), so an account doesn't
   stay P-256-only just because nobody signs in again.
 - **Old messages** (`v1`, `d2`, `w1`) open exactly as before.
-- **Fallback.** New messages use P-256 alone only while one of the two has no *published* PQ key (an account from
-  before that hasn't signed in with the password yet; a seed that was never published, until the password publishes
-  it). Never because the server stops listing a key a device has already seen (below), and never in a DM this
-  device has seen go post-quantum, not even after accepting someone's new keys.
+- **Fallback.** New messages use P-256 alone only while one of the two has no *published* PQ key and nothing on this
+  device says otherwise (an account from before that hasn't signed in with the password yet). Never because the
+  server stops listing a key a device has already seen (below), never for your own account once anything on the
+  device says it has a key (the seed, your key seen published, its fingerprint in your record, copies made for it),
+  and never in a DM this device has seen go post-quantum (any listed epoch, even one it couldn't open), not even
+  after accepting someone's new keys. A seed that was never published writes P-256 only to people without a key: the
+  device can't tell "never published" from "hidden by the server".
 
 **Downgrade protection.**
 - (a) Once a device has checked someone's PQ key, it notes so in its trust-on-first-use pin. A server that later
@@ -224,17 +230,26 @@ identity key. It is covered transitively by the existing safety numbers, which c
   whatever the app says, so an old cached app can't hand them out either. The sharer's app then fetches the key and
   wraps again. That's how a member's first PQ key reaches every server
   they're in.
-- (c) The same for your own key: once a device has seen yours published (signed by you), it refuses to write P-256
-  alone for you if the listing goes. If the keys the server lists as yours don't match what this device's password
+- (c) The same for your own key: once anything on a device says your account has one (above), it writes nothing
+  for you without the seed, whatever the listing says. If the keys the server lists as yours don't match what this device's password
   unlocked, it sends nothing at all; your own copy of a new server key goes to your keys *as this device proved
   them*, never to the listed ones.
 - (d) DM epochs: whether to keep writing in one is decided from your own copy's authenticated time and key set
   (younger than a week by the maker's clock against this device's own, never the server's time; made for the keys you
   both have now), and a local high-water mark means a device never writes in a lower epoch than one it has seen,
-  whatever the server lists (fewer listed is reported as a rollback). An epoch vouched for only by someone's
-  older key opens only messages dated while that key was theirs.
-- (e) A P-256-only DM from someone whose PQ key you've seen, dated after the DM's first epoch (as that epoch's own
-  copy dates it), is flagged "Without post-quantum encryption".
+  whatever the server lists (fewer listed stops sending until you confirm a restore). Reading, trust is worked out
+  every time, never cached: an epoch vouched for only by someone's older key opens only messages dated while that
+  key was theirs, and one made for keys either of you no longer has, even one you made, only messages dated before
+  this device saw their keys change. (Not refused merely for being dated past the epoch's week: a scheduled message
+  is posted as it was encrypted, up to 30 days later.)
+- (e) A P-256-only DM from someone whose PQ key you've seen, dated after the DM's first epoch (as the first epoch
+  this device opened dates it, kept on the device; never what the server lists), is flagged "Without post-quantum
+  encryption". A DM scheduled as P-256 before the conversation went post-quantum is held by the server and
+  re-encrypted by the sender's app instead.
+- (f) Servers and groups: a member without a PQ key gets a P-256 copy (`w1`), and that copy opens the epoch's key,
+  so **a channel's messages are only post-quantum protected while every member's copy is `w2`**. A member this
+  device has seen a PQ key for, whose key isn't listed now, gets no copy at all (the rotation goes on without them
+  and the key is shared with them once theirs is back).
 
 **Races and losses.** The published key's seed must always be in the current envelope. A password change saved
 from an older envelope than the server's (one that raced the upgrade on another device) is refused and retried, and
@@ -316,8 +331,9 @@ What it would take to go further (not built; listed for the record):
    - (b) Switch to native WebCrypto ML-KEM where present (Chromium 156+), keeping the vendored one as fallback.
    - (c) Get the vendored library, or a formally verified one such as libcrux via WASM, independently reviewed.
    - (d) Back off DM epoch creation: a server that keeps answering a device's epoch checks wrongly can make it start
-     a new epoch on every send until the rate limit (30 an hour) stops it sending, and a database restored from an
-     old backup stops DMs whose newer epochs it lost (the app says why). Availability only.
+     a new epoch on every send until the rate limit (30 an hour) stops it sending. Availability only. (A database
+     restored from an old backup asks once per DM before writing again: RECOVERY.md.)
+   - (e) Show which servers still have a member with a P-256-only copy of the key (5(f)).
 4. **Later, only if wanted:**
    - an opt-in ratcheted "secret chat" mode for real forward secrecy;
    - MLS for large servers;

@@ -89,6 +89,7 @@ const UPLOAD = /^\/uploads\/[a-z0-9]+\.bin$/;
 const WHY = {
   key: 'This conversation’s encryption key changed after you scheduled it. Your app re-encrypts it the next time it’s open.',
   peer_key: 'Their security key changed after you scheduled it. Check their safety number; your app then re-encrypts it.',
+  pq: 'This conversation got post-quantum encryption after you scheduled it. Your app re-encrypts it the next time it’s open.',
   keys_changed: 'Your own encryption keys changed after you scheduled it (a password reset without your recovery key), so it can’t be sent. Write it again.',
   no_access: 'You can no longer post in that conversation: it was deleted, or you left or lost access to it.',
   no_permission: 'You no longer have permission to post there (or to attach files or reply in threads there).',
@@ -134,7 +135,11 @@ module.exports = function setupScheduled(ctx) {
     }
     const d = db.prepare('SELECT user_a, user_b FROM dm_channels WHERE id = ?').get(r.dm_id);
     const peer = d && getUserRow(peerOf(d, r.user_id));
-    return peer && !peer.deleted_at && peerKey(peer) !== r.peer_key ? { hold: 'peer_key' } : null;
+    if (peer && !peer.deleted_at && peerKey(peer) !== r.peer_key) return { hold: 'peer_key' };
+    // Written P-256 alone (d2:, v1:) before the DM went post-quantum: sent like that, it would be flagged as a
+    // fallback on the other side. The sender's app re-encrypts it, as for a key change.
+    if (/^(d2|v1):/.test(String(r.ciphertext || '')) && db.prepare('SELECT 1 FROM dm_keys WHERE dm_id = ? LIMIT 1').get(r.dm_id)) return { hold: 'pq' };
+    return null;
   }
 
   // ------------------------------------------------------------------ rows

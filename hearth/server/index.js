@@ -3445,6 +3445,9 @@ api.post('/servers/:id/keys/rotate', auth, (req, res) => {
   const s = requireServer(req.params.id, req.userId);
   rateLimit('rotate:' + req.userId, 30, 60 * 1000);
   const { epoch, check, wraps, pubs, pqs } = req.body || {};
+  // Members the app gave no copy to because the post-quantum key it knows them by doesn't check out right now
+  // (secure.js wrapFor): they're left like a newcomer, and the key is shared with them once it does.
+  const deferred = new Set(Array.isArray((req.body || {}).deferred) ? req.body.deferred.filter((x) => typeof x === 'string' && x !== req.userId).slice(0, 5000) : []);
   if (typeof check !== 'string' || !/^[A-Za-z0-9+/=]{16,64}$/.test(check)) fail(400, 'Bad key check.');
   if (!wraps || typeof wraps !== 'object' || Array.isArray(wraps)) fail(400, 'Missing wrapped keys.');
   if (!Object.values(wraps).every(isWrapped)) fail(400, 'Those wrapped keys aren\u2019t in the right format.', 'bad_wraps');
@@ -3455,7 +3458,7 @@ api.post('/servers/:id/keys/rotate', auth, (req, res) => {
     const held = heldIn(s.id);
     if (held.includes(req.userId) && members.length > 1) fail(403, KEYS_UNVERIFIED, 'keys_unverified');
     if (cur.key_epoch && !(cur.needs_rotation && !causedRotation(s.id, cur.key_epoch, req.userId))) limitVoluntary(s, cur.key_epoch, req.userId);
-    const given = members.filter((m) => m === req.userId || !held.includes(m));
+    const given = members.filter((m) => (m === req.userId || !held.includes(m)) && !(deferred.has(m) && !Object.hasOwn(wraps, m)));
     const ids = Object.keys(wraps);
     if (!ids.every((id) => members.includes(id)) || !given.every((m) => isWrapped(wraps[m]))) fail(409, 'The member list changed. Try again.', 'members');
     const stale = staleWraps(pubs, given, pqs, wraps);

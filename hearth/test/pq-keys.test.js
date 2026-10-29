@@ -74,9 +74,11 @@ async function passwordCtx(user) {
 }
 // The app's start-up on one device (app.js loadBootstrap): its own pins, and its own copy of the post-quantum seed.
 // ctx: a sign-in with the password just before (else a device that was already signed in).
-async function device(user, { pins = new Map(), pqSeed = null, ctx = null, token = user.token } = {}) {
+// edit(boot): what a server that changes its answers hands this device.
+async function device(user, { pins = new Map(), pqSeed = null, ctx = null, token = user.token, edit = null } = {}) {
   store = pins; curIp = user.ip; API.setToken(token);
   const boot = (await as({ ...user, token }, 'GET', '/bootstrap')).json;
+  if (edit) edit(boot);
   const dmEvents = [];
   const needs = [];
   const S = { me: boot.me, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: user.privateKey, e2eeSince: boot.e2eeSince, pqSeed: ctx && ctx.pqSeed ? ctx.pqSeed : pqSeed };
@@ -103,6 +105,7 @@ async function sendDm(d, dmId, t) {
   assert.equal(r.status, 200, r.text);
   return ciphertext;
 }
+async function refreshServers(d) { use(d); const boot = (await as({ ...d.user, token: d.token }, 'GET', '/bootstrap')).json; d.S.servers = boot.servers; for (const st of Object.values(boot.keyStates || {})) await d.sec.applyState(st); }
 async function refreshDms(d) { d.S.dms = (await as({ ...d.user, token: d.token }, 'GET', '/bootstrap')).json.dms; }
 async function readDms(d, dmId) {
   use(d);
@@ -454,13 +457,14 @@ test('review 3 and 9: no quiet P-256 fallback on your own side: own keys that do
   use(aD);
   await assert.rejects(() => aD.sec.encryptDm(dm.id, { t: 'x' }), (e) => e.code === 'own_key_mismatch');
   aD.S.me = { ...aD.S.me, signPublicKey: realSign };
-  // (b) A device of yours without the seed: once it has seen your key published, the server hiding it gets nothing.
+  // (b) A device of yours without the seed reads, and writes nothing post-quantum until the password is entered
+  // (second review: then the server hiding your key, or the peer's, gets it nothing either).
   const aL = await device(a);
   assert.equal(aL.sec.neededPassword(), 'seed');
-  assert.match(await sendDm(aL, dm.id, 'from the waiting device'), /^d3:/, 'it can still write (public keys only)');
-  aL.S.me = { ...aL.S.me, pqPublicKey: null, pqSig: null };
   use(aL);
-  await assert.rejects(() => aL.sec.encryptDm(dm.id, { t: 'x' }), (e) => e.code === 'own_key_mismatch');
+  await assert.rejects(() => aL.sec.encryptDm(dm.id, { t: 'x' }), (e) => e.code === 'need_password');
+  aL.S.me = { ...aL.S.me, pqPublicKey: null, pqSig: null };
+  await assert.rejects(() => aL.sec.encryptDm(dm.id, { t: 'x' }), (e) => e.code === 'need_password' || e.code === 'own_key_mismatch');
   // (c) The receiving side flags a d2 in a DM that already went post-quantum (an app that fell back).
   const d2 = await E.encryptDm({ myPriv: a.privateKey, theirPub: b.publicKey, dmId: dm.id, authorId: a.id, payload: { t: 'fallback' } });
   assert.equal((await as(a, 'POST', `/dms/${dm.id}/messages`, { ciphertext: d2 })).status, 200);
@@ -635,7 +639,7 @@ test('review 12 and 15: a reset with an old recovery key leaves no key published
   // Second review, N1: a browser that never saw the key asks too.
   assert.equal((await device(nu, { pins: new Map() })).sec.neededPassword(), 'upgrade');
   const next = await device(nu, { pins: d.pins });
-  assert.equal(next.sec.neededPassword(), 'publish', 'the next start asks for the password');
+  assert.equal(next.sec.neededPassword(), 'seed', 'the next start asks for the password (it saw the account had a key)');
   use(next);
   const ctx = await passwordCtx(nu);
   await next.sec.ensurePqKey({ ...ctx, pqSeed: null });
@@ -650,7 +654,7 @@ test('review 12 and 15: a reset with an old recovery key leaves no key published
   assert.equal((await srv.api('POST', '/auth/reset/info', { ip: H.newIp(), body: { token: tok2 } })).json.hasPq, false);
 });
 
-test('review 14: a seed that was never published writes P-256 DMs (no failures) and asks for the password to publish', async () => {
+test('review 14: a seed that was never published asks for the password to publish; P-256 DMs to people without a key still go', async () => {
   const peer = await person(uname('rv14p'));
   const u = await person(uname('rv14u'));
   await friends(u, peer);
@@ -662,9 +666,309 @@ test('review 14: a seed that was never published writes P-256 DMs (no failures) 
   assert.equal(srv.sql('SELECT pq_public_key FROM users WHERE id = ?', u.id)[0].pq_public_key, null);
   assert.equal(d.sec.neededPassword(), 'publish');
   await fresh(d, peer.id);
-  assert.match(await sendDm(d, dm.id, 'works'), /^d2:/);
+  // Second review: this device can't tell a key that was never published from one the server hides, so it writes
+  // nothing to someone with a post-quantum key until the password is entered; to someone without one, P-256 as ever.
+  use(d);
+  await assert.rejects(() => d.sec.encryptDm(dm.id, { t: 'x' }), (e) => e.code === 'need_password');
+  const old = await person(uname('rv14o'), { legacy: true });
+  await friends(u, old);
+  const dmOld = await dmBetween(u, old);
+  await fresh(d, old.id);
+  assert.match(await sendDm(d, dmOld.id, 'works'), /^d2:/);
   use(d);
   await d.sec.ensurePqKey(await passwordCtx(u));
   assert.equal(srv.sql('SELECT pq_public_key FROM users WHERE id = ?', u.id)[0].pq_public_key, E.pqKeyPair(seed).publicKey);
   assert.match(await sendDm(d, dm.id, 'hybrid now'), /^d3:/);
+});
+
+// ======================================================================= second review (docs/PQ-REVIEW-FINDINGS-2.md)
+// What a thief with someone's old keys gets out of a DM epoch: its raw key, from their own copy.
+async function stealEpoch(dmId, epoch, victim, victimSeed) {
+  const row = srv.sql('SELECT wrapped, wrapper_id FROM dm_keys WHERE dm_id = ? AND epoch = ? AND user_id = ?', dmId, epoch, victim.id)[0];
+  const senderPub = srv.sql('SELECT public_key FROM dm_keys WHERE dm_id = ? AND epoch = ? AND user_id = ?', dmId, epoch, row.wrapper_id)[0].public_key;
+  return (await E.unwrapDmKey({ wrapped: row.wrapped, dmId, epoch, myId: victim.id, myPriv: victim.privateKey, myPub: victim.publicKey, myPq: E.pqKeyPair(victimSeed), senderId: row.wrapper_id, senderPub })).raw;
+}
+async function forgedD3(d, { dmId, epoch, raw, authorId, t, at = Date.now() }) {
+  use(d);
+  const m = { id: H.hex(8), dmId, authorId, createdAt: at, ciphertext: await E.encryptDm3({ raw, epoch, dmId, authorId, payload: { t } }) };
+  await d.sec.decryptDmMessage(m);
+  return m.dec;
+}
+// A server that answers one GET differently from now on (until the returned function is called).
+function tamperGet(suffix, change) {
+  const f = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    const r = await f(url, opts);
+    if (!String(url).endsWith(suffix) || (opts.method && opts.method !== 'GET')) return r;
+    return new Response(JSON.stringify(change(await r.json())), { status: r.status, headers: { 'content-type': 'application/json' } });
+  };
+  return () => { globalThis.fetch = f; };
+}
+function failPost(suffix, status = 503) {
+  const f = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => (String(url).endsWith(suffix) && opts.method === 'POST'
+    ? new Response(JSON.stringify({ error: 'Service unavailable' }), { status, headers: { 'content-type': 'application/json' } }) : f(url, opts));
+  return () => { globalThis.fetch = f; };
+}
+
+test('second review 1: an epoch you made for someone’s old keys opens nothing dated after their keys changed (after a reload too)', async () => {
+  const { a, b, dm, aD } = await twoWithPq('r2a');
+  const bSeed = (await passwordCtx(b)).pqSeed;
+  assert.match(await sendDm(aD, dm.id, 'one'), /^d3:1:/, 'epoch 1 is a’s');
+  const raw = await stealEpoch(dm.id, 1, b, bSeed);
+  // b's device is stolen; b resets with new keys and a accepts them, then reloads.
+  const bNew = await resetNew(b);
+  await device(bNew, { ctx: await passwordCtx(bNew) });
+  use(aD);
+  assert.equal(aD.sec.acceptKeys(await fresh(aD, b.id)), true);
+  const aR = await device(a, { ctx: await passwordCtx(a), pins: aD.pins });
+  await fresh(aR, b.id);
+  assert.equal((await forgedD3(aR, { dmId: dm.id, epoch: 1, raw, authorId: b.id, t: 'forged as b' })).error, true);
+  assert.equal((await forgedD3(aR, { dmId: dm.id, epoch: 1, raw, authorId: a.id, t: 'forged as a' })).error, true);
+  // What was really written then still reads.
+  assert.deepEqual(texts(await readDms(aR, dm.id)), ['one']);
+});
+
+test('second review 2: an epoch already open in a tab is judged again when their keys change (another tab accepted them)', async () => {
+  const { a, b, dm, aD, bD } = await twoWithPq('r2b');
+  const bSeed = (await passwordCtx(b)).pqSeed;
+  assert.match(await sendDm(bD, dm.id, 'from b'), /^d3:1:/, 'epoch 1 is b’s');
+  const tab2 = await device(a, { ctx: await passwordCtx(a), pins: aD.pins });
+  await fresh(tab2, b.id);
+  assert.deepEqual(texts(await readDms(aD, dm.id)), ['from b']);
+  assert.deepEqual(texts(await readDms(tab2, dm.id)), ['from b']);
+  const raw = await stealEpoch(dm.id, 1, b, bSeed);
+  const bNew = await resetNew(b);
+  await device(bNew, { ctx: await passwordCtx(bNew) });
+  use(aD);
+  assert.equal(aD.sec.acceptKeys(await fresh(aD, b.id)), true);
+  await sleep(5);
+  assert.equal((await forgedD3(tab2, { dmId: dm.id, epoch: 1, raw, authorId: b.id, t: 'forged after acceptance' })).error, true);
+});
+
+test('second review 3: a device without the seed writes nothing P-256 alone for a post-quantum account, whatever its own record lists', async () => {
+  const { a, b, dm, aD } = await twoWithPq('r2c');
+  assert.match(await sendDm(aD, dm.id, 'pq'), /^d3:1:/);
+  const s = (await as(a, 'POST', '/servers', { name: 'r2c' })).json;
+  const code = (await as(a, 'POST', `/servers/${s.id}/invites`, {})).json.code;
+  assert.equal((await as(b, 'POST', `/invites/${code}/join`, {})).status, 200);
+  const ch = s.channels.find((c) => c.type === 'text').id;
+  await refreshServers(aD);
+  const first = await aD.sec.encryptChannel(s.id, ch, { t: 'hello' });
+  // The server leaves the key out of the laptop's own record from the start.
+  const laptop = await device(a, { edit: (boot) => { boot.me = { ...boot.me, pqPublicKey: null, pqSig: null }; } });
+  assert.equal(laptop.sec.neededPassword(), 'seed', 'not "turn it on": the account has one');
+  await fresh(laptop, b.id);
+  use(laptop);
+  await assert.rejects(() => laptop.sec.encryptDm(dm.id, { t: 'x' }), (e) => e.code === 'need_password');
+  const before = srv.sql('SELECT MAX(epoch) AS e FROM server_keys WHERE server_id = ?', s.id)[0].e;
+  await assert.rejects(() => laptop.sec.forceRotate(s.id));
+  assert.equal(srv.sql('SELECT MAX(epoch) AS e FROM server_keys WHERE server_id = ?', s.id)[0].e, before, 'no rotation with a w1 own copy');
+  assert.ok(first.epoch >= 1);
+});
+
+test('second review 5: a device waiting for the seed remembers what it read: the server hiding either key gets no d2', async () => {
+  const { a, b, dm, aD } = await twoWithPq('r2e');
+  assert.match(await sendDm(aD, dm.id, 'pq'), /^d3:1:/);
+  const phone = await device(a);
+  assert.equal(phone.sec.neededPassword(), 'seed');
+  await fresh(phone, b.id);
+  assert.deepEqual(texts(await readDms(phone, dm.id)), ['(waiting)']);
+  // (a) The server pushes your own record without your key (and without its fingerprint).
+  phone.S.me = { ...phone.S.me, pqPublicKey: null, pqSig: null };
+  phone.S.users[a.id] = { ...phone.S.users[a.id], pq: null };
+  use(phone);
+  await phone.sec.ensurePqKey();
+  assert.equal(phone.sec.neededPassword(), 'seed');
+  await assert.rejects(() => phone.sec.encryptDm(dm.id, { t: 'x' }), (e) => e.code === 'need_password');
+  // (b) …or lists b without his.
+  const phone2 = await device(a);
+  await fresh(phone2, b.id);
+  await readDms(phone2, dm.id);
+  phone2.S.users[b.id] = { ...phone2.S.users[b.id], pq: null };
+  use(phone2);
+  await assert.rejects(() => phone2.sec.encryptDm(dm.id, { t: 'x' }), (e) => ['need_password', 'untrusted'].includes(e.code));
+});
+
+test('second review 6: the "without post-quantum encryption" flag can’t be switched off with an epoch entry that doesn’t open', async () => {
+  const { a, b, dm, aD, bD } = await twoWithPq('r2f');
+  assert.match(await sendDm(aD, dm.id, 'pq'), /^d3:1:/);
+  await readDms(bD, dm.id);
+  await readDms(bD, dm.id);
+  const d2 = await E.encryptDm({ myPriv: a.privateKey, theirPub: b.publicKey, dmId: dm.id, authorId: a.id, payload: { t: 'fallback' } });
+  assert.equal((await as(a, 'POST', `/dms/${dm.id}/messages`, { ciphertext: d2 })).status, 200);
+  for (const bogus of [{ epoch: 0, wrapperId: a.id, createdAt: 0, wrapped: null, keys: {} }, { epoch: 1, wrapperId: a.id, createdAt: 9e15, wrapped: 'junk', keys: {} }]) {
+    const undo = tamperGet(`/dms/${dm.id}/keys`, (r) => ({ ...r, epochs: [bogus, ...r.epochs.filter((e) => e.epoch !== bogus.epoch)] }));
+    try {
+      bD.sec.dmKeysChanged(dm.id);
+      const m = (await readDms(bD, dm.id)).find((x) => x.dec.t === 'fallback');
+      assert.equal(m.dec.noPq, true, `still flagged with ${JSON.stringify(bogus)}`);
+    } finally { undo(); }
+  }
+});
+
+test('second review 8: a DM after a restore from an older backup can be confirmed and written again; a rotation leaves out a member whose key is gone', async () => {
+  const { dm, aD } = await twoWithPq('r2h');
+  assert.match(await sendDm(aD, dm.id, 'one'), /^d3:1:/);
+  srv.sql('DELETE FROM dm_keys WHERE dm_id = ?', dm.id); // the backup is from before the DM's first epoch
+  aD.sec.dmKeysChanged(dm.id);
+  use(aD);
+  await assert.rejects(() => aD.sec.encryptDm(dm.id, { t: 'x' }), (e) => e.code === 'rollback' && e.dmId === dm.id);
+  await aD.sec.acceptDmRollback(dm.id);
+  assert.match(await sendDm(aD, dm.id, 'after the restore'), /^d3:1:/);
+
+  const owner = await person(uname('r2ho'));
+  const m1 = await person(uname('r2hm'));
+  const m2 = await person(uname('r2hl'));
+  const s = (await as(owner, 'POST', '/servers', { name: 'r2h' })).json;
+  const code = (await as(owner, 'POST', `/servers/${s.id}/invites`, {})).json.code;
+  for (const u of [m1, m2]) assert.equal((await as(u, 'POST', `/invites/${code}/join`, {})).status, 200);
+  const ch = s.channels.find((c) => c.type === 'text').id;
+  await device(m1, { ctx: await passwordCtx(m1) });
+  const oD = await device(owner, { ctx: await passwordCtx(owner) });
+  use(oD);
+  const e1 = (await oD.sec.encryptChannel(s.id, ch, { t: 'one' })).epoch;
+  assert.equal(E.wrapFormat(srv.sql('SELECT wrapped FROM server_keys WHERE server_id = ? AND user_id = ? AND epoch = ?', s.id, m1.id, e1)[0].wrapped), 'w2');
+  assert.ok(await oD.sec.pqKeyOf(await fresh(oD, m1.id)), 'the owner’s app has seen m1’s post-quantum key');
+  // Restored from before m1 had a post-quantum key; then someone leaves, so the key must change.
+  srv.sql('UPDATE users SET pq_public_key = NULL, pq_sig = NULL WHERE id = ?', m1.id);
+  assert.equal((await as(m2, 'POST', `/servers/${s.id}/leave`)).status, 200);
+  await fresh(oD, m1.id);
+  await refreshServers(oD);
+  const e2 = (await oD.sec.encryptChannel(s.id, ch, { t: 'two' })).epoch;
+  assert.ok(e2 > e1, 'the owner rotated');
+  assert.equal(srv.sql('SELECT COUNT(*) AS n FROM server_keys WHERE server_id = ? AND user_id = ? AND epoch = ?', s.id, m1.id, e2)[0].n, 0, 'no P-256 copy for m1');
+  // m1 publishes again (the password, after the restore): the owner's app shares the key with m1, hybrid.
+  await device(m1, { ctx: await passwordCtx(m1) });
+  await fresh(oD, m1.id);
+  await refreshServers(oD);
+  oD.sec.maintain(s.id);
+  assert.ok(await until(() => srv.sql('SELECT wrapped FROM server_keys WHERE server_id = ? AND user_id = ? AND epoch = ?', s.id, m1.id, e2).length > 0), 'shared once m1’s key is back');
+  assert.equal(E.wrapFormat(srv.sql('SELECT wrapped FROM server_keys WHERE server_id = ? AND user_id = ? AND epoch = ?', s.id, m1.id, e2)[0].wrapped), 'w2');
+});
+
+test('second review 10: devices without the seed make no DM epochs (nothing to use up the limit with)', async () => {
+  const { a, b, dm, aD } = await twoWithPq('r2j');
+  assert.match(await sendDm(aD, dm.id, 'one'), /^d3:1:/);
+  const p1 = await device(a);
+  const p2 = await device(a);
+  for (const p of [p1, p2]) await fresh(p, b.id);
+  for (let i = 0; i < 6; i++) {
+    const p = i % 2 ? p2 : p1;
+    use(p);
+    p.sec.dmKeysChanged(dm.id);
+    await assert.rejects(() => p.sec.encryptDm(dm.id, { t: `try ${i}` }), (e) => e.code === 'need_password');
+  }
+  assert.deepEqual(epochsOf(dm.id), [1]);
+});
+
+test('second review 11: when the password’s publish doesn’t go through, the bar stays and says why; DMs to people without a key still go', async () => {
+  const u = await person(uname('r2k'));
+  const old = await person(uname('r2ko'), { legacy: true });
+  await friends(u, old);
+  const dm = await dmBetween(u, old);
+  const x = await device(u, { ctx: await passwordCtx(u) }); // this browser saw the account's key
+  // A reset elsewhere dropped the key; this browser's first start with the password can't publish it.
+  srv.sql('UPDATE users SET pq_public_key = NULL, pq_sig = NULL WHERE id = ?', u.id);
+  const undo = failPost('/me/pq-key');
+  let x2;
+  try { x2 = await device(u, { ctx: await passwordCtx(u), pins: x.pins }); } finally { undo(); }
+  assert.ok(x2.sec.neededPassword(), 'the bar is there');
+  assert.ok(x2.sec.lastPqError(), 'and the unlock can say what went wrong');
+  await fresh(x2, old.id);
+  assert.match(await sendDm(x2, dm.id, 'still goes'), /^d2:/);
+});
+
+test('second review 12: a DM scheduled as P-256 before the conversation went post-quantum is held for re-encrypting', async () => {
+  const { a, b, dm, aD } = await twoWithPq('r2l');
+  const ciphertext = await E.encryptDm({ myPriv: a.privateKey, theirPub: b.publicKey, dmId: dm.id, authorId: a.id, payload: { t: 'later' } });
+  const r = await as(a, 'POST', `/dms/${dm.id}/scheduled-messages`, { ciphertext, ref: H.hex(12), draft: `x1:${H.b64(48)}`, sendAt: Date.now() + 3600000 });
+  assert.equal(r.status, 200, r.text);
+  assert.equal((await as(a, 'GET', '/scheduled-messages')).json.items.find((x) => x.id === r.json.id).status, 'pending');
+  assert.match(await sendDm(aD, dm.id, 'now pq'), /^d3:1:/);
+  const it = (await as(a, 'GET', '/scheduled-messages')).json.items.find((x) => x.id === r.json.id);
+  assert.equal(it.status, 'held');
+  assert.equal(it.reason, 'pq');
+});
+
+test('second review 13: a channel whose key waits for this device’s seed says so (not "waiting for another member")', async () => {
+  const owner = await person(uname('r2m'));
+  const s = (await as(owner, 'POST', '/servers', { name: 'r2m' })).json;
+  const ch = s.channels.find((c) => c.type === 'text').id;
+  const d = await device(owner, { ctx: await passwordCtx(owner) });
+  use(d);
+  await d.sec.encryptChannel(s.id, ch, { t: 'hello' });
+  const laptop = await device(owner);
+  assert.equal(laptop.sec.waitingForPq(s.id), true);
+  const app = require('node:fs').readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+  const notice = app.slice(app.indexOf('function keyNotice()'), app.indexOf('function blockedDmNotice()'));
+  assert.match(notice, /sec\.waitingForPq\(S\.view\.serverId\)/);
+});
+
+test('second review 14: the password bar doesn’t come back right after the password: simultaneous sign-ins, and another tab', async () => {
+  // (a) Two sign-ins with the password at about the same time on an account from before.
+  const o = await person(uname('r2n'), { legacy: true });
+  const early = await passwordCtx(o); // the second device's envelope, from before the first one upgraded
+  await device(o, { ctx: await passwordCtx(o) });
+  const second = await device(o, { ctx: early, edit: (boot) => { boot.me = { ...boot.me, pqPublicKey: null, pqSig: null }; } });
+  assert.equal(second.sec.neededPassword(), null);
+  assert.ok(second.S.pqSeed instanceof Uint8Array);
+  assert.equal(E.pqKeyPair(second.S.pqSeed).publicKey, srv.sql('SELECT pq_public_key FROM users WHERE id = ?', o.id)[0].pq_public_key);
+  // (b) Two tabs of one browser (one IndexedDB): the password in one, then the other hears the account has a key.
+  const idb = new Map();
+  globalThis.indexedDB = { open() {
+    const r = {};
+    setTimeout(() => {
+      r.result = { transaction() {
+        const t = {};
+        const store = { put: (v, k) => { idb.set(k, v); return {}; }, get: (k) => ({ result: idb.get(k) }), delete: (k) => { idb.delete(k); return {}; } };
+        t.objectStore = () => store;
+        setTimeout(() => t.oncomplete && t.oncomplete());
+        return t;
+      } };
+      r.onsuccess();
+    });
+    return r;
+  } };
+  try {
+    const t = await person(uname('r2t'), { legacy: true });
+    const pins = new Map();
+    const tabB = await device(t, { pins });
+    assert.equal(tabB.sec.neededPassword(), 'upgrade');
+    const tabA = await device(t, { pins, ctx: await passwordCtx(t) });
+    assert.equal(tabA.sec.neededPassword(), null);
+    await sleep(20); // (the seed is stored)
+    use(tabB);
+    Object.assign(tabB.S.me, (await as(t, 'GET', `/users/${t.id}/pq-key`)).json); // user:update
+    await tabB.sec.ensurePqKey();
+    assert.equal(tabB.sec.neededPassword(), null);
+  } finally { delete globalThis.indexedDB; }
+});
+
+test('second review 4 and 9: the vault key comes from your proven identity key; the password bar sits in the page and can wait', async () => {
+  const { a, aD } = await twoWithPq('r2d');
+  use(aD);
+  assert.equal(await aD.sec.provenIdentity(), a.publicKey);
+  const evil = await E.createIdentity(a.wrapKey);
+  const real = aD.S.me.publicKey;
+  aD.S.me = { ...aD.S.me, publicKey: evil.publicKey };
+  await assert.rejects(() => aD.sec.provenIdentity(), (e) => e.code === 'own_key_mismatch');
+  aD.S.me = { ...aD.S.me, publicKey: real };
+  assert.equal(aD.sec.provenKeys().e, a.publicKey);
+  const read = (f) => require('node:fs').readFileSync(path.join(__dirname, '..', 'public', 'js', f), 'utf8');
+  const app = read('app.js');
+  const vault = app.slice(app.indexOf('async function myVaultKey()'), app.indexOf('async function myVaultKey()') + 300);
+  assert.match(vault, /sec\.provenIdentity\(\)/);
+  assert.doesNotMatch(vault, /S\.me\.publicKey/);
+  assert.match(app, /createRecall\(\{ S, vaultKey: \(\) => myVaultKey\(\)/);
+  assert.match(read('recall-host.js'), /if \(ctx\.vaultKey\) return ctx\.vaultKey\(\);/);
+  const upd = app.slice(app.indexOf("socket.on('user:update'"), app.indexOf("socket.on('membership:update'"));
+  assert.match(upd, /sec\.provenKeys\(\)/);
+  // Review 9: in the layout above the message box, with "Later" for this tab; nothing fixed over the page.
+  const bar = app.slice(app.indexOf('function pqNotice('), app.indexOf('async function unlockPq()'));
+  assert.match(bar, /'Later'/);
+  assert.match(bar, /class: 'key-bar pq-bar'/);
+  assert.match(app, /sessionStorage\.setItem\('hearth\.pqLater', '1'\)/);
+  assert.doesNotMatch(app, /id: 'pq-unlock'[^\n]*document\.body\.append/);
+  assert.doesNotMatch(app.slice(app.indexOf('function pqUnlockBar('), app.indexOf('function pqUnlockBar(') + 400), /announce/);
 });

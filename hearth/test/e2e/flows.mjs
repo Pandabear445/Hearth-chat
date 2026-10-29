@@ -3597,7 +3597,8 @@ async function emojiSizes(t) {
   await q.locator('.pending-emoji', { hasText: 'Animated: shrunk to 128×85' }).waitFor();
   const names = await q.locator('input[aria-label="Emoji name"]').evaluateAll((els) => els.map((e) => e.value));
   check(names.join(',') === 'big_photo,dance', `Names should be suggested from the file names (got ${names.join(', ')}).`);
-  const prev = await photo.locator('img.s-inline').evaluate((i) => [i.getBoundingClientRect().height, i.naturalWidth]);
+  // (Rounded: the dialog's opening animation scales it by a hair for its first fifth of a second.)
+  const prev = await photo.locator('img.s-inline').evaluate((i) => [Math.round(i.getBoundingClientRect().height), i.naturalWidth]);
   check(prev[0] === 22 && prev[1] === 128, `The preview should show the shrunk picture at 22 px (got ${prev}).`);
   await ss.locator('button', { hasText: 'Upload 2 emoji' }).click();
   await owner.toast('Added 2 emoji.');
@@ -4834,11 +4835,24 @@ async function postQuantum(t) {
   }), olgaId);
   await olgaOld.page.reload();
   await olgaOld.waitApp();
-  const bar = olgaOld.$('#pq-unlock');
-  await bar.waitFor();
   await olgaOld.railButton('Direct messages');
   await olgaOld.dmRow(aliceShown).click();
+  // The bar sits above the message box (in the page, covering nothing), and fits a phone's width.
+  const bar = olgaOld.$('.composer #pq-unlock');
+  await bar.waitFor();
   await olgaOld.$('#messages .undecryptable', { hasText: 'enter your password once' }).first().waitFor();
+  await olgaOld.page.setViewportSize({ width: 390, height: 844 });
+  const box = await bar.evaluate((el) => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, h: r.height, w: innerWidth, pos: getComputedStyle(el).position }; });
+  check(box.l >= 0 && box.r <= box.w && box.h < 200 && box.pos !== 'fixed', `On a phone the password bar should fit in the page (got ${JSON.stringify(box)}).`);
+  await olgaOld.page.setViewportSize({ width: 1400, height: 900 });
+  // "Later" puts it away for this tab; it's back when something needs it (a message to a post-quantum DM isn't sent).
+  await bar.locator('button', { hasText: exact('Later') }).click();
+  await bar.waitFor({ state: 'detached' });
+  await olgaOld.page.fill('#composer-input', 'Not yet: durian');
+  await olgaOld.page.press('#composer-input', 'Enter');
+  await olgaOld.$('#toasts .toast', { hasText: 'post-quantum key isn’t on this device yet' }).waitFor();
+  check(/^d3:/.test(newest()), 'A device without the seed should send nothing P-256 alone into a post-quantum DM.');
+  await bar.waitFor();
   await bar.locator('button', { hasText: 'Enter password' }).click();
   const unlock = olgaOld.modal('Unlock your encryption keys');
   await unlock.locator('input[type=password]').fill(pw);

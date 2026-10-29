@@ -519,6 +519,9 @@ async function openReset(token) {
       }
       const res = await api('POST', '/auth/reset', body);
       history.replaceState(null, '', '/');
+      // The server dropped the account's post-quantum key (new keys, or a recovery key older than it): this browser
+      // forgets that it saw it, or it would refuse every DM until the new one is published.
+      if (!body.keepKeys || !pqSeed) E2EE.forgetOwnPq(info.userId);
       // What a reset with a recovery key older than the account's post-quantum key loses, exactly: what was locked to
       // that key alone (secure.js keeps older copies as they were while the recovery key is older).
       toast(body.keepKeys && info.hasPq && !pqSeed ? 'Password reset. Your messages are still here, except direct messages, and server and group messages, encrypted to your account’s post-quantum key since you first signed in after Hearth added it: your recovery key is older than that key, so those can’t be opened on your account any more (the people you talked to still have them). Each server’s and group’s current key is shared with you again. Make a new recovery key in Settings.'
@@ -794,6 +797,15 @@ function startApp() {
     const keysNow = () => { const x = S.users[u.id]; return x ? `${x.publicKey || ''}|${x.signPublicKey || ''}` : ''; };
     const keysBefore = keysNow();
     const pqBefore = S.me.pqPublicKey || null;
+    // Your own public keys change only by a reset, which signs this device out: a record listing others for you is
+    // the server's, and this app keeps the ones it proved yours.
+    if (u.id === S.me.id) {
+      const k = sec.provenKeys();
+      if (k && ((u.publicKey && u.publicKey !== k.e) || (u.signPublicKey && u.signPublicKey !== k.s))) {
+        console.warn('The server listed other public keys for your account; keeping the ones this device proved.');
+        u = { ...u }; delete u.publicKey; delete u.signPublicKey;
+      }
+    }
     setUser(u); sec.trust(u); refreshUserBits(u.id);
     // Your account got a (new) post-quantum key on another device: this one asks it for the seed.
     if (u.id === S.me.id && (S.me.pqPublicKey || null) !== pqBefore) sec.ensurePqKey();
@@ -2550,7 +2562,7 @@ const updates = createUpdates({
 // Study tools: Recall in a sandboxed frame, with its decks end-to-end encrypted and synced (recall-host.js).
 // Input in its frame doesn't reach this page, so the frame says when it's in use (for automatic Away, and so an update
 // waits; while Study is open an update waits anyway: updateBlockedBy).
-const study = createRecall({ S, onEnabled: () => { if (!S.view.serverId) renderSidebar(); }, onActive: () => { if (away) away.used(); autoUpdate.input(); } });
+const study = createRecall({ S, vaultKey: () => myVaultKey(), onEnabled: () => { if (!S.view.serverId) renderSidebar(); }, onActive: () => { if (away) away.used(); autoUpdate.input(); } });
 const folders = createFolders({
   S, servers: () => realServers(), favorites: () => new Set(P.favorites.filter((f) => f.startsWith('s:')).map((f) => f.slice(2))),
   rerender: () => renderRail(), serverUnread: (s) => serverUnread(s), setNotify: (k, v) => setNotify(k, v), railSide: () => railSide(),
@@ -3825,8 +3837,15 @@ function friendsView() {
 
 // Saved messages: kept on the server as message ids (plus a note encrypted with your own key), so they follow
 // you to every device. Each one is fetched and decrypted here; one you can't see anymore says so.
+// From your identity key as secure.js last proved it yours, never as the server lists it: a listed key the server
+// swapped in for a moment would otherwise lock everything kept in the vault to a key it holds.
 let vaultKeyP = null;
-const myVaultKey = () => (vaultKeyP ||= E2EE.vaultKey(S.privateKey, S.me.publicKey));
+let vaultFor = null;
+async function myVaultKey() {
+  const e = await sec.provenIdentity();
+  if (e !== vaultFor) { vaultFor = e; vaultKeyP = E2EE.vaultKey(S.privateKey, e); }
+  return vaultKeyP;
+}
 async function openNote(it) {
   if (!it.note) return '';
   try { return (await E2EE.openVault(await myVaultKey(), 'saved', it.messageId, it.note)).n || ''; } catch { return ''; }
@@ -4923,7 +4942,7 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
   else if (m.dec && m.dec.error) body.append(h('div', { class: 'msg-text undecryptable' }, icon('lock'), 'This message could not be decrypted on this device.'));
   else if (m.dec && m.dec.pending) {
     body.append(h('div', { class: 'msg-text undecryptable' }, icon('lock'), m.dec.pq
-      ? 'Locked to your account\u2019s post-quantum key: enter your password once on this device (the bar at the top) to read it.'
+      ? 'Locked to your account\u2019s post-quantum key: enter your password once on this device (the bar above the message box) to read it.'
       : m.dec.before
         ? 'Sent before you joined. Only members who had the key then can read it.'
         : 'Waiting for the encryption key from another member\u2026'));
@@ -8079,7 +8098,10 @@ function createComposer({ id, key, threadId, placeholder }) {
       const wait = /in (\d+)s/.exec(e.message || '');
       if (e.code === 'slowmode' && wait) startSlow(+wait[1]);
       if (e.cancelled) toast('Upload cancelled. Your message and files are back in the box.');
+      else if (e.code === 'rollback' && e.dmId) confirmDmRollback(e.dmId, e.message);
       else toast(e.message, 'error');
+      // The password bar comes back if it was put off: this message needs it.
+      if (e.code === 'need_password') { pqLater.clear(); if (composers.main) composers.main.renderExtras(); }
       // Give the files and words back so nothing is lost: to this box if it still shows the conversation, else to the
       // one that shows it now or next (takeBack, renderExtras).
       if (!poll && !files.some((f) => f.voice)) {
@@ -8133,9 +8155,9 @@ function keyNotice() {
         h('span', null, `${displayName(u)} reset their password without their recovery key, so their keys are new. Compare safety numbers before you share anything private.`),
         h('button', { class: 'btn sm ghost', onclick: () => openSafetyNumber(u) }, 'Verify'));
     }
-    return null;
+    return pqNotice();
   }
-  if (S.view.type !== 'channel' && !(S.view.type === 'voice' && S.view.chat)) return null;
+  if (S.view.type !== 'channel' && !(S.view.type === 'voice' && S.view.chat)) return pqNotice();
   // crypto-2: waiting to be verified here yourself, nobody shares this conversation's key with you (a voice channel's
   // chat uses its server's key, so the same there).
   const here = S.servers.find((x) => x.id === S.view.serverId);
@@ -8145,7 +8167,11 @@ function keyNotice() {
       h('button', { class: 'btn sm ghost', onclick: () => openGetVerified() }, 'Ask a member to verify you'));
   }
   const st = sec.stateOf(S.view.serverId);
-  if (!st || sec.currentKey(S.view.serverId) || st.needsRotation || !st.keyEpoch) return null;
+  if (!st || sec.currentKey(S.view.serverId) || st.needsRotation || !st.keyEpoch) return pqNotice();
+  // This account's copy of the key is locked to its post-quantum key, which this device doesn't have yet: nobody
+  // else can help, only the password (shown even after "Later", as nothing can be read or written here until then).
+  const pqBar = sec.waitingForPq(S.view.serverId) && pqNotice({ always: true });
+  if (pqBar) return pqBar;
   // Joined a server where new members can't read what came before (since: where your history starts): the key you
   // get is the next one, which the members' apps make for you; nobody can share you the current one.
   if (st.since && st.since.epoch > st.keyEpoch) {
@@ -11217,25 +11243,49 @@ async function updateAndReload() {
 
 // ======================================================================= announcement banner (from the admins)
 // This device needs the password once for the account's post-quantum key (secure.js ensurePqKey): it was signed in
-// before the account had it, or the key isn't published yet. A bar at the top until it's done; nothing is blocked
-// meanwhile but what's locked to that key. why: 'seed' | 'publish', or null to take the bar away.
-function pqUnlockBar(why) {
-  let el = $('#pq-unlock');
-  if (!why) { if (el) el.remove(); return; }
-  if (!el) { el = h('div', { id: 'pq-unlock', role: 'status' }); document.body.append(el); }
-  el.className = 'announce lvl-warning';
-  clear(el).append(icon('shield'),
-    h('span', { class: 'announce-text' }, why === 'seed'
-      ? 'Hearth added post-quantum encryption to your account. Enter your password once on this device to read what’s locked with it.'
+// before the account had it, or the key isn't published yet. Shown above the message box (pqNotice), where it covers
+// nothing; "Later" hides it until this tab closes. Until then this device reads what it can and writes nothing that
+// would need the key. why: 'seed' | 'publish' | 'upgrade', or null once it's done.
+function pqUnlockBar() {
+  if (composers.main) composers.main.renderExtras();
+}
+const pqLater = {
+  get() { try { return sessionStorage.getItem('hearth.pqLater') === '1'; } catch { return pqLaterHere; } },
+  set() { pqLaterHere = true; try { sessionStorage.setItem('hearth.pqLater', '1'); } catch { /* the tab remembers it */ } },
+  clear() { pqLaterHere = false; try { sessionStorage.removeItem('hearth.pqLater'); } catch { /* as above */ } },
+};
+let pqLaterHere = false;
+function pqNotice({ always = false } = {}) {
+  const why = sec.neededPassword();
+  if (!why || (!always && pqLater.get())) return null;
+  const go = () => unlockPq().catch((e) => { if (!e.cancelled) toast(e.message, 'error'); });
+  return h('div', { class: 'key-bar pq-bar', id: 'pq-unlock', role: 'status' }, icon('shield'),
+    h('span', null, why === 'seed'
+      ? 'Hearth added post-quantum encryption to your account. Enter your password once on this device to read and write what’s locked with it.'
       : why === 'upgrade' ? 'Hearth can protect your messages against future quantum computers too. Enter your password once to turn it on for your account.'
         : 'Enter your password once on this device to finish setting up your account’s post-quantum encryption.'),
-    h('button', { class: 'btn sm primary', onclick: () => unlockPq().catch((e) => { if (!e.cancelled) toast(e.message, 'error'); }) }, 'Enter password'));
+    h('span', { class: 'pq-bar-actions' },
+      always ? null : h('button', { class: 'btn sm ghost', onclick: () => { pqLater.set(); if (composers.main) composers.main.renderExtras(); } }, 'Later'),
+      h('button', { class: 'btn sm primary', onclick: go }, 'Enter password')));
+}
+// A DM whose server lists fewer encryption epochs than this device has seen (secure.js dmSendKey 'rollback'): after a
+// restore from a backup that's expected, and only you can tell. Confirmed, this device writes from what's listed now.
+function confirmDmRollback(dmId, why) {
+  modal({ title: 'This conversation’s encryption went back in time', size: 'sm', dismissable: true,
+    body: h('div', { class: 'stack' }, h('p', null, why),
+      h('p', { class: 'field-hint' }, 'If the server’s owner restored it from a backup, that’s expected: continue, and this device starts a new key for the conversation from what the server has now. If not, the server may be hiding newer keys; ask its owner first.')),
+    actions: [{ label: 'Cancel' }, { label: 'It was restored: continue', kind: 'primary', action: async () => {
+      await sec.acceptDmRollback(dmId);
+      toast('Done. Send your message again.');
+    } }] });
 }
 async function unlockPq() {
   const keys = await askPassword(app, { title: 'Unlock your encryption keys', text: 'Your post-quantum key is locked with your password, like the rest of your keys. Nothing else changes.', button: 'Unlock' });
   if (!keys) return;
   await app.unlockPq(keys);
-  if (!sec.neededPassword()) toast('Done: this device has your post-quantum key.');
+  // Still needed: what went wrong (the publish was refused, the network dropped), not a silent close.
+  if (sec.neededPassword()) throw sec.lastPqError() || new Error('That didn’t finish. Try again in a moment.');
+  toast('Done: this device has your post-quantum key.');
 }
 // The account just got its post-quantum key: a recovery key made before can't open what's locked to it.
 function pqUpgraded() {

@@ -896,7 +896,7 @@ export function pinPq(myId, user, fp) {
   savePins(myId, pins);
 }
 // The same for your own account, per device: once this device has seen your post-quantum key published (signed by you),
-// it never writes P-256 alone for you again because the server stops listing it (secure.js myPublishedPq).
+// it never writes P-256 alone for you again because the server stops listing it (secure.js myPqForWriting).
 const ownPqKey = (myId) => `hearth.pqself.${myId}`;
 export function pinOwnPq(myId, fp) {
   try { if (typeof fp === 'string' && fp && localStorage.getItem(ownPqKey(myId)) !== fp) localStorage.setItem(ownPqKey(myId), fp); } catch { /* storage blocked */ }
@@ -917,6 +917,43 @@ export function noteDmEpoch(myId, dmId, epoch) {
   all[dmId] = epoch;
   try { localStorage.setItem(hwKey(myId), JSON.stringify(all)); } catch { /* storage blocked */ }
 }
+// Forced back to n (after a server restore, when you've confirmed it: secure.js acceptDmRollback).
+export function setDmHighWater(myId, dmId, n) {
+  const all = loadHw(myId);
+  if (Number.isSafeInteger(n) && n > 0) all[dmId] = n; else delete all[dmId];
+  try { localStorage.setItem(hwKey(myId), JSON.stringify(all)); } catch { /* storage blocked */ }
+}
+// Per DM, what this device has seen of it going post-quantum: pq (the server has listed an epoch for it, opened or not),
+// first (when its first epoch was made, as an epoch this device opened says). Kept like the high-water mark.
+const dmPqKey = (myId) => `hearth.dmpq.${myId}`;
+function loadDmPq(myId) {
+  try { const x = JSON.parse(localStorage.getItem(dmPqKey(myId)) || '{}'); return x && typeof x === 'object' && !Array.isArray(x) ? x : {}; } catch { return {}; }
+}
+function saveDmPq(myId, all) { try { localStorage.setItem(dmPqKey(myId), JSON.stringify(all)); } catch { /* storage blocked */ } }
+export const dmPqSeen = (myId, dmId) => !!(loadDmPq(myId)[dmId] || {}).pq;
+export function noteDmPq(myId, dmId) {
+  const all = loadDmPq(myId);
+  if ((all[dmId] || {}).pq) return;
+  all[dmId] = { ...(all[dmId] || {}), pq: 1 };
+  saveDmPq(myId, all);
+}
+export const dmFirstAt = (myId, dmId) => { const t = Number((loadDmPq(myId)[dmId] || {}).first); return Number.isSafeInteger(t) && t > 0 ? t : 0; };
+export function noteDmFirst(myId, dmId, t) {
+  if (!Number.isSafeInteger(t) || t <= 0) return;
+  const all = loadDmPq(myId);
+  const cur = Number((all[dmId] || {}).first) || 0;
+  if (cur && cur <= t) return;
+  all[dmId] = { ...(all[dmId] || {}), pq: 1, first: t };
+  saveDmPq(myId, all);
+}
+// When this device last saw someone's keys change (the newest `until` among the keys it pinned for them before), or 0.
+export function lastKeyChange(myId, user) {
+  const p = user && loadPins(myId)[user.id];
+  if (!p || !Array.isArray(p.old)) return 0;
+  return p.old.reduce((t, k) => (k && validUntil(k.until) && k.until > t ? k.until : t), 0);
+}
+// Forgets that this account had a post-quantum key (a reset that legitimately dropped it).
+export function forgetOwnPq(myId) { try { localStorage.removeItem(ownPqKey(myId)); } catch { /* storage blocked */ } }
 export function pinnedPq(myId, user) {
   const p = user && loadPins(myId)[user.id];
   return !!p && typeof p.q === 'string' && !!p.q && p.e === user.publicKey;
