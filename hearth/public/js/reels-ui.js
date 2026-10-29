@@ -571,15 +571,26 @@ export function createReels(deps) {
   }
 
   // ---- the together bar and the side
+  // The bar is drawn anew whenever anything changes (someone swipes, a session starts): the control keyboard focus was on
+  // gets it back, found again by its class and words, so the next key (an Esc above all) isn't taken from the page.
   function drawBar() {
     if (!st) return;
+    const a = document.activeElement;
+    const was = a && st.bar.contains(a) ? `${a.tagName}|${a.className}|${a.getAttribute('aria-label') || a.textContent}` : null;
+    drawBarIn();
+    if (!was || st.bar.contains(document.activeElement)) return;
+    const again = [...st.bar.querySelectorAll('button, select, input')].find((el) => `${el.tagName}|${el.className}|${el.getAttribute('aria-label') || el.textContent}` === was);
+    if (again) again.focus({ preventScroll: true });
+  }
+  function drawBarIn() {
     const s = st.session;
     const me = deps.me();
     clear(st.bar);
     if (st.mine) {
       add(st.bar, h('span', { class: 'reels-with' }, `${st.items.length} video${st.items.length === 1 ? '' : 's'}`),
         h('span', { class: 'reels-sub' }, 'Sealed in your vault: the server can’t see them.'),
-        h('button', { class: 'btn ghost sm', onclick: () => deps.openImport() }, icon('download'), 'Import'));
+        h('button', { class: 'btn ghost sm', onclick: () => deps.openImport() }, icon('download'), 'Import'),
+        st.br ? st.br.barItems() : null); // (Brainrot's own switch: My Reels shares the Reels tabs' setting)
       return;
     }
     if (!s) {

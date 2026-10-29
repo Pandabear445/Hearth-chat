@@ -48,6 +48,18 @@ export async function brainrot(t) {
   });
   check(split.row === split.want, `Beside or below as the space allows (${JSON.stringify(split)}).`);
   check(split.row ? Math.abs(split.f[2] - split.u[2]) < 4 && split.u[0] >= split.f[0] + split.f[2] - 2 : Math.abs(split.f[3] - split.u[3]) < 4 && split.u[1] >= split.f[1] + split.f[3] - 2, `Half and half (${JSON.stringify(split)}).`);
+  // The "tap to start watching" cover (and the empty note) keep to the video's half: a tap on the gameplay, its ✕ or its
+  // settings is never taken for consent to load TikTok's and Instagram's players.
+  const tapsGameplay = await alice.page.evaluate(() => {
+    const m = document.querySelector('.reels-layer .reels-main');
+    const cover = m.querySelector('.reels-cover'); const empty = m.querySelector('.reels-empty');
+    const was = [cover.hidden, empty.hidden]; cover.hidden = false; empty.hidden = false;
+    const u = m.querySelector('.br-under').getBoundingClientRect();
+    const hits = [[0.5, 0.5], [0.95, 0.05], [0.05, 0.95]].map(([fx, fy]) => document.elementFromPoint(u.x + u.width * fx, u.y + u.height * fy));
+    [cover.hidden, empty.hidden] = was;
+    return hits.every((el) => !!el && !!el.closest('.br-under'));
+  });
+  check(tapsGameplay, 'With the start cover showing, a tap on the gameplay still reaches the gameplay (never the cover).');
   await running(alice, R, 'Block Parkour');
   // The slider: 0 is just the gameplay; 1 adds captions and the progress bar; 2 the counter and emoji rain.
   await alice.$(`${R} .br-gear`).click();

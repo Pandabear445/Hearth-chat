@@ -128,6 +128,26 @@ test('import: TikTok’s and Instagram’s exports, as files or in their .zip, r
   assert.deepEqual([capped.items.length, capped.capped], [I.ITEMS_MAX, true]);
 });
 
+test('import: a huge flat file and a zip of oversized entries stay within the caps', async () => {
+  const I = await clientModule('reels-import.js');
+  // Ten million zeros in one array: looked at one at a time (as far as the budget goes), never all queued at once. Before,
+  // each was put on the walk's stack first: hundreds of megabytes more at the peak, over 2 GB for a 40 MB file.
+  const flat = enc(`[${'0,'.repeat(10_000_000)}"https://www.tiktok.com/@a/video/${ID}"]`);
+  const peak = process.resourceUsage().maxRSS;
+  const r = await I.readExport([{ name: 'flat.json', bytes: flat }]);
+  const grew = (process.resourceUsage().maxRSS - peak) / 1024; // MB
+  assert.equal(r.capped, true);
+  assert.ok(grew < 400, `the peak grew by ${Math.round(grew)} MB`);
+  // Entries that each unpack past TEXT_MAX count toward the zip's 256 MB too: by the fourth or fifth it's reached, and the
+  // zip is given up on there (before, each was skipped and the next unpacked again, up to 5,000 times).
+  const over = Buffer.alloc(I.TEXT_MAX + 1024, 0x20);
+  const many = zip([...Array.from({ length: 5 }, (_, i) => ({ name: `big${i}.json`, data: over, lie: 100 })), { name: 'ok.txt', data: `https://www.tiktok.com/@a/video/${ID}` }]);
+  const z = await I.readExport([{ name: 'x.zip', bytes: many }]);
+  assert.equal(z.capped, true);
+  assert.equal(z.items.length, 0, 'what comes after is never read');
+  assert.ok(z.skipped.length >= 4 && z.skipped.length <= 5, String(z.skipped.length));
+});
+
 // ================================================================== My Reels
 test('my reels: the list is checked, and sealed with the vault key before it leaves the device', async () => {
   globalThis.window = globalThis.window || { crypto: globalThis.crypto };

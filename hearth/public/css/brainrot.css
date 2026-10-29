@@ -59,6 +59,10 @@ html.reduce-motion :is(.br-cap.br-pop-a, .br-cap.br-pop-b, .br-flash.on, .br-sha
 .reels-main.br-on.br-col > .br-under { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; }
 .reels-main.br-on.br-row > .reels-feed { right: 50%; }
 .reels-main.br-on.br-row > .br-under { position: absolute; top: 0; right: 0; bottom: 0; width: 50%; }
+/* The "tap to start watching" cover and the empty note keep to the video's half: over the gameplay they'd take a tap on
+   its own buttons for consent to load TikTok's and Instagram's players. */
+.reels-main.br-on.br-col > .reels-cover, .reels-main.br-on.br-col > .reels-empty { bottom: 50%; }
+.reels-main.br-on.br-row > .reels-cover, .reels-main.br-on.br-row > .reels-empty { right: 50%; }
 .reels-main.br-on .reel-card { padding: 4px 0; }
 /* Watch together: below the video, or beside it on a wide screen. Not in the mini player, nor in full screen. */
 .wt.br-on > .br-under { border-radius: 12px; }

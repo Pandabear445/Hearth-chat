@@ -306,7 +306,10 @@ export function createBrainrot(opts) {
     const dt = self.last ? Math.min(0.25, (now - self.last) / 1000) : 0;
     self.last = now;
     // Frames coming too slowly for a couple of seconds: a lower resolution (down to half).
-    if (dt > 1 / 28) self.slowFrames++; // (below 30 a second: a 30 Hz screen in power saving isn't "slow") else self.slowFrames = Math.max(0, self.slowFrames - 1);
+    // (Below 30 a second: a 30 Hz screen in power saving isn't "slow".) A good frame takes one back, so only a run of slow
+    // ones counts, not every hitch since it opened.
+    if (dt > 1 / 28) self.slowFrames++;
+    else self.slowFrames = Math.max(0, self.slowFrames - 1);
     if (self.slowFrames > 120 && self.quality > 0.5) { self.quality = Math.max(0.5, self.quality * 0.8); self.slowFrames = 0; sizeCanvas(); }
     const s = self.scale || 1;
     ctx.setTransform(s, 0, 0, s, 0, 0);

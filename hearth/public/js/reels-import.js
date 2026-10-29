@@ -23,6 +23,7 @@ export const NODES_MAX = 3000000; // JSON values looked at, all files together
 export const DEPTH_MAX = 64;
 export const ITEMS_MAX = 10000;
 export const UNPACKED_MAX = 256 * 1024 * 1024; // everything unpacked from one .zip together
+export const FAILED_MAX = 50; // entries of one .zip that can't be unpacked before the rest is given up on
 const READABLE = /\.(json|txt|html?)$/i;
 const URLISH = /https?:\/\/[^\s<>"'`\\]{1,2048}/gi;
 
@@ -42,17 +43,22 @@ function linksInText(text, add) {
   return true;
 }
 
-// Every string in a parsed JSON value, without recursion (a deeply nested file can't overflow the stack).
+// Every string in a parsed JSON value, in the file's own order (TikTok lists newest first), without recursion: each
+// array or object being looked through is one frame with how far it's got, so a deeply nested file can't overflow the
+// stack and a huge flat one (an array of millions of zeros) doesn't queue all of them at once either.
 function linksInJson(value, add, budget) {
-  const stack = [[value, 0]];
-  while (stack.length) {
-    const [v, depth] = stack.pop();
+  const frames = [];
+  const look = (v, depth) => {
     if (--budget.nodes < 0) return false;
-    if (typeof v === 'string') { if (v.includes('http') && !linksInText(v, add)) return false; continue; }
-    if (!v || typeof v !== 'object' || depth >= DEPTH_MAX) continue;
-    const kids = Array.isArray(v) ? v : Object.values(v);
-    // (Reversed onto the stack, so the file's own order is kept: TikTok lists newest first.)
-    for (let i = kids.length - 1; i >= 0; i--) stack.push([kids[i], depth + 1]);
+    if (typeof v === 'string') return !v.includes('http') || linksInText(v, add);
+    if (v && typeof v === 'object' && depth < DEPTH_MAX) frames.push({ kids: Array.isArray(v) ? v : Object.values(v), i: 0, depth: depth + 1 });
+    return true;
+  };
+  if (!look(value, 0)) return false;
+  while (frames.length) {
+    const f = frames[frames.length - 1];
+    if (f.i >= f.kids.length) { frames.pop(); continue; }
+    if (!look(f.kids[f.i++], f.depth)) return false;
   }
   return true;
 }
@@ -96,7 +102,12 @@ async function inflate(data) {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.length;
-    if (size > TEXT_MAX) { await reader.cancel().catch(() => {}); throw new Error('A file in that export is too big.'); }
+    if (size > TEXT_MAX) {
+      await reader.cancel().catch(() => {});
+      // What was unpacked counts toward the zip's limit all the same (readExport): a zip of thousands of entries that
+      // each unpack past TEXT_MAX is still work done.
+      throw Object.assign(new Error('A file in that export is too big.'), { unpacked: size });
+    }
     parts.push(value);
   }
   const out = new Uint8Array(size); let o = 0;
@@ -141,10 +152,16 @@ export async function readExport(files) {
     if (total > FILE_MAX) throw new Error('That’s too much to read at once (200 MB at most).');
     const zip = bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
     if (zip) {
-      let unpacked = 0;
+      let unpacked = 0; let failed = 0;
       for (const e of zipEntries(bytes)) {
         let data;
-        try { data = await e.bytes(); } catch { skipped.push(e.name); continue; }
+        try { data = await e.bytes(); } catch (err) {
+          skipped.push(e.name);
+          // A damaged or oversized entry still cost its unpacking; a zip made mostly of them is given up on.
+          unpacked += (err && err.unpacked) || 0;
+          if (unpacked > UNPACKED_MAX || ++failed > FAILED_MAX) { capped = true; break; }
+          continue;
+        }
         unpacked += data.byteLength;
         if (unpacked > UNPACKED_MAX) { capped = true; break; }
         if (!(await readOne(e.name, data))) break;

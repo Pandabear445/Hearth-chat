@@ -1309,7 +1309,7 @@ async function loadBootstrap() {
   LOOK.fromBootstrap(b.dms, b.servers); // (after the keys: a group chat's background opens with its group's)
   if (S.view.serverId && !S.servers.find((s) => s.id === S.view.serverId)) S.view = { type: 'home' };
   if (S.view.dmId && !S.dms.find((d) => d.id === S.view.dmId)) S.view = { type: 'home' };
-  if (!S.view.serverId && !S.view.dmId && !['friends', 'saved', 'people'].includes(S.view.type)) S.view = { type: 'home' };
+  if (!S.view.serverId && !S.view.dmId && !['friends', 'saved', 'people', 'myreels'].includes(S.view.type)) S.view = { type: 'home' };
   if (reading && currentKey() === readingKey && !S.view.jumpTo) S.view.restoreAt = reading;
   applyUserState(await extras);
   const savedFilter = await filterList;
@@ -2461,14 +2461,16 @@ function globalKeys(e) {
   }
   if (e.key === 'Escape' && !document.querySelector('.modal-backdrop, .popover, .sheet-backdrop')) {
     // Phones: the navigation drawer closes first, and focus goes back to the button that opened it.
-    if (document.body.classList.contains('nav-open')) { document.body.classList.remove('nav-open'); const t = $('.nav-toggle'); if (t) t.focus(); }
+    // Whatever one Esc closes, it's handled (preventDefault): nothing else takes the same press too (brainrot.js turns
+    // itself off on an Esc nothing else used, and an edit hidden behind the Reels tab mustn't go with it).
+    if (document.body.classList.contains('nav-open')) { e.preventDefault(); document.body.classList.remove('nav-open'); const t = $('.nav-toggle'); if (t) t.focus(); }
     // Phones: the side panel covers the conversation, so it closes next (beside the chat on wider screens, it stays).
-    else if (isPhoneLayout() && panelMode()) closePanel();
+    else if (isPhoneLayout() && panelMode()) { e.preventDefault(); closePanel(); }
     // Picking messages to delete ends first (wherever focus is: often the bar's own buttons), and only that.
     else if (S.select) { e.preventDefault(); endSelect({ refocus: true }); }
-    else if (S.editing) { S.editing = null; renderMessages(false); }
-    else if (composers.main && composers.main.state.replyTo) composers.main.setReply(null);
-    else if (S.panel === 'thread') closeThread();
+    else if (S.editing) { e.preventDefault(); S.editing = null; renderMessages(false); }
+    else if (composers.main && composers.main.state.replyTo) { e.preventDefault(); composers.main.setReply(null); }
+    else if (S.panel === 'thread') { e.preventDefault(); closeThread(); }
   }
 }
 // Ctrl+/ (⌘+/ on a Mac), Settings → Keybinds or the user menu: every shortcut, with this person's own call keys.
@@ -11566,7 +11568,7 @@ function restoreResume() {
   for (const [k, v] of r.drafts || []) drafts.set(k, v);
   const v = r.view || {};
   const ok = ((v.type === 'channel' || v.type === 'voice') && channelById(v.channelId)) || (v.type === 'dm' && S.dms.some((d) => d.id === v.dmId))
-    || ['home', 'friends', 'saved', 'updates', 'people'].includes(v.type) || (v.type === 'study' && S.me.studyEnabled) || (v.type === 'admin' && S.me.staffRole);
+    || ['home', 'friends', 'saved', 'updates', 'people', 'myreels'].includes(v.type) || (v.type === 'study' && S.me.studyEnabled) || (v.type === 'admin' && S.me.staffRole);
   if (!ok) return;
   setView({ ...v, jumpTo: undefined, restoreAt: typeof v.jumpTo === 'string' ? v.jumpTo : undefined });
   if (r.thread && r.thread.channelId === v.channelId && channelById(r.thread.channelId)) openThread({ id: r.thread.id, channelId: r.thread.channelId, serverId: r.thread.serverId }).catch(() => {});
