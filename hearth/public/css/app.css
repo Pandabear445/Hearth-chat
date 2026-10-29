@@ -3755,6 +3755,7 @@ html.reduce-motion :is(.pc-banner.bfx-flow, .pc-banner.bfx-aurora, .pc-banner.bf
 .section-order-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; border-radius: 10px; background: var(--hover); }
 .section-order-row.off { opacity: .6; }
 .fav-edit-row { grid-template-columns: 56px 1fr 1.4fr auto; }
+.fav-edit-row .emoji-input { width: 100%; min-width: 0; } /* fills its 56px column instead of spilling into the gap */
 /* Phones: the emoji and the label side by side, the value under them with the remove button (instead of the link
    rows' layout, where the first box takes a row to itself). */
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {

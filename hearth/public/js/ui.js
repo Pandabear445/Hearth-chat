@@ -90,7 +90,9 @@ export function popover(anchor, content, { side = 'right', align = 'start', clas
   layer().append(pop);
   openPop = pop;
   const r = anchor.getBoundingClientRect();
-  const pr = pop.getBoundingClientRect();
+  // Its layout size, not getBoundingClientRect(): the entry animation starts it scaled down (.97), which would place
+  // it off centre and let the edge clamps push it a few pixels past the screen.
+  const pr = { width: pop.offsetWidth, height: pop.offsetHeight };
   const gap = 8;
   let x;
   let y;
