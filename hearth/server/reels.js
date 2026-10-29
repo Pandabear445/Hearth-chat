@@ -61,7 +61,7 @@ module.exports = function setupReels(ctx) {
       key, viewers,
       session: s ? {
         by: s.by, hostOnly: s.hostOnly, mid: s.mid, i: s.i, playing: s.playing, position: s.position, updatedAt: s.updatedAt, startAt: s.startAt,
-        seq: s.seq, lastBy: s.lastBy, lastAction: s.lastAction, dir: s.dir,
+        seq: s.seq, lastBy: s.lastBy, lastAction: s.lastAction, dir: s.dir, brainrot: !!s.brainrot,
         following: viewers.filter((u) => room.following.has(u)),
         ready: room.ready && room.ready.mid === s.mid && room.ready.i === s.i ? [...room.ready.users].filter((u) => viewers.includes(u)) : [],
       } : null,
@@ -156,7 +156,7 @@ module.exports = function setupReels(ctx) {
       if (room.session) fail(409, 'People are already scrolling together here.');
       if (!isMessageOf(key, p.mid, uid)) fail(400, 'That isn’t a message here.');
       room.following = new Set(room.viewers.values());
-      room.session = { by: uid, hostOnly: !!p.hostOnly, mid: p.mid, i: idx(p.i), playing: true, position: 0, updatedAt: Date.now(), startAt: 0, seq: 1, lastBy: uid, lastAction: 'start', dir: 0 };
+      room.session = { by: uid, hostOnly: !!p.hostOnly, mid: p.mid, i: idx(p.i), playing: true, position: 0, updatedAt: Date.now(), startAt: 0, seq: 1, lastBy: uid, lastAction: 'start', dir: 0, brainrot: false };
       room.ready = null;
       emit(key);
       // People in this conversation's call who aren't on the tab: told it started, so they can come.
@@ -218,6 +218,17 @@ module.exports = function setupReels(ctx) {
       if (room.session.by !== uid && !isStaff(uid)) fail(403, 'Only the person who started it can change that.');
       room.session.hostOnly = !!p.hostOnly;
       touch(room.session, uid, 'mode');
+      emit(key);
+      return { ok: true };
+    }));
+    // Brainrot mode for everyone following (public/js/brainrot.js): a yes or no, nothing else. Each person can still
+    // turn it off for themselves, and someone never warned about it is asked first (all on their device).
+    socket.on('reels:brainrot', guard((p = {}) => {
+      const { key, room } = control(p);
+      const on = p.on === true;
+      if (!!room.session.brainrot === on) return { ok: true };
+      room.session.brainrot = on;
+      touch(room.session, uid, 'brainrot');
       emit(key);
       return { ok: true };
     }));

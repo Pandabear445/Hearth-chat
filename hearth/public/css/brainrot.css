@@ -1,0 +1,78 @@
+/* Brainrot mode (public/js/brainrot.js, docs/design/BRAINROT.md): the content on top (or on the left), gameplay
+   underneath (or on the right), and the extras over the gameplay. */
+.br-under { position: relative; overflow: hidden; background: #0b0d18; color: #fff; contain: layout paint; min-height: 0; min-width: 0; }
+.br-under[hidden] { display: none; }
+.br-stage { position: absolute; inset: 0; container-type: size; }
+.br-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+/* "Your own background": the video covers the area (cropped, never letterboxed), and can't be clicked or focused. */
+.br-stage .br-frame { position: absolute; top: 50%; left: 50%; width: max(100cqw, calc(100cqh * 16 / 9)); height: auto; aspect-ratio: 16 / 9; transform: translate(-50%, -50%); border: 0; pointer-events: none; }
+.br-note { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; text-align: center; background: rgb(0 0 0 / .62); }
+.br-note p { margin: 0; max-width: 360px; font-size: 13.5px; line-height: 1.45; }
+
+.br-hud { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.br-prog { position: absolute; top: 0; left: 0; right: 0; height: 5px; background: rgb(255 255 255 / .22); }
+.br-prog i { display: block; height: 100%; background: linear-gradient(90deg, #ff3df2, #ffe14d); transform-origin: left center; transform: scaleX(0); }
+.br-score { position: absolute; top: 14px; left: 12px; padding: 2px 10px; border-radius: 999px; background: rgb(0 0 0 / .4); font: 900 clamp(15px, 3.4vmin, 24px)/1.4 system-ui, sans-serif; font-variant-numeric: tabular-nums; text-shadow: 0 2px 0 #000; }
+/* Big TikTok-style captions: white, outlined, a few words at a time (text only: textContent). */
+.br-cap { position: absolute; left: 50%; top: 16%; width: max-content; max-width: 92%; transform: translateX(-50%); text-align: center; text-transform: uppercase; overflow-wrap: anywhere;
+  font: 900 clamp(22px, 7vmin, 56px)/1.05 system-ui, sans-serif; color: #fff; -webkit-text-stroke: 2px #000; paint-order: stroke fill; text-shadow: 0 4px 0 rgb(0 0 0 / .55); }
+.br-cap:empty { display: none; }
+.br-cap.br-pop-a { animation: br-pop-a .34s cubic-bezier(.2, 1.6, .4, 1); }
+.br-cap.br-pop-b { animation: br-pop-b .34s cubic-bezier(.2, 1.6, .4, 1); }
+@keyframes br-pop-a { from { transform: translateX(-50%) scale(.6) rotate(-4deg); } to { transform: translateX(-50%) scale(1); } }
+@keyframes br-pop-b { from { transform: translateX(-50%) scale(.6) rotate(4deg); } to { transform: translateX(-50%) scale(1); } }
+/* A milestone: one soft flash (the limiter allows at most 3 a second). */
+.br-flash { position: absolute; inset: 0; z-index: 1; pointer-events: none; background: #fff; opacity: 0; }
+.br-flash.on { animation: br-flash .24s ease-out; }
+@keyframes br-flash { from { opacity: .16; } to { opacity: 0; } }
+/* A reaction: a small shake of the whole split (never with reduced motion). */
+.br-shake { animation: br-shake .32s linear; }
+@keyframes br-shake { 0%, 100% { translate: 0 0; } 20% { translate: -3px 1px; } 40% { translate: 3px -1px; } 60% { translate: -2px 0; } 80% { translate: 2px 1px; } }
+@media (prefers-reduced-motion: reduce) { .br-cap.br-pop-a, .br-cap.br-pop-b, .br-flash.on, .br-shake { animation: none; } }
+html.reduce-motion :is(.br-cap.br-pop-a, .br-cap.br-pop-b, .br-flash.on, .br-shake) { animation: none !important; }
+
+.br-tools { position: absolute; top: 10px; right: 8px; z-index: 3; display: flex; gap: 6px; }
+.br-tools .icon-btn { width: 36px; height: 36px; border-radius: 50%; background: rgb(0 0 0 / .55); color: #fff; }
+.br-tools .icon-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.br-panel { position: absolute; top: 52px; right: 8px; z-index: 4; width: min(320px, calc(100% - 16px)); max-height: calc(100% - 60px); overflow-y: auto; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 14px; background: rgb(var(--s1)); color: var(--text); border: 1px solid var(--line); box-shadow: var(--pop-shadow); font-size: 13.5px; }
+.br-panel[hidden] { display: none; }
+.br-panel-head { display: flex; align-items: center; justify-content: space-between; }
+.br-games { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; }
+.br-games legend { padding: 0; margin-bottom: 6px; font-weight: 600; }
+.br-choice { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line); cursor: pointer; }
+.br-choice.on { border-color: var(--accent); background: rgb(var(--accent-rgb) / .15); }
+.br-choice input { margin: 0; }
+.br-yt-form { display: flex; flex-wrap: wrap; gap: 6px; }
+.br-yt-form .input { flex: 1 1 160px; min-width: 0; }
+.br-field { display: flex; flex-direction: column; gap: 4px; }
+.br-slider { width: 100%; accent-color: var(--accent); }
+.br-level { font-size: 12px; color: var(--muted); }
+.br-toggle.active, .br-everyone.active { background: rgb(var(--accent-rgb) / .18); }
+.br-toggle .ic { width: 16px; height: 16px; }
+.br-invite { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+
+/* ---- the split, in each place */
+/* The Reels tab: half and half, one above the other (phones) or side by side (wide). Nothing is moved: the feed
+   just gets smaller, so its players don't reload. */
+.reels-main.br-on.br-col > .reels-feed { bottom: 50%; }
+.reels-main.br-on.br-col > .br-under { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; }
+.reels-main.br-on.br-row > .reels-feed { right: 50%; }
+.reels-main.br-on.br-row > .br-under { position: absolute; top: 0; right: 0; bottom: 0; width: 50%; }
+.reels-main.br-on .reel-card { padding: 4px 0; }
+/* Watch together: below the video, or beside it on a wide screen. Not in the mini player, nor in full screen. */
+.wt.br-on > .br-under { border-radius: 12px; }
+.wt.br-on.br-col > .br-under { height: clamp(180px, 42vh, 460px); }
+.wt-dock:not(.mini) .wt.br-on.br-row:not(.wt-is-full) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 8px; }
+.wt-dock:not(.mini) .wt.br-on.br-row:not(.wt-is-full) > * { grid-column: 1 / -1; }
+.wt-dock:not(.mini) .wt.br-on.br-row:not(.wt-is-full) > .wt-stage { grid-column: 1; grid-row: 1; }
+.wt-dock:not(.mini) .wt.br-on.br-row:not(.wt-is-full) > .br-under { grid-column: 2; grid-row: 1; min-height: 200px; }
+.wt-dock.mini .br-under, .wt.wt-is-full > .br-under { display: none; }
+/* A call: under the tiles. */
+.call-stage.br-on > .br-under { flex: none; height: clamp(180px, 38vh, 420px); border-radius: 12px; }
+@media (max-width: 760px) { .call-stage.br-on > .br-under { height: 42vh; } }
+/* The Reels tab's bar on a phone: with the Brainrot button too, still one line (the hint gives way). */
+.reels-layer.full .reels-bar:has(> .reels-start) { flex-wrap: nowrap; }
+.reels-layer.full .reels-bar:has(> .reels-start) > .reels-sub { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reels-layer.full .reels-bar > * { flex-shrink: 0; }
+.reels-layer.full .reels-bar > .reels-sub { flex-shrink: 1; }

@@ -24,6 +24,7 @@ import { watchPlayer, dropWatchPlayer } from './watch.js';
 import { socialLinks, parseSocialUrl, playerMode } from './social.js';
 import { socialEmbedEl, resolveSocial } from './social-embed.js';
 import { createReels } from './reels-ui.js';
+import { createBrainrot } from './brainrot.js';
 import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice, voicePlaying } from './features.js';
 import { rankRelays, chooseIce, relayTime, iceStale, usableIce, memberRelayHosts, avoidsMemberRelays, isMemberRelay, isRelay } from './relays.js';
 import { watchConnection } from './conn.js';
@@ -10770,6 +10771,7 @@ function callControls(room) {
     h('button', { class: `round-btn${camOn ? ' on' : ''}`, 'data-tip': camOn ? 'Turn camera off' : 'Turn camera on', 'aria-label': camOn ? 'Turn camera off' : 'Turn camera on', 'aria-pressed': String(camOn), onclick: () => toggleCamera() }, icon(camOn ? 'video' : 'videoOff')),
     (S.config.features || {}).watch === false ? null : h('button', { class: `round-btn${S.watch[room] ? ' on' : ''}`, 'data-tip': S.watch[room] ? 'Add a video to the queue' : 'Watch together', 'aria-label': 'Watch together', onclick: () => openWatchStart(room, !!S.watch[room]) }, icon('eye')),
     h('button', { class: `round-btn${scrOn ? ' on' : ''}`, 'data-tip': scrOn ? 'Stop sharing' : 'Share your screen', 'aria-label': scrOn ? 'Stop sharing your screen' : 'Share your screen', 'aria-pressed': String(scrOn), onclick: () => toggleScreen() }, icon('monitor')),
+    callBr.s && callBr.room === room ? h('button', { class: `round-btn br-call${callBr.s.isActive() ? ' on' : ''}`, 'data-tip': callBr.s.isActive() ? 'Turn off Brainrot mode (Esc)' : 'Brainrot mode: gameplay under the call', 'aria-label': 'Brainrot mode', 'aria-pressed': String(callBr.s.isActive()), onclick: () => callBr.s.toggle() }, icon('gamepad')) : null,
     h('button', { class: 'round-btn sb-open', 'data-tip': 'Soundboard', 'aria-label': 'Soundboard', 'data-pop-anchor': '', onclick: (e) => board.openPicker(e.currentTarget) }, icon('music')),
     h('button', { class: 'round-btn hang', 'data-tip': 'Leave call', 'aria-label': 'Leave call', onclick: () => { voice.leave(); playSound('selfLeave'); } }, icon('phoneOff')));
 }
@@ -10806,11 +10808,35 @@ function fillStage(el) {
     if (!host) host = h('div', { class: 'cs-watch-host', dataset: { room } });
   } else if (host) { host.remove(); host = null; }
   syncWatchDock();
-  [...el.children].forEach((c) => { if (c !== host) c.remove(); });
+  // Brainrot mode (brainrot.js): gameplay under the call's tiles, for the call you're in. It's never moved once
+  // it's in this stage (a background video would reload): the rest is put around it.
+  const br = inCall ? callBrainrot(room, el) : null;
+  if (!inCall && callBr.room === room) { callBr.s.destroy(); callBr.room = null; callBr.s = null; } // left the call: it goes
+  [...el.children].forEach((c) => { if (c !== host && c !== br) c.remove(); });
   const warn = hidden.length ? h('p', { class: 'cs-hidden-peers', role: 'alert' }, `Warning: you\u2019re connected to ${hidden.map((p) => nameInServer(serverOfChannel(room), getUser(p.userId))).join(', ')}, who the server doesn\u2019t list in this call. Leave the call if you didn\u2019t expect them.`) : null;
   const rest = [warn, tiles.length ? body : h('div', { class: 'empty-state' }, h('p', null, 'No one\u2019s here yet.')), callControls(room)].filter(Boolean);
-  if (host) { if (!host.parentNode) el.append(host); el.insertBefore(head, host); el.append(...rest); el.classList.add('watching'); }
-  else { el.append(head, ...rest); el.classList.remove('watching'); }
+  const order = [head, host, ...rest].filter(Boolean);
+  if (br) order.splice(order.length - 1, 0, br);
+  if (br && br.parentNode === el) { const i = order.indexOf(br); br.before(...order.slice(0, i)); br.after(...order.slice(i + 1)); }
+  else el.append(...order);
+  el.classList.toggle('watching', !!host);
+}
+const callBr = { room: null, s: null };
+function callBrainrot(room, stageEl) {
+  if (callBr.room !== room) {
+    if (callBr.s) callBr.s.destroy();
+    callBr.room = room;
+    callBr.s = createBrainrot({
+      kind: 'call', frame: stageEl, me: () => S.me && S.me.id, row: () => false, focusToggle: () => { const b = $('.br-call'); if (b) b.focus(); },
+      available: () => !!voice && voice.channelId === room,
+      caption: () => (S.watch[room] && S.watch[room].item.title) || '',
+      nameOf: (id) => nameInServer(serverOfChannel(room), getUser(id)),
+      // On or off: the call's button says so (without drawing the call again).
+      onChange: () => $$('.br-call').forEach((b) => { const on = !!callBr.s && callBr.s.isActive(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); b.dataset.tip = on ? 'Turn off Brainrot mode (Esc)' : 'Brainrot mode: gameplay under the call'; }),
+    });
+  } else callBr.s.setFrame(stageEl);
+  callBr.s.sync();
+  return callBr.s.el;
 }
 const watchCtx = (room) => ({
   socket, me: S.me, isStaff: !!S.me.staffRole,

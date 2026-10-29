@@ -5,6 +5,7 @@
 import { h, clear, icon, toast } from './util.js';
 import { outsideVideoHost } from './outside.js';
 import { playerSrc, SOCIAL_SANDBOX, SOCIAL_ALLOW, TIKTOK_ORIGIN, tiktokCommand, readTiktokMessage } from './social.js';
+import { createBrainrot } from './brainrot.js';
 
 const DRIFT = 1.6; // seconds out of step before we correct
 const clock = (s) => { s = Math.max(0, Math.floor(s || 0)); const hh = Math.floor(s / 3600); const mm = Math.floor((s % 3600) / 60); const ss = String(s % 60).padStart(2, '0'); return hh ? `${hh}:${String(mm).padStart(2, '0')}:${ss}` : `${mm}:${ss}`; };
@@ -22,13 +23,18 @@ export function expectedPosition(st, offset) {
 // can never navigate the Hearth tab itself.
 const PLAYER_SANDBOX = 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox';
 const YOUTUBE_ORIGIN = 'https://www.youtube-nocookie.com';
-function youtubeAdapter(item, onEvent) {
+// background (Brainrot mode's "your own background", brainrot.js): muted, looping, no controls, can't be focused or
+// clicked, and a tighter sandbox (no popups, no full screen).
+export function youtubeAdapter(item, onEvent, { background = false } = {}) {
   let t = 0; let state = -1; let ready = false; let dur = 0; let rate = 1;
   // YouTube's embed doesn't report seeks, so a jump in its reported time is one: dragging the progress bar,
   // the arrow keys, or double-tapping. (Without this, a seek was undone by the next drift check.)
   let lastT = null; let lastAt = 0; let ownSeekUntil = 0;
-  const src = `${YOUTUBE_ORIGIN}/embed/${item.src}?enablejsapi=1&playsinline=1&rel=0&modestbranding=1&controls=1&origin=${encodeURIComponent(location.origin)}`;
-  const frame = h('iframe', { class: 'wt-frame', sandbox: PLAYER_SANDBOX, src, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: true, title: item.title || 'YouTube video', referrerpolicy: 'strict-origin-when-cross-origin' });
+  const opts = background ? `controls=0&mute=1&autoplay=1&loop=1&playlist=${item.src}&disablekb=1&fs=0&iv_load_policy=3` : 'controls=1';
+  const src = `${YOUTUBE_ORIGIN}/embed/${item.src}?enablejsapi=1&playsinline=1&rel=0&modestbranding=1&${opts}&origin=${encodeURIComponent(location.origin)}`;
+  const frame = background
+    ? h('iframe', { class: 'wt-frame', sandbox: 'allow-scripts allow-same-origin', src, allow: 'autoplay; encrypted-media', title: item.title || 'Background video', referrerpolicy: 'strict-origin-when-cross-origin', tabindex: '-1', 'aria-hidden': 'true' })
+    : h('iframe', { class: 'wt-frame', sandbox: PLAYER_SANDBOX, src, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: true, title: item.title || 'YouTube video', referrerpolicy: 'strict-origin-when-cross-origin' });
   // Commands go only to YouTube's player, never to whatever page the frame might have ended up on.
   const send = (func, args = []) => frame.contentWindow && frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args }), YOUTUBE_ORIGIN);
   const onMsg = (e) => {
@@ -62,7 +68,7 @@ function youtubeAdapter(item, onEvent) {
   });
   return {
     el: frame, live: false,
-    play: () => send('playVideo'), pause: () => send('pauseVideo'),
+    play: () => send('playVideo'), pause: () => send('pauseVideo'), mute: () => send('mute'),
     seek: (s) => { t = s; lastT = s; lastAt = Date.now(); ownSeekUntil = Date.now() + 1500; send('seekTo', [s, true]); }, rate: (r) => send('setPlaybackRate', [r]),
     time: () => (state === 1 && lastT !== null ? lastT + ((Date.now() - lastAt) / 1000) * rate : t), playing: () => state === 1 || state === 3, duration: () => dur,
     destroy: () => window.removeEventListener('message', onMsg),
@@ -198,6 +204,15 @@ function createPlayer(room, initialCtx) {
   const queueEl = h('div', { class: 'wt-queue' });
   el.append(stage, bar, queueEl);
   let adapter = null; let itemId = null;
+  // Brainrot mode (brainrot.js): gameplay under the video (beside it on a wide screen); hidden in the mini player.
+  const br = createBrainrot({
+    kind: 'watch', frame: el, me: () => self.ctx.me && self.ctx.me.id, available: () => !!self.state,
+    row: (w) => w >= 900, nameOf: (id) => self.ctx.userName(id),
+    caption: () => (self.state && self.state.item.title) || '',
+    progress: () => { const d = adapter && !adapter.live && adapter.duration ? adapter.duration() : 0; return d ? expectedPosition(self.state, self.offset) / d : null; },
+    onChange: () => { if (self.state) drawBar(); },
+  });
+  stage.after(br.el);
   // The second upright video beside the first (st.side), and the "start together" countdown over both.
   let side = null; let sideId = null; let startTimer = null; let countTimer = null; let sideRuns = null;
   const countEl = h('div', { class: 'wt-count', 'aria-live': 'assertive', hidden: true });
@@ -362,6 +377,7 @@ function createPlayer(room, initialCtx) {
         h('button', { class: 'btn ghost sm', onclick: () => addDialog(true) }, '+ Queue'),
         st.queue.length && canControl() ? h('button', { class: 'btn ghost sm', onclick: () => self.ctx.socket.emit('watch:next', { itemId, skip: true }, (r) => r && r.error && toast(r.error, 'error')) }, 'Skip') : null,
         st.by === self.ctx.me.id || self.ctx.isStaff ? h('button', { class: `btn ghost sm${st.hostOnly ? ' active' : ''}`, onclick: () => self.ctx.socket.emit('watch:control', { action: 'hostOnly', value: !st.hostOnly }, () => {}) }, st.hostOnly ? 'Let everyone control' : 'Only I control') : null,
+        ...br.barItems(),
         h('a', { class: 'btn ghost sm', href: st.item.link, target: '_blank', rel: 'noopener noreferrer' }, icon('external')),
         canControl() ? h('button', { class: 'btn ghost sm danger-text', onclick: () => self.ctx.socket.emit('watch:stop', {}, (r) => r && r.error && toast(r.error, 'error')) }, 'Stop') : null));
     clear(queueEl);
@@ -388,6 +404,7 @@ function createPlayer(room, initialCtx) {
     }
     self.state = st;
     el.hidden = !st;
+    br.sync();
     if (!st) {
       if (isFull()) exitFull();
       if (adapter) { adapter.destroy(); adapter = null; }
@@ -445,6 +462,7 @@ function createPlayer(room, initialCtx) {
     document.removeEventListener('fullscreenchange', onFullChange);
     document.removeEventListener('webkitfullscreenchange', onFullChange);
     document.removeEventListener('keydown', onF);
+    br.destroy();
     if (adapter) adapter.destroy(); clearInterval(timer); clearTimeout(playCheck); clearTimeout(idleTimer); el.remove();
   };
   self.el = el;
