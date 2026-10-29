@@ -266,16 +266,24 @@ function shrinkGif(buf, max = EMOJI_PX) {
   const fit = fitSize(W, H, max);
   const sx = fit.width / W;
   const sy = fit.height / H;
+  // An edge in the GIF's own pixels on the new screen, worked out in whole numbers: x * (fit / W) in floating point
+  // can land just under a whole number (161 * (128 / 161) is 127.99…), which would leave a full-screen frame one
+  // pixel short and its last column or row never drawn.
+  const toX = (x) => Math.floor((x * fit.width) / W);
+  const toY = (y) => Math.floor((y * fit.height) / H);
   const out = [];
   const head = Buffer.from(buf.subarray(0, 13 + tableSize(buf[10])));
   head.writeUInt16LE(fit.width, 6);
   head.writeUInt16LE(fit.height, 8);
   out.push(head);
   let transparent = -1; // from the graphic control block just before a frame
+  let gceAt = -1; // where in out that block is, so an unseen frame can be made transparent
   walkGif(buf, {
     onExt: (i, e) => {
-      if (buf[i + 1] === 0xf9 && buf[i + 2] === 4 && i + 7 <= e) transparent = buf[i + 3] & 1 ? buf[i + 6] : -1;
-      out.push(buf.subarray(i, e));
+      const gce = buf[i + 1] === 0xf9 && buf[i + 2] === 4 && i + 7 <= e;
+      if (gce) transparent = buf[i + 3] & 1 ? buf[i + 6] : -1;
+      out.push(gce ? Buffer.from(buf.subarray(i, e)) : buf.subarray(i, e));
+      if (gce) gceAt = out.length - 1;
     },
     onFrame: (i, e) => {
       const left = buf.readUInt16LE(i + 1);
@@ -292,10 +300,10 @@ function shrinkGif(buf, max = EMOJI_PX) {
       const y0 = Math.min(top, H);
       const x1 = Math.min(left + fw, W);
       const y1 = Math.min(top + fh, H);
-      let nx0 = Math.floor(x0 * sx);
-      let ny0 = Math.floor(y0 * sy);
-      let nx1 = Math.floor(x1 * sx);
-      let ny1 = Math.floor(y1 * sy);
+      let nx0 = toX(x0);
+      let ny0 = toY(y0);
+      let nx1 = toX(x1);
+      let ny1 = toY(y1);
       if (x0 >= x1 || y0 >= y1) { nx1 = nx0 + 1; ny1 = ny0 + 1; } // nothing of it shows: one pixel
       if (nx1 <= nx0) nx1 = nx0 + 1;
       if (ny1 <= ny0) ny1 = ny0 + 1;
@@ -306,7 +314,14 @@ function shrinkGif(buf, max = EMOJI_PX) {
       // (A transparent index the code size can't write would break the codes after it.)
       const fill = transparent >= 0 && transparent < (1 << minCode) ? transparent : 0;
       const offScreen = x0 >= x1 || y0 >= y1; // nothing of it shows: kept (for its timing) as one unseen pixel
+      if (offScreen) {
+        // Unseen means transparent: its control block says that pixel's colour is see-through (one is added if it
+        // had none), else the pixel would be drawn in colour 0 where the GIF shows nothing, and stay there.
+        if (gceAt >= 0) { out[gceAt][3] |= 1; out[gceAt][6] = fill; }
+        else out.push(Buffer.from([0x21, 0xf9, 4, 1, 0, 0, fill, 0]));
+      }
       transparent = -1;
+      gceAt = -1;
       const src = fw && fh && !offScreen ? lzwDecode(joinSubBlocks(buf, data + 1, e), minCode, fw * fh, fill) : new Uint8Array(0);
       // Rows in the order they're stored (interlaced frames store every 8th row first, and so on).
       let rowOf = null;

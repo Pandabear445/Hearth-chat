@@ -180,6 +180,45 @@ test('review: a frame bigger than a small screen is clipped to it; a transparent
   assert.deepEqual([f2.w, f2.h, f2.px[0]], [1, 1, 0]);
 });
 
+test('review: a frame that fills the screen fills the new one exactly, at sizes where floating point falls just short', () => {
+  // 161 * (128 / 161) is 127.99… in floating point: the last column and row must still be drawn.
+  for (const [w, h] of [[161, 161], [138, 200], [161, 64], [129, 129], [4096, 4095]]) {
+    const big = w * h > 600000;
+    const src = gifOf({ width: w, height: h, frames: [{ w: big ? 1 : w, h: big ? 1 : h, color: checker }, ...(big ? [] : [{ x: 0, y: 0, w, h, color: () => 4 }])] });
+    if (big) { src.writeUInt16LE(w, 6); src.writeUInt16LE(h, 8); }
+    const fit = E.fitSize(w, h);
+    const g = readGif(E.fitEmoji(src).buf);
+    assert.deepEqual([g.W, g.H], [fit.width, fit.height], `${w}×${h}`);
+    if (big) continue;
+    for (const f of g.frames) assert.deepEqual([f.x, f.y, f.w, f.h], [0, 0, fit.width, fit.height], `${w}×${h}: a full-screen frame keeps the whole screen`);
+    assert.ok(g.frames[1].px.every((v) => v === 4));
+  }
+  // A frame ending at the screen's right edge ends at the new screen's right edge too.
+  const g = readGif(E.fitEmoji(gifOf({ width: 161, height: 161, frames: [{ x: 80, y: 100, w: 81, h: 61, color: () => 2 }] })).buf);
+  const [f] = g.frames;
+  assert.deepEqual([f.x + f.w, f.y + f.h], [128, 128]);
+});
+
+test('review: a frame wholly off the screen without a transparent colour adds nothing that shows', () => {
+  // The second frame sits at (300, 300) on a 200×200 screen and its control block names no transparent colour.
+  const off = gifOf({ width: 200, height: 200, frames: [{ w: 200, h: 200, color: () => 6 }, { x: 300, y: 300, w: 20, h: 20, color: () => 0, delay: 9 }] });
+  const g = readGif(E.fitEmoji(off).buf);
+  assert.equal(g.frames.length, 2, 'kept, for its timing');
+  const f = g.frames[1];
+  assert.deepEqual([f.w, f.h], [1, 1]);
+  assert.equal(f.gce.delay, 9);
+  assert.equal(f.gce.transparent, f.px[0], 'its one pixel is see-through');
+  assert.equal(f.gce.flags >> 2 & 7, 2, 'disposal kept');
+  // With no control block at all, one is added that makes the pixel see-through.
+  const u16 = (n) => [n & 255, (n >> 8) & 255];
+  const bare = Buffer.from([...Buffer.from('GIF89a'), ...u16(200), ...u16(200), 0x81, 0, 0, ...Buffer.alloc(12, 9),
+    0x2c, 0, 0, 0, 0, ...u16(200), ...u16(200), 0, 2, 1, 0x04, 0,
+    0x2c, ...u16(500), ...u16(500), 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0, 0x3b]);
+  const b = readGif(E.fitEmoji(bare).buf);
+  assert.equal(b.frames.length, 2);
+  assert.ok(b.frames[1].gce && b.frames[1].gce.transparent === b.frames[1].px[0]);
+});
+
 test('anything else too big is refused with what to do; so is an emoji over 512 KB', () => {
   assert.throws(() => E.fitEmoji(png(256, 256)), (e) => e instanceof E.EmojiRejected && /256×256/.test(e.message) && /128×128/.test(e.message));
   assert.throws(() => E.fitEmoji(webpX(300, 300, true)), (e) => /animated/.test(e.message) && /GIF/.test(e.message));
