@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 24;
+const SCHEMA_VERSION = 25;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1753,6 +1753,28 @@ addColumn('servers', 'discover_about', "TEXT NOT NULL DEFAULT ''");
 addColumn('servers', 'discover_tags', "TEXT NOT NULL DEFAULT '[]'");
 addColumn('servers', 'discover_at', 'INTEGER');
 db.exec('CREATE INDEX IF NOT EXISTS idx_servers_discoverable ON servers(discoverable) WHERE discoverable = 1');
+
+// v25 (soundboard): everyone's own soundboard (server/soundboard.js). Each sound is end-to-end encrypted by the app
+// with a key only its owner's devices can derive (the personal vault key, e2ee.js vaultKey): the server stores
+// ciphertext and never learns a sound's name, picture or audio.
+//   soundboard_items  one row per sound (kind 'sound': meta = the sealed name, emoji, color, volume and the audio's
+//                     own key; audio = the encrypted audio, base64) and one for the board's layout (kind 'layout':
+//                     meta = the sealed grid, size, order and pages; audio = '').
+// The new Use Soundboard permission (perms.js) is on for @everyone by default, as in Discord, so servers made
+// before it get it on their @everyone role too.
+db.exec(`
+CREATE TABLE IF NOT EXISTS soundboard_items (
+  id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  meta TEXT NOT NULL DEFAULT '',
+  audio TEXT NOT NULL DEFAULT '',
+  size INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, id)
+);
+`);
+if (hasData && fromVersion < 25) db.prepare('UPDATE roles SET permissions = permissions | ? WHERE id = server_id').run(1 << 22);
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
 db.exec('COMMIT');

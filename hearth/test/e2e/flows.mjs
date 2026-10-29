@@ -5871,6 +5871,110 @@ async function community(t) {
   delete t.people.nova;
 }
 
+// ------------------------------------------------------------------ soundboards and profile extras (v25)
+// A WAV made here: a beep `seconds` long (8 kHz, 8-bit mono).
+function beepWav(seconds) {
+  const n = Math.round(8000 * seconds);
+  const b = Buffer.alloc(44 + n);
+  b.write('RIFF', 0); b.writeUInt32LE(36 + n, 4); b.write('WAVE', 8); b.write('fmt ', 12); b.writeUInt32LE(16, 16);
+  b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(8000, 24); b.writeUInt32LE(8000, 28); b.writeUInt16LE(1, 32); b.writeUInt16LE(8, 34);
+  b.write('data', 36); b.writeUInt32LE(n, 40);
+  for (let i = 0; i < n; i++) b[44 + i] = 128 + Math.round(90 * Math.sin((2 * Math.PI * 660 * i) / 8000));
+  return b;
+}
+async function soundboardAndProfile(t) {
+  const { alice, bob } = t.people;
+  const aliceId = await alice.page.evaluate(() => localStorage.getItem('hearth.userId'));
+  // Settings → Soundboard: a page renamed .mp3 and a sound that's too long are refused before anything is sent.
+  await alice.openSettings('Soundboard');
+  const page = alice.$('.set-content .sb-editor');
+  await page.locator('.set-h', { hasText: 'Your sounds (0/24)' }).waitFor();
+  const file = page.locator('input[type=file]');
+  await file.setInputFiles({ name: 'evil.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('<html><script>alert(1)</script>'.padEnd(400, ' ')) });
+  await alice.toast('isn’t a sound Hearth can play');
+  await file.setInputFiles({ name: 'long.wav', mimeType: 'audio/wav', buffer: beepWav(7) });
+  await alice.toast('up to 5 seconds long');
+  check(!t.server.rows('SELECT 1 FROM soundboard_items').length, 'Nothing should reach the server for a refused file.');
+  // A real one: named, with an emoji and a color.
+  await file.setInputFiles({ name: 'airhorn.wav', mimeType: 'audio/wav', buffer: beepWav(0.8) });
+  const add = await alice.dialog('Add a sound');
+  await add.locator('label.field', { hasText: 'Name' }).locator('input').fill('Airhorn');
+  await add.locator('input[aria-label="Emoji"]').fill('📯');
+  await add.locator('.modal-foot .btn.primary').click();
+  await alice.toast('Sound added.');
+  await page.locator('.sb-edit-item .sb-btn', { hasText: 'Airhorn' }).waitFor();
+  await page.locator('.set-h', { hasText: 'Your sounds (1/24)' }).waitFor();
+  // The server only has ciphertext: neither the name nor the WAV header.
+  const rows = t.server.rows("SELECT kind, meta, audio FROM soundboard_items WHERE user_id = ?", aliceId);
+  check(rows.some((r) => r.kind === 'sound') && rows.every((r) => r.meta.startsWith('x1:') && !r.meta.includes('Airhorn')), 'Sound details should be sealed on the server.');
+  check(rows.every((r) => !Buffer.from(r.audio || '', 'base64').includes('WAVE')), 'Sound audio should be encrypted on the server.');
+  // Layout: a list, and a second page.
+  await page.locator('.chips[aria-label="Show as"] .chip', { hasText: exact('List') }).click();
+  await page.locator('.sb-edit-list.sb-list').waitFor();
+  await page.locator('button', { hasText: '+ Page' }).click();
+  await page.locator('.sb-tab', { hasText: 'Page 2' }).waitFor();
+  await page.locator('.sb-tab', { hasText: 'Sounds' }).click();
+  await page.locator('.sb-edit-item .sb-btn', { hasText: 'Airhorn' }).waitFor();
+  // On her profile, by choice.
+  await page.locator('.toggle-row', { hasText: 'Show my soundboard on my profile' }).locator('.switch').click();
+  for (let i = 0; i < 50 && !t.server.rows("SELECT 1 FROM users WHERE id = ? AND profile LIKE '%\"showSoundboard\":true%'", aliceId).length; i++) await new Promise((r) => setTimeout(r, 100));
+
+  // Profile extras: a favorite thing and a crown.
+  await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Profile') }).click();
+  const form = alice.$('.set-content .set-form');
+  await form.locator('details summary', { hasText: 'Favorite things' }).click();
+  await form.locator('button', { hasText: '+ Add a favorite' }).click();
+  await form.locator('input[aria-label="Emoji"]').last().fill('🍕');
+  await form.locator('input[aria-label="What it is"]').fill('Food');
+  await form.locator('input[aria-label="Your favorite"]').fill('Pizza');
+  await form.locator('details summary', { hasText: 'Avatar shape & ring' }).click();
+  await form.locator('.chip', { hasText: 'Crown' }).click();
+  await alice.$('.set-preview .pc-fav', { hasText: 'Pizza' }).waitFor();
+  await alice.$('.save-bar .btn.primary').click();
+  await alice.toast('Profile saved.');
+  await alice.closeSettings();
+
+  // In a call: her press plays to bob (his tile for her lights up), and stops being heard once he mutes her soundboard.
+  await alice.railButton(SERVER);
+  await bob.railButton(SERVER);
+  for (const p of [alice, bob]) { await p.channelRow('Lounge').locator('.ch-main').click(); await p.$('.voice-room .cs-controls').waitFor(); }
+  for (const p of [alice, bob]) await p.page.waitForFunction(() => (window.__e2ePeers || []).some((pc) => pc.connectionState === 'connected'), null, { timeout: 30000 });
+  for (const label of ['Unmute', 'Undeafen']) if (await alice.$(`.voice-room .cs-controls button[aria-label="${label}"]`).count()) await alice.$(`.voice-room .cs-controls button[aria-label="${label}"]`).click();
+  const play = async () => {
+    await alice.$('.voice-room .cs-controls button[aria-label="Soundboard"]').click();
+    const pop = alice.page.locator('.sb-popover');
+    await pop.locator('.sb-btn', { hasText: 'Airhorn' }).click();
+    await alice.page.keyboard.press('Escape');
+  };
+  const lit = bob.page.locator(`.voice-room .cs-tile[data-speak="${aliceId}"].board-playing`);
+  await play();
+  await lit.waitFor({ timeout: 10000 });
+  await lit.waitFor({ state: 'detached', timeout: 10000 });
+  await bob.$(`.voice-room .cs-tile[data-speak="${aliceId}"]`).click({ button: 'right' });
+  await bob.page.locator('.vol-pop .toggle-row', { hasText: 'Mute their soundboard' }).locator('input').check();
+  await bob.page.keyboard.press('Escape');
+  await play();
+  await alice.page.waitForTimeout(1500);
+  check(!(await lit.count()), 'A muted soundboard should not play for bob.');
+  // Bob unmutes it from Settings → Soundboard.
+  await bob.openSettings('Soundboard');
+  await bob.$('.sb-muted li button', { hasText: 'Unmute' }).click();
+  await bob.$('.sb-muted').waitFor({ state: 'detached' });
+  await bob.closeSettings();
+  await bob.$('#voice-panel button[aria-label="Leave call"]').click();
+  await alice.$('#voice-panel button[aria-label="Leave call"]').click();
+
+  // Bob sees her favorite, crown and soundboard (names only) on her profile card.
+  await bob.openChannel('general');
+  await bob.showMembers();
+  await bob.page.locator('#members .member').filter({ has: bob.page.locator(`[data-user-av="${aliceId}"]`) }).first().click();
+  const card = bob.page.locator('.pop-profile');
+  await card.locator('.pc-fav', { hasText: 'Pizza' }).waitFor();
+  await card.locator('.pc-sound', { hasText: 'Airhorn' }).waitFor();
+  await card.locator('.av-deco.deco-crown').waitFor();
+  await bob.page.keyboard.press('Escape');
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -5933,6 +6037,7 @@ export const FLOWS = [
   ['the side view: a message and a picture pinned to the side stay beside the chat while you switch conversations, jump, unpin', sideView],
   ['where the chat puts you: a DM reopens at its newest message as GIFs load, the "New messages" line above; Jump on a pin or a search result lands on the message and keeps it there; on a phone the pins close on Jump', keepYourPlace],
   ['community: a server from the Gaming template, shown in server search and joined from there; the main server a new account joins at sign-up and reads in', community],
+  ['soundboards: a page renamed .mp3 and a 7-second sound refused, a sound added sealed, list layout and pages, shown on the profile; played in a call and lit up for bob, muted by him and unmuted; favorite things and a crown on her card', soundboardAndProfile],
   ['member relays: a member offers a machine in Help host, it checks in, the owner approves it with a password, it’s in everyone’s calls under a made-up login; the member avoids members’ relays, removes theirs and gets the uninstall command', memberRelays],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
