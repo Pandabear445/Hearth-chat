@@ -240,7 +240,16 @@ function shrinkGif(buf, max = EMOJI_PX) {
   const W = buf.readUInt16LE(6);
   const H = buf.readUInt16LE(8);
   if (!W || !H) throw no('That GIF has no size.');
-  if (W <= max && H <= max) return buf;
+  // A frame can claim to be bigger than the screen, or to sit outside it (browsers then draw a bigger picture than
+  // the screen says): such a GIF goes through the shrinking below even when its screen fits, which clips every frame
+  // to the screen.
+  let inside = true;
+  walkGif(buf, { onFrame: (i) => {
+    if (i + 10 > buf.length) return true;
+    if (buf.readUInt16LE(i + 1) + buf.readUInt16LE(i + 5) > W || buf.readUInt16LE(i + 3) + buf.readUInt16LE(i + 7) > H) inside = false;
+    return inside;
+  } });
+  if (W <= max && H <= max && inside) return buf;
   if (W > MAX_SIDE || H > MAX_SIDE) throw no(`That GIF is ${W}×${H}: too big to make into an emoji. Use one up to ${MAX_SIDE}×${MAX_SIDE}.`);
   // Count the work first: nothing is decoded for a file that claims too much.
   let pixels = 0;
@@ -287,15 +296,18 @@ function shrinkGif(buf, max = EMOJI_PX) {
       let ny0 = Math.floor(y0 * sy);
       let nx1 = Math.floor(x1 * sx);
       let ny1 = Math.floor(y1 * sy);
+      if (x0 >= x1 || y0 >= y1) { nx1 = nx0 + 1; ny1 = ny0 + 1; } // nothing of it shows: one pixel
       if (nx1 <= nx0) nx1 = nx0 + 1;
       if (ny1 <= ny0) ny1 = ny0 + 1;
       if (nx1 > fit.width) { nx1 = fit.width; nx0 = Math.min(nx0, nx1 - 1); }
       if (ny1 > fit.height) { ny1 = fit.height; ny0 = Math.min(ny0, ny1 - 1); }
       const nw = nx1 - nx0;
       const nh = ny1 - ny0;
-      const fill = transparent >= 0 ? transparent : 0;
+      // (A transparent index the code size can't write would break the codes after it.)
+      const fill = transparent >= 0 && transparent < (1 << minCode) ? transparent : 0;
+      const offScreen = x0 >= x1 || y0 >= y1; // nothing of it shows: kept (for its timing) as one unseen pixel
       transparent = -1;
-      const src = fw && fh ? lzwDecode(joinSubBlocks(buf, data + 1, e), minCode, fw * fh, fill) : new Uint8Array(0);
+      const src = fw && fh && !offScreen ? lzwDecode(joinSubBlocks(buf, data + 1, e), minCode, fw * fh, fill) : new Uint8Array(0);
       // Rows in the order they're stored (interlaced frames store every 8th row first, and so on).
       let rowOf = null;
       if (packed & 0x40) {
@@ -312,7 +324,7 @@ function shrinkGif(buf, max = EMOJI_PX) {
         for (let x = 0; x < nw; x++) {
           let sxx = Math.floor((nx0 + x + 0.5) / sx) - left;
           sxx = Math.max(0, Math.min(fw - 1, sxx));
-          dst[y * nw + x] = fw && fh ? src[row + sxx] : fill;
+          dst[y * nw + x] = fw && fh && !offScreen ? src[row + sxx] : fill;
         }
       }
       const desc = Buffer.alloc(10);
@@ -337,13 +349,13 @@ function fitEmoji(buf, max = EMOJI_PX) {
   const info = imageInfo(buf);
   if (!info || !info.width || !info.height) throw no('That isn’t a picture Hearth can use as an emoji. Use a PNG, JPG, GIF or WebP image.');
   let out = buf;
-  if (info.width > max || info.height > max) {
-    if (info.type !== 'gif') {
+  if (info.type === 'gif') out = shrinkGif(buf, max); // (also clips frames that reach past a screen that fits)
+  else if (info.width > max || info.height > max) {
+    {
       throw no(info.animated
         ? `That animated picture is ${info.width}×${info.height}. Emoji are up to ${max}×${max}: shrink it first, or upload it as a GIF and Hearth shrinks it for you.`
         : `That picture is ${info.width}×${info.height}. Emoji are up to ${max}×${max}: the Hearth app shrinks pictures for you, or shrink it first.`);
     }
-    out = shrinkGif(buf, max);
   }
   if (out.length > EMOJI_STORED_MAX) throw no(`That emoji is ${Math.ceil(out.length / 1024)} KB once it fits ${max}×${max}. Emoji are up to ${EMOJI_STORED_MAX / 1024} KB: try a shorter animation or fewer colours.`);
   const now = out === buf ? info : imageInfo(out);

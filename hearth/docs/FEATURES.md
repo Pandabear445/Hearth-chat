@@ -333,6 +333,8 @@ Before this, a thread reply counted nowhere: not as unread, not as a mention, an
     sealed copy it opened and uses it when the server serves an older one or none ("behind").
   - Names follow the server-nickname rules in the app (`cleanName`): up to 32 characters, no control, invisible or
     direction-changing characters, at least one visible character; up to 1,000 people. Never for yourself.
+  - A saved list the device can't open is never replaced by a change: the app loads it again first, and only
+    "Start a new list" (Privacy & safety, after a confirmation) replaces it.
   - A save against an older version is refused (409 `stale`); the app loads the newer list and makes the same
     change on top of it, so two devices never undo each other.
   - Not in OS push notifications sent by the server while the app is closed (the server can't know the names).
@@ -344,7 +346,7 @@ Before this, a thread reply counted nowhere: not as unread, not as a mention, an
   transparency and palettes kept); anything else over 128×128 (a still picture sent straight to the API, an animated
   WebP or APNG) is refused with 400 `bad_emoji` and a message saying what fits, and nothing is kept. Before decoding,
   a GIF whose screen is over 4096 px a side, whose frames add up to over 48 M pixels or that has over 1,500 frames
-  is refused; decoding stops at each frame's own size. GIFs from GIPHY/KLIPY go through the same check. Emoji are
+  is refused; decoding stops at each frame's own size. A GIF whose frames reach past its screen (which browsers would draw bigger than the screen says) is always rewritten with every frame clipped to the screen, even when the screen fits. GIFs from GIPHY/KLIPY go through the same check. Emoji are
   drawn in fixed boxes whatever the file (22 px inline, 48 px jumbo, 16-17 px reactions), so older, bigger uploads
   look the same.
 - **Reports**:

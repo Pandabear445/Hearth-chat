@@ -159,6 +159,27 @@ test('a GIF that would take too much work is refused before anything is decoded'
   assert.throws(() => E.fitEmoji(odd), E.EmojiRejected);
 });
 
+test('review: a frame bigger than a small screen is clipped to it; a transparent index the codes can’t hold, and frames off the screen, don’t break the GIF', () => {
+  // A 16×16 screen whose frame claims 2000×2000 (browsers would draw it that big): stored clipped to 16×16.
+  const sneaky = gifOf({ width: 16, height: 16, frames: [{ w: 300, h: 300, color: checker }] });
+  sneaky.writeUInt16LE(16, 6); sneaky.writeUInt16LE(16, 8);
+  const r = E.fitEmoji(sneaky);
+  assert.equal(r.changed, true);
+  const g = readGif(r.buf);
+  assert.deepEqual([g.W, g.H, g.frames[0].w, g.frames[0].h], [16, 16, 16, 16]);
+  // Transparent index 120, but the frame's codes are 2 bits: filled with 0 instead, and the output reads back whole.
+  const u16 = (n) => [n & 255, (n >> 8) & 255];
+  const odd = Buffer.from([...Buffer.from('GIF89a'), ...u16(200), ...u16(200), 0x81, 0, 0, ...Buffer.alloc(12, 9),
+    0x21, 0xf9, 4, 1, 0, 0, 120, 0, 0x2c, 0, 0, 0, 0, ...u16(200), ...u16(200), 0, 2, 1, 0x04, 0, 0x3b]);
+  const o = readGif(E.fitEmoji(odd).buf);
+  assert.equal(o.frames[0].px.length, o.frames[0].w * o.frames[0].h);
+  assert.ok(o.frames[0].px.every((v) => v === 0));
+  // A frame wholly off the screen stays unseen: one pixel of its transparent colour.
+  const off = gifOf({ width: 300, height: 300, frames: [{ w: 300, h: 300, color: checker }, { x: 400, y: 0, w: 50, h: 50, color: () => 3, transparent: 0 }] });
+  const f2 = readGif(E.fitEmoji(off).buf).frames[1];
+  assert.deepEqual([f2.w, f2.h, f2.px[0]], [1, 1, 0]);
+});
+
 test('anything else too big is refused with what to do; so is an emoji over 512 KB', () => {
   assert.throws(() => E.fitEmoji(png(256, 256)), (e) => e instanceof E.EmojiRejected && /256×256/.test(e.message) && /128×128/.test(e.message));
   assert.throws(() => E.fitEmoji(webpX(300, 300, true)), (e) => /animated/.test(e.message) && /GIF/.test(e.message));

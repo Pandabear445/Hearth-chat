@@ -134,14 +134,23 @@ export function createPersonalNames({ S, vaultKey, onChange = () => {}, store = 
     }
   }
   // Gives (or, with '', takes away) your nickname for someone. Returns the name kept.
+  // A saved list this device can't open is never replaced by accident (a key not ready yet, a damaged copy): it's
+  // tried again first, and only startOver() replaces it.
+  async function readable() {
+    if (!unreadable) return;
+    await load().catch(() => {});
+    if (unreadable) throw Object.assign(new Error('Your saved nicknames couldn\u2019t be opened on this device, so nothing was changed. Start a new list in Settings \u2192 Privacy & safety if they\u2019re lost for good.'), { code: 'unreadable' });
+  }
   async function setName(userId, name) {
     if (!ID.test(String(userId || '')) || (S.me && userId === S.me.id)) throw new Error('You can only give other people a nickname.');
+    await readable();
     const clean = cleanName(name);
     if (clean && !names[userId] && Object.keys(names).length >= LIST_MAX) throw new Error(`You can give up to ${LIST_MAX} people a nickname. Remove some first.`);
     await saveWith((list) => { if (clean) list[userId] = clean; else delete list[userId]; return list; });
     return clean;
   }
-  const clearAll = () => saveWith(() => ({}));
+  const clearAll = async () => { await readable(); return saveWith(() => ({})); };
+  const startOver = () => saveWith(() => ({}));
 
   function listen(socket) {
     socket.on('personalnicks:changed', (p = {}) => {
@@ -187,7 +196,11 @@ export function createPersonalNames({ S, vaultKey, onChange = () => {}, store = 
       root.append(
         h('h3', { class: 'set-h' }, 'Nicknames only you see'),
         h('p', { class: 'set-sub' }, 'Names you gave people show instead of theirs everywhere, on all your devices. They’re end-to-end encrypted: the server can’t read them, and nobody is told. Right-click someone (or long-press), or open their profile, to set one.'),
-        unreadable ? h('p', { class: 'wf-note bad' }, icon('lock'), 'Your saved nicknames couldn’t be opened on this device (they were saved with a key this account no longer has). Setting one starts a new list.') : null,
+        unreadable ? h('p', { class: 'wf-note bad' }, icon('lock'), h('span', null, 'Your saved nicknames couldn’t be opened on this device (they may have been saved with a key this account no longer has), so they can’t be changed here. ',
+          h('button', { class: 'link-btn', type: 'button', onclick: async () => {
+            if (!(await confirmDialog({ title: 'Start a new list of nicknames?', text: 'The saved list that can’t be opened is replaced with an empty one, on all your devices.', confirm: 'Start a new list', danger: true }))) return;
+            try { await startOver(); toast('New list started.'); } catch (err) { toast(err.message, 'error'); }
+          } }, 'Start a new list'))) : null,
         behind ? h('p', { class: 'wf-note bad' }, icon('shield'),
           h('span', null, 'The server sent an older copy of your nicknames than this device has already seen (or none), so this device keeps using its own. ',
             h('button', { class: 'link-btn', type: 'button', onclick: async (e) => {
@@ -219,7 +232,7 @@ export function createPersonalNames({ S, vaultKey, onChange = () => {}, store = 
   }
 
   return {
-    apply, load, listen, setName, clearAll, openEditor, settingsSection,
+    apply, load, listen, setName, clearAll, startOver, openEditor, settingsSection,
     get: (id) => names[id] || '',
     all: () => ({ ...names }),
     state: () => ({ at, seq, unreadable, behind }),

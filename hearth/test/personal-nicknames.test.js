@@ -151,6 +151,13 @@ test('app: a nickname is sealed with your vault key and padded; your other devic
   await stranger.load();
   assert.equal(stranger.get('u_bob'), '');
   assert.equal(stranger.state().unreadable, true);
+  // …and never replaces the list it couldn't open by accident, only when asked to start over.
+  await assert.rejects(stranger.setName('u_z', 'Zed'), (e) => e.code === 'unreadable');
+  await assert.rejects(stranger.clearAll(), (e) => e.code === 'unreadable');
+  assert.equal(theirs.data, stored.data, 'untouched');
+  await stranger.startOver();
+  await stranger.setName('u_z', 'Zed');
+  assert.equal(stranger.get('u_z'), 'Zed');
 });
 
 test('app: the rules for a nickname, and only for other people', async () => {

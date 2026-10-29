@@ -4756,7 +4756,9 @@ api.post('/servers/:id/emojis/from-giphy', auth, wrap(async (req, res) => {
   fs.writeFileSync(path.join(UPLOAD_DIR, file), buf);
   recordFile(req.userId, file, 'emoji', buf.length);
   try {
-    await stripUploadedImage({}, uploadPath(file));
+    const stripped = { size: buf.length };
+    await stripUploadedImage(stripped, uploadPath(file));
+    if (stripped.size !== buf.length) db.prepare('UPDATE user_files SET size = ? WHERE name = ?').run(stripped.size, file);
     const animated = await fitStoredEmoji(file);
     res.json(addEmoji(s, name, '/uploads/' + file, animated, req.userId));
   } catch (e) { removeUpload('/uploads/' + file); throw e; }
