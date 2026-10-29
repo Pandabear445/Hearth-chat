@@ -46,7 +46,7 @@ export function personalNameNote(u, { cls = 'pc-personal', onEdit = null } = {})
   const mine = personalName(u);
   if (!mine) return null;
   return h('div', { class: cls, title: 'A nickname only you see. They aren\u2019t told.' },
-    h('span', { class: 'pn-badge' }, 'Your nickname'), h('span', { class: 'pn-real' }, `Really ${realName(u)} (@${u.username})`),
+    h('span', { class: 'pnick-badge' }, 'Your nickname'), h('span', { class: 'pnick-real' }, `Really ${realName(u)} (@${u.username})`),
     onEdit ? h('button', { class: 'link-btn', 'aria-label': `Change your nickname for ${realName(u)}`, onclick: onEdit }, 'Change') : null);
 }
 // Someone's nickname in one server (server/nicknames.js), or ''. Group chats have none, and without a server (DMs,

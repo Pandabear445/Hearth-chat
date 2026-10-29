@@ -180,7 +180,7 @@ export function createPersonalNames({ S, vaultKey, onChange = () => {}, store = 
   // Privacy & safety → Nicknames only you see: everyone you renamed, with Change and Remove, and Remove all.
   // getUser(id), realName(u), avatarEl(u, size): the app's.
   function settingsSection({ getUser, realName, avatarEl }) {
-    const root = h('section', { class: 'set-section pn-set', id: 'personal-nicknames' });
+    const root = h('section', { class: 'set-section pnick-set', id: 'personal-nicknames' });
     const draw = () => {
       clear(root);
       const ids = Object.keys(names).sort((a, b) => names[a].localeCompare(names[b]));
@@ -195,12 +195,12 @@ export function createPersonalNames({ S, vaultKey, onChange = () => {}, store = 
               try { await saveWith((l) => l); toast('Your nicknames are saved again.'); } catch (err) { toast(err.message, 'error'); draw(); }
             } }, 'Save this device’s copy again'))) : null,
         ids.length
-          ? h('div', { class: 'stack tight pn-list' }, ids.map((id) => {
+          ? h('div', { class: 'stack tight pnick-list' }, ids.map((id) => {
             const u = getUser(id);
             const own = u && u.username ? realName(u) : 'Someone you no longer share a server with';
-            return h('div', { class: 'ss-row pn-row', dataset: { userId: id } },
+            return h('div', { class: 'ss-row pnick-row', dataset: { userId: id } },
               u ? avatarEl(u, 30) : null,
-              h('span', { class: 'ss-row-name' }, h('bdi', { class: 'pn-name' }, names[id]), h('span', null, u && u.username ? h('bdi', null, `${own} (@${u.username})`) : own)),
+              h('span', { class: 'ss-row-name' }, h('bdi', { class: 'pnick-name' }, names[id]), h('span', null, u && u.username ? h('bdi', null, `${own} (@${u.username})`) : own)),
               u && u.username ? h('button', { class: 'btn ghost sm', type: 'button', onclick: () => openEditor(u, { realName }) }, 'Change') : null,
               h('button', { class: 'btn ghost sm', type: 'button', 'aria-label': `Remove your nickname for ${own}`, onclick: async (e) => {
                 e.currentTarget.disabled = true;

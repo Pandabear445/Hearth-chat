@@ -3398,6 +3398,111 @@ async function nicknames(t) {
   await bob.noModals();
 }
 
+// ------------------------------------------------------------------ 26b. nicknames only you see
+// Bob gives Alice a nickname from her member-list menu: his member list and her messages say it, hers don't, and the
+// server only holds it sealed. Her profile card says it's his name for her and who she really is; @mention
+// suggestions find her by it. With this device's copy gone, a reload gets it back from the server (as another device
+// would). Removing it in Privacy & safety brings her own name back.
+async function personalNicknames(t) {
+  const { alice, bob } = t.people;
+  for (const p of [alice, bob]) { await p.railButton(SERVER); await p.openChannel('general'); await p.showMembers(); }
+  await bob.member('Alice Wonder').click({ button: 'right' });
+  await bob.menuItem('Set nickname (only you see it)…').click();
+  const d = await bob.dialog('Set a nickname for Alice Wonder');
+  await d.locator('input').fill('  Sis\u202e 🌻 ');
+  await d.locator('.modal-foot .btn.primary').click();
+  await bob.toast('Alice Wonder shows as Sis 🌻 for you.');
+  await bob.member('Sis 🌻').waitFor();
+  await bob.message('Nickname check: quince').locator('.msg-name', { hasText: 'Sis 🌻' }).waitFor();
+  // Nobody else sees it, Alice included.
+  await alice.member('Alice Wonder').waitFor();
+  check(!(await alice.page.getByText('Sis 🌻').count()), 'Alice should never see the nickname Bob gave her.');
+  const rows = t.server.rows('SELECT data FROM personal_nicknames');
+  check(rows.length === 1 && /^x1:/.test(rows[0].data) && !rows[0].data.includes('Sis'), 'The server should only hold the nickname sealed.');
+  // Her profile card: his name for her, and who she really is.
+  await bob.member('Sis 🌻').click();
+  const pop = bob.page.locator('.pop-profile');
+  await pop.locator('.pc-personal', { hasText: 'Your nickname' }).waitFor();
+  await pop.locator('.pc-personal', { hasText: /Really Alice Wonder \(@alice\w*\)/ }).waitFor();
+  await bob.page.keyboard.press('Escape');
+  await pop.waitFor({ state: 'detached' });
+  const box = bob.$('#composer-input');
+  await box.fill('@sis');
+  await bob.page.locator('.suggest-item', { hasText: 'Sis 🌻' }).waitFor();
+  await box.fill('');
+  // From the server alone (this device's own copy gone), as another of Bob's devices would get it.
+  await bob.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('hearth.personalNames.')).forEach((k) => localStorage.removeItem(k)));
+  await bob.page.reload();
+  await bob.waitApp();
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await bob.showMembers();
+  await bob.member('Sis 🌻').waitFor();
+  // The list in Privacy & safety: removed there, her own name is back.
+  await bob.openSettings('Privacy & safety');
+  const sec = bob.page.locator('#personal-nicknames');
+  const row = sec.locator('.pnick-row', { hasText: 'Sis 🌻' });
+  await row.waitFor();
+  check((await row.innerText()).includes('Alice Wonder (@alice'), 'The settings list should say who each nickname is for.');
+  await row.locator('button', { hasText: exact('Remove') }).click();
+  await bob.toast('Nickname removed.');
+  await sec.getByText('You haven’t given anyone a nickname.').waitFor();
+  await bob.closeSettings();
+  await bob.member('Alice Wonder').waitFor();
+}
+
+// ------------------------------------------------------------------ 26c. emoji at the size they're shown
+// Two pictures picked at once: a big PNG shrunk on the device (shown as it will be stored, with a name from its file
+// name) and a big animated GIF the server shrinks, still animated. Both are stored at most 128×128 and drawn 22 px
+// tall in a line of text, 48 px on their own.
+async function emojiSizes(t) {
+  const { alice, bob } = t.people;
+  // A GIF with two frames (the harness's one frame, twice).
+  const one = makeGif(300, 200);
+  const frame = one.subarray(13 + 384, one.length - 1);
+  const dance = Buffer.concat([one.subarray(0, one.length - 1), frame, Buffer.from([0x3b])]);
+  await alice.serverMenu('Server settings');
+  const ss = alice.$('.modal.server-settings');
+  await ss.locator('.ss-tab', { hasText: 'Emoji' }).click();
+  await ss.locator('input[type=file]').setInputFiles([{ name: 'Big Photo.png', mimeType: 'image/png', buffer: makePng(400, 300) }, { name: 'dance.gif', mimeType: 'image/gif', buffer: dance }]);
+  const q = ss.locator('.emoji-queue');
+  const photo = q.locator('.pending-emoji', { hasText: 'Shrunk from 400×300 to 128×96' });
+  await photo.waitFor();
+  await q.locator('.pending-emoji', { hasText: 'Animated: shrunk to 128×85' }).waitFor();
+  const names = await q.locator('input[aria-label="Emoji name"]').evaluateAll((els) => els.map((e) => e.value));
+  check(names.join(',') === 'big_photo,dance', `Names should be suggested from the file names (got ${names.join(', ')}).`);
+  const prev = await photo.locator('img.s-inline').evaluate((i) => [i.getBoundingClientRect().height, i.naturalWidth]);
+  check(prev[0] === 22 && prev[1] === 128, `The preview should show the shrunk picture at 22 px (got ${prev}).`);
+  await ss.locator('button', { hasText: 'Upload 2 emoji' }).click();
+  await alice.toast('Added 2 emoji.');
+  await alice.page.waitForFunction(() => {
+    const imgs = [...document.querySelectorAll('.modal.server-settings .emoji-admin-grid img.cemoji')];
+    return imgs.length >= 3 && imgs.every((i) => i.complete && i.naturalWidth > 0 && i.naturalWidth <= 128 && i.naturalHeight <= 128);
+  });
+  const sizes = t.server.rows('SELECT name, animated FROM emojis WHERE name IN (?, ?) ORDER BY name', 'big_photo', 'dance');
+  check(sizes.map((e) => `${e.name}:${e.animated}`).join(' ') === 'big_photo:0 dance:1', `The GIF should stay animated (got ${JSON.stringify(sizes)}).`);
+  await ss.locator('.modal-x').click();
+  await alice.noModals();
+  // In a line of text, then on its own.
+  await alice.$('#composer-input').fill('Sized right :big_ph');
+  await alice.$('.composer-wrap .suggest:not([hidden])', { hasText: ':big_photo:' }).waitFor();
+  await alice.$('#composer-input').press('Tab');
+  await alice.$('#composer-input').press('Enter');
+  const inline = bob.message('Sized right').locator('img.cemoji[alt=":big_photo:"]');
+  await inline.waitFor();
+  await bob.page.waitForFunction(() => { const i = document.querySelector('#messages img.cemoji[alt=":big_photo:"]'); return i && i.complete && i.naturalWidth === 128; });
+  const h = await inline.evaluate((i) => Math.round(i.getBoundingClientRect().height));
+  check(h >= 20 && h <= 24, `An emoji in a line of text should be about 22 px tall (got ${h}).`);
+  await alice.$('#composer-input').fill(':danc');
+  await alice.$('.composer-wrap .suggest:not([hidden])', { hasText: ':dance:' }).waitFor();
+  await alice.$('#composer-input').press('Tab');
+  await alice.$('#composer-input').press('Enter');
+  const jumbo = bob.page.locator('#messages .msg-text.jumbo img.cemoji[alt=":dance:"]').last();
+  await jumbo.waitFor();
+  const j = await jumbo.evaluate((i) => Math.round(i.getBoundingClientRect().height));
+  check(j === 48, `An emoji on its own should be 48 px (got ${j}).`);
+}
+
 // ------------------------------------------------------------------ 27. a message the server moved, repeated or rolled back
 // Each message carries its own id, what it replies to, its thread, its time and its edit count inside the encryption
 // (public/js/binding.js). Nothing the earlier flows did in #general is flagged (edits, replies, threads, scheduled
@@ -5806,6 +5911,8 @@ export const FLOWS = [
   ['voice chat: open beside the call, both ways, a picture link from another site waits for a click, no threads, unread only once opened, pings always, pins, All messages, in a call', voiceChat],
   ['send later: schedule from the send button, edit, reschedule and send now from the list; cancel one in a DM; re-encrypted by itself when the key changes, never from a copy it can’t confirm; a signed-out session’s message waits for Keep; overdue ones ask first', sendLater],
   ['nicknames: set your own, seen in the member list, messages and @mention suggestions; a moderator changes and removes it; audit log', nicknames],
+  ['nicknames only you see: set from the member menu, shown in his lists and messages but never to her, sealed on the server, on her profile with her real name, found by @mention, back after a reload from the server alone, removed in settings', personalNicknames],
+  ['emoji sizes: a big PNG shrunk on the device and a big animated GIF shrunk on the server, previews, names from file names, 22 px inline and 48 px on their own', emojiSizes],
   ['message binding: nothing earlier flagged; a reply moved, a message re-dated, replayed and rolled back in the database are each flagged after a reload, with details; deleting a copy clears the other', messageBinding],
   ['reset without a recovery key: held back (in a voice channel’s chat too) and no invites until a member compares safety numbers and verifies her', resetVerify],
   ['word filter: your own list hides a disguised word (sealed on the server, never your own messages, search doesn’t quote it); a server’s suggested list blurs live, is audited, and can be turned off; a hidden message keeps its tampering flag', wordFilter],

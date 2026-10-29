@@ -6629,7 +6629,7 @@ function memberMenuItems(server, u) {
     !me ? { label: 'Message', icon: 'message', action: () => openDmWith(u.id) } : null,
     { label: 'Copy username', icon: 'copy', action: () => { copyText(u.username); toast('Copied.'); } },
     personalNameItem(u),
-    mayNickname(server, u) ? { label: me ? 'Change my nickname\u2026' : 'Change server nickname\u2026', icon: 'edit', action: () => openNickname(server, u) } : null,
+    mayNickname(server, u) ? { label: me ? 'Change my nickname\u2026' : 'Change nickname\u2026', icon: 'edit', action: () => openNickname(server, u) } : null,
   ];
   if (isGroup(server)) return items;
   const isOwnerTarget = server.ownerId === u.id;
