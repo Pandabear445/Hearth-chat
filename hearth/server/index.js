@@ -211,6 +211,18 @@ function withPastKeys(users) {
   return users;
 }
 
+// The fingerprint apps compare a fetched post-quantum key with: SHA-256 of its bytes, the first 16, base64.
+const pqFps = new Map();
+function pqFp(pq) {
+  if (!pq) return null;
+  let f = pqFps.get(pq);
+  if (!f) {
+    f = crypto.createHash('sha256').update(Buffer.from(pq, 'base64')).digest().subarray(0, 16).toString('base64');
+    if (pqFps.size > 20000) pqFps.clear();
+    pqFps.set(pq, f);
+  }
+  return f;
+}
 function publicUser(row) {
   if (!row) return null;
   const profile = parseProfile(row);
@@ -227,6 +239,9 @@ function publicUser(row) {
     profile,
     publicKey: row.public_key,
     signPublicKey: row.sign_public_key || null,
+    // A short fingerprint of their post-quantum key (null: none yet). The key itself is big (1.2 KB), so apps fetch it
+    // once per fingerprint (GET /users/:id/pq-key) rather than with every member list and broadcast.
+    pq: pqFp(row.pq_public_key),
     supporter: !!row.supporter || undefined,
     bot: !!row.is_bot || undefined,
     deleted: !!row.deleted_at || undefined,
@@ -248,6 +263,8 @@ function selfUser(row) {
   u.customStatusExpiresAt = (!statusExpired(row) && row.status_expires_at) || null;
   u.kdf = row.kdf;
   u.kdfSalt = row.kdf_salt;
+  u.pqPublicKey = row.pq_public_key || null;
+  u.pqSig = row.pq_sig || null;
   u.privacy = privacyOf(row);
   u.pageBg = row.page_bg || null;
   u.profileLocked = !!row.profile_locked;
@@ -907,6 +924,10 @@ app.use((req, res, next) => {
 // webhooks.js) read their own bodies, with a much smaller cap and only once the address is known to be right.
 // (Case-insensitive like Express's routing, which would send /API/Webhooks/… there too.)
 const jsonBody = (req) => !/^\/api\/webhooks\//i.test(req.originalUrl) && String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase() === 'application/json';
+// A server key handed to every member at once: with post-quantum keys each copy is about 1.8 KB, so a big server's
+// rotation needs more room than other requests get.
+const KEY_ROUTE = /^\/api\/servers\/[^/]+\/keys\/(rotate|share|self)$/i;
+app.use(express.json({ limit: '8mb', type: (req) => KEY_ROUTE.test(req.path) && jsonBody(req) }));
 app.use(express.json({ limit: '2mb', type: jsonBody, verify: (req, res, buf) => { if (req.originalUrl.startsWith('/api/pay/')) req.rawBody = buf; } }));
 // Strict browser security policy for the app's own pages:
 //   scripts       only files from this server (+ WebAssembly for password hashing) — no inline or injected code
@@ -1465,7 +1486,7 @@ function walk(dir, base = '') {
 }
 // The interface's own fonts are kept for offline use too; a profile font loads the first time a profile uses it.
 const CORE_FONTS = /^fonts\/(fonts\.css|(figtree|bricolage-grotesque)-[\w-]+\.woff2)$/;
-const APP_ASSETS = ['/', '/manifest.webmanifest', '/vendor/argon2.js', '/socket.io/socket.io.js',
+const APP_ASSETS = ['/', '/manifest.webmanifest', '/vendor/argon2.js', '/vendor/ml-kem.js', '/socket.io/socket.io.js',
   ...walk(PUBLIC_DIR).filter((f) => /^(js|css|icons)\//.test(f) || f === 'favicon.svg' || CORE_FONTS.test(f)).map((f) => '/' + f)];
 // (The end-to-end tests restart the server as a new version with TEST_BUILD_SALT, without touching the files.)
 const BUILD = crypto.createHash('sha256').update(walk(PUBLIC_DIR).sort().map((f) => f + fs.readFileSync(path.join(PUBLIC_DIR, f)).length + fs.statSync(path.join(PUBLIC_DIR, f)).mtimeMs).join('|')
@@ -2469,7 +2490,7 @@ function eraseAccount(row) {
     // Their settings and bookmarks (saved messages with their notes, read positions, mention counts, notification
     // choices, folders and other preferences), and which servers they were in (former_members only matters to
     // someone who could come back).
-    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters',
+    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'pq_handoffs', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters',
       'saved_messages', 'read_states', 'mention_marks', 'notify_prefs', 'user_prefs', 'former_members']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(row.id);
     db.prepare('DELETE FROM profile_comments WHERE profile_id = ?').run(row.id); // the comments on their profile page go with it
     // Call relays they offered (Settings → Help host) leave everyone's calls and backups (everyone's apps are told to
@@ -2543,6 +2564,87 @@ api.post('/me/sign-key', auth, wrap(async (req, res) => {
   broadcastUser(req.userId);
   res.json(selfUser(getUserRow(req.userId)));
 }));
+
+// ---------------------------------------------------------------- post-quantum key (e2ee.js pqKeyPair)
+// Publishing the account's ML-KEM-768 public key. It must be signed with the account's signing key, over the account id
+// and identity key (the same check every app makes before encrypting to it), so a stolen session alone can't plant one.
+// With encPrivateKey, the password-locked envelope is replaced too (the one-time upgrade at sign-in, which puts the
+// new seed inside it): that takes the password (authKey; a two-factor code counts from the sign-in for 10 minutes).
+// A key already published is only replaced (replace: true) together with a new envelope, i.e. with the password: after
+// a reset with a recovery key made before the upgrade, whose envelope has no seed. Replacing drops pending handoffs.
+const PQ_B64 = /^[A-Za-z0-9+/]{1579}=$/;
+function pqSigOk(row, pq, sig) {
+  const signing = row.sign_public_key && p256Key(row.sign_public_key);
+  if (!signing || typeof sig !== 'string' || sig.length > 100) return false;
+  try { return crypto.verify('sha256', Buffer.from(`hearth-pq-key-v1|${row.id}|${row.public_key}|${pq}`), { key: signing, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig, 'base64')); } catch { return false; }
+}
+api.post('/me/pq-key', auth, wrap(async (req, res) => {
+  rateLimit('pqkey:' + req.userId, 10, 10 * 60 * 1000);
+  const b = req.body || {};
+  if (typeof b.pqPublicKey !== 'string' || !PQ_B64.test(b.pqPublicKey) || Buffer.from(b.pqPublicKey, 'base64').length !== 1184) fail(400, 'Bad key material.');
+  const envelope = b.encPrivateKey !== undefined;
+  if (envelope && !isB64ish(b.encPrivateKey, 4000)) fail(400, 'Bad key material.');
+  let row = getUserRow(req.userId);
+  if (!row.sign_public_key) fail(409, 'Make a signing key first. Reload the page.', 'need_sign_key');
+  if (!pqSigOk(row, b.pqPublicKey, b.pqSig)) { secEvent('pq_key_bad_sig', req.ip, row.username); fail(403, 'That key couldn\u2019t be confirmed. Reload the page and try again.', 'bad_key_proof'); }
+  if (row.pq_public_key === b.pqPublicKey && !envelope) return res.json(selfUser(row));
+  if (row.pq_public_key && row.pq_public_key !== b.pqPublicKey && !(b.replace === true && envelope)) fail(409, 'This account already has a post-quantum key. Reload the page.', 'pq_exists');
+  if (envelope) row = await stepUp(req, b, 'authKey', { grace: true });
+  const sets = envelope ? 'pq_public_key = ?, pq_sig = ?, enc_private_key = ?' : 'pq_public_key = ?, pq_sig = ?';
+  const args = envelope ? [b.pqPublicKey, b.pqSig, b.encPrivateKey] : [b.pqPublicKey, b.pqSig];
+  // Unchanged identity and signing keys (the signature covers them), and the published key as the app last saw it.
+  const was = row.pq_public_key || null;
+  const done = db.transaction(() => {
+    const n = db.prepare(`UPDATE users SET ${sets} WHERE id = ? AND public_key = ? AND sign_public_key = ? AND pq_public_key IS ?`).run(...args, row.id, row.public_key, row.sign_public_key, was).changes;
+    if (n && was && was !== b.pqPublicKey) db.prepare('DELETE FROM pq_handoffs WHERE user_id = ?').run(row.id);
+    return n;
+  })();
+  if (!done) fail(409, 'Your keys changed on another device. Reload the page.', 'pq_exists');
+  auditLog(req, !was ? 'pq_key_created' : was !== b.pqPublicKey ? 'pq_key_replaced' : 'pq_key_resaved', req.userId, row.username);
+  broadcastUser(req.userId);
+  res.json(selfUser(getUserRow(req.userId)));
+}));
+
+// Handing the post-quantum seed to another of your own devices (e2ee.js pqHandoffRequest / sealPqHandoff). The server
+// only passes sealed bytes along: a request must carry the account's signature (checked here too, so nobody fills the
+// table with junk), at most 5 are open per account, and they go after a week.
+const HANDOFF_MS = 7 * 24 * 3600 * 1000;
+const isHandoffId = (x) => typeof x === 'string' && /^[0-9a-f]{32}$/.test(x);
+const isSealedSeed = (x) => {
+  if (typeof x !== 'string' || x.length > 2000) return false;
+  const p = x.split(':');
+  return p.length === 5 && p[0] === 'ph1' && b64Len(p[1]) >= 60 && b64Len(p[1]) <= 120 && b64Len(p[2]) === 1088 && b64Len(p[3]) === 12 && b64Len(p[4]) === 80;
+};
+const handoffsOf = (uid) => db.prepare('SELECT id, device_pk, sig, sealed, created_at FROM pq_handoffs WHERE user_id = ? AND created_at > ? ORDER BY created_at').all(uid, now() - HANDOFF_MS)
+  .map((r) => ({ id: r.id, devicePk: r.device_pk, sig: r.sig, sealed: r.sealed || null, createdAt: r.created_at }));
+api.get('/me/pq-handoff', auth, (req, res) => res.json({ requests: handoffsOf(req.userId) }));
+api.post('/me/pq-handoff', auth, (req, res) => {
+  rateLimit('pqhandoff:' + req.userId, 20, 60 * 60 * 1000);
+  const b = req.body || {};
+  const row = getUserRow(req.userId);
+  if (!isHandoffId(b.id) || typeof b.devicePk !== 'string' || !PQ_B64.test(b.devicePk) || typeof b.sig !== 'string' || b.sig.length > 100) fail(400, 'Bad request.');
+  const signing = row.sign_public_key && p256Key(row.sign_public_key);
+  let ok = false;
+  try { ok = !!signing && crypto.verify('sha256', Buffer.from(`hearth-pq-handoff|${row.id}|${b.id}|${b.devicePk}`), { key: signing, dsaEncoding: 'ieee-p1363' }, Buffer.from(b.sig, 'base64')); } catch { ok = false; }
+  if (!ok) fail(403, 'That request couldn\u2019t be confirmed. Reload the page.', 'bad_key_proof');
+  db.prepare('DELETE FROM pq_handoffs WHERE user_id = ? AND created_at <= ?').run(row.id, now() - HANDOFF_MS);
+  if (db.prepare('SELECT COUNT(*) AS n FROM pq_handoffs WHERE user_id = ? AND sealed IS NULL').get(row.id).n >= 5) fail(429, 'Too many devices are waiting for keys. Open Hearth on a device that has them.', 'rate_limited', 600);
+  db.prepare('INSERT OR IGNORE INTO pq_handoffs (id, user_id, device_pk, sig, created_at) VALUES (?, ?, ?, ?, ?)').run(b.id, row.id, b.devicePk, b.sig, now());
+  io.to(`user:${row.id}`).emit('pq:handoff', { id: b.id });
+  res.json({ ok: true });
+});
+api.post('/me/pq-handoff/:id', auth, (req, res) => {
+  rateLimit('pqhandoffseal:' + req.userId, 60, 60 * 60 * 1000);
+  const sealed = (req.body || {}).sealed;
+  if (!isHandoffId(req.params.id) || !isSealedSeed(sealed)) fail(400, 'Bad request.');
+  const n = db.prepare('UPDATE pq_handoffs SET sealed = ?, sealed_at = ? WHERE id = ? AND user_id = ? AND sealed IS NULL').run(sealed, now(), req.params.id, req.userId).changes;
+  if (n) io.to(`user:${req.userId}`).emit('pq:handoff', { id: req.params.id });
+  res.json({ sealed: n });
+});
+api.delete('/me/pq-handoff/:id', auth, (req, res) => {
+  db.prepare('DELETE FROM pq_handoffs WHERE id = ? AND user_id = ?').run(String(req.params.id), req.userId);
+  res.json({ ok: true });
+});
 
 // Your password-locked private key, for changing the password or making a recovery key on this device.
 // It needs the password (not just a session): with only a stolen session, someone could otherwise take the
@@ -2743,6 +2845,20 @@ api.get('/users/:id', auth, (req, res) => {
   const u = publicUser(getUserRow(req.params.id));
   if (!u) fail(404, 'User not found.');
   res.json(withPastKeys({ [u.id]: u })[u.id]);
+});
+// Many people's at once, for an app handing a server's key to all its members: { keys: { id: { publicKey, pqPublicKey, pqSig } } }.
+api.post('/users/pq-keys', auth, (req, res) => {
+  rateLimit('pqkeys:' + req.userId, 120, 60 * 1000);
+  const ids = (req.body || {}).ids;
+  if (!Array.isArray(ids) || ids.length > 500 || !ids.every((x) => typeof x === 'string' && x.length <= 64)) fail(400, 'Bad request.');
+  const rows = ids.length ? db.prepare('SELECT id, public_key, pq_public_key, pq_sig FROM users WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(ids)) : [];
+  res.json({ keys: Object.fromEntries(rows.map((r) => [r.id, { id: r.id, publicKey: r.public_key, pqPublicKey: r.pq_public_key || null, pqSig: r.pq_sig || null }])) });
+});
+// Someone's post-quantum key and its signature, for the apps to check (e2ee.js verifyPqKey) before encrypting to it.
+api.get('/users/:id/pq-key', auth, (req, res) => {
+  const row = getUserRow(req.params.id);
+  if (!row) fail(404, 'User not found.');
+  res.json({ id: row.id, publicKey: row.public_key, pqPublicKey: row.pq_public_key || null, pqSig: row.pq_sig || null });
 });
 
 // ---------------------------------------------------------------- friends
@@ -3232,7 +3348,16 @@ api.post('/invites/:code/join', auth, (req, res) => {
 // fill the database (and every member's start-up) with junk "keys".
 const B64_FIELD = /^[A-Za-z0-9+/]+={0,2}$/;
 const b64Len = (x) => (B64_FIELD.test(x) && x.length % 4 === 0 ? Buffer.from(x, 'base64').length : -1);
+// Since 1.40 also the hybrid post-quantum form, w2:<ephemeral P-256 public key>:<1088-byte ML-KEM-768 ciphertext>:<iv>:
+// <key + tag>:<signature>.
 function isWrapped(w) {
+  if (typeof w === 'string' && w.startsWith('w2:')) {
+    if (w.length > 2000) return false;
+    const q = w.split(':');
+    const e = b64Len(q[1]);
+    const g = b64Len(q[5]);
+    return q.length === 6 && e >= 60 && e <= 120 && b64Len(q[2]) === 1088 && b64Len(q[3]) === 12 && b64Len(q[4]) === 48 && g >= 64 && g <= 72;
+  }
   if (typeof w !== 'string' || w.length > 600) return false;
   const p = w.split(':');
   if (p.length !== 5 || p[0] !== 'w1') return false;
@@ -3242,10 +3367,14 @@ function isWrapped(w) {
 }
 // Which wrapped keys were made for a public key the person no longer has (the sharer's app had stale info).
 // Apps send the public key they wrapped for; older apps that don't are trusted as before.
-function staleWraps(pubs, ids) {
+// Apps that know about post-quantum keys also send pqs ({ userId: the fingerprint wrapped for, or null for w1 }): a key
+// wrapped without the post-quantum key someone has now (or for one they no longer have) is stale too, so the sharer's
+// app fetches it and wraps again. That's how a person's first post-quantum key reaches every server they're in.
+function staleWraps(pubs, ids, pqs = null) {
   if (!pubs || typeof pubs !== 'object') return [];
-  const get = db.prepare('SELECT public_key FROM users WHERE id = ?');
-  return ids.filter((uid) => typeof pubs[uid] === 'string' && (get.get(uid) || {}).public_key !== pubs[uid]);
+  const get = db.prepare('SELECT public_key, pq_public_key FROM users WHERE id = ?');
+  const pqStale = (uid, row) => !!pqs && typeof pqs === 'object' && Object.hasOwn(pqs, uid) && (pqs[uid] || null) !== pqFp(row.pq_public_key);
+  return ids.filter((uid) => { const row = get.get(uid) || {}; return typeof pubs[uid] === 'string' && (row.public_key !== pubs[uid] || pqStale(uid, row)); });
 }
 // Someone who was in this server before is back, e.g. after a kick with an invite they kept: switch to a new key,
 // so they can't read what was said while they were away. Known from former_members (kept through a password
@@ -3334,7 +3463,7 @@ const KEYS_UNVERIFIED = 'Your password was reset without your recovery key, so t
 api.post('/servers/:id/keys/rotate', auth, (req, res) => {
   const s = requireServer(req.params.id, req.userId);
   rateLimit('rotate:' + req.userId, 30, 60 * 1000);
-  const { epoch, check, wraps, pubs } = req.body || {};
+  const { epoch, check, wraps, pubs, pqs } = req.body || {};
   if (typeof check !== 'string' || !/^[A-Za-z0-9+/=]{16,64}$/.test(check)) fail(400, 'Bad key check.');
   if (!wraps || typeof wraps !== 'object' || Array.isArray(wraps)) fail(400, 'Missing wrapped keys.');
   if (!Object.values(wraps).every(isWrapped)) fail(400, 'Those wrapped keys aren\u2019t in the right format.', 'bad_wraps');
@@ -3348,7 +3477,7 @@ api.post('/servers/:id/keys/rotate', auth, (req, res) => {
     const given = members.filter((m) => m === req.userId || !held.includes(m));
     const ids = Object.keys(wraps);
     if (!ids.every((id) => members.includes(id)) || !given.every((m) => isWrapped(wraps[m]))) fail(409, 'The member list changed. Try again.', 'members');
-    const stale = staleWraps(pubs, given);
+    const stale = staleWraps(pubs, given, pqs);
     if (stale.length) fail(409, 'A member\u2019s keys just changed. Try again.', 'stale_keys');
     const t = now();
     db.prepare('INSERT INTO server_epochs (server_id, epoch, key_check, creator_id, created_at) VALUES (?, ?, ?, ?, ?)').run(s.id, cur.key_epoch + 1, check, req.userId, t);
@@ -3369,7 +3498,7 @@ api.post('/servers/:id/keys/rotate', auth, (req, res) => {
 api.post('/servers/:id/keys/share', auth, (req, res) => {
   const s = requireServer(req.params.id, req.userId);
   rateLimit('share:' + req.userId, 60, 60 * 1000);
-  const { epoch, wraps, pubs } = req.body || {};
+  const { epoch, wraps, pubs, pqs } = req.body || {};
   const st = db.prepare('SELECT key_epoch, needs_rotation FROM servers WHERE id = ?').get(s.id);
   const cur = st.key_epoch;
   if (!cur || Number(epoch) !== cur || st.needs_rotation) fail(409, 'That key is out of date.', 'epoch');
@@ -3380,7 +3509,7 @@ api.post('/servers/:id/keys/share', auth, (req, res) => {
   if (held.includes(req.userId)) fail(403, KEYS_UNVERIFIED, 'keys_unverified');
   const ins = db.prepare('INSERT OR IGNORE INTO server_keys (server_id, epoch, user_id, wrapped, wrapper_id, created_at) VALUES (?, ?, ?, ?, ?, ?)');
   let n = 0;
-  const stale = staleWraps(pubs, Object.keys(wraps || {}));
+  const stale = staleWraps(pubs, Object.keys(wraps || {}), pqs);
   const waiting = new Set(HIST.waitingFor(s.id, cur));
   for (const [uid, w] of Object.entries(wraps || {}).slice(0, 200)) {
     if (stale.includes(uid) || held.includes(uid) || waiting.has(uid)) continue;
@@ -4267,6 +4396,53 @@ api.post('/dms/:id/messages', auth, (req, res) => {
   DIS.checkTtl(req.body, d.disappear_secs);
   const replyTo = dmReplyIn(d, (req.body || {}).replyTo);
   res.json(postDmMessage(d, req.userId, { ciphertext, files, replyTo, replyFile: replyFileIn('dm_messages', replyTo, fileAsked) }, req.body));
+});
+// A DM's post-quantum epoch keys (e2ee.js wrapDmKey). Each epoch has one copy for each of the two, wrapped dk1:
+// <ephemeral P-256>:<ML-KEM-768 ciphertext>:<iv>:<key + tag> for the identity and post-quantum keys named with it
+// (checked against the account now, as for server keys, so a copy is never made for keys someone no longer has).
+// Either of the two may start the next epoch, one at a time and only as the next number; the server keeps them all,
+// so every device either of them signs in on can read the whole conversation.
+const isDmWrapped = (w) => {
+  if (typeof w !== 'string' || w.length > 2000) return false;
+  const p = w.split(':');
+  const e = b64Len(p[1]);
+  return p.length === 5 && p[0] === 'dk1' && e >= 60 && e <= 120 && b64Len(p[2]) === 1088 && b64Len(p[3]) === 12 && b64Len(p[4]) === 48;
+};
+function dmKeysFor(d, userId) {
+  const rows = db.prepare('SELECT epoch, user_id, wrapped, wrapper_id, public_key, pq_public_key, created_at FROM dm_keys WHERE dm_id = ? ORDER BY epoch').all(d.id);
+  const by = new Map();
+  for (const r of rows) {
+    if (!by.has(r.epoch)) by.set(r.epoch, { epoch: r.epoch, wrapperId: r.wrapper_id, createdAt: r.created_at, wrapped: null, keys: {} });
+    const e = by.get(r.epoch);
+    if (r.user_id === userId) e.wrapped = r.wrapped;
+    e.keys[r.user_id] = { publicKey: r.public_key, pq: pqFp(r.pq_public_key) };
+  }
+  return { epochs: [...by.values()] };
+}
+api.get('/dms/:id/keys', auth, (req, res) => {
+  const d = requireDm(req.params.id, req.userId);
+  res.json(dmKeysFor(d, req.userId));
+});
+api.post('/dms/:id/keys', auth, (req, res) => {
+  const d = requireDm(req.params.id, req.userId);
+  rateLimit('dmkeys:' + req.userId, 30, 60 * 60 * 1000);
+  if (isBlocked(d.user_a, d.user_b)) fail(403, 'You can\u2019t message this person.');
+  const { epoch, wraps, pubs } = req.body || {};
+  const both = [d.user_a, d.user_b];
+  if (!wraps || typeof wraps !== 'object' || Object.keys(wraps).length !== 2 || !both.every((u) => isDmWrapped(wraps[u]))) fail(400, 'Those wrapped keys aren\u2019t in the right format.', 'bad_wraps');
+  if (!pubs || typeof pubs !== 'object') fail(400, 'Missing keys.');
+  const rows = both.map((u) => getUserRow(u));
+  if (rows.some((r) => !r || r.deleted_at || !r.pq_public_key)) fail(409, 'Their keys changed. Try again.', 'stale_keys');
+  if (rows.some((r) => !pubs[r.id] || pubs[r.id].publicKey !== r.public_key || pubs[r.id].pq !== pqFp(r.pq_public_key))) fail(409, 'Their keys changed. Try again.', 'stale_keys');
+  const t = now();
+  db.transaction(() => {
+    const cur = db.prepare('SELECT MAX(epoch) AS e FROM dm_keys WHERE dm_id = ?').get(d.id).e || 0;
+    if (Number(epoch) !== cur + 1) fail(409, 'A new key was just made. Try again.', 'epoch');
+    const ins = db.prepare('INSERT INTO dm_keys (dm_id, epoch, user_id, wrapped, wrapper_id, public_key, pq_public_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    rows.forEach((r) => ins.run(d.id, cur + 1, r.id, wraps[r.id], req.userId, r.public_key, r.pq_public_key, t));
+  })();
+  io.to(both.map((u) => `user:${u}`)).emit('dm:keys', { dmId: d.id });
+  res.json(dmKeysFor(d, req.userId));
 });
 // The DM a new one replies to, if it's really in this DM and hasn't disappeared.
 const dmReplyIn = (d, replyTo, t = now()) => (replyTo && alive(db.prepare('SELECT expires_at FROM dm_messages WHERE id = ? AND dm_id = ?').get(String(replyTo), d.id), t) ? String(replyTo) : null);

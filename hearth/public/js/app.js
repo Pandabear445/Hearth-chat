@@ -66,6 +66,7 @@ const S = {
   config: null,
   me: null,
   privateKey: null,
+  pqSeed: null, // the account's post-quantum seed on this device (secure.js ensurePqKey)
   users: {},
   servers: [],          // includes group DMs (kind: 'group')
   dms: [],
@@ -104,7 +105,7 @@ onTokenChange((t) => { if (socket && socket.connected && t !== socketToken) { so
 let hadController = false; // was a service worker already in charge when the page loaded?
 let voice;
 let away = null; // automatic Away (presence.js)
-const sec = createSecure({ S, onKeysChanged, onKeyWarning });
+const sec = createSecure({ S, onKeysChanged, onKeyWarning, onDmKeys });
 // Who's typing where (typing.js): drawn under the open conversation's box and in the conversation lists.
 const TYPING = createTyping({ onChange: (key) => typingChanged(key) });
 // Word filter (wordfilter-app.js): your own list and your servers' suggested ones, applied on this device only.
@@ -249,7 +250,7 @@ async function init() {
   const uid = localStorage.getItem('hearth.userId');
   if (getToken() && uid) {
     const key = await E2EE.loadKey(uid).catch(() => null);
-    if (key) { S.privateKey = key; return startApp(); }
+    if (key) { S.privateKey = key; S.pqSeed = await E2EE.loadPqSeed(uid); return startApp(); }
   }
   showSignIn();
 }
@@ -361,7 +362,9 @@ function showSignIn() {
         });
       saveDeviceNote(username, res.device);
       totpField.hidden = true; loginForm.totp.value = ''; derived = null;
-      const priv = await E2EE.unwrapPrivateKey(wrapKey, res.encPrivateKey);
+      const { privateKey: priv, pqSeed } = await E2EE.unwrapIdentity(wrapKey, res.encPrivateKey);
+      // For the post-quantum key's one-time set-up (secure.js ensurePqKey), which needs the password's keys.
+      let pq = { authKey, wrapKey, encPrivateKey: res.encPrivateKey, pqSeed };
       if (params.kdf !== 'argon2id') {
         // Older account: upgrade password hashing from PBKDF2 to Argon2id. Same password, same keys.
         btn.textContent = 'Upgrading your encryption…';
@@ -373,8 +376,9 @@ function showSignIn() {
         // new token with the re-saved password.
         const up = await api('POST', '/me/password', { oldAuthKey: authKey, newAuthKey: next.authKey, encPrivateKey, salt, keepSessions: true, ...(res.stepUpTicket ? { stepUpTicket: res.stepUpTicket } : {}) });
         if (up.token) res.token = up.token;
+        pq = { authKey: next.authKey, wrapKey: next.wrapKey, encPrivateKey, pqSeed };
       }
-      await finishLogin(res, priv);
+      await finishLogin(res, priv, pq);
     } catch (ex) {
       err.textContent = ex.message;
       // Point the error at the field it's about, so screen readers read them together.
@@ -406,7 +410,7 @@ function showSignIn() {
       const send = (c) => api('POST', '/auth/register', { captcha: c, ...body }).finally(() => regCap.reset());
       const res = await send(captcha).catch(async (ex) => (ex.code === 'captcha_harder' ? send(await regCap.token()) : Promise.reject(ex)));
       saveDeviceNote(username, res.device);
-      await finishLogin(res, id.privateKey);
+      await finishLogin(res, id.privateKey, { authKey, wrapKey, encPrivateKey: id.encPrivateKey, pqSeed: id.pqSeed });
     } catch (ex) {
       err.textContent = ex.message;
       const bad = /username|name/i.test(ex.message) ? regForm.username : /code/i.test(ex.code || ex.message) && regForm.code && !$('#reg-code-field').hidden ? regForm.code : null;
@@ -451,32 +455,41 @@ async function openReset(token) {
       const c = code.value.trim();
       if (info.need2fa) { if (!c) throw new Error('Enter your two-factor code.'); Object.assign(body, /^\d{6}$/.test(c.replace(/\s/g, '')) ? { totp: c } : { backupCode: c }); }
       let privateKey;
+      let pqSeed = null;
       if (info.hasRecovery && !noRec.checked) {
         // Unlock the old key with the recovery key and lock it again with the new password.
         const rk = await E2EE.recoveryWrapKey(rec.value, info.recoverySalt);
         try { body.encPrivateKey = await E2EE.rewrapPrivateKey(rk, next.wrapKey, info.encPrivateKeyRecovery); } catch { throw new Error('That recovery key isn\u2019t right.'); }
-        privateKey = await E2EE.unwrapPrivateKey(next.wrapKey, body.encPrivateKey);
+        ({ privateKey, pqSeed } = await E2EE.unwrapIdentity(next.wrapKey, body.encPrivateKey));
         body.keepKeys = true;
         body.keyProof = await E2EE.resetKeyProof(privateKey, info.keyChallenge.serverPublicKey, info.keyChallenge.nonce, info.userId);
       } else {
         const id = await E2EE.createIdentity(next.wrapKey);
         Object.assign(body, { encPrivateKey: id.encPrivateKey, publicKey: id.publicKey });
         privateKey = id.privateKey;
+        pqSeed = id.pqSeed;
       }
       const res = await api('POST', '/auth/reset', body);
       history.replaceState(null, '', '/');
       toast(body.keepKeys ? 'Password reset. All your messages are still here.'
         : res.user && res.user.keysReset ? 'Password reset with new keys. Ask a member to verify you so you can read your servers and groups again, and add a recovery key in Settings so this can\u2019t happen again.'
           : 'Password reset with new keys. Add a recovery key in Settings so this can\u2019t happen again.');
-      await finishLogin(res, privateKey);
+      // (Every other device was signed out, so none can hand the post-quantum key over: a recovery key made before the
+      // account had one gives it a new one, replace.)
+      await finishLogin(res, privateKey, { authKey: next.authKey, wrapKey: next.wrapKey, encPrivateKey: body.encPrivateKey, pqSeed, replace: !!body.keepKeys });
     } }] });
 }
 
-async function finishLogin(res, privateKey) {
+// pq: { authKey, wrapKey, encPrivateKey, pqSeed, replace? } from a sign-in with the password, for secure.js ensurePqKey.
+let pendingPq = null;
+async function finishLogin(res, privateKey, pq = null) {
   setToken(res.token);
   localStorage.setItem('hearth.userId', res.user.id);
   await E2EE.storeKey(res.user.id, privateKey);
   S.privateKey = privateKey;
+  S.pqSeed = pq && pq.pqSeed ? pq.pqSeed : null;
+  if (S.pqSeed) await E2EE.storePqSeed(res.user.id, S.pqSeed).catch(() => {});
+  pendingPq = pq;
   startApp();
 }
 
@@ -722,7 +735,10 @@ function startApp() {
     const wasWaiting = sec.awaitingVerify(S.users[u.id]) || (u.id === S.me.id && sec.awaitingVerify(S.me));
     const keysNow = () => { const x = S.users[u.id]; return x ? `${x.publicKey || ''}|${x.signPublicKey || ''}` : ''; };
     const keysBefore = keysNow();
+    const pqBefore = S.me.pqPublicKey || null;
     setUser(u); sec.trust(u); refreshUserBits(u.id);
+    // Your account got a (new) post-quantum key on another device: this one asks it for the seed.
+    if (u.id === S.me.id && (S.me.pqPublicKey || null) !== pqBefore) sec.ensurePqKey();
     if (keysNow() !== keysBefore) { NOTES.onTrust(u.id); LOOK.onTrust(u.id); } // photo tags and backgrounds that didn't open with the keys known before
     // Outside images changed on another device: the image links on screen follow the new choice.
     if (u.id === S.me.id && outsideMode(S.me.privacy) !== outsideBefore) later(redrawImageLinks);
@@ -755,6 +771,8 @@ function startApp() {
     playSound('mention');
   });
   socket.on('keys:state', (st) => { if (S.me) sec.applyState(st); });
+  socket.on('pq:handoff', () => sec.onHandoff());
+  socket.on('dm:keys', ({ dmId } = {}) => { if (S.me && typeof dmId === 'string') sec.dmKeysChanged(dmId); });
   socket.on('call:ring', (p) => onRing(p));
   socket.on('call:end', ({ room }) => stopRinging(room));
   socket.on('call:declined', ({ room, userId }) => {
@@ -1205,6 +1223,11 @@ async function loadBootstrap() {
   MEDIA.reset({ all: true });
   SIDE.reset(); // (and the side view loads what's pinned there again: edited or deleted meanwhile)
   await sec.ensureSigningKey(b.encSignPrivateKey);
+  // The post-quantum key: made, published or handed over from another device (secure.js). Before the server keys are
+  // opened, as some may be locked to it, but never holding the start up for long.
+  const pqCtx = pendingPq;
+  pendingPq = null;
+  await Promise.race([sec.ensurePqKey(pqCtx), new Promise((r) => setTimeout(r, 8000))]);
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(b.keyStates || {})) await sec.applyState(st);
   LOOK.fromBootstrap(b.dms, b.servers); // (after the keys: a group chat's background opens with its group's)
@@ -4236,6 +4259,29 @@ function mentionKind(m) {
 }
 const mentionsMe = (m) => !!mentionKind(m);
 
+// A DM's epoch keys arrived (or, with no dmId, this device's post-quantum seed did): open the messages that waited.
+async function onDmKeys(dmId) {
+  if (!S.me) return;
+  for (const [key, store] of Object.entries(S.msgs)) {
+    if (!key.startsWith('d:') || (dmId && key !== 'd:' + dmId)) continue;
+    let waited = false;
+    store.list.forEach((m) => {
+      if (m.dec && m.dec.pending) { m.dec = null; waited = true; }
+      if (m.reply && m.reply.dec && m.reply.dec.pending) { m.reply.dec = null; waited = true; }
+    });
+    if (!waited) continue;
+    await decryptAll(key);
+    if (store.loaded && currentKey() === key) {
+      const sc = $('#messages');
+      const atBottom = sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80;
+      const top = sc ? sc.scrollTop : 0;
+      renderMessages(atBottom);
+      if (sc && !atBottom) sc.scrollTop = top;
+    }
+  }
+  if (!S.view.serverId) later(renderSidebar);
+}
+
 async function onKeysChanged(serverId, added, heldChanged) {
   if (!S.me) return;
   // crypto-2: someone here was verified (or is held back now): their shield in the member list and, in a DM with
@@ -4790,9 +4836,11 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
   else if (m.dec && m.dec.forged) body.append(h('div', { class: 'msg-text undecryptable', 'data-tip': 'Members\u2019 apps can\u2019t send messages without end-to-end encryption, so only the server could have written this one.' }, icon('shield'), 'Hidden: a message without end-to-end encryption, dated after this server turned it on.'));
   else if (m.dec && m.dec.error) body.append(h('div', { class: 'msg-text undecryptable' }, icon('lock'), 'This message could not be decrypted on this device.'));
   else if (m.dec && m.dec.pending) {
-    body.append(h('div', { class: 'msg-text undecryptable' }, icon('lock'), m.dec.before
-      ? 'Sent before you joined. Only members who had the key then can read it.'
-      : 'Waiting for the encryption key from another member\u2026'));
+    body.append(h('div', { class: 'msg-text undecryptable' }, icon('lock'), m.dec.pq
+      ? 'Waiting for your keys from another of your devices\u2026 Open Hearth on one where you\u2019re signed in.'
+      : m.dec.before
+        ? 'Sent before you joined. Only members who had the key then can read it.'
+        : 'Waiting for the encryption key from another member\u2026'));
   } else {
     const chat = P.chat;
     // A message that's only an image link shows just the picture, once the picture is really shown.

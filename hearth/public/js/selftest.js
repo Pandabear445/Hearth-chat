@@ -71,6 +71,29 @@ export async function runCryptoChecks() {
     (await expectFail(() => E2EE.decryptGroup({ raw, serverId: 's1', channelId: 'c1', authorId: 'A', authorSignPub: sa.signPublicKey, text: tamperField(msg, 4) })))
     && expectFail(() => E2EE.decryptGroup({ raw, serverId: 's1', channelId: 'c2', authorId: 'A', authorSignPub: sa.signPublicKey, text: msg })));
   await check('Channel message: an old/other server key can’t read it', () => expectFail(() => E2EE.decryptGroup({ raw: E2EE.newGroupKey(), serverId: 's1', channelId: 'c1', authorId: 'A', authorSignPub: sa.signPublicKey, text: msg })));
+  // Post-quantum (hybrid ML-KEM-768 + P-256)
+  const pa = E2EE.pqKeyPair(a.pqSeed); const pb = E2EE.pqKeyPair(b.pqSeed); const pe = E2EE.pqKeyPair(eve.pqSeed);
+  await check('Post-quantum key: kept inside the password-locked key', async () => {
+    const back = (await E2EE.unwrapIdentity(k1.wrapKey, a.encPrivateKey)).pqSeed;
+    return !!back && E2EE.pqKeyPair(back).publicKey === pa.publicKey;
+  });
+  await check('Post-quantum key: its signature binds it to the account', async () => {
+    const sig = await E2EE.signPqKey(sa.signKey, 'A', a.publicKey, pa.publicKey);
+    return !!(await E2EE.verifyPqKey(sa.signPublicKey, 'A', a.publicKey, pa.publicKey, sig)) && !(await E2EE.verifyPqKey(sa.signPublicKey, 'A', a.publicKey, pe.publicKey, sig));
+  });
+  const w2 = await E2EE.wrapGroupKey({ raw, serverId: 's1', epoch: 1, recipientId: 'B', recipientPub: b.publicKey, recipientPq: pb.publicKey, wrapperId: 'A', signKey: sa.signKey });
+  const open2 = (o) => E2EE.unwrapGroupKey({ wrapped: w2, serverId: 's1', epoch: 1, myId: 'B', myPriv: b.privateKey, myPub: b.publicKey, myPq: pb, wrapperId: 'A', wrapperSignPub: sa.signPublicKey, ...o });
+  await check('Hybrid server key handoff: the right member unwraps it', async () => { const got = await open2({}); return got.every((x, i) => x === raw[i]); });
+  await check('Hybrid server key handoff: needs both the post-quantum and the P-256 key', async () =>
+    (await expectFail(() => open2({ myPq: pe }))) && expectFail(() => open2({ myPriv: eve.privateKey })));
+  const dmKey = E2EE.newDmKey();
+  const dk = await E2EE.wrapDmKey({ raw: dmKey, dmId: 'dm1', epoch: 1, recipientId: 'B', recipientPub: b.publicKey, recipientPq: pb.publicKey, senderId: 'A', myPriv: a.privateKey, myPub: a.publicKey });
+  await check('Hybrid direct message: the other person reads it; an outsider can’t', async () => {
+    const got = await E2EE.unwrapDmKey({ wrapped: dk, dmId: 'dm1', epoch: 1, myId: 'B', myPriv: b.privateKey, myPub: b.publicKey, myPq: pb, senderId: 'A', senderPub: a.publicKey });
+    const d3 = await E2EE.encryptDm3({ raw: dmKey, epoch: 1, dmId: 'dm1', authorId: 'A', payload: { t: 'pq secret' } });
+    return (await E2EE.decryptDm3({ raw: got, dmId: 'dm1', authorId: 'A', text: d3 })).payload.t === 'pq secret'
+      && expectFail(() => E2EE.unwrapDmKey({ wrapped: dk, dmId: 'dm1', epoch: 1, myId: 'B', myPriv: eve.privateKey, myPub: eve.publicKey, myPq: pe, senderId: 'A', senderPub: a.publicKey }));
+  });
   // Lengths are hidden
   await check('Message length is hidden (a short and a longer message look the same size)', async () => {
     const x = await E2EE.encryptGroup({ raw, serverId: 's1', channelId: 'c1', epoch: 1, authorId: 'A', signKey: sa.signKey, payload: { t: 'ok' } });
@@ -88,7 +111,7 @@ export async function runCryptoChecks() {
 }
 
 // Checks on this account: its keys match what the server publishes, and every server's key is in place.
-export async function runAccountChecks({ me, privateKey, signKey, serverKeys }) {
+export async function runAccountChecks({ me, privateKey, signKey, serverKeys, pqSeed = null }) {
   const out = [];
   const check = async (name, fn) => {
     try { const r = await fn(); out.push({ name, ok: r !== false, detail: typeof r === 'string' ? r : '' }); } catch (e) { out.push({ name, ok: false, detail: e.message }); }
@@ -99,6 +122,11 @@ export async function runAccountChecks({ me, privateKey, signKey, serverKeys }) 
     return (await E2EE.decryptDm({ myPriv: privateKey, theirPub: probe.publicKey, dmId: 'probe', authorId: 'p', text })).payload.t === 'x';
   });
   if (signKey) await check('Your signing key matches the one others check against', async () => E2EE.verify(me.signPublicKey, 'probe', await E2EE.sign(signKey, 'probe')));
+  // (Only once the account has one: older accounts get theirs at the next sign-in with the password.)
+  if (me.pqPublicKey) {
+    await check('Your post-quantum key is signed by you', async () => !!(await E2EE.verifyPqKey(me.signPublicKey, me.id, me.publicKey, me.pqPublicKey, me.pqSig)));
+    await check('This device has your post-quantum key', () => (pqSeed instanceof Uint8Array && E2EE.pqKeyPair(pqSeed).publicKey === me.pqPublicKey) || 'still waiting for it from another of your devices');
+  }
   for (const s of serverKeys || []) {
     await check(`Server key for ${s.name}`, () => (s.ok ? true : (s.why || 'missing')));
   }

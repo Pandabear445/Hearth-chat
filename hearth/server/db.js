@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 24;
+const SCHEMA_VERSION = 25;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1742,6 +1742,42 @@ addColumn('servers', 'discover_about', "TEXT NOT NULL DEFAULT ''");
 addColumn('servers', 'discover_tags', "TEXT NOT NULL DEFAULT '[]'");
 addColumn('servers', 'discover_at', 'INTEGER');
 db.exec('CREATE INDEX IF NOT EXISTS idx_servers_discoverable ON servers(discoverable) WHERE discoverable = 1');
+
+// v25 (post-quantum keys, public/js/e2ee.js): each account's ML-KEM-768 public key, published next to its identity key
+// and signed with its signing key (the apps check that signature; so does POST /me/pq-key). The seed it comes from is
+// inside enc_private_key, locked with the password like the identity key.
+//   users.pq_public_key   ML-KEM-768 public key (base64, 1184 bytes), or NULL until the account's next sign-in
+//   users.pq_sig          its signature: ECDSA over hearth-pq-key-v1|<id>|<public_key>|<pq_public_key>
+// dm_keys: a DM's epoch keys once both people have post-quantum keys, each wrapped (dk1:, hybrid ML-KEM + ECDH) for one of
+//   the two, with the public keys it was wrapped for (so apps know when it's time for a new one). Kept as long as the DM:
+//   that's what lets every device you sign in on read the whole history.
+// pq_handoffs: a device that was signed in before its account had a post-quantum key asks another of the account's
+//   devices for it (devicePk: a one-off ML-KEM key, signed with the account's signing key); sealed: the answer.
+addColumn('users', 'pq_public_key', 'TEXT');
+addColumn('users', 'pq_sig', 'TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS dm_keys (
+  dm_id TEXT NOT NULL REFERENCES dm_channels(id) ON DELETE CASCADE,
+  epoch INTEGER NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  wrapped TEXT NOT NULL,
+  wrapper_id TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  pq_public_key TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (dm_id, epoch, user_id)
+);
+CREATE TABLE IF NOT EXISTS pq_handoffs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_pk TEXT NOT NULL,
+  sig TEXT NOT NULL,
+  sealed TEXT,
+  created_at INTEGER NOT NULL,
+  sealed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_pq_handoffs_user ON pq_handoffs(user_id, created_at);
+`);
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
 db.exec('COMMIT');

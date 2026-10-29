@@ -2,6 +2,7 @@
 // Everything goes through the real UI; the only shortcuts are reading state the UI already shows.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import { exact, makeGif, makePng, totp, newPassword, Person, PHONE } from './harness.mjs';
 
 export function check(ok, message) { if (!ok) throw new Error(message); }
@@ -4523,6 +4524,90 @@ async function ownerResetLink(t) {
   await droid.close();
 }
 
+// ------------------------------------------------------------------ post-quantum keys: an old account upgrades by itself
+// olga's account is made the way Hearth stored accounts before post-quantum keys (a password envelope with the P-256
+// identity key alone, nothing published). alice writes to her: P-256, as olga has no post-quantum key. olga signs in
+// with her password: her app makes the key, puts its seed in her envelope and publishes it signed, without a word on
+// screen. She reads the old message, and from then on both of them write hybrid (ML-KEM-768 + P-256, d3). Then alice
+// hands her a server's key: the hybrid kind (w2), and olga reads the channel.
+async function postQuantum(t) {
+  const { alice } = t.people;
+  const require = createRequire(import.meta.url);
+  globalThis.window = globalThis.window || { crypto: globalThis.crypto, hashwasm: require('hash-wasm') };
+  const E = await import(new URL('../../public/js/e2ee.js', import.meta.url).href);
+  const b64 = (u8) => Buffer.from(u8).toString('base64');
+  const pw = newPassword();
+  const kdfSalt = E.newKdfSalt();
+  const { authKey, wrapKey } = await E.deriveKeys('olga', pw, { kdf: 'argon2id', salt: kdfSalt });
+  const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const envelope = `${b64(iv)}:${b64(new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, wrapKey, pkcs8)))}`;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const olgaId = Date.now().toString(36).padStart(9, '0') + crypto.randomBytes(5).toString('hex'); // (as server/db.js newId)
+  const aliceId = t.server.rows("SELECT id FROM users WHERE username = 'alice'")[0].id;
+  const terms = (await (await fetch(`${t.server.base}/api/config`)).json()).termsVersion || null;
+  t.server.sql(`INSERT INTO users (id, username, auth_hash, public_key, enc_private_key, profile, created_at, kdf, kdf_salt, tos_version)
+      VALUES (?, 'olga', ?, ?, ?, '{}', ?, 'argon2id', ?, ?)`, olgaId, require('bcryptjs').hashSync(authKey, 11),
+  b64(await crypto.subtle.exportKey('spki', kp.publicKey)), envelope, Date.now(), kdfSalt, terms);
+  t.server.sql("INSERT INTO friendships (requester_id, addressee_id, status, created_at) VALUES (?, ?, 'accepted', ?)", aliceId, olgaId, Date.now());
+  const pqOf = () => t.server.rows('SELECT pq_public_key, enc_private_key FROM users WHERE id = ?', olgaId)[0];
+  const newest = () => t.server.rows('SELECT ciphertext FROM dm_messages WHERE author_id IN (?, ?) ORDER BY created_at DESC, rowid DESC LIMIT 1', aliceId, olgaId)[0].ciphertext;
+
+  // alice writes first, to an account with no post-quantum key: P-256, as before.
+  await alice.page.reload();
+  await alice.waitApp();
+  await alice.railButton('Home');
+  await alice.page.locator('#sidebar-body .nav-row', { hasText: 'Friends' }).click();
+  await alice.page.locator('#main-head .tab', { hasText: exact('All') }).click();
+  await alice.$('.friend-row', { hasText: 'olga' }).locator('.friend-who').click();
+  await alice.page.locator('.pop-profile button', { hasText: exact('Message') }).click();
+  await alice.page.waitForSelector('#composer-input[placeholder="Message olga"]');
+  await alice.send('Before your upgrade: quince');
+  check(/^d2:/.test(newest()), 'To an account without a post-quantum key, a DM should still be P-256 (d2).');
+  check(!pqOf().pq_public_key, 'olga has no post-quantum key until she signs in.');
+
+  // olga signs in: the upgrade happens by itself.
+  const olga = await t.open('olga');
+  await olga.login('olga', pw);
+  await olga.$('#user-panel .me-text', { hasText: 'olga' }).waitFor();
+  for (let i = 0; i < 100 && !pqOf().pq_public_key; i++) await sleep(100);
+  const row = pqOf();
+  check(E.isPqPublicKey(row.pq_public_key), 'Signing in should give olga a post-quantum key.');
+  const opened = await E.unwrapIdentity(wrapKey, row.enc_private_key);
+  check(opened.pqSeed && E.pqKeyPair(opened.pqSeed).publicKey === row.pq_public_key, 'Its seed should be inside her password envelope.');
+  check(await E.ownsPublicKey(opened.privateKey, b64(await crypto.subtle.exportKey('spki', kp.publicKey))), 'Her identity key should be the same as before.');
+  check(!(await olga.$('.modal').count()), 'Nothing should be asked or shown for the upgrade.');
+  await olga.railButton('Direct messages');
+  await olga.dmRow('alice').click();
+  await olga.message('Before your upgrade: quince').waitFor();
+  await olga.send('After my upgrade: persimmon');
+  await alice.message('After my upgrade: persimmon').waitFor();
+  check(/^d3:1:/.test(newest()), 'Once both have post-quantum keys, DMs should be hybrid (d3).');
+  await alice.send('Hybrid both ways: medlar');
+  await olga.message('Hybrid both ways: medlar').waitFor();
+  check(/^d3:1:/.test(newest()), 'alice’s reply should be hybrid too, in the same epoch.');
+  const keys = t.server.rows('SELECT user_id, wrapped FROM dm_keys WHERE user_id IN (?, ?)', aliceId, olgaId);
+  check(keys.length === 2 && keys.every((k) => /^dk1:/.test(k.wrapped)), 'The epoch key should be kept wrapped for each of them.');
+
+  // A server's key, handed to olga when she joins: the hybrid kind, and she reads the channel.
+  await alice.createServer('Quantum club');
+  const link = await alice.inviteLink();
+  await alice.send('In the channel before olga: loquat');
+  await olga.join(link, 'Quantum club');
+  const sid = t.server.rows("SELECT id FROM servers WHERE name = 'Quantum club'")[0].id;
+  let wrap = null;
+  for (let i = 0; i < 100 && !wrap; i++) { wrap = (t.server.rows('SELECT wrapped FROM server_keys WHERE server_id = ? AND user_id = ?', sid, olgaId)[0] || {}).wrapped; if (!wrap) await sleep(100); }
+  check(E.wrapFormat(wrap) === 'w2', `The server key handed to olga should be hybrid (w2), not ${E.wrapFormat(wrap)}.`);
+  const own = t.server.rows('SELECT wrapped FROM server_keys WHERE server_id = ? AND user_id = ?', sid, aliceId)[0].wrapped;
+  check(E.wrapFormat(own) === 'w2', 'alice’s own copy should be hybrid too.');
+  await olga.message('In the channel before olga: loquat').waitFor();
+  await alice.send('And after: sapodilla');
+  await olga.message('And after: sapodilla').waitFor();
+  check(!(await olga.$('#messages .undecryptable').count()), 'Nothing should be left unreadable for olga.');
+  await olga.close();
+}
+
 // ------------------------------------------------------------------ an update puts itself in place
 // An update reaches an open page as a new service worker. There's nothing to click: the page reloads into the new
 // version by itself, keeping its place and a message being typed, but never while something is under way (here a
@@ -5827,6 +5912,7 @@ export const FLOWS = [
   ['where the chat puts you: a DM reopens at its newest message as GIFs load, the "New messages" line above; Jump on a pin or a search result lands on the message and keeps it there; on a phone the pins close on Jump', keepYourPlace],
   ['community: a server from the Gaming template, shown in server search and joined from there; the main server a new account joins at sign-up and reads in', community],
   ['member relays: a member offers a machine in Help host, it checks in, the owner approves it with a password, it’s in everyone’s calls under a made-up login; the member avoids members’ relays, removes theirs and gets the uninstall command', memberRelays],
+  ['post-quantum keys: an account from before them gets one at its next sign-in, unseen; DMs and a server key go hybrid', postQuantum],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
 ];

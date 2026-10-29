@@ -849,7 +849,7 @@ function securitySections(app) {
         return { name: sv.name || 'group chat', ok, why: ok ? '' : fresh ? 'your key is on its way: this server gives new members a fresh key, which can take a few minutes'
           : 'waiting for another member to share it (happens automatically when one is online)' };
       });
-      const mine = await runAccountChecks({ me: S.me, privateKey: S.privateKey, signKey: S.signKey, serverKeys });
+      const mine = await runAccountChecks({ me: S.me, privateKey: S.privateKey, signKey: S.signKey, serverKeys, pqSeed: S.pqSeed });
       const all = [...generic, ...mine];
       const bad = all.filter((x) => !x.ok);
       clear(checkBox).append(h('p', { class: bad.length ? 'warn-box' : 'support-now' }, bad.length ? `${bad.length} of ${all.length} checks need attention.` : `All ${all.length} checks passed. Your encryption is working as it should.`),

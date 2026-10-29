@@ -1,6 +1,6 @@
 // Hearth end-to-end encryption.
 //
-// Primitives (all from the browser's WebCrypto, plus Argon2id via WebAssembly):
+// Primitives (the browser's WebCrypto, plus Argon2id via WebAssembly and ML-KEM-768 from public/vendor/ml-kem.js):
 //   Password hardening  Argon2id (64 MiB, 3 passes) with a random per-account salt.
 //                        Older accounts used PBKDF2-SHA256 and are upgraded at their next login.
 //   Identity key        ECDH P-256. Private half is AES-256-GCM encrypted with a key derived from your
@@ -11,11 +11,26 @@
 //                        epoch are bound in as additional authenticated data. Padded to size steps so
 //                        lengths don't give messages away.
 //   Attachments         Each file gets its own random AES-256-GCM key, carried inside the encrypted message.
-//   Direct messages     Conversation key = HKDF(ECDH(you, them)). Not signed, so DMs stay deniable.
+//   Post-quantum key    ML-KEM-768 (FIPS 203), from a 64-byte seed kept inside the password-locked envelope with
+//                        the identity key; its public half is published signed by the signing key. Always used
+//                        hybrid with P-256 (hybridKey: HKDF over the ML-KEM secret and the ECDH outputs, salted
+//                        with the whole transcript), so reading anything takes breaking both. Accounts from before
+//                        get theirs at the next sign-in with the password; devices already signed in get the seed
+//                        from another of the account's devices (pq handoff). Signatures stay ECDSA P-256 (classical).
+//   Direct messages     With post-quantum keys on both sides: a random 256-bit key per DM "epoch", wrapped for each
+//                        of the two with ML-KEM + ECDH(ephemeral, them) + ECDH(you, them) (dk1, deniable: no
+//                        signature), rotated weekly and on key changes, every epoch kept so every device reads the
+//                        history (d3). Otherwise, and for older messages: key = HKDF(ECDH(you, them)) (d2). Not
+//                        signed, so DMs stay deniable. Not forward secret: see docs/ENCRYPTION-RESEARCH.md.
 //   Server channels     A random 256-bit group key per server "epoch", sent to each member wrapped with
-//                        ECIES (ephemeral ECDH P-256 + HKDF + AES-GCM) and signed by whoever shared it.
+//                        ECIES (ephemeral ECDH P-256 + HKDF + AES-GCM, w1), or with the hybrid for members with a
+//                        post-quantum key (w2), and signed by whoever shared it.
 //                        A new epoch starts whenever someone leaves (or a former member comes back), so
 //                        former members can't read on.
+//   Still P-256 only    The personal vault (x1), DM photo tags (td1) and DM chat backgrounds (lkd1): see the
+//                        research note's open items.
+
+import { ml_kem768 } from '../vendor/ml-kem.js';
 
 const subtle = () => {
   if (!window.crypto || !window.crypto.subtle) {
@@ -153,18 +168,62 @@ function importEcdhPublic(b64key) {
   return pubCache.get(b64key);
 }
 
+// What the password locks (encPrivateKey). Until 1.40 it was the identity key's PKCS#8 bytes alone. Since then it's
+//   'H' 'Q' 0x01 | PKCS#8 length (2 bytes, big-endian) | PKCS#8 | the 64-byte ML-KEM-768 seed (pqKeyPair)
+// so the post-quantum key goes everywhere the identity key goes: every path that locks it again (a new password, the
+// recovery key, the PBKDF2 upgrade) copies these bytes without looking inside. PKCS#8 always starts with 0x30, so the
+// two forms can't be mistaken for each other. The seed is never locked with anything derived from the identity key
+// (as the signing key is): a quantum computer could work that out from the public key, and then the post-quantum key
+// would protect nothing.
+const ENVELOPE = [0x48, 0x51, 0x01];
+function packIdentity(pkcs8, pqSeed) {
+  if (pkcs8.length > 0xffff || pqSeed.length !== PQ_SEED_BYTES) throw new Error('Bad key material');
+  return concat(Uint8Array.from(ENVELOPE), Uint8Array.of(pkcs8.length >> 8, pkcs8.length & 0xff), pkcs8, pqSeed);
+}
+// { pkcs8, pqSeed (null in an envelope from before) }: copies, so the caller can wipe `bytes`.
+function unpackIdentity(bytes) {
+  if (bytes[0] !== ENVELOPE[0]) return { pkcs8: bytes.slice(), pqSeed: null };
+  if (bytes[1] !== ENVELOPE[1] || bytes[2] !== ENVELOPE[2] || bytes.length < 5) throw new Error('Unknown key format');
+  const n = (bytes[3] << 8) | bytes[4];
+  if (bytes.length !== 5 + n + PQ_SEED_BYTES) throw new Error('Unknown key format');
+  return { pkcs8: bytes.slice(5, 5 + n), pqSeed: bytes.slice(5 + n) };
+}
+
 export async function createIdentity(wrapKey) {
   const kp = await subtle().generateKey(ECDH, true, ['deriveBits']);
   const publicKey = b64(await subtle().exportKey('spki', kp.publicKey));
   const pkcs8 = new Uint8Array(await subtle().exportKey('pkcs8', kp.privateKey));
-  const encPrivateKey = await sealBytes(wrapKey, pkcs8);
+  const pqSeed = newPqSeed();
+  const packed = packIdentity(pkcs8, pqSeed);
+  const encPrivateKey = await sealBytes(wrapKey, packed);
   const privateKey = await importEcdhPrivate(pkcs8);
-  pkcs8.fill(0);
-  return { publicKey, encPrivateKey, privateKey };
+  pkcs8.fill(0); packed.fill(0);
+  return { publicKey, encPrivateKey, privateKey, pqSeed };
+}
+// The identity key and (when the account has one in its envelope) the post-quantum seed.
+export async function unwrapIdentity(wrapKey, encPrivateKey) {
+  const bytes = await openBytes(wrapKey, encPrivateKey);
+  const { pkcs8, pqSeed } = unpackIdentity(bytes);
+  bytes.fill(0);
+  try { return { privateKey: await importEcdhPrivate(pkcs8), pqSeed }; } finally { pkcs8.fill(0); }
 }
 export async function unwrapPrivateKey(wrapKey, encPrivateKey) {
-  const pkcs8 = await openBytes(wrapKey, encPrivateKey);
-  try { return await importEcdhPrivate(pkcs8); } finally { pkcs8.fill(0); }
+  return (await unwrapIdentity(wrapKey, encPrivateKey)).privateKey;
+}
+// An envelope from before post-quantum keys, locked again with a seed inside (the same identity key): `seed`, or a new
+// one. One that already has a seed comes back as it was, unless `replace` (its seed isn't the one the account
+// publishes: after a reset with a recovery key made before the upgrade, or put back by a password change that raced
+// the upgrade on another device).
+export async function addPqToEnvelope(wrapKey, encPrivateKey, { replace = false, seed: given = null } = {}) {
+  const bytes = await openBytes(wrapKey, encPrivateKey);
+  const { pkcs8, pqSeed } = unpackIdentity(bytes);
+  bytes.fill(0);
+  try {
+    if (pqSeed && !replace) return { encPrivateKey, pqSeed, changed: false };
+    const seed = given || newPqSeed();
+    const packed = packIdentity(pkcs8, seed);
+    try { return { encPrivateKey: await sealBytes(wrapKey, packed), pqSeed: seed, changed: true }; } finally { packed.fill(0); }
+  } finally { pkcs8.fill(0); }
 }
 // Proves to the server that this device holds the private key for the account's published public key, without
 // revealing it: ECDH with a one-off server key, then an HMAC over a fresh nonce. Used when a password reset
@@ -193,6 +252,124 @@ export async function signKeyProof(myPriv, serverPublicKeyB64, nonce, userId, si
   const mac = await subtle().importKey('raw', bits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return b64(await subtle().sign('HMAC', mac, enc.encode(`hearth-sign-key-proof|${userId}|${nonce}|${signPublicKey}`)));
 }
+// ---------------------------------------------------------------- post-quantum (ML-KEM-768) key
+// Each account has one ML-KEM-768 key pair (FIPS 203), made from a 64-byte seed that lives inside the password-locked
+// envelope (see packIdentity). Its public half is published next to the identity key, signed with the account's
+// signing key over the account id and identity key (signPqKey), so the server can neither swap it nor move it to
+// someone else. It's always used together with P-256 ECDH, never instead of it (hybridKey): to read anything, an
+// attacker has to break both.
+export const PQ_SEED_BYTES = 64;
+export const PQ_PUBLIC_BYTES = 1184;
+const PQ_CT_BYTES = 1088;
+export const newPqSeed = () => rand(PQ_SEED_BYTES);
+const pqPairs = new WeakMap(); // seed (Uint8Array) -> { publicKey (base64), secretKey }
+// { publicKey (base64), secretKey } for a seed. Key generation from a seed is deterministic (FIPS 203 ML-KEM.KeyGen_internal).
+export function pqKeyPair(seed) {
+  if (!(seed instanceof Uint8Array) || seed.length !== PQ_SEED_BYTES) throw new Error('Bad post-quantum key');
+  let k = pqPairs.get(seed);
+  if (!k) {
+    const { publicKey, secretKey } = ml_kem768.keygen(seed);
+    k = { publicKey: b64(publicKey), secretKey };
+    pqPairs.set(seed, k);
+  }
+  return k;
+}
+// A published ML-KEM-768 public key: the right size and accepted by the encapsulation-key check (FIPS 203 7.2), or null.
+const pqPubCache = new Map();
+function pqPublicBytes(pqPubB64) {
+  if (typeof pqPubB64 !== 'string' || pqPubB64.length !== 1580) return null;
+  if (!pqPubCache.has(pqPubB64)) {
+    let bytes = null;
+    try { bytes = unb64(pqPubB64); if (bytes.length !== PQ_PUBLIC_BYTES) bytes = null; else ml_kem768.encapsulate(bytes); } catch { bytes = null; }
+    if (pqPubCache.size > 2000) pqPubCache.clear();
+    pqPubCache.set(pqPubB64, bytes);
+  }
+  return pqPubCache.get(pqPubB64);
+}
+export const isPqPublicKey = (k) => !!pqPublicBytes(k);
+// The short fingerprint the server lists for someone's post-quantum key (server/index.js pqFp).
+export async function pqFingerprint(pqPubB64) {
+  const bytes = pqPublicBytes(pqPubB64);
+  return bytes ? b64((await sha256(bytes)).slice(0, 16)) : null;
+}
+const pqKeyText = (userId, publicKey, pqPublicKey) => `hearth-pq-key-v1|${userId}|${publicKey}|${pqPublicKey}`;
+export const signPqKey = (signKey, userId, publicKey, pqPublicKey) => sign(signKey, pqKeyText(userId, publicKey, pqPublicKey));
+// The signing key (of one or a list, best first) that signed this post-quantum key for this account and identity key,
+// or null. Only a key that passes is ever encrypted to.
+export async function verifyPqKey(signPubs, userId, publicKey, pqPublicKey, sigB64) {
+  if (!isPqPublicKey(pqPublicKey) || typeof publicKey !== 'string' || !publicKey) return null;
+  return verifyAny(signPubs, pqKeyText(userId, publicKey, pqPublicKey), sigB64);
+}
+
+// The hybrid combiner, after Signal's PQXDH and X-Wing (draft-connolly-cfrg-xwing-kem): one AES-256-GCM key from
+// HKDF-SHA256 over the ML-KEM shared secret and every ECDH output, salted with a hash of the whole transcript (the
+// ephemeral key, the ML-KEM ciphertext and both sides' public keys, each with its length in front) and labelled with
+// the format and its context. Whoever reads it needs both the ML-KEM secret key and the P-256 one. ML-KEM is
+// IND-CCA2 and binds its own ciphertext, so the transcript is belt and braces, as X-Wing keeps the ECDH half's.
+const sha256 = async (bytes) => new Uint8Array(await subtle().digest('SHA-256', bytes));
+const framed = (parts) => concat(...parts.flatMap((p) => [Uint8Array.of(p.length >>> 24, (p.length >>> 16) & 0xff, (p.length >>> 8) & 0xff, p.length & 0xff), p]));
+async function hybridKey({ label, ctx, kemSs, dhs, transcript, usage }) {
+  const salt = await sha256(concat(enc.encode(`${label}|${ctx}|`), framed(transcript)));
+  const ikm = concat(kemSs, ...dhs);
+  try { return await hkdfAes(await hkdfKey(ikm), salt, `${label}|${ctx}`, [usage]); } finally { ikm.fill(0); }
+}
+const dhBits = async (priv, pubB64) => new Uint8Array(await subtle().deriveBits({ name: 'ECDH', public: await importEcdhPublic(pubB64) }, priv, 256));
+async function ephemeral() {
+  const eph = await subtle().generateKey(ECDH, true, ['deriveBits']);
+  return { priv: eph.privateKey, pub: b64(await subtle().exportKey('spki', eph.publicKey)) };
+}
+function needPq(myPq) {
+  if (!myPq || !(myPq.secretKey instanceof Uint8Array) || typeof myPq.publicKey !== 'string') {
+    const err = new Error('This device doesn’t have the account’s post-quantum key yet');
+    err.code = 'no_pq';
+    throw err;
+  }
+}
+const isB64 = (x, bytes) => typeof x === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(x) && (bytes == null || (x.length === 4 * Math.ceil(bytes / 3) && unb64(x).length === bytes));
+
+// ---------------------------------------------------------------- post-quantum key handoff between your devices
+// A device that was already signed in when the account got its post-quantum key has the identity key but not the
+// seed (that's locked with the password, which a signed-in device doesn't keep). Rather than ask for the password, it
+// makes a one-off ML-KEM-768 key, signs its public half with the account's signing key (so the server can't slip in one
+// of its own) and asks; any of your devices that has the seed seals it to that key and to your identity key (the same
+// hybrid as everything else). The device checks the seed makes the very key the account publishes before using it.
+//   request:  { id, devicePk, sig }   sig over hearth-pq-handoff|<account>|<id>|<devicePk>
+//   answer:   ph1:<ephemeral P-256>:<ML-KEM ciphertext>:<iv>:<ciphertext>
+const handoffText = (userId, id, devicePk) => `hearth-pq-handoff|${userId}|${id}|${devicePk}`;
+export async function pqHandoffRequest(signKey, userId) {
+  const seed = newPqSeed();
+  const id = toHex(rand(16));
+  const devicePk = pqKeyPair(seed).publicKey;
+  return { id, devicePk, sig: await sign(signKey, handoffText(userId, id, devicePk)), seed };
+}
+export const verifyPqHandoffRequest = (signPub, userId, r) => !!r && typeof r.id === 'string' && /^[0-9a-f]{32}$/.test(r.id) && isPqPublicKey(r.devicePk)
+  && verify(signPub, handoffText(userId, r.id, r.devicePk), r.sig);
+export async function sealPqHandoff({ pqSeed, userId, id, devicePk, myPub }) {
+  const pk = pqPublicBytes(devicePk);
+  if (!pk) throw new Error('Bad device key');
+  const eph = await ephemeral();
+  const { cipherText, sharedSecret } = ml_kem768.encapsulate(pk);
+  const ctx = `${userId}|${id}`;
+  const key = await hybridKey({ label: 'hearth-ph1', ctx, kemSs: sharedSecret, dhs: [await dhBits(eph.priv, myPub)], transcript: [unb64(eph.pub), cipherText, unb64(myPub), pk], usage: 'encrypt' });
+  sharedSecret.fill(0);
+  const iv = rand(12);
+  return `ph1:${eph.pub}:${b64(cipherText)}:${b64(iv)}:${b64(await aesEncrypt(key, iv, pqSeed, `hearth-ph1|${ctx}`))}`;
+}
+// The seed, checked to make expectPq (the account's published post-quantum key); throws otherwise.
+export async function openPqHandoff({ sealed, userId, id, deviceSeed, myPriv, myPub, expectPq }) {
+  const p = String(sealed).split(':');
+  if (p.length !== 5 || p[0] !== 'ph1' || !isB64(p[2], PQ_CT_BYTES)) throw new Error('Unknown format');
+  const dev = pqKeyPair(deviceSeed);
+  const ct = unb64(p[2]);
+  const ss = ml_kem768.decapsulate(ct, dev.secretKey);
+  const ctx = `${userId}|${id}`;
+  const key = await hybridKey({ label: 'hearth-ph1', ctx, kemSs: ss, dhs: [await dhBits(myPriv, p[1])], transcript: [unb64(p[1]), ct, unb64(myPub), unb64(dev.publicKey)], usage: 'decrypt' });
+  ss.fill(0);
+  const seed = await aesDecrypt(key, unb64(p[3]), unb64(p[4]), `hearth-ph1|${ctx}`);
+  if (seed.length !== PQ_SEED_BYTES || pqKeyPair(seed).publicKey !== expectPq) throw new Error('That isn’t this account’s post-quantum key');
+  return seed;
+}
+
 // ---------------------------------------------------------------- personal vault (study tools)
 // A key only you can derive: ECDH between your identity key and its own public half, through HKDF. Your study
 // decks, assignments and stats are encrypted with it before they're saved, so the server stores only ciphertext.
@@ -299,6 +476,67 @@ export async function decryptLegacyDmFile(myPriv, theirPub, buf) {
   return aesDecrypt(await dmLegacyKey(myPriv, theirPub), bytes.slice(0, 12), bytes.slice(12));
 }
 
+// ---------------------------------------------------------------- direct messages, post-quantum (DM epoch keys)
+// Once both people have a post-quantum key, a DM is written with an epoch key instead of the fixed ECDH one: a random
+// 256-bit key per conversation and epoch, wrapped for each of the two (and kept on the server, so every device either
+// of you signs in on can read the whole history) with the hybrid:
+//   dk1:<ephemeral public>:<ML-KEM ciphertext>:<iv>:<ciphertext>
+// The AES key comes from hybridKey over ML-KEM-768 to the recipient's post-quantum key, ECDH(ephemeral, recipient) and
+// ECDH(sender, recipient) with both identity keys. That last one is what says the key came from one of you two (only
+// you two can work it out), the way the d2 key always did: still no signatures, so DMs stay deniable.
+// A new epoch starts every so often and whenever either of you has new keys (secure.js); messages in it are
+//   d3:<epoch>:<salt>:<iv>:<ciphertext>
+// with a fresh key per message (HKDF from the epoch key and a random salt) and the DM, epoch and author bound in.
+export const newDmKey = () => rand(32);
+const dmKeyCtx = (dmId, epoch, recipientId, senderId) => `hearth-dmk1|${dmId}|${epoch}|${recipientId}|${senderId}`;
+export async function wrapDmKey({ raw, dmId, epoch, recipientId, recipientPub, recipientPq, senderId, myPriv, myPub }) {
+  const pk = pqPublicBytes(recipientPq);
+  if (!pk) throw new Error('Bad post-quantum key');
+  const eph = await ephemeral();
+  const { cipherText, sharedSecret } = ml_kem768.encapsulate(pk);
+  const ctx = dmKeyCtx(dmId, epoch, recipientId, senderId);
+  const dhs = [await dhBits(eph.priv, recipientPub), await dhBits(myPriv, recipientPub)];
+  const key = await hybridKey({ label: 'hearth-dmk1', ctx, kemSs: sharedSecret, dhs, transcript: [unb64(eph.pub), cipherText, unb64(recipientPub), unb64(myPub), pk], usage: 'encrypt' });
+  sharedSecret.fill(0); dhs.forEach((d) => d.fill(0));
+  const iv = rand(12);
+  return `dk1:${eph.pub}:${b64(cipherText)}:${b64(iv)}:${b64(await aesEncrypt(key, iv, raw, ctx))}`;
+}
+// senderPub: the identity key the sender had when they wrapped it (yours, for your own copy).
+export async function unwrapDmKey({ wrapped, dmId, epoch, myId, myPriv, myPub, myPq, senderId, senderPub }) {
+  const parts = String(wrapped).split(':');
+  const [v, ephPub, kemCt, iv, ct] = parts;
+  if (parts.length !== 5 || v !== 'dk1' || !isB64(kemCt, PQ_CT_BYTES)) throw new Error('Unknown key format');
+  needPq(myPq);
+  const kct = unb64(kemCt);
+  const ss = ml_kem768.decapsulate(kct, myPq.secretKey);
+  const ctx = dmKeyCtx(dmId, epoch, myId, senderId);
+  const dhs = [await dhBits(myPriv, ephPub), await dhBits(myPriv, senderPub)];
+  const key = await hybridKey({ label: 'hearth-dmk1', ctx, kemSs: ss, dhs, transcript: [unb64(ephPub), kct, unb64(myPub), unb64(senderPub), unb64(myPq.publicKey)], usage: 'decrypt' });
+  ss.fill(0); dhs.forEach((d) => d.fill(0));
+  const raw = await aesDecrypt(key, unb64(iv), unb64(ct), ctx);
+  if (raw.length !== 32) throw new Error('Unknown key format');
+  return raw;
+}
+// The epoch a d3 message says it was written in (null for anything else).
+export function dmEpoch(text) {
+  const p = String(text || '').split(':');
+  return p[0] === 'd3' && /^[1-9][0-9]{0,8}$/.test(p[1] || '') ? parseInt(p[1], 10) : null;
+}
+export async function encryptDm3({ raw, epoch, dmId, authorId, payload }) {
+  const salt = rand(32);
+  const iv = rand(12);
+  const key = await hkdfAes(await groupBase(raw, `dm|${dmId}|${epoch}`), salt, `hearth-dm-v3|${dmId}|${epoch}`, ['encrypt']);
+  const ct = await aesEncrypt(key, iv, padded(payload), `hearth-d3|${dmId}|${epoch}|${authorId}`);
+  return `d3:${epoch}:${b64(salt)}:${b64(iv)}:${b64(ct)}`;
+}
+export async function decryptDm3({ raw, dmId, authorId, text }) {
+  const parts = String(text).split(':');
+  const [v, epoch, salt, iv, ct] = parts;
+  if (parts.length !== 5 || v !== 'd3' || dmEpoch(text) === null) throw new Error('Unknown format');
+  const key = await hkdfAes(await groupBase(raw, `dm|${dmId}|${epoch}`), unb64(salt), `hearth-dm-v3|${dmId}|${epoch}`, ['decrypt']);
+  return { payload: JSON.parse(dec.decode(await aesDecrypt(key, unb64(iv), unb64(ct), `hearth-d3|${dmId}|${epoch}|${authorId}`))) };
+}
+
 // ---------------------------------------------------------------- server channel group keys
 export const newGroupKey = () => rand(32);
 
@@ -309,7 +547,12 @@ export async function keyCheck(raw, serverId, epoch) {
 
 // ECIES: ephemeral ECDH with the recipient's identity key → HKDF → AES-GCM, then signed by the sender.
 // Format: w1:<ephemeral public>:<iv>:<ciphertext>:<signature>
-export async function wrapGroupKey({ raw, serverId, epoch, recipientId, recipientPub, wrapperId, signKey }) {
+// With the recipient's post-quantum key (recipientPq, checked by the caller: verifyPqKey) it's the hybrid instead:
+//   w2:<ephemeral public>:<ML-KEM ciphertext>:<iv>:<ciphertext>:<signature>
+// the AES key from hybridKey over ML-KEM-768 to their post-quantum key and the same ephemeral ECDH, and the signature
+// over everything, under its own label (hearth-gk2), so neither form's signature ever checks out for the other.
+export async function wrapGroupKey({ raw, serverId, epoch, recipientId, recipientPub, recipientPq, wrapperId, signKey }) {
+  if (recipientPq) return wrapGroupKey2({ raw, serverId, epoch, recipientId, recipientPub, recipientPq, wrapperId, signKey });
   const eph = await subtle().generateKey(ECDH, true, ['deriveBits']);
   const ephPub = b64(await subtle().exportKey('spki', eph.publicKey));
   const bits = await subtle().deriveBits({ name: 'ECDH', public: await importEcdhPublic(recipientPub) }, eph.privateKey, 256);
@@ -321,8 +564,25 @@ export async function wrapGroupKey({ raw, serverId, epoch, recipientId, recipien
   const sig = await sign(signKey, `${ctx}|${body}`);
   return `w1:${body}:${sig}`;
 }
+async function wrapGroupKey2({ raw, serverId, epoch, recipientId, recipientPub, recipientPq, wrapperId, signKey }) {
+  const pk = pqPublicBytes(recipientPq);
+  if (!pk) throw new Error('Bad post-quantum key');
+  const eph = await ephemeral();
+  const { cipherText, sharedSecret } = ml_kem768.encapsulate(pk);
+  const ctx = `hearth-gk2|${serverId}|${epoch}|${recipientId}|${wrapperId}`;
+  const key = await hybridKey({ label: 'hearth-gk2', ctx, kemSs: sharedSecret, dhs: [await dhBits(eph.priv, recipientPub)], transcript: [unb64(eph.pub), cipherText, unb64(recipientPub), pk], usage: 'encrypt' });
+  sharedSecret.fill(0);
+  const iv = rand(12);
+  const body = `${eph.pub}:${b64(cipherText)}:${b64(iv)}:${b64(await aesEncrypt(key, iv, raw, ctx))}`;
+  return `w2:${body}:${await sign(signKey, `${ctx}|${body}`)}`;
+}
+// Which form a wrapped key is in: 'w1' (P-256 only), 'w2' (hybrid post-quantum) or null.
+export const wrapFormat = (w) => { const v = String(w || '').split(':', 1)[0]; return v === 'w1' || v === 'w2' ? v : null; };
 // wrapperSignPub: the sharer's signing key, or a list of the keys they've had (any one must have signed it).
-export async function unwrapGroupKey({ wrapped, serverId, epoch, myId, myPriv, wrapperId, wrapperSignPub }) {
+// A w2 key also needs myPub (the identity key it was wrapped for) and myPq ({ publicKey, secretKey }: pqKeyPair);
+// without myPq it throws with code 'no_pq' (this device is still waiting for the key from another one).
+export async function unwrapGroupKey({ wrapped, serverId, epoch, myId, myPriv, myPub, myPq, wrapperId, wrapperSignPub }) {
+  if (String(wrapped).startsWith('w2:')) return unwrapGroupKey2({ wrapped, serverId, epoch, myId, myPriv, myPub, myPq, wrapperId, wrapperSignPub });
   const [v, ephPub, iv, ct, sig] = wrapped.split(':');
   if (v !== 'w1') throw new Error('Unknown key format');
   const ctx = `hearth-gk|${serverId}|${epoch}|${myId}|${wrapperId}`;
@@ -330,6 +590,21 @@ export async function unwrapGroupKey({ wrapped, serverId, epoch, myId, myPriv, w
   const bits = await subtle().deriveBits({ name: 'ECDH', public: await importEcdhPublic(ephPub) }, myPriv, 256);
   const key = await hkdfAes(await hkdfKey(bits), unb64(ephPub).slice(-32), ctx, ['decrypt']);
   return aesDecrypt(key, unb64(iv), unb64(ct), ctx);
+}
+async function unwrapGroupKey2({ wrapped, serverId, epoch, myId, myPriv, myPub, myPq, wrapperId, wrapperSignPub }) {
+  const parts = wrapped.split(':');
+  const [, ephPub, kemCt, iv, ct, sig] = parts;
+  if (parts.length !== 6 || !isB64(kemCt, PQ_CT_BYTES)) throw new Error('Unknown key format');
+  const ctx = `hearth-gk2|${serverId}|${epoch}|${myId}|${wrapperId}`;
+  if (!(await verifyAny(wrapperSignPub, `${ctx}|${ephPub}:${kemCt}:${iv}:${ct}`, sig))) throw new Error('Key signature did not verify');
+  needPq(myPq);
+  const kct = unb64(kemCt);
+  const ss = ml_kem768.decapsulate(kct, myPq.secretKey);
+  const key = await hybridKey({ label: 'hearth-gk2', ctx, kemSs: ss, dhs: [await dhBits(myPriv, ephPub)], transcript: [unb64(ephPub), kct, unb64(myPub), unb64(myPq.publicKey)], usage: 'decrypt' });
+  ss.fill(0);
+  const raw = await aesDecrypt(key, unb64(iv), unb64(ct), ctx);
+  if (raw.length !== 32) throw new Error('Unknown key format');
+  return raw;
 }
 
 // Cached per key (the raw bytes object) as well as server+epoch, so a different key for the same epoch
@@ -629,6 +904,22 @@ export function checkPins(myId, users) {
   if (save) savePins(myId, pins);
   return changed;
 }
+// Downgrade protection: once this device has checked a post-quantum key for someone (next to the identity key it pinned
+// for them), it notes so in the pin (q: its fingerprint). A server that later leaves their post-quantum key out, to get
+// apps to fall back on P-256 alone, is then refused (secure.js pqKeyOf). Accepting new keys for them (acceptPin) starts
+// the pin over, so a reset that really gave them no post-quantum key yet doesn't block anything after that.
+export function pinPq(myId, user, fp) {
+  if (!user || user.id === myId || typeof fp !== 'string' || !fp) return;
+  const pins = loadPins(myId);
+  const p = pins[user.id];
+  if (!p || p.e !== user.publicKey || p.q === fp) return;
+  p.q = fp;
+  savePins(myId, pins);
+}
+export function pinnedPq(myId, user) {
+  const p = user && loadPins(myId)[user.id];
+  return !!p && typeof p.q === 'string' && !!p.q && p.e === user.publicKey;
+}
 // When the server says a key of someone's was replaced (0 if it doesn't list it with a usable date).
 export function listedRetiredAt(user, e) {
   const k = listedOf(user).find((x) => x.e === e);
@@ -684,5 +975,11 @@ async function tx(mode, fn) {
 }
 export const storeKey = (userId, key) => tx('readwrite', (s) => s.put(key, userId));
 export const loadKey = (userId) => tx('readonly', (s) => s.get(userId)).catch(() => null);
+// The post-quantum seed this device holds for the account (see unwrapIdentity / openPqHandoff), and a handoff it's
+// waiting for ({ id, seed }: its one-off device key), kept beside the identity key.
+export const storePqSeed = (userId, seed) => tx('readwrite', (s) => s.put(seed, `${userId}|pq`));
+export const loadPqSeed = (userId) => tx('readonly', (s) => s.get(`${userId}|pq`)).then((x) => (x instanceof Uint8Array && x.length === PQ_SEED_BYTES ? x : null)).catch(() => null);
+export const storePqRequest = (userId, req) => tx('readwrite', (s) => (req ? s.put(req, `${userId}|pqreq`) : s.delete(`${userId}|pqreq`)));
+export const loadPqRequest = (userId) => tx('readonly', (s) => s.get(`${userId}|pqreq`)).catch(() => null);
 export const clearKeys = () => tx('readwrite', (s) => s.clear()).catch(() => {});
 export function clearCaches() { dmBases = new WeakMap(); dmLegacyKeys = new WeakMap(); groupBases = new WeakMap(); }

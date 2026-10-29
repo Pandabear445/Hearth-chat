@@ -432,7 +432,8 @@ module.exports = function setupAccounts(ctx) {
         // record: key handoffs and posts signed with them still check out, and the people this account talked
         // to can still open their old direct messages (they hold their own half of those keys).
         if (row.public_key) db.prepare('INSERT INTO user_key_history (user_id, public_key, sign_public_key, retired_at) VALUES (?, ?, ?, ?)').run(row.id, row.public_key, row.sign_public_key || null, now());
-        db.prepare('UPDATE users SET public_key = ?, sign_public_key = NULL, enc_sign_private_key = NULL, enc_private_key_recovery = NULL, recovery_salt = NULL WHERE id = ?').run(b.publicKey, row.id);
+        // (The post-quantum key goes too: it's signed with the old signing key, and its seed was in the old envelope.)
+        db.prepare('UPDATE users SET public_key = ?, sign_public_key = NULL, enc_sign_private_key = NULL, enc_private_key_recovery = NULL, recovery_salt = NULL, pq_public_key = NULL, pq_sig = NULL WHERE id = ?').run(b.publicKey, row.id);
         db.prepare('DELETE FROM server_keys WHERE user_id = ?').run(row.id);
         // crypto-2: an email link alone made these keys, so it could be anyone who got into the inbox. Nobody's app
         // hands them a server's or group's key until someone there who knew this person before checks them
@@ -450,6 +451,7 @@ module.exports = function setupAccounts(ctx) {
         db.prepare('DELETE FROM key_vouches WHERE user_id = ?').run(row.id);
       }
       db.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND kind = 'reset'").run(row.id);
+      db.prepare('DELETE FROM pq_handoffs WHERE user_id = ?').run(row.id); // asked by devices that are signed out now
     })();
     revokeSessions(row.id, { reason: 'password_reset' });
     // New public key first, then "please share": members must already know the new key when they re-share.
