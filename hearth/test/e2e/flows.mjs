@@ -4590,7 +4590,7 @@ async function postQuantum(t) {
   await alice.send('Hybrid both ways: medlar');
   await olga.message('Hybrid both ways: medlar').waitFor();
   check(/^d3:1:/.test(newest()), 'alice’s reply should be hybrid too, in the same epoch.');
-  const keys = t.server.rows('SELECT user_id, wrapped FROM dm_keys WHERE user_id IN (?, ?)', aliceId, olgaId);
+  const keys = t.server.rows('SELECT user_id, wrapped FROM dm_keys WHERE dm_id = (SELECT dm_id FROM dm_messages WHERE author_id = ? LIMIT 1)', olgaId);
   check(keys.length === 2 && keys.every((k) => /^dk1:/.test(k.wrapped)), 'The epoch key should be kept wrapped for each of them.');
 
   // A server's key, handed to olga when she joins: the hybrid kind, and she reads the channel.
@@ -5913,9 +5913,9 @@ export const FLOWS = [
   ['chat backgrounds: set in a DM and a group chat, seen live by the other side with a line in the chat, a picture, removed, and turned off on one device', chatBackgrounds],
   ['the side view: a message and a picture pinned to the side stay beside the chat while you switch conversations, jump, unpin', sideView],
   ['where the chat puts you: a DM reopens at its newest message as GIFs load, the "New messages" line above; Jump on a pin or a search result lands on the message and keeps it there; on a phone the pins close on Jump', keepYourPlace],
+  ['post-quantum keys: an account from before them gets one at its next sign-in, unseen; DMs and a server key go hybrid', postQuantum],
   ['community: a server from the Gaming template, shown in server search and joined from there; the main server a new account joins at sign-up and reads in', community],
   ['member relays: a member offers a machine in Help host, it checks in, the owner approves it with a password, it’s in everyone’s calls under a made-up login; the member avoids members’ relays, removes theirs and gets the uninstall command', memberRelays],
-  ['post-quantum keys: an account from before them gets one at its next sign-in, unseen; DMs and a server key go hybrid', postQuantum],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],
 ];

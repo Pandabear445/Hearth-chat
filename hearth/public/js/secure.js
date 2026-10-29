@@ -949,19 +949,20 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   // keyNote says when that wasn't their current trusted key, so the message can say so.
   async function openDm(dmId, authorId, text, at = 0) {
     try {
+      // Which key opens it: the DM's epoch key (d3), else the one from your two identity keys (d2, v1).
+      let opened = null;
       if (E2EE.dmEpoch(text) !== null) {
         const r = await openDm3(dmId, authorId, text);
         if (r.pending) return { pending: true, pq: true, t: '', f: [] };
-        const { payload, how } = r;
-        return { t: String(payload.t || ''), f: cleanFiles(payload.f), p: cleanPoll(payload.p), x: cleanX(payload.x), ...linksIn(payload), ...bindIn(payload), ...photoIn(payload), ...(how !== 'now' ? { keyNote: how } : {}) };
+        opened = { payload: r.payload, how: r.how };
+      } else {
+        for (const { key, trust: how } of await dmKeys(dmId, at)) {
+          try { opened = { ...(await E2EE.decryptDm({ myPriv: S.privateKey, theirPub: key, dmId, authorId, text })), how }; break; } catch { /* not this key */ }
+        }
       }
-      for (const { key, trust: how } of await dmKeys(dmId, at)) {
-        try {
-          const { payload, legacy } = await E2EE.decryptDm({ myPriv: S.privateKey, theirPub: key, dmId, authorId, text });
-          return { t: String(payload.t || ''), f: cleanFiles(payload.f), p: cleanPoll(payload.p), x: cleanX(payload.x), ...linksIn(payload), ...bindIn(payload), ...photoIn(payload), legacyFormat: !!legacy, ...(how !== 'now' ? { keyNote: how } : {}) };
-        } catch { /* not this key */ }
-      }
-      throw new Error('Missing key');
+      if (!opened) throw new Error('Missing key');
+      const { payload, legacy, how } = opened;
+      return { t: String(payload.t || ''), f: cleanFiles(payload.f), p: cleanPoll(payload.p), x: cleanX(payload.x), ...linksIn(payload), ...bindIn(payload), ...photoIn(payload), legacyFormat: !!legacy, ...(how !== 'now' ? { keyNote: how } : {}) };
     } catch {
       return { error: true, t: '', f: [] };
     }
