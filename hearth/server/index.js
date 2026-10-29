@@ -2567,9 +2567,10 @@ api.post('/me/sign-key', auth, wrap(async (req, res) => {
 
 // ---------------------------------------------------------------- post-quantum key (e2ee.js pqKeyPair)
 // Publishing the account's ML-KEM-768 public key. It must be signed with the account's signing key, over the account id
-// and identity key (the same check every app makes before encrypting to it), so a stolen session alone can't plant one.
-// With encPrivateKey, the password-locked envelope is replaced too (the one-time upgrade at sign-in, which puts the
-// new seed inside it): that takes the password (authKey; a two-factor code counts from the sign-in for 10 minutes).
+// and identity key (the same check every app makes before encrypting to it), and it takes the password (authKey; a
+// two-factor code counts from the sign-in for 10 minutes), which the apps have only right after signing in: neither a
+// stolen session nor a device's keys alone can plant one. With encPrivateKey, the password-locked envelope is replaced
+// too (the one-time upgrade at sign-in, which puts the new seed inside it).
 // A key already published is only replaced (replace: true) together with a new envelope, i.e. with the password: after
 // a reset with a recovery key made before the upgrade, whose envelope has no seed. Replacing drops pending handoffs.
 const PQ_B64 = /^[A-Za-z0-9+/]{1579}=$/;
@@ -2587,9 +2588,9 @@ api.post('/me/pq-key', auth, wrap(async (req, res) => {
   let row = getUserRow(req.userId);
   if (!row.sign_public_key) fail(409, 'Make a signing key first. Reload the page.', 'need_sign_key');
   if (!pqSigOk(row, b.pqPublicKey, b.pqSig)) { secEvent('pq_key_bad_sig', req.ip, row.username); fail(403, 'That key couldn\u2019t be confirmed. Reload the page and try again.', 'bad_key_proof'); }
-  if (row.pq_public_key === b.pqPublicKey && !envelope) return res.json(selfUser(row));
   if (row.pq_public_key && row.pq_public_key !== b.pqPublicKey && !(b.replace === true && envelope)) fail(409, 'This account already has a post-quantum key. Reload the page.', 'pq_exists');
-  if (envelope) row = await stepUp(req, b, 'authKey', { grace: true });
+  row = await stepUp(req, b, 'authKey', { grace: true });
+  if (row.pq_public_key === b.pqPublicKey && !envelope) return res.json(selfUser(row));
   const sets = envelope ? 'pq_public_key = ?, pq_sig = ?, enc_private_key = ?' : 'pq_public_key = ?, pq_sig = ?';
   const args = envelope ? [b.pqPublicKey, b.pqSig, b.encPrivateKey] : [b.pqPublicKey, b.pqSig];
   // Unchanged identity and signing keys (the signature covers them), and the published key as the app last saw it.

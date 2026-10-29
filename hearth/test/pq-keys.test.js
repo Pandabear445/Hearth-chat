@@ -220,6 +220,26 @@ test('DM epochs: a new one once the week is up, one at a time, only as the serve
   const outsider = await person(uname('pqout'));
   assert.equal((await as(outsider, 'GET', `/dms/${dm.id}/keys`)).status, 404);
   assert.deepEqual(texts(await readDms(bD, dm.id)), ['one', 'two', 'three', 'four']);
+
+  // The server plants an epoch "from b", made with a key it lists as one of b's past keys (its own): a's app reads
+  // what's in it only as "older key, not verified", and never writes in it.
+  const fake = await E.createIdentity(a.wrapKey);
+  const t0 = Date.now();
+  srv.sql('INSERT INTO user_key_history (user_id, public_key, sign_public_key, retired_at) VALUES (?, ?, NULL, ?)', b.id, fake.publicKey, t0 - 60000);
+  const rowOf = (id) => srv.sql('SELECT public_key, pq_public_key FROM users WHERE id = ?', id)[0];
+  const planted = E.newDmKey();
+  for (const who of [a, b]) {
+    const r = rowOf(who.id);
+    const wrapped = await E.wrapDmKey({ raw: planted, dmId: dm.id, epoch: 3, recipientId: who.id, recipientPub: r.public_key, recipientPq: r.pq_public_key, senderId: b.id, myPriv: fake.privateKey, myPub: fake.publicKey });
+    srv.sql('INSERT INTO dm_keys (dm_id, epoch, user_id, wrapped, wrapper_id, public_key, pq_public_key, created_at) VALUES (?, 3, ?, ?, ?, ?, ?, ?)', dm.id, who.id, wrapped, b.id, r.public_key, r.pq_public_key, t0 - 120000);
+  }
+  const forged = await E.encryptDm3({ raw: planted, epoch: 3, dmId: dm.id, authorId: b.id, payload: { t: 'planted' } });
+  srv.sql('INSERT INTO dm_messages (id, dm_id, author_id, ciphertext, created_at) VALUES (?, ?, ?, ?, ?)', `zz${H.hex(8)}`, dm.id, b.id, forged, t0 - 100000);
+  aD.sec.dmKeysChanged(dm.id);
+  await fresh(aD, b.id);
+  const seen = (await readDms(aD, dm.id)).find((m) => m.dec.t === 'planted');
+  assert.equal(seen && seen.dec.keyNote, 'listed', 'shown as not verified');
+  assert.match(await sendDm(aD, dm.id, 'five'), /^d3:4:/, 'a new epoch, not the planted one');
 });
 
 test('server keys: hybrid (w2) to members with a post-quantum key, P-256 (w1) to the others; everyone reads; old self-copies are upgraded', async () => {
@@ -280,12 +300,14 @@ test('publishing a post-quantum key: signed by the account, never replaced witho
   const pq = E.pqKeyPair(seed).publicKey;
   const other = E.pqKeyPair(E.newPqSeed()).publicKey;
   const sig = await E.signPqKey(u.signKey, u.id, u.publicKey, pq);
-  assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: pq, pqSig: await E.signPqKey(u.signKey, u.id, u.publicKey, other) })).status, 403, 'signature for another key');
-  assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: 'AAAA', pqSig: sig })).status, 400);
-  assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: pq, pqSig: sig })).status, 200);
-  assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: pq, pqSig: sig })).status, 200, 'the same again is fine');
+  const pw = { authKey: u.authKey };
+  assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: pq, pqSig: await E.signPqKey(u.signKey, u.id, u.publicKey, other), ...pw })).status, 403, 'signature for another key');
+  assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: 'AAAA', pqSig: sig, ...pw })).status, 400);
+  assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: pq, pqSig: sig })).status, 401, 'a session and the keys, without the password');
+  assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: pq, pqSig: sig, ...pw })).status, 200);
+  assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: pq, pqSig: sig, ...pw })).status, 200, 'the same again is fine');
   const sig2 = await E.signPqKey(u.signKey, u.id, u.publicKey, other);
-  assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: other, pqSig: sig2 })).status, 409, 'a second key, without the password');
+  assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: other, pqSig: sig2, ...pw })).status, 409, 'a second key, without a new envelope');
   const { encPrivateKey } = await E.addPqToEnvelope(u.wrapKey, u.encPrivateKey, { replace: true });
   assert.equal((await as(u, 'POST', '/me/pq-key', { pqPublicKey: other, pqSig: sig2, encPrivateKey, replace: true, authKey: 'f'.repeat(64) })).status, 401, 'the wrong password');
   assert.equal(srv.sql('SELECT pq_public_key FROM users WHERE id = ?', u.id)[0].pq_public_key, pq, 'unchanged');
