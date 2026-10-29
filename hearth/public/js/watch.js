@@ -125,10 +125,11 @@ function videoAdapter(item, onEvent) {
 }
 // TikTok (social.js): its embed player's postMessage API plays, pauses, seeks and reports its time and state, so
 // it's kept in step like YouTube. It has no playback rate. The player is built from the checked id only.
-function tiktokAdapter(item, onEvent) {
+// opts (the Reels tab, reels-ui.js): muted() says whether play starts it without sound; autoplay starts it at once.
+export function tiktokAdapter(item, onEvent, { muted = () => false, autoplay = false } = {}) {
   let t = 0; let dur = 0; let state = -1; let ready = false;
   let lastT = null; let lastAt = 0; let ownSeekUntil = 0; let ownSeekTo = null; let readyTimer = null;
-  const frame = h('iframe', { class: 'wt-frame', sandbox: SOCIAL_SANDBOX, src: playerSrc({ kind: 'tiktok', id: item.src }, { autoplay: false }), allow: SOCIAL_ALLOW, allowfullscreen: true, title: item.title || 'TikTok video', referrerpolicy: 'no-referrer' });
+  const frame = h('iframe', { class: 'wt-frame', sandbox: SOCIAL_SANDBOX, src: playerSrc({ kind: 'tiktok', id: item.src }, { autoplay }), allow: SOCIAL_ALLOW, allowfullscreen: true, title: item.title || 'TikTok video', referrerpolicy: 'no-referrer' });
   // Commands go only to TikTok's player origin.
   const send = (type, value) => frame.contentWindow && frame.contentWindow.postMessage(tiktokCommand(type, value), TIKTOK_ORIGIN);
   const onMsg = (e) => {
@@ -158,7 +159,7 @@ function tiktokAdapter(item, onEvent) {
   frame.addEventListener('load', () => { clearTimeout(readyTimer); readyTimer = setTimeout(() => { if (!ready) { ready = true; onEvent('ready'); } }, 2500); });
   return {
     el: frame, live: false, noRate: true,
-    play: () => { send('unMute'); send('play'); }, pause: () => send('pause'),
+    play: () => { send(muted() ? 'mute' : 'unMute'); send('play'); }, pause: () => send('pause'), mute: (on) => send(on ? 'mute' : 'unMute'),
     seek: (s) => { t = s; lastT = s; lastAt = Date.now(); ownSeekUntil = Date.now() + 1500; ownSeekTo = s; send('seekTo', s); }, rate() {},
     time: () => (state === 1 && lastT !== null ? lastT + (Date.now() - lastAt) / 1000 : t), playing: () => state === 1 || state === 3, duration: () => dur,
     destroy: () => { clearTimeout(readyTimer); window.removeEventListener('message', onMsg); },
@@ -167,7 +168,7 @@ function tiktokAdapter(item, onEvent) {
 // Instagram has no player API: nothing outside the frame can play, pause, seek or read the time. So it isn't
 // kept in step (manual): everyone presses play together at the end of a shared countdown, says when they're
 // ready, and moves to the next video together (by the host, or once most of the call says it's done).
-function instagramAdapter(item, onEvent) {
+export function instagramAdapter(item, onEvent) {
   const frame = h('iframe', { class: 'wt-frame', sandbox: SOCIAL_SANDBOX, src: playerSrc({ kind: 'instagram', id: item.src, type: item.postType === 'p' ? 'p' : 'reel' }), allow: SOCIAL_ALLOW, allowfullscreen: true, title: item.title || 'Instagram reel', referrerpolicy: 'no-referrer' });
   frame.addEventListener('load', () => onEvent('loaded'));
   return { el: frame, live: false, manual: true, noRate: true, play() {}, pause() {}, seek() {}, rate() {}, time: () => 0, playing: () => false, duration: () => 0, destroy() {} };

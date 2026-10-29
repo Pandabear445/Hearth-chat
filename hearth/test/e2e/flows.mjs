@@ -1035,7 +1035,7 @@ async function watchTogether(t) {
 // The players are stand-ins (page.route): a TikTok player that speaks TikTok's postMessage API and records the
 // commands it gets, and a plain Instagram embed page. Nothing reaches the real sites.
 const TT_ID = '7234567890123456789';
-const FAKE_TIKTOK = `<!doctype html><html><body style="margin:0;background:#111;color:#fff;font:14px sans-serif"><div id="s">fake tiktok</div><script>
+const FAKE_TIKTOK = `<!doctype html><html><body style="margin:0;height:100vh;background:radial-gradient(circle at 30% 25%,#25f4ee66,transparent 55%),radial-gradient(circle at 70% 80%,#fe2c5566,transparent 55%),#0b0b0f;color:#fff;font:14px sans-serif;display:grid;place-items:center"><div id="s">TikTok player (stand-in)</div><script>
   const log = window.__cmds = []; let state = -1; let t = 0; let at = 0;
   const post = (type, value) => parent.postMessage({ type, value, 'x-tiktok-player': true }, '*');
   const now = () => (state === 1 ? t + (Date.now() - at) / 1000 : t);
@@ -1055,7 +1055,7 @@ async function fakeSocialSites(p) {
     const u = route.request().url();
     asked.push(u);
     const tt = u.startsWith('https://www.tiktok.com/player/v1/');
-    return route.fulfill({ status: 200, contentType: 'text/html', body: tt ? FAKE_TIKTOK : '<!doctype html><body style="background:#222;color:#fff">fake reel</body>' });
+    return route.fulfill({ status: 200, contentType: 'text/html', body: tt ? FAKE_TIKTOK : '<!doctype html><body style="margin:0;height:100vh;display:grid;place-items:center;font:14px sans-serif;color:#fff;background:radial-gradient(circle at 20% 100%,#fdba3f88,transparent 55%),radial-gradient(circle at 80% 0%,#833ab488,transparent 60%),#2a1024">Instagram reel (stand-in)</body>' });
   });
   return asked;
 }
@@ -1153,6 +1153,139 @@ async function socialVideos(t) {
   await bob.$('#voice-panel button[aria-label="Leave call"]').click();
   await alice.$('#voice-panel button[aria-label="Leave call"]').click();
   for (const p of [alice, bob]) await p.page.waitForSelector('#voice-panel', { state: 'hidden' });
+  for (const p of [alice, bob]) await p.context.unroute(/^https:\/\/www\.(tiktok|instagram)\.com\//);
+}
+
+// ------------------------------------------------------------------ the Reels tab: the conversation's TikToks and reels, scrolled together
+const TT_ID2 = '7333333333333333333';
+// Which card is on screen in someone's Reels tab, and the commands its stand-in TikTok player got.
+const reelOnScreen = (p) => p.page.evaluate(() => {
+  const feed = document.querySelector('.reels-layer .reels-feed');
+  const cards = [...feed.querySelectorAll('.reel-card')];
+  const c = cards.find((x) => Math.abs(x.offsetTop - feed.scrollTop) < 4);
+  return c ? { i: +c.dataset.i, frame: c.querySelector('iframe') ? c.querySelector('iframe').getAttribute('src') : null } : null;
+});
+async function reelCommands(p) {
+  const i = (await reelOnScreen(p)).i;
+  const frame = await (await p.$(`.reels-layer .reel-card[data-i="${i}"] iframe`).elementHandle()).contentFrame();
+  return frame.evaluate(() => window.__cmds || []);
+}
+async function waitOnScreen(p, i, why) {
+  for (let n = 0; n < 100; n++) { const x = await reelOnScreen(p); if (x && x.i === i) return x; await p.page.waitForTimeout(100); }
+  check(false, `${why} (on screen: ${JSON.stringify(await reelOnScreen(p))}).`);
+}
+// E2E_SHOTS=<folder>: screenshots of the tab, for docs/scroll-together.png (scripts/contact-sheet.mjs).
+const shot = async (p, name) => { if (process.env.E2E_SHOTS) await p.page.screenshot({ path: `${process.env.E2E_SHOTS}/${name}.png` }); };
+async function reelsTab(t) {
+  const { alice, bob } = t.people;
+  const bobAsked = await fakeSocialSites(bob);
+  await fakeSocialSites(alice);
+  await alice.openChannel('general');
+  await bob.openChannel('general');
+  // Alice adds a TikTok from the tab: it goes out as an ordinary message, so it's in the chat too.
+  await alice.$('.conv-tab', { hasText: 'Reels' }).click();
+  await alice.$('.reels-layer:not([hidden]) .reel-card').first().waitFor();
+  await alice.$('.reels-add input.input').fill(`https://www.tiktok.com/@hearth/video/${TT_ID2}`);
+  await alice.$('.reels-add button[type=submit]').click();
+  await alice.toast('Shared in the chat.');
+  await bob.message(`video/${TT_ID2}`).waitFor();
+  const asked0 = bobAsked.length;
+  // Bob's tab: newest first, each video once, and nothing loads before his first tap ("Load when I tap").
+  await bob.$('.conv-tab', { hasText: 'Reels' }).click();
+  await bob.$('.reels-cover', { hasText: 'Tap to start watching' }).waitFor();
+  await bob.page.waitForFunction(() => document.querySelectorAll('.reels-layer .reel-card').length === 3);
+  await shot(bob, 'desktop-cover');
+  check(bobAsked.length === asked0, `Nothing should load from TikTok or Instagram before the tap (got ${bobAsked.slice(asked0).join(', ')}).`);
+  check(!(await bob.$('.reels-layer iframe').count()), 'No players before the tap.');
+  await bob.$('.reels-cover button', { hasText: 'Start watching' }).click();
+  await bob.$('.reels-cover').waitFor({ state: 'hidden' });
+  let on = await waitOnScreen(bob, 0, 'The newest video comes first');
+  await bob.page.waitForFunction(() => !!document.querySelector('.reels-layer .reel-card[data-i="0"] iframe'));
+  on = await reelOnScreen(bob);
+  check(on.frame.startsWith(`https://www.tiktok.com/player/v1/${TT_ID2}?`), `The newest share first (got ${on.frame}).`);
+  // Only the one on screen and its neighbour have players.
+  check((await bob.$('.reels-layer iframe').count()) <= 2, 'At most the video on screen and one on each side have players.');
+  // It plays without sound until a tap on its sound button.
+  for (let n = 0; n < 60 && !(await reelCommands(bob)).includes('play'); n++) await bob.page.waitForTimeout(100);
+  const cmds = await reelCommands(bob);
+  check(cmds.includes('mute') && cmds.includes('play'), `The video on screen plays muted (got ${cmds.join(', ')}).`);
+  await bob.$('.reels-layer .reel-card[data-i="0"] .reel-sound').click();
+  for (let n = 0; n < 30 && !(await reelCommands(bob)).includes('unMute'); n++) await bob.page.waitForTimeout(100);
+  check((await reelCommands(bob)).includes('unMute'), 'Tap for sound unmutes it.');
+  // React from the feed: the chat shows it too.
+  await bob.$('.reels-layer .reel-card[data-i="0"] .reel-act[aria-label="React"]').click();
+  await bob.$('.popover .emoji-grid button, .popover .ep-grid button, .popover button.emoji').first().click();
+  await bob.$('.reels-layer .reel-card[data-i="0"] .reel-act.reaction.mine').waitFor();
+  await alice.$('.reels-layer .reel-card[data-i="0"] .reel-act.reaction').waitFor();
+
+  // Scroll together: Alice starts it; when she moves, Bob follows and is told who swiped.
+  await alice.$('.reels-bar button', { hasText: 'Scroll together' }).click();
+  await bob.$('.reels-with', { hasText: 'Scrolling with Alice Wonder' }).waitFor();
+  await alice.$('.reels-with', { hasText: 'Scrolling with bob' }).waitFor();
+  await alice.$('.reels-feed').focus();
+  await alice.page.keyboard.press('ArrowDown');
+  await waitOnScreen(alice, 1, 'Arrow down moves to the next video');
+  await waitOnScreen(bob, 1, 'Bob follows Alice to the next video');
+  await bob.toast('Alice Wonder swiped to the next');
+  await shot(bob, 'desktop-together');
+  await bob.page.waitForFunction(() => !!document.querySelector('.reels-layer .reel-card[data-i="1"] iframe'));
+  for (let n = 0; n < 60 && !(await reelCommands(bob)).includes('seekTo'); n++) await bob.page.waitForTimeout(100);
+  check((await reelCommands(bob)).includes('seekTo'), 'Bob’s TikTok is put where everyone is.');
+  // Bob moves everyone too ("Everyone controls", the default).
+  await bob.$('.reels-feed').focus();
+  await bob.page.keyboard.press('ArrowDown');
+  await waitOnScreen(alice, 2, 'Bob moves everyone to the reel');
+  await alice.$('.reels-manual button', { hasText: 'Start together' }).waitFor();
+  await bob.$('.reels-manual button', { hasText: 'I’m ready' }).click();
+  await alice.$('.reels-manual .reels-sub', { hasText: '1 ready' }).waitFor();
+  await alice.$('.reels-manual button', { hasText: 'Start together' }).click();
+  await bob.$('.reels-count:not([hidden])').waitFor();
+  await shot(alice, 'desktop-reel');
+  // "Only I control": Bob scrolling away now leaves the session; Rejoin puts him back where Alice is.
+  await alice.$('.reels-bar select[aria-label="Who controls"]').selectOption('me');
+  await bob.$('.reels-bar .reels-sub', { hasText: 'Alice Wonder controls' }).waitFor();
+  await bob.$('.reels-feed').focus();
+  await bob.page.keyboard.press('ArrowUp');
+  await bob.toast('You’re scrolling on your own now');
+  await bob.$('.reels-bar button', { hasText: 'Rejoin' }).waitFor();
+  await waitOnScreen(alice, 2, 'Alice stays where she is');
+  await bob.$('.reels-bar button', { hasText: 'Rejoin' }).click();
+  await waitOnScreen(bob, 2, 'Rejoin snaps back to everyone');
+  await alice.$('.reels-bar button', { hasText: 'Stop' }).click();
+  await bob.$('.reels-bar button', { hasText: 'Scroll together' }).waitFor();
+
+  // A phone: the tab fills the screen; swiping moves between videos; + opens Add a link; Back goes to the chat.
+  const phone = await t.open('bob-reels', PHONE);
+  await fakeSocialSites(phone);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
+  await page.locator(`#rail button[aria-label="${SERVER}"]`).tap();
+  // (The server opens at general, its last channel, and the drawer closes by itself.)
+  await page.waitForSelector('#composer-input[placeholder="Message #general"]');
+  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  await page.locator('.conv-tab', { hasText: 'Reels' }).tap();
+  await page.waitForFunction(() => { const r = document.querySelector('.reels-layer').getBoundingClientRect(); return r.top <= 1 && r.width >= innerWidth - 1 && r.height >= innerHeight - 1; });
+  await shot(phone, 'phone-cover');
+  await page.locator('.reels-cover button', { hasText: 'Start watching' }).tap();
+  await page.waitForFunction(() => !!document.querySelector('.reels-layer .reel-card[data-i="0"] iframe'));
+  const card = await page.locator('.reels-layer .reel-card[data-i="0"] .reel-stage').boundingBox();
+  check(card.width >= 380 && card.height >= 700, `On a phone a video fills the screen (got ${card.width}×${card.height}).`);
+  t.state.reelsPhone = phone;
+  await page.locator('.reels-feed').evaluate((f) => f.scrollBy(0, f.clientHeight));
+  await waitOnScreen(phone, 1, 'A swipe (scroll) moves to the next video');
+  await page.waitForFunction(() => !!document.querySelector('.reels-layer .reel-card[data-i="1"] iframe'));
+  await page.waitForTimeout(400);
+  await shot(phone, 'phone-video');
+  await page.locator('.reels-top button[aria-label="Add a link"]').tap();
+  await page.locator('.reels-side.open .reels-add input.input').waitFor();
+  await shot(phone, 'phone-add');
+  await page.locator('.reels-top button[aria-label="Add a link"]').tap();
+  await page.locator('.reels-top button[aria-label="Back to the chat"]').tap();
+  await page.locator('.reels-layer').waitFor({ state: 'hidden' });
+  await page.locator('#composer-input').waitFor();
+  await phone.close();
+  for (const p of [alice, bob]) { await p.$('.conv-tab', { hasText: 'Chat' }).click(); await p.$('.reels-layer').waitFor({ state: 'hidden' }); }
   for (const p of [alice, bob]) await p.context.unroute(/^https:\/\/www\.(tiktok|instagram)\.com\//);
 }
 
@@ -6119,6 +6252,7 @@ export const FLOWS = [
   ['moderator toolkit: server mute in and out of a call, bulk delete', moderatorTools],
   ['watch together: start, pause for everyone, stop; a video file from another site says so before it loads; leave the call', watchTogether],
   ['tiktok and instagram: tap to load in place (nothing before), sandboxed, side by side, Always; watch together keeps a TikTok in step, a reel starts together after a ready check, a mixed queue, side by side', socialVideos],
+  ['reels tab: the conversation’s TikToks and reels newest first, nothing before a tap, muted until sound, react, add a link; scroll together follows who swipes, a reel’s ready check and countdown, Only I control, leave and rejoin; a phone full screen', reelsTab],
   ['audit log and reports: moderation as sentences, filters, live entries; a report reaches the server’s moderators', auditAndReports],
   ['dm call: ring, accept, hang up, decline', dmCall],
   ['group chat: create, talk both ways, call rings', groupChat],

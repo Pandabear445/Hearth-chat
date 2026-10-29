@@ -4,7 +4,7 @@ Generated from the code by enumerating every `api.*`/`app.*` route and `socket.o
 then annotated during the security audit (which middleware and checks actually run, limits, tests). "Gaps" lists
 what the audit found missing at the time; items fixed since are tracked in [ENGINEERING-REPORT.md](ENGINEERING-REPORT.md).
 
-Routes: 390 HTTP, 17 socket events.
+Routes: 390 HTTP, 26 socket events.
 
 ## HTTP routes
 
@@ -428,6 +428,15 @@ Routes: 390 HTTP, 17 socket events.
 | EVENT | `watch:stop` | server/index.js:7304 | session (handshake token) | in room + mayControl; yes | none | socket bucket | none | none |
 | EVENT | `watch:ready` | server/index.js | session (handshake token) | in room; yes | itemId must be the current one | socket bucket | social-embeds.test.js | none |
 | EVENT | `watch:side` | server/index.js | session (handshake token) | in room + mayControl; yes | parseWatchUrl; TikTok/Instagram only | socket bucket | social-embeds.test.js | none |
+| EVENT | `reels:join` | server/reels.js | session (handshake token) | read access to the conversation (requireChannel / requireDm, not blocked); re-checked per update | key c:/d: pattern; 200 viewers | socket bucket; state merged to 4/s | scroll-together.test.js | none |
+| EVENT | `reels:leave` | server/reels.js | session (handshake token) | own connection | none | socket bucket; state merged to 4/s | scroll-together.test.js | none |
+| EVENT | `reels:start` | server/reels.js | session (handshake token) | viewer of that conversation's tab | message id of that conversation (top level, visible to them); link index 0–3 | socket bucket; state merged to 4/s | scroll-together.test.js | none |
+| EVENT | `reels:go` | server/reels.js | session (handshake token) | following + may control (hostOnly: starter or staff) | message id of that conversation; index; dir | socket bucket; state merged to 4/s | scroll-together.test.js | none |
+| EVENT | `reels:control` | server/reels.js | session (handshake token) | following + may control | action enum; position capped 24 h; stale mid ignored | socket bucket; state merged to 4/s | scroll-together.test.js | none |
+| EVENT | `reels:ready` | server/reels.js | session (handshake token) | viewer, session on | current mid/index only | socket bucket; state merged to 4/s | scroll-together.test.js | none |
+| EVENT | `reels:follow` | server/reels.js | session (handshake token) | viewer, session on | boolean | socket bucket; state merged to 4/s | scroll-together.test.js | none |
+| EVENT | `reels:mode` | server/reels.js | session (handshake token) | session starter or staff | boolean | socket bucket; state merged to 4/s | scroll-together.test.js | none |
+| EVENT | `reels:stop` | server/reels.js | session (handshake token) | starter, staff, or anyone when everyone controls | none | socket bucket; state merged to 4/s | scroll-together.test.js | none |
 | EVENT | `voice:leave` | server/index.js:7314 | session (handshake token) | own state only; yes | none | socket bucket | none | none |
 | EVENT | `disconnect` | server/index.js:7321 | n.a. | n.a.; n.a. | n.a. | n.a. | sessions.test.js (indirect) | A socket drop ends the call on every side; no grace period or rejoin (voice-13). |
 

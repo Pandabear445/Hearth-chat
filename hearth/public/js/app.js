@@ -23,6 +23,7 @@ import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
 import { socialLinks, parseSocialUrl, playerMode } from './social.js';
 import { socialEmbedEl, resolveSocial } from './social-embed.js';
+import { createReels } from './reels-ui.js';
 import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice, voicePlaying } from './features.js';
 import { rankRelays, chooseIce, relayTime, iceStale, usableIce, memberRelayHosts, avoidsMemberRelays, isMemberRelay, isRelay } from './relays.js';
 import { watchConnection } from './conn.js';
@@ -997,7 +998,15 @@ function startApp() {
     const store = S.msgs[key];
     const m = (store && store.list.find((x) => x.id === p.messageId)) || findThreadMessage(p.messageId);
     if (m) { m.reactions = p.reactions; replaceMessageEl(m); }
+    REELS.onReactions(p.messageId, p.reactions);
   });
+  // Scroll together (reels-ui.js, server/reels.js).
+  socket.on('reels:state', (x) => REELS.onState(x));
+  socket.on('reels:invite', (x) => {
+    if (!x || typeof x.key !== 'string' || REELS.key() === x.key) return;
+    toast(`${nameInServer(currentServer(), getUser(x.by))} started scrolling together in ${convTitle(x.key)}: open its Reels tab to join.`);
+  });
+  socket.on('connect', () => REELS.rejoin());
   // Photo comments and tags (photo-notes.js): a message's tags (its whole list), or how many comments each of its photos
   // has. Its loaded copies take them, and only what shows them is drawn again (the counts on its pictures, an open
   // viewer's side panel, the Photos & videos panel): never the whole message, which would load its pictures again.
@@ -3233,13 +3242,99 @@ function renderMain() {
   else if (v.type === 'study') main.append(study.view());
   else if (v.type === 'admin' && S.me.staffRole) main.append(S.adminEl = adminView({ role: S.me.staffRole, confirm: (fn, opts) => confirmedCall(app, fn, opts), me: () => S.me, tab: v.tab, setTab: (t) => { S.view.tab = t; }, openReports: S.adminReports, onCount: (n) => { if (S.adminReports !== n) { S.adminReports = n; renderRail(); } } }));
   else if ((v.type === 'channel' || v.type === 'dm') && hiddenWhileSharing(privateKey(v))) main.append(shareCover(privateKey(v)));
-  else if (v.type === 'channel' || v.type === 'dm') main.append(chatView());
-  else if (v.type === 'voice') main.append(voiceRoomView());
+  else if (v.type === 'channel' || v.type === 'dm' || v.type === 'voice') {
+    // On the Reels tab the chat (or call) stays on the page, hidden, so everything that keeps it up to date still
+    // has it; the tab's place goes in beside it.
+    const reels = v.tab === 'reels' && reelsKey(v);
+    const body = v.type === 'voice' ? voiceRoomView() : chatView();
+    if (reels) body.hidden = true;
+    main.append(...[convTabs(v), body, reels ? reelsHost(reels) : null].filter(Boolean));
+  }
   else if (v.type === 'empty-server') {
     main.append(h('div', { class: 'empty-state' }, h('h3', null, 'No text channels yet'),
       h('p', null, isAdmin(currentServer()) ? 'Create one from the server menu.' : 'Ask an admin to create one.')));
   }
+  // The Reels tab (reels-ui.js) is a layer over its place: it goes when its place does.
+  if (!main.querySelector('.reels-host')) REELS.hide();
 }
+// ---- the Reels tab: a conversation's TikToks and reels, swiped through alone or together (reels-ui.js)
+// Channels, DMs, group chats, and a voice channel's own chat (its call page).
+function reelsKey(v) {
+  if (v.type === 'channel') return 'c:' + v.channelId;
+  if (v.type === 'dm') return 'd:' + v.dmId;
+  if (v.type === 'voice' && hasChat(channelById(v.channelId))) return 'c:' + v.channelId;
+  return null;
+}
+function setConvTab(tab) {
+  if (!reelsKey(S.view) || (S.view.tab || 'chat') === tab) return;
+  S.view = { ...S.view, tab };
+  renderMain();
+}
+// Chat | Reels, under the header.
+function convTabs(v) {
+  if (!reelsKey(v)) return null;
+  const tab = v.tab === 'reels' ? 'reels' : 'chat';
+  const b = (id, label, ic) => h('button', { class: `conv-tab${tab === id ? ' active' : ''}`, role: 'tab', 'aria-selected': String(tab === id), onclick: () => setConvTab(id) }, icon(ic), label);
+  return h('div', { class: 'conv-tabs', role: 'tablist', 'aria-label': 'Chat or reels' }, b('chat', v.type === 'voice' ? 'Call' : 'Chat', v.type === 'voice' ? 'speaker' : 'message'), b('reels', 'Reels', 'play'));
+}
+let reelsMode = null;
+function reelsHost(key) {
+  const host = h('div', { class: 'reels-host' });
+  const mode = playerMode(P.chat);
+  later(() => {
+    if (!host.isConnected) return;
+    REELS.show(key, host);
+    if (reelsMode !== null && reelsMode !== mode) REELS.setMode();
+    reelsMode = mode;
+  });
+  return host;
+}
+// "Add a link": sent as an ordinary message here (encrypted), with a preview card if asked for.
+async function sendReelLink(key, url, { preview }) {
+  const why = photoPostBlock(key, null);
+  if (why) throw new Error(why);
+  let l = null;
+  if (preview && (S.config.features || {}).linkPreviews !== false) {
+    try {
+      const r = await api('POST', '/link-previews', { url });
+      const p = r && r.preview;
+      const img = p && p.image && typeof p.image.data === 'string' ? await previewThumb(E2EE.unb64(p.image.data), p.image.type).catch(() => null) : null;
+      const entry = p && { v: 1, url, title: cleanPreviewText(p.title, TITLE_MAX), desc: cleanPreviewText(p.description, DESC_MAX), site: cleanPreviewText(p.siteName, SITE_MAX), kind: PREVIEW_KINDS.has(p.kind) ? p.kind : 'web', ...(img ? { img } : {}) };
+      if (entry && (entry.title || entry.desc || entry.img)) l = [entry];
+    } catch { /* sent without one */ }
+  }
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join('');
+  await underWay(sendTo(key, null, { t: url, f: [], ...(l ? { l } : {}) }, null, nonce));
+}
+const REELS = createReels({
+  socket: () => socket,
+  me: () => S.me && S.me.id,
+  isPhone: () => isPhoneLayout(),
+  mode: () => playerMode(P.chat),
+  title: (key) => convTitle(key),
+  inCall: (key) => !!voice && !!voice.channelId && voice.channelId === (key.startsWith('d:') ? 'dm:' + key.slice(2) : key.slice(2)),
+  setTab: (tab) => setConvTab(tab),
+  loaded: (key) => ((S.msgs[key] && S.msgs[key].list) || []).filter((m) => m.dec),
+  page: (key, before) => api('GET', msgUrl(key) + (before ? `?before=${encodeURIComponent(before)}` : '')),
+  decrypt: (m) => decryptMessage(m),
+  // What the chat would show as a player: readable, not gone, not from someone blocked, not hidden or blurred by
+  // the word filter, and from someone allowed to embed links here.
+  ok: (m) => readable(m) && !isExpired(m, nowServer()) && !S.blocked.has(m.authorId) && !veiled(m) && senderMayEmbed(m),
+  text: (m) => textOf(m),
+  card: (m, url) => (P.chat.linkCards !== false ? linksOf(m).find((l) => l.url === url) || null : null),
+  user: (id) => getUser(id),
+  name: (m, u) => nameInMsg(m, u),
+  nameOf: (id) => nameInServer(currentServer(), getUser(id)),
+  avatar: (u, size) => avatarEl(u, size),
+  when: (ts) => relTime(ts),
+  emoji: (str) => emojiNode(str, 'r-emoji'),
+  react: (m, emoji) => react(m, emoji),
+  picker: (anchor, cb) => emojiPicker(anchor, cb),
+  jump: (m) => { const key = keyOfMessage(m); S.view = { ...S.view, tab: 'chat' }; renderMain(); jumpToMessage(key, m.id); },
+  canSend: (key) => photoPostBlock(key, null),
+  previewChoice: () => ((S.config.features || {}).linkPreviews === false || P.chat.linkPreviews === 'never' ? 'off' : P.chat.linkPreviews === 'always' ? 'always' : 'ask'),
+  send: (key, url, opts) => sendReelLink(key, url, opts),
+});
 const navToggle = () => ibtn('menu', 'Open navigation', () => document.body.classList.toggle('nav-open'), { cls: 'nav-toggle' });
 const navOpen = () => document.body.classList.contains('nav-open');
 function closeNav() {
@@ -6110,6 +6205,7 @@ async function onNewMessage(key, m) {
   // Already past its time (a timer shorter than the trip here, or a server that held on to it): never shown.
   if (isExpired(m, nowServer())) { const cur = convOf(key); if (cur && cur.last === m) cur.last = before; return; }
   MEDIA.onNew(key, m); // its pictures and videos go on top in Photos & videos, if that's open here
+  REELS.onNew(key, m); // a TikTok or reel in it goes on top of the Reels tab, if that's open here
   // Kept decrypted as the newest message, the preview also goes at its time by the timer inside it (the server's copy
   // can't be decrypted there). When the server's copy of it took its place meanwhile (sent with a delete or an edit),
   // setLast already wrote the line and the group's time from that.
@@ -6224,6 +6320,7 @@ async function onUpdateMessage(key, m) {
   if (S.editing === m.id) S.editing = null;
   replaceMessageEl(m);
   MEDIA.onUpdate(key, m);
+  REELS.onUpdate(key, m);
 }
 // Channel messages deleted (one, or a batch): thread replies leave their thread, the rest leave the channel.
 // expired: disappearing messages whose time came (this device's copies of them go too, see forgetCopies).
@@ -6277,6 +6374,7 @@ function onDeleteMessage(key, id, { expired = false } = {}) {
     : named;
   forgetBindings(key, gone);
   MEDIA.onDelete(key, gone); // their tiles in Photos & videos, and the decrypted copies it had of them
+  REELS.onDelete(key, gone);
   NOTES.onDelete(key, gone); // their photos' tags (the chips, the suggestions) and comments, and as comments
   SIDE.onDelete(key, gone); // their cards in the side view say they're gone, and its decrypted copies of them go
   // Threads these messages started go with them (their counts, and their cards in the Threads panel), and so does
@@ -7174,6 +7272,7 @@ const MEDIA = createMediaPanel({
 });
 // Disappearing messages that went from wherever else they were loaded go from the panel too.
 expiryListeners.add((ids) => MEDIA.onDelete(null, ids));
+expiryListeners.add((ids) => REELS.onDelete(null, ids));
 
 // Comments on one photo and tags on photos (photo-notes.js).
 const NOTES = createPhotoNotes({

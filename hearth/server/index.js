@@ -7457,6 +7457,11 @@ function setupSockets(server) {
     next();
   });
 
+  // Scroll together (server/reels.js): a conversation's Reels tab, moved through as one.
+  const REELS = require('./reels')({
+    io, db, fail, requireChannel, requireDm, isStaff, isBlocked, voiceChannels, jobs,
+    hiddenFor: (m, uid) => { const c = db.prepare('SELECT server_id FROM channels WHERE id = ?').get(m.channel_id); return !c || HIST.hidden(c.server_id, uid, m); },
+  });
   io.on('connection', (socket) => {
     const uid = socket.userId;
     // Flood protection. A connection may send 40 events per 4 seconds, and all of a person's connections together
@@ -7509,6 +7514,7 @@ function setupSockets(server) {
 
     // Whether this app has gone unused for the person's "Away after" time (server/presence.js).
     socket.on('presence:idle', guard((p = {}) => PRES.setIdle(socket, p)));
+    REELS.attach(socket, uid, guard);
 
     // An open Audit log tab (Server settings) hears about new entries, while its reader may still read them.
     socket.on('audit:watch', guard((p = {}) => SA.watch(socket, p)));
