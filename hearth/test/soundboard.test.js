@@ -471,3 +471,33 @@ test('profile-ui: sections follow the chosen order, hidden ones stay hidden, and
   assert.equal(odd.children[0].style['--sb-color'], '#f2a541');
   Object.assign(globalThis, had);
 });
+
+test('look: the board’s popup has a surface and centres on its button, the glow survives redraws, and the stripes loop cleanly', () => {
+  const read = (...p) => require('node:fs').readFileSync(path.join(__dirname, '..', 'public', ...p), 'utf8');
+  const css = read('css', 'app.css');
+  const app = read('js', 'app.js');
+  // A surface like the other popups (and a solid one in the lighter look).
+  assert.match(css, /\.menu, \.emoji-picker, \.gif-picker, \.inbox, \.sb-pop \{\s*background: rgb\(var\(--elev\)/);
+  assert.match(css, /html\.lite :is\([^)]*\.sb-pop[^)]*\) \{ background: rgb\(var\(--elev\)\); \}/);
+  assert.match(read('js', 'soundboard.js'), /side: 'top', align: 'center'/);
+  assert.match(read('js', 'ui.js'), /align === 'center' \? r\.left \+ r\.width \/ 2 - pr\.width \/ 2/);
+  // Who has a sound playing is remembered and put back on tiles and avatars drawn again; its colour is a token, and
+  // a tile shows it next to the speaking ring.
+  assert.match(app, /if \(on\) S\.boardPlaying\.add\(id\); else S\.boardPlaying\.delete\(id\);/);
+  assert.equal((app.match(/S\.boardPlaying\.has\(/g) || []).length, 3, 'the call tile, its avatar and the voice channel list');
+  assert.match(css, /--board: #[0-9a-f]{6};/);
+  const glow = css.split('\n').filter((l) => /board-playing \{/.test(l));
+  assert.equal(glow.length, 3);
+  assert.ok(glow.every((l) => !/#[0-9a-f]{6}|176 124 255/i.test(l)), 'drawn with the --board tokens');
+  assert.match(css, /\.cs-tile\.speaking\.board-playing \{/);
+  // Stripes: the tile is one period wide and the loop moves exactly one tile.
+  const m = css.match(/\.bfx-stripes \{ background: repeating-linear-gradient\((\d+)deg, var\(--b1\) 0 ([\d.]+)px, var\(--b2\) \2px ([\d.]+)px\) 0 0 \/ (\d+)px 100%;/);
+  assert.ok(m, 'stripes drawn as one tile');
+  const period = Number(m[3]) / Math.sin((Number(m[1]) * Math.PI) / 180);
+  assert.ok(Math.abs(period - Number(m[4])) < 0.01, `${period} across`);
+  assert.match(css, new RegExp(`@keyframes bfx-stripes \\{ from \\{ background-position: 0 0; \\} to \\{ background-position: ${m[4]}px 0; \\} \\}`));
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.pc-banner\.bfx-flow, \.pc-banner\.bfx-aurora, \.pc-banner\.bfx-stripes \{ animation: none; \} \}/);
+  // Phones: the favourites editor and the call buttons.
+  assert.match(css, /\.fav-edit-row \.input:first-child \{ grid-column: auto; \}/);
+  assert.match(css, /\.cs-controls \.round-btn \{ width: 40px; height: 40px; \}/);
+});

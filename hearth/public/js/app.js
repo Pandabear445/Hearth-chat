@@ -95,6 +95,7 @@ const S = {
   notifySettings: { dnd: { on: false }, previews: 'hidden' },
   savedIds: new Set(),  // saved messages (ids only; on the server)
   speaking: new Set(),
+  boardPlaying: new Set(), // people in the call whose soundboard sound is playing (their tiles glow, like speaking)
   clockOffset: 0,       // the server's clock minus this device's (disappearing messages go by the server's time)
 };
 // The server's time now: disappearing messages are hidden by it, whatever this device's clock says.
@@ -605,7 +606,11 @@ function startApp() {
   voice = new Voice({
     // The call's soundboard lane carries our sounds; someone else's lights up their tile while one plays.
     boardTrack: () => board.track(),
-    onBoard: (id, on) => $$(`[data-speak="${id}"]`).forEach((el) => el.classList.toggle('board-playing', on)),
+    // Remembered, so tiles and avatars drawn again while it plays (someone joins, a camera turns on) still glow.
+    onBoard: (id, on) => {
+      if (on) S.boardPlaying.add(id); else S.boardPlaying.delete(id);
+      $$(`[data-speak="${id}"]`).forEach((el) => el.classList.toggle('board-playing', on));
+    },
     // Lets the speaking detector ignore people whose mic is off (their state comes from the server).
     isPeerMuted: (userId) => { const st = voice && (S.voice[voice.channelId] || []).find((x) => x.userId === userId); return !!(st && (st.muted || st.deafened)); },
     socket,
@@ -3070,6 +3075,7 @@ function renderSidebarVoiceUsers() {
       const av = avatarEl(u, 22);
       av.dataset.speak = u.id;
       if (S.speaking.has(u.id)) av.classList.add('speaking');
+      if (S.boardPlaying.has(u.id)) av.classList.add('board-playing');
       el.append(h('button', { class: 'vc-user', 'data-pop-anchor': '', onclick: (e) => openProfilePop(e.currentTarget, u.id, 'right'),
         oncontextmenu: server ? (e) => contextMenu(e, memberMenuItems(server, u)) : null },
         av, nameEl(u, { server }),
@@ -10607,7 +10613,7 @@ function tileEl(room, t, big) {
   const shown = nameInServer(serverOfChannel(room), t.u);
   const name = t.kind === 'screen' ? `${shown}\u2019s screen` : shown;
   const el = h('div', {
-    class: `cs-tile kind-${t.kind}${big ? ' big' : ''}${t.kind !== 'screen' && S.speaking.has(t.u.id) ? ' speaking' : ''}`,
+    class: `cs-tile kind-${t.kind}${big ? ' big' : ''}${t.kind !== 'screen' && S.speaking.has(t.u.id) ? ' speaking' : ''}${t.kind !== 'screen' && S.boardPlaying.has(t.u.id) ? ' board-playing' : ''}`,
     dataset: { speak: t.kind === 'screen' ? '' : t.u.id, key: t.key }, tabindex: '0',
     'aria-label': name, onclick: (e) => { if (e.target.closest('button')) return; stageSpotlight.set(room, stageSpotlight.get(room) === t.key ? null : t.key); renderCallStages(); },
   });
@@ -10615,6 +10621,7 @@ function tileEl(room, t, big) {
     if (t.u.banner) el.append(h('div', { class: 'vr-bg' }, h('img', { class: 'cropped', src: t.u.banner, alt: '', style: cropStyle(t.u.profile.bannerCrop) })));
     const av = avatarEl(t.u, big ? 96 : 64); av.dataset.speak = t.u.id;
     if (S.speaking.has(t.u.id)) av.classList.add('speaking');
+    if (S.boardPlaying.has(t.u.id)) av.classList.add('board-playing');
     el.append(av);
   } else {
     const v = videoEl(t.key, t.track, t.me && t.kind === 'cam');
