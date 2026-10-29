@@ -240,16 +240,18 @@ identity key. It is covered transitively by the existing safety numbers, which c
   whatever the server lists (fewer listed stops sending until you confirm a restore). Reading, trust is worked out
   every time, never cached: an epoch vouched for only by someone's older key opens only messages dated while that
   key was theirs, and one made for keys either of you no longer has, even one you made, only messages dated before
-  this device saw their keys change. (Not refused merely for being dated past the epoch's week: a scheduled message
+  the first change of their identity key this device saw after the epoch was made (an earlier change, or a
+  post-quantum key replaced on its own, refuses nothing). (Not refused merely for being dated past the epoch's week: a scheduled message
   is posted as it was encrypted, up to 30 days later.)
 - (e) A P-256-only DM from someone whose PQ key you've seen, dated after the DM's first epoch (as the first epoch
   this device opened dates it, kept on the device; never what the server lists), is flagged "Without post-quantum
-  encryption". A DM scheduled as P-256 before the conversation went post-quantum is held by the server and
-  re-encrypted by the sender's app instead.
+  encryption". A DM scheduled as P-256 before the conversation went post-quantum, or in an epoch made for a
+  post-quantum key the other person no longer has, is held by the server and re-encrypted by the sender's app.
 - (f) Servers and groups: a member without a PQ key gets a P-256 copy (`w1`), and that copy opens the epoch's key,
   so **a channel's messages are only post-quantum protected while every member's copy is `w2`**. A member this
   device has seen a PQ key for, whose key isn't listed now, gets no copy at all (the rotation goes on without them
-  and the key is shared with them once theirs is back).
+  and the key is shared with them once theirs is back; the server allows that only for members with no
+  post-quantum key listed, so a member's app can't keep a new key from the others).
 
 **Races and losses.** The published key's seed must always be in the current envelope. A password change saved
 from an older envelope than the server's (one that raced the upgrade on another device) is refused and retried, and

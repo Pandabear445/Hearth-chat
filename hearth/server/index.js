@@ -3445,9 +3445,13 @@ api.post('/servers/:id/keys/rotate', auth, (req, res) => {
   const s = requireServer(req.params.id, req.userId);
   rateLimit('rotate:' + req.userId, 30, 60 * 1000);
   const { epoch, check, wraps, pubs, pqs } = req.body || {};
-  // Members the app gave no copy to because the post-quantum key it knows them by doesn't check out right now
-  // (secure.js wrapFor): they're left like a newcomer, and the key is shared with them once it does.
-  const deferred = new Set(Array.isArray((req.body || {}).deferred) ? req.body.deferred.filter((x) => typeof x === 'string' && x !== req.userId).slice(0, 5000) : []);
+  // Members the app gave no copy to because the post-quantum key it knows them by isn't listed right now (secure.js
+  // wrapFor): they're left like a newcomer, and the key is shared with them once it's back. Only someone with no
+  // post-quantum key listed here can be left out like that: anyone else gets a copy, whatever the app says, so a
+  // member's app can't keep the key from the others.
+  const deferIds = Array.isArray((req.body || {}).deferred) ? req.body.deferred.filter((x) => typeof x === 'string' && x !== req.userId).slice(0, 5000) : [];
+  const noPq = deferIds.length ? new Set(db.prepare(`SELECT id FROM users WHERE pq_public_key IS NULL AND id IN (${deferIds.map(() => '?').join(',')})`).all(...deferIds).map((r) => r.id)) : new Set();
+  const deferred = new Set(deferIds.filter((id) => noPq.has(id)));
   if (typeof check !== 'string' || !/^[A-Za-z0-9+/=]{16,64}$/.test(check)) fail(400, 'Bad key check.');
   if (!wraps || typeof wraps !== 'object' || Array.isArray(wraps)) fail(400, 'Missing wrapped keys.');
   if (!Object.values(wraps).every(isWrapped)) fail(400, 'Those wrapped keys aren\u2019t in the right format.', 'bad_wraps');

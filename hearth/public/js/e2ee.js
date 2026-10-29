@@ -946,11 +946,15 @@ export function noteDmFirst(myId, dmId, t) {
   all[dmId] = { ...(all[dmId] || {}), pq: 1, first: t };
   saveDmPq(myId, all);
 }
-// When this device last saw someone's keys change (the newest `until` among the keys it pinned for them before), or 0.
-export function lastKeyChange(myId, user) {
+// Whether any DM of this account has gone post-quantum on this device (then the account has a post-quantum key).
+export function anyDmPq(myId) {
+  return Object.keys(loadHw(myId)).length > 0 || Object.values(loadDmPq(myId)).some((x) => x && x.pq);
+}
+// When the keys this device knew for them stopped being theirs, the first time after t (0: they haven't changed since).
+export function keyChangeAfter(myId, user, t) {
   const p = user && loadPins(myId)[user.id];
   if (!p || !Array.isArray(p.old)) return 0;
-  return p.old.reduce((t, k) => (k && validUntil(k.until) && k.until > t ? k.until : t), 0);
+  return p.old.reduce((m, k) => (k && validUntil(k.until) && k.until > t && (!m || k.until < m) ? k.until : m), 0);
 }
 // Forgets that this account had a post-quantum key (a reset that legitimately dropped it).
 export function forgetOwnPq(myId) { try { localStorage.removeItem(ownPqKey(myId)); } catch { /* storage blocked */ } }

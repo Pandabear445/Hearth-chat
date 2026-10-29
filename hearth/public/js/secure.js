@@ -264,9 +264,10 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   // or a DM epoch made for your post-quantum key. A server that leaves your key out of one record doesn't make this
   // device take the account for P-256 only.
   let pqEvidence = false;
-  const notePqEvidence = () => { pqEvidence = true; };
+  const notePqEvidence = () => { pqEvidence = true; if (pqNeed === 'upgrade') needPassword('seed'); };
   const accountHasPq = () => pqEvidence || !!myPq() || E2EE.ownPqPinned(S.me.id) || !!S.me.pqPublicKey
-    || !!(S.users[S.me.id] && typeof S.users[S.me.id].pq === 'string' && S.users[S.me.id].pq);
+    || !!(S.users[S.me.id] && typeof S.users[S.me.id].pq === 'string' && S.users[S.me.id].pq)
+    || E2EE.anyDmPq(S.me.id); // (a DM of yours went post-quantum: both of you had a key)
   function needPasswordError() {
     const err = new Error('Your account’s post-quantum key isn’t on this device yet, so nothing was sent. Enter your password once on this device (the bar above the message box).');
     err.code = 'need_password';
@@ -554,7 +555,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
         else if (self && lockPq && w1 && !staleRecovery) fresh.push({ epoch: k.epoch, raw });
       } catch (e) {
         // Locked to the post-quantum key this device is still waiting for: looked at again once it's here.
-        if (e.code === 'no_pq') { waitingPq.add(st.serverId); continue; }
+        if (e.code === 'no_pq') { waitingPq.add(st.serverId); notePqEvidence(); continue; }
         console.warn('Could not unlock a server key', st.serverId, k.epoch, e.message);
         // Locked for keys this account no longer has (or damaged): ask for it to be shared again. Once per
         // key per session, and only the current key (nobody can share an older one again, so the server keeps
@@ -1059,7 +1060,9 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
         if (!then) throw new Error('Written after that key stopped being theirs');
         how = then.trust === 'now' ? 'pinned' : then.trust;
       }
-      const changed = peer ? E2EE.lastKeyChange(S.me.id, peer) : 0;
+      // (The first change after the epoch was made: the keys it was made for were theirs until then. A change before
+      // it, or only a post-quantum key replaced, refuses nothing.)
+      const changed = peer ? E2EE.keyChangeAfter(S.me.id, peer, got.madeAt) : 0;
       if (changed && at > changed) throw new Error('Written after their keys changed');
     }
     const { payload } = await E2EE.decryptDm3({ raw: got.raw, dmId, authorId, text });

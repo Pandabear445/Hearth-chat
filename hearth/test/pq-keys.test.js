@@ -972,3 +972,122 @@ test('second review 4 and 9: the vault key comes from your proven identity key; 
   assert.doesNotMatch(app, /id: 'pq-unlock'[^\n]*document\.body\.append/);
   assert.doesNotMatch(app.slice(app.indexOf('function pqUnlockBar('), app.indexOf('function pqUnlockBar(') + 400), /announce/);
 });
+
+// ======================================================================= the fixes' own review
+const shown = (msgs) => msgs.map((m) => (m.dec.error ? '(error)' : m.dec.t));
+async function acceptedOnce(base) {
+  const { a, b, dm, aD } = await twoWithPq(base);
+  assert.match(await sendDm(aD, dm.id, 'e1'), /^d3:1:/);
+  const bNew = await resetNew(b);
+  const bN = await device(bNew, { ctx: await passwordCtx(bNew) });
+  use(aD);
+  assert.equal(aD.sec.acceptKeys(await fresh(aD, b.id)), true);
+  await sleep(20);
+  await fresh(bN, a.id);
+  assert.match(await sendDm(aD, dm.id, 'e2 from a'), /^d3:2:/);
+  assert.match(await sendDm(bN, dm.id, 'e2 from b'), /^d3:2:/);
+  return { a, b, dm, aD, bNew, bN };
+}
+
+test('third review 1: an earlier accepted key change refuses nothing written after it (a post-quantum key replaced, a second reset, a failed lookup)', async () => {
+  // b's post-quantum key alone is replaced later (same identity key).
+  {
+    const { a, b, dm, aD, bNew, bN } = await acceptedOnce('r3e');
+    use(bN);
+    bN.S.pqSeed = null;
+    await bN.sec.ensurePqKey({ ...(await passwordCtx(bNew)), pqSeed: null });
+    const aR = await device(a, { ctx: await passwordCtx(a), pins: aD.pins });
+    await fresh(aR, b.id);
+    assert.deepEqual(shown(await readDms(aR, dm.id)), ['e1', 'e2 from a', 'e2 from b']);
+    assert.match(await sendDm(aR, dm.id, 'e3'), /^d3:3:/);
+  }
+  // b resets a second time; a hasn't compared numbers yet.
+  {
+    const { a, b, dm, aD, bNew } = await acceptedOnce('r3a');
+    await sleep(20);
+    const bNew2 = await resetNew(bNew);
+    await device(bNew2, { ctx: await passwordCtx(bNew2) });
+    const aR = await device(a, { ctx: await passwordCtx(a), pins: aD.pins });
+    await fresh(aR, b.id);
+    assert.deepEqual(shown(await readDms(aR, dm.id)), ['e1', 'e2 from a', 'e2 from b']);
+  }
+  // A reload while the server can't answer for b's post-quantum key.
+  {
+    const { a, b, dm, aD } = await acceptedOnce('r3b');
+    const f = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => (String(url).endsWith(`/users/${b.id}/pq-key`) ? new Response('{"error":"busy"}', { status: 503, headers: { 'content-type': 'application/json' } }) : f(url, opts));
+    try {
+      const aR = await device(a, { ctx: await passwordCtx(a), pins: aD.pins });
+      await fresh(aR, b.id);
+      assert.deepEqual(shown(await readDms(aR, dm.id)), ['e1', 'e2 from a', 'e2 from b']);
+    } finally { globalThis.fetch = f; }
+  }
+});
+
+test('third review 2: a member’s app can’t leave members with a post-quantum key out of a new server key', async () => {
+  const owner = await person(uname('r3do'));
+  const evil = await person(uname('r3de'));
+  const m2 = await person(uname('r3dm'));
+  const m3 = await person(uname('r3dx'));
+  const s = (await as(owner, 'POST', '/servers', { name: 'r3d' })).json;
+  const code = (await as(owner, 'POST', `/servers/${s.id}/invites`, {})).json.code;
+  for (const u of [evil, m2, m3]) assert.equal((await as(u, 'POST', `/invites/${code}/join`, {})).status, 200);
+  const ch = s.channels.find((c) => c.type === 'text').id;
+  const eD = await device(evil, { ctx: await passwordCtx(evil) });
+  await device(m2, { ctx: await passwordCtx(m2) });
+  const oD = await device(owner, { ctx: await passwordCtx(owner) });
+  use(oD);
+  const e1 = (await oD.sec.encryptChannel(s.id, ch, { t: 'one' })).epoch;
+  assert.equal((await as(m3, 'POST', `/servers/${s.id}/leave`)).status, 200);
+  use(eD);
+  const raw = E.newGroupKey();
+  const epoch = e1 + 1;
+  const wraps = { [evil.id]: await E.wrapGroupKey({ raw, serverId: s.id, epoch, recipientId: evil.id, recipientPub: evil.publicKey, recipientPq: E.pqKeyPair(eD.S.pqSeed).publicKey, wrapperId: evil.id, signKey: eD.S.signKey }) };
+  const r = await as(evil, 'POST', `/servers/${s.id}/keys/rotate`, { epoch, check: await E.keyCheck(raw, s.id, epoch), wraps, pubs: { [evil.id]: evil.publicKey }, pqs: {}, deferred: [owner.id, m2.id] });
+  assert.equal(r.status, 409);
+  assert.equal(srv.sql('SELECT COUNT(*) AS n FROM server_keys WHERE server_id = ? AND epoch = ?', s.id, epoch)[0].n, 0);
+});
+
+test('third review 3: a device without the seed that the server shows no sign of the key still knows the account has one', async () => {
+  const { a, b, dm, aD } = await twoWithPq('r3c');
+  assert.match(await sendDm(aD, dm.id, 'pq'), /^d3:1:/);
+  const s = (await as(a, 'POST', '/servers', { name: 'r3c' })).json;
+  const ch = s.channels.find((c) => c.type === 'text').id;
+  await refreshServers(aD);
+  use(aD);
+  await aD.sec.encryptChannel(s.id, ch, { t: 'hello' });
+  const carol = await person(uname('r3cc'));
+  await device(carol, { ctx: await passwordCtx(carol) });
+  await friends(a, carol);
+  const dmC = await dmBetween(a, carol);
+  const strip = (boot) => { boot.me = { ...boot.me, pqPublicKey: null, pqSig: null }; if (boot.users[a.id]) boot.users[a.id] = { ...boot.users[a.id], pq: null }; };
+  const laptop = await device(a, { edit: strip });
+  assert.equal(laptop.sec.waitingForPq(s.id), true);
+  assert.equal(laptop.sec.neededPassword(), 'seed', 'a hybrid copy for you says the account has a key');
+  let body = null;
+  const f = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => { if (String(url).endsWith(`/servers/${s.id}/keys/rotate`)) body = JSON.parse(opts.body); return f(url, opts); };
+  use(laptop);
+  try { await assert.rejects(() => laptop.sec.forceRotate(s.id)); } finally { globalThis.fetch = f; }
+  assert.equal(body, null, 'no rotation was even tried');
+  await fresh(laptop, carol.id);
+  laptop.S.users[a.id] = { ...laptop.S.users[a.id], pq: null };
+  use(laptop);
+  await assert.rejects(() => laptop.sec.encryptDm(dmC.id, { t: 'to carol' }), (e) => e.code === 'need_password');
+});
+
+test('third review 6: a scheduled DM in an epoch made for a post-quantum key they no longer have is held for re-encrypting', async () => {
+  const { a, b, dm, aD } = await twoWithPq('r3s');
+  use(aD);
+  await refreshDms(aD);
+  const ciphertext = await aD.sec.encryptDm(dm.id, { t: 'later' });
+  assert.match(ciphertext, /^d3:1:/);
+  const r = await as(a, 'POST', `/dms/${dm.id}/scheduled-messages`, { ciphertext, ref: H.hex(12), draft: `x1:${H.b64(48)}`, sendAt: Date.now() + 3600000 });
+  assert.equal(r.status, 200, r.text);
+  assert.equal((await as(a, 'GET', '/scheduled-messages')).json.items.find((x) => x.id === r.json.id).status, 'pending');
+  const other = E.pqKeyPair(E.newPqSeed ? E.newPqSeed() : crypto.getRandomValues(new Uint8Array(64))).publicKey;
+  srv.sql('UPDATE users SET pq_public_key = ? WHERE id = ?', other, b.id);
+  const it = (await as(a, 'GET', '/scheduled-messages')).json.items.find((x) => x.id === r.json.id);
+  assert.equal(it.status, 'held');
+  assert.equal(it.reason, 'pq');
+});
