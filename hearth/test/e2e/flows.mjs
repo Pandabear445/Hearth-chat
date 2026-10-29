@@ -1644,13 +1644,24 @@ async function androidApp(t) {
   await droid.page.reload();
   await droid.waitApp();
   const sent = (type) => droid.page.evaluate((ty) => window.__androidSent.filter((m) => m.type === ty), type);
-  check((await sent('hello')).some((m) => m.v === 2), 'The page should tell the app it takes notification taps and invites in place.');
+  check((await sent('hello')).some((m) => m.v === 3), 'The page should tell the app it takes notification taps, invites and shared links in place.');
 
   // The invite link the app was opened with: the "Join a server" box, without leaving the page.
   const join = await droid.dialog('Join a server');
   await join.locator('.invite-preview strong', { hasText: 'E2E Hall' }).waitFor();
   await join.locator('.modal-foot .btn.primary').click();
   await droid.page.locator('#sidebar-head .server-head-name', { hasText: exact('E2E Hall') }).waitFor();
+  await droid.noModals();
+
+  // Share → Hearth from another app (the native side checked it: ShareLinks.java): the share picker, nothing sent.
+  // Junk that slipped through is refused again here.
+  await droid.page.evaluate(() => window.dispatchEvent(new CustomEvent('hearth-share', { detail: 'javascript:alert(1)//https://evil.example/' })));
+  await droid.page.waitForTimeout(300);
+  check(!(await droid.$('.modal', { hasText: 'Share to Hearth' }).count()), 'Junk from another app opens nothing.');
+  await droid.page.evaluate(() => window.dispatchEvent(new CustomEvent('hearth-share', { detail: 'https://vm.tiktok.com/ZMdroid01/' })));
+  const sp = await droid.dialog('Share to Hearth');
+  await sp.locator('.share-what', { hasText: 'vm.tiktok.com/ZMdroid01/' }).waitFor();
+  await sp.locator('.modal-foot button', { hasText: 'Cancel' }).click();
   await droid.noModals();
 
   // Offered once: notifications when Hearth is closed. The app registers with the server's key; the page
