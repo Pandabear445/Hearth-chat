@@ -15,6 +15,9 @@ import { modal, field, confirmDialog } from './ui.js';
 
 export const NAME_MAX = 32;
 export const LIST_MAX = 1000;
+// The biggest sealed list the server keeps (server/personalnames.js SEALED_MAX): a full list fits under it, and a
+// save past it is refused here with a clear message rather than by the server.
+export const SEALED_MAX = 320 * 1024;
 const PAD = 4096; // the sealed list is padded to a multiple of this
 const enc = new TextEncoder();
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -26,12 +29,14 @@ const BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
 const HIDDEN = /\u{1F3F4}[\u{E0030}-\u{E0039}\u{E0061}-\u{E007A}]{2,7}\u{E007F}|[\p{Default_Ignorable_Code_Point}￹-￻]/gu;
 const KEEP = /^(?:\u{1F3F4}.*|[‌‍︀-️\u{E0100}-\u{E01EF}])$/u;
 const BLANK = /[\p{Default_Ignorable_Code_Point}\s⠀]/gu;
+// Half of an emoji's pair on its own isn't a character anyone can see, and JSON would keep it as six bytes of \\u escape.
+const LONE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 // The name as it will be kept: '' for none. Throws (with a message to show) for one too long or with nothing visible.
 export function cleanName(v) {
   if (v === null || v === undefined) return '';
   if (typeof v !== 'string') throw new Error('A nickname is text.');
   if (v.length > 512) throw new Error(`A nickname is up to ${NAME_MAX} characters.`);
-  const t = v.replace(BREAKS, ' ').replace(HIDDEN, (c) => (KEEP.test(c) ? c : '')).replace(/\s+/g, ' ').trim();
+  const t = v.replace(LONE, '').replace(BREAKS, ' ').replace(HIDDEN, (c) => (KEEP.test(c) ? c : '')).replace(/\s+/g, ' ').trim();
   if (!t) {
     if (v.trim()) throw new Error('A nickname needs at least one character you can see.');
     return '';
@@ -72,6 +77,7 @@ export function createPersonalNames({ S, vaultKey, onChange = () => {}, store = 
   let unreadable = false; // a saved list this device couldn't open
   let behind = false; // the server's copy is older than one this device has opened, so this device's is used
   let saving = 0;
+  let saved = 0; // how many saves this device has made, so a load that started before one can tell
   let missed = null; // a change announced while a save was on its way (it may be this device's own)
   let section = null; // the settings list, while it's open: { root, refresh }
 
@@ -85,41 +91,55 @@ export function createPersonalNames({ S, vaultKey, onChange = () => {}, store = 
     if (section && section.root.isConnected) section.refresh();
   };
   // The saved list: what GET /me/personal-nicknames answered. quiet: at start-up, before anything is drawn.
-  async function apply(r, { quiet = false } = {}) {
-    at = (r && r.updatedAt) || 0;
-    unreadable = false;
-    behind = false;
+  // Nothing changes until the list is open, and a list fetched before one of this device's saves landed is dropped
+  // (saved counts them), so a slow load can't put back the version a save just replaced.
+  async function apply(r, { quiet = false, since = saved } = {}) {
+    let bad = false;
+    let ahead = false;
     let next = {};
     let n = 0;
     if (r && r.data) {
-      try { ({ list: next, n } = await open(r.data)); } catch { unreadable = true; }
+      try { ({ list: next, n } = await open(r.data)); } catch { bad = true; }
     }
     const local = store.get();
+    let keep = null;
     if (local && local.n > n) {
       // Older than (or missing next to) a copy this device has opened: keep using this device's; saving puts it back.
       try {
         const kept = await open(local.data);
-        if (kept.n === local.n) { next = kept.list; n = kept.n; behind = true; unreadable = false; }
+        if (kept.n === local.n) { next = kept.list; n = kept.n; ahead = true; bad = false; }
       } catch { /* sealed with a key this account no longer has */ }
-    } else if (r && r.data && !unreadable && n) store.set({ n, data: r.data });
+    } else if (r && r.data && !bad && n) keep = { n, data: r.data };
+    if (since !== saved) return;
+    if (keep) store.set(keep);
+    at = (r && r.updatedAt) || 0;
+    unreadable = bad;
+    behind = ahead;
     seq = n;
     set(next, quiet);
   }
-  const load = async () => apply(await request('GET', '/me/personal-nicknames'));
+  const load = async () => { const since = saved; return apply(await request('GET', '/me/personal-nicknames'), { since }); };
 
   // Sealed with your vault key, bound to your account, numbered, padded, then saved against the version this device
   // has. If another device saved since, the newer list is loaded and the same change made to it.
   async function saveWith(change, { retry = true } = {}) {
-    const next = cleanList(change({ ...names }));
-    const local = store.get();
-    const n = Math.max(seq, local ? local.n : 0) + 1;
-    const body = { v: 1, n, names: next, pad: '' };
-    const size = enc.encode(JSON.stringify(body)).length;
-    body.pad = ' '.repeat((PAD - (size % PAD)) % PAD);
-    const data = await E2EE.sealVault(await vaultKey(), 'nicknames', S.me.id, body);
+    // Counted as saving before anything waits, so a change announced meanwhile is held back (missed) instead of
+    // loading another device's list under this save. The version the change is made to is taken at the same moment as
+    // the list it's made from: if another device's list arrives while this one is sealed, the save goes out against
+    // the older version, is refused as stale, and the change is made again on top of the newer list.
     saving++;
     try {
-      const r = await request('PUT', '/me/personal-nicknames', { data, base: at });
+      const base = at;
+      const next = cleanList(change({ ...names }));
+      const local = store.get();
+      const n = Math.max(seq, local ? local.n : 0) + 1;
+      const body = { v: 1, n, names: next, pad: '' };
+      const size = enc.encode(JSON.stringify(body)).length;
+      body.pad = ' '.repeat((PAD - (size % PAD)) % PAD);
+      const data = await E2EE.sealVault(await vaultKey(), 'nicknames', S.me.id, body);
+      if (data.length > SEALED_MAX) throw new Error('That list of nicknames is too big to save. Remove some first.');
+      const r = await request('PUT', '/me/personal-nicknames', { data, base });
+      saved++;
       at = r.updatedAt;
       store.set({ n, data });
       seq = n;

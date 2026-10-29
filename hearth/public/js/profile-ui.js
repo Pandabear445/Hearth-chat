@@ -34,6 +34,13 @@ export function displayName(u) {
   if (!u) return 'Unknown';
   return personalName(u) || realName(u);
 }
+// A forwarded message: your note, then who wrote it and their words quoted. It is sent to other people, so it names
+// the author by their own name (realName), never a nickname only you see: nobody else is told what you call them.
+export function forwardText({ note = '', author = null, text = '' } = {}) {
+  const lead = String(note || '').trim();
+  const quoted = String(text || '').split('\n').map((l) => '> ' + l).join('\n');
+  return `${lead ? lead + '\n' : ''}> Forwarded from ${realName(author)}\n${quoted}`;
+}
 // For search boxes and suggestions: does any name you know them by contain q (already lower case)? Your nickname for
 // them, their display name, their username and (with a server) their nickname there.
 export function nameMatches(u, q, server = null) {

@@ -18,8 +18,10 @@
 // Socket
 //   personalnicks:changed { updatedAt, from }  to your own apps (from: the session that saved it)
 
-// A sealed list: up to 1,000 names of 32 characters plus their ids is about 100 KB of JSON, padded and base64'd.
-const SEALED_MAX = 192 * 1024;
+// A sealed list at its biggest: 1,000 entries, each a 64-character id and a 32-character name of 4-byte emoji (or
+// quotes JSON escapes), is about 198 KB of JSON. Padded to 4 KB, sealed and base64'd that is about 270 KB, so this
+// leaves room for every list the app allows (public/js/personal-names.js SEALED_MAX, the same number).
+const SEALED_MAX = 320 * 1024;
 const SEALED = /^x1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/;
 
 function setupPersonalNames(ctx) {

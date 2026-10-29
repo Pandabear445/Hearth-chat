@@ -18,7 +18,7 @@ import { EMOJI, EMOJI_NAMES, CATEGORY_ICONS, QUICK_REACTIONS, recentEmoji, pushR
 import { Voice } from './voice.js';
 import { openCallDiagnostics } from './call-diagnostics.js';
 import { createSecure, mergeUser, callRefusedText, noSafetyNumbersText } from './secure.js';
-import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, realName, nameMatches, setPersonalNames, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong, songPlaying } from './profile-ui.js';
+import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, realName, forwardText, nameMatches, setPersonalNames, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong, songPlaying } from './profile-ui.js';
 import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
 import { socialLinks, parseSocialUrl, playerMode } from './social.js';
@@ -5496,7 +5496,8 @@ function openForward(m) {
     dests.filter((d) => !q || d.label.toLowerCase().includes(q) || d.sub.toLowerCase().includes(q)).slice(0, 40).forEach((d) => list.append(
       h('button', { class: 'quick-row', onclick: async () => {
         try {
-          const fwd = `${note.value.trim() ? note.value.trim() + '\n' : ''}> Forwarded from ${displayName(getUser(m.authorId))}\n${textOf(m).split('\n').map((l) => '> ' + l).join('\n')}`;
+          // Sent to other people, so the author goes by their own name, never your private nickname for them.
+          const fwd = forwardText({ note: note.value, author: getUser(m.authorId), text: textOf(m) });
           // A link preview goes along: the quoted text still has its link, so readers there keep the card.
           const all = filesOf(m);
           const go = (f) => sendTo(d.key, null, { t: fwd, f, ...(linksOf(m).length ? { l: linksOf(m) } : {}) }, null);
@@ -9384,7 +9385,7 @@ function openAddServer() {
   });
 }
 function openCreateServer() {
-  const name = h('input', { class: 'input', maxlength: '64', value: `${displayName(S.me)}'s place` });
+  const name = h('input', { class: 'input', maxlength: '64', value: `${realName(S.me)}'s place` });
   let iconFile = null;
   const preview = h('div', { class: 'icon-preview' }, icon('image'));
   const fileIn = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', hidden: true, onchange: (e) => {

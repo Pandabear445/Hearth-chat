@@ -36,7 +36,7 @@ test('server: stores only the sealed list, yours alone, and refuses anything els
     const r = await as(alice, 'PUT', '/me/personal-nicknames', { data });
     assert.equal(r.status, 400, `${JSON.stringify(data)}: ${r.text}`);
   }
-  const huge = `x1:${'A'.repeat(16)}:${'A'.repeat(200 * 1024)}`;
+  const huge = `x1:${'A'.repeat(16)}:${'A'.repeat(330 * 1024)}`;
   assert.equal((await as(alice, 'PUT', '/me/personal-nicknames', { data: huge })).status, 413);
   assert.equal((await as(alice, 'PUT', '/me/personal-nicknames', { data: SEALED(2), base: 'x' })).status, 400);
   assert.equal((await as(alice, 'GET', '/me/personal-nicknames')).json.data, SEALED(1), 'nothing refused was kept');
@@ -200,6 +200,45 @@ test('app: a change made while another device saved is made again on top of the 
   assert.deepEqual(one.all(), { u_a: 'Ace', u_b: 'Bee' });
 });
 
+test('app: another device’s save that lands while this one is sealing is kept, not overwritten', async () => {
+  const { device, stored, vk } = await account();
+  // This device's first seal waits until the test lets it go; everything after is immediate.
+  let release; const gate = new Promise((r) => { release = r; });
+  let first = true;
+  const handlers = {};
+  const one = device({ vaultKey: () => (first ? (first = false, gate.then(() => vk)) : vk) });
+  const two = device();
+  one.listen({ on: (ev, fn) => { handlers[ev] = fn; } });
+  await one.load(); // the gated seal is the first vault key asked for after this
+  first = true;
+  await two.load();
+  const pending = one.setName('u_a', 'Ace'); // stuck sealing
+  await two.setName('u_b', 'Bee');
+  // The server tells this device about two's save while it's still sealing.
+  handlers['personalnicks:changed']({ updatedAt: stored.updatedAt });
+  await new Promise((r) => setTimeout(r, 30));
+  release();
+  await pending;
+  const body = await E.openVault(await vk, 'nicknames', 'me1', stored.data);
+  assert.deepEqual(body.names, { u_b: 'Bee', u_a: 'Ace' }, 'both changes are in the saved list');
+  assert.deepEqual(one.all(), { u_b: 'Bee', u_a: 'Ace' });
+});
+
+test('app: a full list of the longest names fits what the server keeps, and a lone half of a pair is dropped', async () => {
+  const { vk } = await account();
+  const { SEALED_MAX } = require('../server/personalnames');
+  assert.equal(P.SEALED_MAX, SEALED_MAX, 'the app and the server agree');
+  assert.equal(P.cleanName('a\uD83Db'), 'ab');
+  assert.equal(P.cleanName('\uDE00x\uD83D'), 'x');
+  // 1,000 entries with 64-character ids and 32 four-byte emoji (or 32 escaped quotes) each: the biggest list allowed.
+  const ids = Array.from({ length: P.LIST_MAX }, (_, i) => String(i).padStart(64, 'u'));
+  const worst = Object.fromEntries(ids.map((id, i) => [id, i % 2 ? '😀'.repeat(32) : '"'.repeat(32)]));
+  assert.equal(Object.keys(P.cleanList(worst)).length, P.LIST_MAX);
+  // Padded as the app pads it, to the next 4 KB (here the most padding there can be).
+  const sealed = await E.sealVault(await vk, 'nicknames', 'me1', { v: 1, n: 99, names: worst, pad: ' '.repeat(4095) });
+  assert.ok(sealed.length <= SEALED_MAX, `${sealed.length} > ${SEALED_MAX}`);
+});
+
 test('app: a server that hands back an older copy, or none, can’t quietly undo a nickname on a device that saw a newer one', async () => {
   const { device, stored, server, vk } = await account();
   const d = device();
@@ -247,6 +286,28 @@ test('names: your nickname comes first, then their nickname in the server, then 
   assert.equal(UI.personalNameNote(plain), null);
   UI.setPersonalNames(null);
   assert.equal(UI.displayName(u), 'Zedediah');
+});
+
+test('forwarding: the text that is sent names the author by their own name, never your nickname for them', async () => {
+  await load();
+  const alice = { id: 'u_alice', username: 'alice', profile: { displayName: 'Alice A.' } };
+  const plain = { id: 'u_plain', username: 'plainuser', profile: {} };
+  UI.setPersonalNames((id) => ({ u_alice: 'Dumbo', u_plain: 'Secret name' })[id] || '');
+  try {
+    assert.equal(UI.displayName(alice), 'Dumbo', 'on your screen it is your nickname');
+    const fwd = UI.forwardText({ note: '  look at this ', author: alice, text: 'line one\nline two' });
+    assert.equal(fwd, 'look at this\n> Forwarded from Alice A.\n> line one\n> line two');
+    assert.doesNotMatch(fwd, /Dumbo/);
+    assert.equal(UI.forwardText({ author: plain, text: 'hi' }), '> Forwarded from plainuser\n> hi');
+    assert.equal(UI.forwardText({ note: '   ', author: null, text: '' }), '> Forwarded from Unknown\n> ');
+  } finally { UI.setPersonalNames(null); }
+  // The app builds what it sends with it, and nothing it sends or saves for others is built from displayName.
+  const app = read('public', 'js', 'app.js');
+  assert.match(app, /const fwd = forwardText\(\{ note: note\.value, author: getUser\(m\.authorId\), text: textOf\(m\) \}\)/);
+  assert.doesNotMatch(app, /Forwarded from \$\{displayName/);
+  assert.doesNotMatch(app, /value: `\$\{displayName\(S\.me\)\}'s place`/, 'a new server’s suggested name');
+  // Mentions put the @username in the text, not a name you see.
+  assert.match(app, /: '@' \+ \(c\.special \|\| c\.username\);/);
 });
 
 test('app.js: every place someone is right-clicked or opened offers it, and lists search by it', () => {
