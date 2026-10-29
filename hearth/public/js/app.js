@@ -35,7 +35,7 @@ import { unseenNotes, markNotesSeen } from './whatsnew.js';
 import { autocorrect, correctSending, isCommand, englishHere, lastWordPasted } from './spelling.js';
 import { initKeybinds, getKeybinds, comboLabel, reportCall, flashTaskbar, installUpdate, shortcutGroups, comboParts, keyName } from './keybinds.js';
 import { initActivity, activityLine, openActivityPicker, startDesktopDetection } from './activity.js';
-import { modal, popover, closePopover, menu, contextMenu, sheet, quietFocus, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
+import { modal, popover, closePopover, menu, contextMenu, sheet, sheetMenu, quietFocus, confirmDialog, field, ibtn, markInvalid, clearInvalid, trapTab } from './ui.js';
 import { openSettings, applyAppearance, confirmedCall, displayNameDialog, askPassword } from './settings.js';
 import { createFolders, dragDrop } from './folders.js';
 import { createUpdates } from './updates.js';
@@ -3309,6 +3309,13 @@ function statusMenu(anchor) {
     h('button', { class: 'menu-item', onclick: () => { closePopover(); openSettings(app, 'appearance'); } }, icon('palette', 'ic menu-ic'), 'Theme and appearance'),
     h('button', { class: 'menu-item', onclick: () => { closePopover(); openShortcuts(); } }, icon('info', 'ic menu-ic'), h('span', { class: 'menu-col' }, 'Keyboard shortcuts', h('span', { class: 'menu-desc' }, /Mac|iPhone|iPad/.test(navigator.platform || '') ? '\u2318 + /' : 'Ctrl + /'))),
   );
+  // On a phone a sheet from the bottom, with room for a finger (put away as soon as one is picked); elsewhere a menu
+  // beside your name.
+  if (isPhoneLayout()) {
+    const sh = sheetMenu(el, { label: 'Your status and profile', returnTo: anchor });
+    el.addEventListener('click', (e) => { if (e.target.closest('.menu-item')) sh._close(); }, true);
+    return;
+  }
   popover(anchor, el, { side: 'top' });
 }
 function openCustomStatus() {
@@ -6503,7 +6510,7 @@ function openViewer(fromImg, { name, download, items: given = null, index = 0, s
       vid ? null : { label: 'Copy image', icon: 'copy', action: copy },
     ].filter(Boolean);
     while (list[list.length - 1] === '-') list.pop();
-    morePop = menu(more, list, { align: 'end', className: 'viewer-menu' });
+    morePop = menu(more, list, { align: 'end', className: 'viewer-menu', sheet: false });
   }, { attrs: { 'data-pop-anchor': '' } });
   const fit = () => {
     const phone = isPhoneLayout();
@@ -7917,7 +7924,7 @@ function createComposer({ id, key, threadId, placeholder }) {
       ...more,
     ];
   };
-  const attachBtn = h('button', { class: 'icon-btn attach', 'aria-label': 'Attach a file or create a poll', 'data-tip': 'Attach or poll', 'data-pop-anchor': '', onclick: (e) => menu(e.currentTarget, attachItems(), { side: 'top' }) }, icon('plus'));
+  const attachBtn = h('button', { class: 'icon-btn attach', 'aria-label': 'Attach a file or create a poll', 'data-tip': 'Attach or poll', 'data-pop-anchor': '', onclick: (e) => menu(e.currentTarget, attachItems(), { side: 'top', sheet: false }) }, icon('plus'));
   // On a phone the + stays without permission to attach files: GIFs, voice messages and Send later are in it there.
   const fitAttach = () => {
     const phone = isPhoneLayout();
@@ -9616,6 +9623,7 @@ function openProfilePop(anchor, userId, side = 'right') {
   card.querySelector('.pc-inner')?.prepend(h('button', { class: 'btn primary pc-open-page', onclick: open }, icon('user'), u.id === S.me.id ? 'View my page' : 'View full profile'));
   card.querySelectorAll('.pc-av, .pc-name').forEach((el) => { el.style.cursor = 'pointer'; el.addEventListener('click', open); });
   if (S.blocked.has(u.id)) card.prepend(h('div', { class: 'pc-blocked' }, icon('ban'), 'Blocked'));
+  if (isPhoneLayout()) { sheet(h('div', { class: 'pc-sheet' }, card), { label: displayName(u), returnTo: anchor }); return; }
   popover(anchor, card, { side, className: 'pop-profile' });
 }
 function topFriendsEl(u) {

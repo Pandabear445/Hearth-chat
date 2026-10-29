@@ -1,5 +1,6 @@
 // Modals, popovers, menus and bottom sheets.
 import { h, icon } from './util.js';
+import { isPhoneLayout, isTouchUI } from './device.js';
 
 const layer = () => document.getElementById('layer');
 let openPop = null;
@@ -145,7 +146,8 @@ function menuSemantics(el) {
 }
 
 // Menu items: { label, icon, hint, danger, action } | '-' (separator) | { header: 'Text' }
-function menuEl(items) {
+// done: what picking one puts away first (the popup, or the sheet it's in).
+function menuEl(items, done = closePopover) {
   const el = h('div', { class: 'menu', role: 'menu' }, items.filter(Boolean).map((it) => {
     if (it === '-') return h('div', { class: 'menu-sep', role: 'separator' });
     if (it.header) return h('div', { class: 'menu-header', role: 'presentation' }, it.header);
@@ -153,7 +155,7 @@ function menuEl(items) {
       class: `menu-item${it.danger ? ' danger' : ''}${it.checked ? ' checked' : ''}`,
       role: it.checked !== undefined ? 'menuitemradio' : 'menuitem',
       'aria-checked': it.checked !== undefined ? String(!!it.checked) : null,
-      onclick: () => { closePopover(); it.action(); },
+      onclick: () => { done(); it.action(); },
     }, it.icon ? icon(it.icon, 'ic menu-ic') : null, h('span', { class: 'menu-label' }, it.label),
     it.checked ? icon('check', 'ic menu-check') : it.hint ? h('span', { class: 'menu-hint' }, it.hint) : null);
   }));
@@ -161,13 +163,22 @@ function menuEl(items) {
   return el;
 }
 
+// In the phone layout a menu is a sheet from the bottom of the screen, its items a finger's height apart (sheetMenu);
+// { sheet: false } keeps it a popup there too (one on the picture viewer, the message box's +, whose pickers open
+// beside it).
 export function menu(anchor, items, opts = {}) {
+  if (opts.sheet !== false && isPhoneLayout()) return sheetMenu(items, { label: opts.label || nameOf(anchor) || 'Options', returnTo: anchor });
   return popover(anchor, menuEl(items), { side: 'bottom', ...opts });
 }
+const nameOf = (el) => (el && el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('data-tip'))) || '';
 
-// Right-click menu at the pointer.
-export function contextMenu(e, items) {
+// Right-click menu at the pointer. On a touch screen (a long press) and in the phone layout, a sheet instead.
+export function contextMenu(e, items, opts = {}) {
   e.preventDefault();
+  if (opts.sheet !== false && (isPhoneLayout() || isTouchUI())) {
+    const at = e.currentTarget && e.currentTarget.nodeType === 1 ? e.currentTarget : e.target;
+    return sheetMenu(items, { label: opts.label || 'Options', returnTo: at && at.closest ? at.closest('button, [tabindex]') || at : null });
+  }
   const pt = h('span', { style: { position: 'fixed', left: e.clientX + 'px', top: e.clientY + 'px', width: '1px', height: '1px' } });
   document.body.append(pt);
   const pop = popover(pt, menuEl(items), { side: 'bottom', className: 'ctx' });
@@ -208,6 +219,17 @@ export function sheet(content, { label = 'Actions', returnTo = null, onClose } =
   // The sheet itself takes focus, so screen readers start at its name.
   requestAnimationFrame(() => { if (!closed && !box.contains(document.activeElement)) box.focus({ preventScroll: true }); });
   return { close: () => close(), box };
+}
+// A menu as a bottom sheet: the same items (or a .menu built by hand, the status menu) and the same arrow keys, each
+// item putting the sheet away as it's picked. A menu opened from one of them takes its place.
+export function sheetMenu(items, { label = 'Options', returnTo = null } = {}) {
+  let sh = null;
+  const el = Array.isArray(items) ? menuEl(items, () => { closePopover(); if (sh) sh.close(); }) : items;
+  el.classList.add('sheet-menu');
+  menuSemantics(el);
+  sh = sheet(el, { label, returnTo });
+  sh.box._close = sh.close; // (what closes it, for a menu built by hand)
+  return sh.box;
 }
 // Swiping a sheet down puts it away: it follows the finger and goes if pulled far or fast enough, else it springs
 // back. Only while its list is scrolled to the top, so a long list still scrolls.
@@ -291,6 +313,8 @@ export function ibtn(name, label, onclick, { cls = '', side, active = false, att
 let dialogSeq = 0;
 export function modal({ title, label, body, actions = [], size = 'md', onClose, className = '', dismissable = true }) {
   closePopover();
+  // A dialog opened from a sheet (a menu's item, on a phone) takes its place rather than opening behind it.
+  if (openSheet) openSheet._close(); // (focus goes back where it came from, which this one gives it back to)
   // Where focus goes back to on close. If this dialog was opened from inside another one that is closing
   // (Back / Next between dialogs), fall back to whatever opened that one.
   const opener = document.activeElement;

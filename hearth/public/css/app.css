@@ -3294,8 +3294,10 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
      (pointer: coarse)                                                the touch UI: a finger is the main pointer
    A desktop with a mouse matches neither, so nothing below changes it. */
 
-/* Bottom sheets (ui.js sheet): a message's actions after a long press (app.js messageSheet). Only touch screens open them. */
-@media (pointer: coarse) {
+/* Bottom sheets (ui.js sheet): a message's actions after a long press (app.js messageSheet), and in the phone layout
+   menus too (ui.js sheetMenu): touch screens and the phone layout open them. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px), (pointer: coarse) {
+  #layer > .sheet-backdrop { z-index: 50; }
   .sheet-backdrop { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; background: var(--scrim); animation: fade .16s ease; }
   .sheet-backdrop.closing { animation: fadeout .18s ease forwards; pointer-events: none; }
   .sheet {
@@ -3323,6 +3325,22 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
   .sheet-row.danger, .sheet-row.danger .ic { color: var(--danger); }
   .sheet-sep { height: 1px; margin: 4px 8px; background: var(--line); }
   .msg.pressed { background: var(--active); }
+  .sheet { max-height: calc(var(--app-h, 100dvh) - env(safe-area-inset-top) - 24px); }
+  html.kb-open .sheet-backdrop { bottom: auto; height: var(--app-h, 100%); }
+  /* A menu as a sheet: its items a finger's height, the full width. */
+  .sheet-menu { min-width: 0; max-width: none; width: auto; max-height: none; overflow: visible; padding: 2px 0 6px; border: 0; border-radius: 0; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .sheet-menu .menu-item:not(:has(.menu-ic, .status-dot)) { padding-left: 49px; }
+  .sheet-menu .menu-item { min-height: 50px; padding: 12px 14px; gap: 14px; border-radius: 14px; font-size: 16px; color: var(--text); flex-shrink: 0; }
+  .sheet-menu .menu-ic { width: 21px !important; height: 21px !important; color: var(--text-2); opacity: 1; }
+  .sheet-menu .menu-item.danger, .sheet-menu .menu-item.danger .menu-ic { color: var(--danger); }
+  .sheet-menu .menu-hint { font-size: 13.5px; }
+  .sheet-menu .menu-desc { font-size: 13.5px; }
+  .sheet-menu .menu-header { padding: 14px 14px 4px; font-size: 13px; }
+  .sheet-menu .menu-sep { margin: 6px 10px; }
+  .sheet-menu .menu-check { width: 20px !important; height: 20px !important; }
+  .sheet-menu .status-dot.inline { transform: scale(1.25); }
+  .pc-sheet { padding: 4px 0 6px; }
+  .pc-sheet .pcard { width: 100%; max-width: none; }
 }
 
 /* PHONE LAYOUT or TOUCH UI: the message box's buttons are 44px, for a finger (a tablet keeps all of them beside the
