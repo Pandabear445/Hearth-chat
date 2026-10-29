@@ -158,7 +158,8 @@ function sanitizeProfile(input, current = {}) {
       .filter((f) => f.label && f.value),
     songLink: songLink(merged.songLink),
     showSoundboard: merged.showSoundboard === true,
-    soundShowcase: (Array.isArray(merged.soundShowcase) ? merged.soundShowcase : []).slice(0, 12)
+    // Kept only while it's on, so an old draft saved from another device can't bring back names taken off.
+    soundShowcase: (merged.showSoundboard === true && Array.isArray(merged.soundShowcase) ? merged.soundShowcase : []).slice(0, 12)
       .map((x) => ({ emoji: graphemes(x && x.emoji), name: line(x && x.name, 32), color: hex(x && x.color, '#f2a541') }))
       .filter((x) => x.name),
     links: links.slice(0, 6)

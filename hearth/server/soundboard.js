@@ -26,8 +26,9 @@ const ID = /^[a-z0-9]{8,32}$/;
 const LAYOUT_ID = 'layout';
 const B64 = /^[A-Za-z0-9+/]*={0,2}$/;
 const PLAY_MAX_MS = LIMITS.ms;
-// Plays per person: one at a time (a new one replaces it), at most one every 800 ms and 12 in 30 seconds.
-const PLAY_RATE = Object.freeze({ gapMs: 800, burst: 12, windowMs: 30000 });
+// Plays per person: one at a time (a new one replaces it), at most one every 800 ms, 12 in 30 seconds, and 15
+// seconds of sound in those 30 seconds (so the lane is open at most about half the time).
+const PLAY_RATE = Object.freeze({ gapMs: 800, burst: 12, windowMs: 30000, msPerWindow: 15000 });
 
 function setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, emitToUser }) {
   const now = () => Date.now();
@@ -95,6 +96,7 @@ function setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, emit
 
   api.delete('/me/soundboard/:id', auth, (req, res) => {
     rateLimit('board-save:' + req.userId, 60, 60000);
+    requireUnlocked(req.userId);
     const id = String(req.params.id);
     if (!ID.test(id)) fail(400, 'Bad id.');
     db.prepare("DELETE FROM soundboard_items WHERE user_id = ? AND id = ? AND kind = 'sound'").run(req.userId, id);

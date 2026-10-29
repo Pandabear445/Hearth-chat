@@ -39,7 +39,7 @@ Signaling goes over the app's Socket.IO connection.
 | `voice:peer-left`, `voice:kicked { by? }`, `voice:perms { canSpeak, serverMuted? }` | server → clients | Someone left; you were removed (`by: 'moderator'` for a moderator's disconnect); your Speak permission or server mute changed. |
 | `voice:moved { channelId, to, serverId }` | server → client | A moderator moved you: the server already took you out of `channelId`; the app joins `to` (every join check runs again). |
 | `voice:leave` | client → server | Hang up (also accepted for a place kept after a dropped connection, from the same session). |
-| `voice:board { ms }` | client → server → room | v25: ask to play a soundboard sound `ms` long. Refused unless you're in the call on this socket, may Speak there, aren't muted or deafened, have Use Soundboard in that voice channel (DM calls: always), and are within the rate limit (one play per 800 ms, 12 per 30 s). Answers `{ ok, ms }` (capped at 5000); the others get `voice:board { channelId, userId, ms }`. The server never learns which sound it is. |
+| `voice:board { ms }` | client → server → room | v25: ask to play a soundboard sound `ms` long. Refused unless you're in the call on this socket, may Speak there, aren't muted or deafened, have Use Soundboard in that voice channel (DM calls: always), and are within the rate limit (one play per 800 ms, 12 plays and 15 s of sound per 30 s, 30 asks per 10 s). Answers `{ ok, ms }` (capped at 5000); the others get `voice:board { channelId, userId, ms }`. The server never learns which sound it is. |
 | `call:region { room, region, version, by }` | server → room | The call's region changed (section 3). |
 
 The newcomer is the initiator toward every existing member. Offers and answers are signed (section 6).

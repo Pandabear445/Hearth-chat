@@ -141,6 +141,10 @@ test('voice:board: a burst of plays is cut off, and a DM call works without a se
   await sleep(100);
   assert.equal(got.length, ok);
   assert.ok(got.every((x) => x.ms === 200 && x.userId === member.id && x.channelId === 'dm:' + dm.id));
+  // Back-to-back 5-second plays: at most 15 seconds of sound in 30 (the owner's own budget, untouched so far).
+  let long = 0;
+  for (let i = 0; i < 5; i++) { if ((await ack(so, 'voice:board', { ms: 5000 })).ok) long++; await sleep(BOARD.PLAY_RATE.gapMs + 30); }
+  assert.equal(long, BOARD.PLAY_RATE.msPerWindow / 5000);
 });
 
 test('Use Soundboard: on for @everyone in new servers, scoped per channel, and taken by a timeout', async () => {
@@ -205,6 +209,10 @@ test('engine: a soundboard lane only with apps that have one, and it plays only 
   assert.equal(b.pc.lanes.length, 5, 'five lanes with someone whose app has one');
   assert.equal(b.pc.lanes[4].sender.track, boardTrack, 'our sounds go out on it');
   assert.equal(c.pc.lanes.length, 4, 'four with an older app');
+  // Someone who comes back on an older app (the server's list no longer says board) gets no fifth lane after that.
+  v.noteAvoiders([{ userId: 'ub', socketId: 'B' }]);
+  assert.equal(v.boardPeers.has('ub'), false);
+  v.noteAvoiders([{ userId: 'ub', socketId: 'B', board: true }]);
   // Their lane: silent until the server says they're playing something, then for that long (plus a little).
   b.board = { muted: true, volume: 1, remove() {} };
   v.applyBoardAudio(b);
@@ -327,6 +335,7 @@ test('profile: banner styles, decorations, text size, sections, favorites, song 
   assert.deepEqual(p.favorites[0], { emoji: '🍕', label: 'Foodscript', value: 'Pizza!' });
   assert.deepEqual(p.soundShowcase, [{ name: 'Airhorn', emoji: '📯', color: '#f2a541' }]);
   assert.equal(p.showSoundboard, true);
+  assert.deepEqual(sanitizeProfile({ showSoundboard: false, soundShowcase: [{ name: 'Old' }] }).soundShowcase, [], 'kept only while it’s on');
   const junk = sanitizeProfile({ bannerFx: 'x', avatarDecoration: 'url(evil)', textSize: 99, showSoundboard: 'yes' });
   assert.deepEqual([junk.bannerFx, junk.avatarDecoration, junk.textSize, junk.showSoundboard], ['none', 'none', 'md', false]);
   // Song links: https on a music service only, no logins in the address.

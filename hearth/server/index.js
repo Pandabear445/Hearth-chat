@@ -7587,6 +7587,8 @@ function setupSockets(server) {
     // of theirs is playing (for `ms`, at most PLAY_MAX_MS), so a modified app can't play longer, more often, or
     // without permission to people running this one. The server never learns which sound it is.
     socket.on('voice:board', guard((p = {}) => {
+      // Asking at all is counted first, so refused asks (no permission, say) can't be sent without limit either.
+      rateLimit('board-ask:' + uid, 30, 10000);
       const room = userVoice.get(uid);
       const s = room && voiceChannels.get(room)?.get(uid);
       if (!s || s.socketId !== socket.id) fail(400, 'Join the call first.');
@@ -7601,6 +7603,9 @@ function setupSockets(server) {
       rateLimit('board-gap:' + uid, 1, BOARD.PLAY_RATE.gapMs);
       rateLimit('board-play:' + uid, BOARD.PLAY_RATE.burst, BOARD.PLAY_RATE.windowMs);
       const ms = Math.round(Math.min(BOARD.PLAY_MAX_MS, Math.max(100, +p.ms || BOARD.PLAY_MAX_MS)));
+      // And at most PLAY_RATE.msPerWindow of sound in each window, so back-to-back 5-second plays can't keep the
+      // listeners' soundboard lane open the whole time.
+      rateLimit('board-ms:' + uid, BOARD.PLAY_RATE.msPerWindow, BOARD.PLAY_RATE.windowMs, ms);
       socket.to(`voice:${room}`).emit('voice:board', { channelId: room, userId: uid, ms });
       return { ok: true, ms };
     }));

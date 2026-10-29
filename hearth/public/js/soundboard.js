@@ -132,9 +132,10 @@ export function createSoundboard(ctx) {
         const m = sounds.get(id);
         if (!m) throw new Error('That sound was deleted.');
         const r = await api('GET', `/me/soundboard/${id}/audio`);
-        const plain = await E2EE.decryptFile(m.k, E2EE.unb64(r.audio));
-        if (!sniffAudio(new Uint8Array(plain, 0, Math.min(64, plain.byteLength)))) throw new Error('That sound couldn’t be read.');
-        return audioCtx().decodeAudioData(plain);
+        // (decryptFile gives a Uint8Array; decodeAudioData takes an ArrayBuffer of its own.)
+        const plain = new Uint8Array(await E2EE.decryptFile(m.k, E2EE.unb64(r.audio))).slice();
+        if (!sniffAudio(plain.subarray(0, 64))) throw new Error('That sound couldn’t be read.');
+        return audioCtx().decodeAudioData(plain.buffer);
       })();
       p.catch(() => buffers.delete(id));
       buffers.set(id, p);

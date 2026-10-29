@@ -128,7 +128,11 @@ export class Voice {
     this.signalChains = new Map(); // socketId -> promise of the last signal handled
     this.early = new Map(); // socketId -> candidates that came before the connection they belong to
     socket.on('voice:signal', (p) => this.queueSignal(p));
-    socket.on('voice:peer-left', ({ socketId } = {}) => this.closePeer(socketId, 'left the call'));
+    socket.on('voice:peer-left', ({ socketId } = {}) => {
+      const gone = this.peers.get(socketId);
+      if (gone) this.boardPeers.delete(gone.userId); // they may come back on another app
+      this.closePeer(socketId, 'left the call');
+    });
     socket.on('voice:peer-joined', (p) => this.onPeerJoined(p || {}));
     socket.on('voice:board', (p) => this.boardPlayed(p || {}));
     socket.on('voice:kicked', ({ by } = {}) => {
@@ -663,7 +667,7 @@ export class Voice {
   // Who in the call avoids member relays, from the server's list (the answer to voice:join).
   noteAvoiders(peers) {
     for (const p of peers || []) if (p && p.userId) { if (p.avoid === true) this.theyAvoid.add(p.userId); else this.theyAvoid.delete(p.userId); }
-    for (const p of peers || []) if (p && p.userId && p.board === true) this.boardPeers.add(p.userId);
+    for (const p of peers || []) if (p && p.userId) { if (p.board === true) this.boardPeers.add(p.userId); else this.boardPeers.delete(p.userId); }
   }
   // New relay logins (the old ones run out): connections in progress use them from their next network change on.
   // (An address it already has on a member relay stays in use meanwhile, so that relay stays among its memberHosts.)
@@ -1029,7 +1033,9 @@ export class Voice {
       if (peer && peer.socketId !== from) this.rekey(peer, from);
       // They avoid member relays (or not, any more): what our connection with them is built with from now on.
       if (userId) { if (data.avoid === true) this.theyAvoid.add(userId); else this.theyAvoid.delete(userId); }
-      if (userId && data.board === true) this.boardPeers.add(userId);
+      // Whether their app has a soundboard lane, as of their latest offer or answer (they may have come back on an
+      // older app, which would take a fifth lane for a microphone).
+      if (userId) { if (data.board === true) this.boardPeers.add(userId); else this.boardPeers.delete(userId); }
       // Our connection with them may use a member relay, and they avoid them: none of their addresses go into it (a
       // member relay would be told them), it starts over without member relays instead.
       const restartFor = (p) => {

@@ -2193,7 +2193,7 @@ the names, emoji and colors of the first 12 sounds, copied into the profile in t
 **Playing** (the music-note button in the call controls and the call bar): the app asks the server first
 (`voice:board`), which allows it only for someone in that call, unmuted and not deafened, allowed to speak there (not
 server-muted or timed out), with **Use soundboard** in that voice channel (DM and group calls: always), at most one play
-every 800 ms and 12 in 30 seconds. The sound then goes out on the call's own soundboard lane (docs/VOICE.md), not mixed
+every 800 ms, 12 and 15 seconds of sound in 30 seconds. The sound then goes out on the call's own soundboard lane (docs/VOICE.md), not mixed
 into the microphone, so each listener decides how loud it is: Settings → Soundboard has a volume for everyone else's
 soundboards and a switch to mute them all, and right-clicking someone in a call mutes theirs. Listeners' apps only let
 someone's soundboard lane through while the server says one of their sounds is playing, so a modified app can't play
