@@ -4791,7 +4791,9 @@ async function postQuantum(t) {
   // from the flow before: a reload in the middle of that can leave it blank.)
   await alice.waitApp();
   await alice.page.reload();
-  await alice.waitApp();
+  // (A reload here has twice left a blank page whose module loads were aborted, with no request reaching the server:
+  // the browser's service worker, not the app's code, as far as the failure reports show. Once more, then.)
+  await alice.waitApp(20000).catch(async () => { await alice.page.reload(); await alice.waitApp(); });
   await alice.railButton('Home');
   await alice.page.locator('#sidebar-body .nav-row', { hasText: 'Friends' }).click();
   await alice.page.locator('#main-head .tab', { hasText: exact('All') }).click();
