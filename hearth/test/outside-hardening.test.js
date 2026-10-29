@@ -102,7 +102,7 @@ test('xss-7: the security policy names no font host and no blob: frames; fetch, 
     assert.deepEqual(d['font-src'], ["'self'", 'data:']);
     assert.deepEqual(d['style-src'], ["'self'", "'unsafe-inline'"]);
     assert.ok(!d['frame-src'].includes('blob:'), `${p}: frame-src allows blob:`);
-    assert.deepEqual(d['frame-src'], ["'self'", 'https://www.youtube-nocookie.com', 'https://www.youtube.com', 'https://player.vimeo.com', 'https://player.twitch.tv']);
+    assert.deepEqual(d['frame-src'], ["'self'", 'https://www.youtube-nocookie.com', 'https://www.youtube.com', 'https://player.vimeo.com', 'https://player.twitch.tv', 'https://www.tiktok.com', 'https://www.instagram.com']);
     assert.ok(d['connect-src'].every((s) => s === "'self'" || /^wss?:\/\/127\.0\.0\.1:\d+$/.test(s)), `${p}: connect-src ${d['connect-src']}`);
   }
   // Nothing in the app makes a frame out of a blob: (Recall is the only same-site frame, at /recall/).

@@ -4,15 +4,17 @@
 // YouTube and Vimeo are controlled through their embed's message API, so no outside script is loaded.
 import { h, clear, icon, toast } from './util.js';
 import { outsideVideoHost } from './outside.js';
+import { playerSrc, SOCIAL_SANDBOX, SOCIAL_ALLOW, TIKTOK_ORIGIN, tiktokCommand, readTiktokMessage } from './social.js';
 
 const DRIFT = 1.6; // seconds out of step before we correct
 const clock = (s) => { s = Math.max(0, Math.floor(s || 0)); const hh = Math.floor(s / 3600); const mm = Math.floor((s % 3600) / 60); const ss = String(s % 60).padStart(2, '0'); return hh ? `${hh}:${String(mm).padStart(2, '0')}:${ss}` : `${mm}:${ss}`; };
 
 // What the shared position is right now, on this computer's clock.
+// (During a "start together" countdown updatedAt is when it ends, so until then it stays put.)
 export function expectedPosition(st, offset) {
   if (!st) return 0;
   const now = Date.now() + offset;
-  return st.position + (st.playing ? ((now - st.updatedAt) / 1000) * st.rate : 0);
+  return st.position + (st.playing ? (Math.max(0, now - st.updatedAt) / 1000) * st.rate : 0);
 }
 
 // ---- a small adapter per kind of player: load, play, pause, seek, rate, and "what time is it"
@@ -121,8 +123,58 @@ function videoAdapter(item, onEvent) {
     time: () => v.currentTime, playing: () => !v.paused, duration: () => (Number.isFinite(v.duration) ? v.duration : 0), destroy: () => { v.pause(); v.removeAttribute('src'); v.load(); },
   };
 }
-const ADAPTERS = { youtube: youtubeAdapter, vimeo: vimeoAdapter, twitch: twitchAdapter, video: videoAdapter };
-const KIND_LABEL = { youtube: 'YouTube', vimeo: 'Vimeo', twitch: 'Twitch', video: 'Video' };
+// TikTok (social.js): its embed player's postMessage API plays, pauses, seeks and reports its time and state, so
+// it's kept in step like YouTube. It has no playback rate. The player is built from the checked id only.
+function tiktokAdapter(item, onEvent) {
+  let t = 0; let dur = 0; let state = -1; let ready = false;
+  let lastT = null; let lastAt = 0; let ownSeekUntil = 0; let ownSeekTo = null; let readyTimer = null;
+  const frame = h('iframe', { class: 'wt-frame', sandbox: SOCIAL_SANDBOX, src: playerSrc({ kind: 'tiktok', id: item.src }, { autoplay: false }), allow: SOCIAL_ALLOW, allowfullscreen: true, title: item.title || 'TikTok video', referrerpolicy: 'no-referrer' });
+  // Commands go only to TikTok's player origin.
+  const send = (type, value) => frame.contentWindow && frame.contentWindow.postMessage(tiktokCommand(type, value), TIKTOK_ORIGIN);
+  const onMsg = (e) => {
+    if (e.source !== frame.contentWindow || e.origin !== TIKTOK_ORIGIN) return;
+    const d = readTiktokMessage(e.data);
+    if (!d) return;
+    if (d.type === 'onPlayerReady') { if (!ready) { ready = true; onEvent('ready'); } return; }
+    if (d.type === 'onCurrentTime' && d.value && typeof d.value.currentTime === 'number') {
+      if (typeof d.value.duration === 'number' && d.value.duration > 0) dur = d.value.duration;
+      const now = Date.now();
+      // Its own progress bar was dragged: the time jumped further than playing explains.
+      // (Not a seek we asked for that landed late, after buffering.)
+      const ours = ownSeekTo !== null && Math.abs(d.value.currentTime - ownSeekTo) < 1;
+      if (ours) ownSeekTo = null;
+      else if (lastT !== null && now > ownSeekUntil && Math.abs(d.value.currentTime - (lastT + (state === 1 ? (now - lastAt) / 1000 : 0))) > 2.5) onEvent('seek', d.value.currentTime);
+      t = d.value.currentTime; lastT = t; lastAt = now;
+      return;
+    }
+    if (d.type === 'onStateChange' && typeof d.value === 'number' && d.value !== state) {
+      state = d.value;
+      if (state === 1) onEvent('play', t); else if (state === 2) onEvent('pause', t); else if (state === 0) onEvent('ended', t);
+      return;
+    }
+    if (d.type === 'onError') onEvent('error');
+  };
+  window.addEventListener('message', onMsg);
+  frame.addEventListener('load', () => { clearTimeout(readyTimer); readyTimer = setTimeout(() => { if (!ready) { ready = true; onEvent('ready'); } }, 2500); });
+  return {
+    el: frame, live: false, noRate: true,
+    play: () => { send('unMute'); send('play'); }, pause: () => send('pause'),
+    seek: (s) => { t = s; lastT = s; lastAt = Date.now(); ownSeekUntil = Date.now() + 1500; ownSeekTo = s; send('seekTo', s); }, rate() {},
+    time: () => (state === 1 && lastT !== null ? lastT + (Date.now() - lastAt) / 1000 : t), playing: () => state === 1 || state === 3, duration: () => dur,
+    destroy: () => { clearTimeout(readyTimer); window.removeEventListener('message', onMsg); },
+  };
+}
+// Instagram has no player API: nothing outside the frame can play, pause, seek or read the time. So it isn't
+// kept in step (manual): everyone presses play together at the end of a shared countdown, says when they're
+// ready, and moves to the next video together (by the host, or once most of the call says it's done).
+function instagramAdapter(item, onEvent) {
+  const frame = h('iframe', { class: 'wt-frame', sandbox: SOCIAL_SANDBOX, src: playerSrc({ kind: 'instagram', id: item.src, type: item.postType === 'p' ? 'p' : 'reel' }), allow: SOCIAL_ALLOW, allowfullscreen: true, title: item.title || 'Instagram reel', referrerpolicy: 'no-referrer' });
+  frame.addEventListener('load', () => onEvent('loaded'));
+  return { el: frame, live: false, manual: true, noRate: true, play() {}, pause() {}, seek() {}, rate() {}, time: () => 0, playing: () => false, duration: () => 0, destroy() {} };
+}
+const ADAPTERS = { youtube: youtubeAdapter, vimeo: vimeoAdapter, twitch: twitchAdapter, video: videoAdapter, tiktok: tiktokAdapter, instagram: instagramAdapter };
+const KIND_LABEL = { youtube: 'YouTube', vimeo: 'Vimeo', twitch: 'Twitch', video: 'Video', tiktok: 'TikTok', instagram: 'Instagram' };
+const UPRIGHT = new Set(['tiktok', 'instagram']);
 
 // One player per call room. It stays alive while the call screen redraws around it.
 const players = new Map();
@@ -145,6 +197,12 @@ function createPlayer(room, initialCtx) {
   const queueEl = h('div', { class: 'wt-queue' });
   el.append(stage, bar, queueEl);
   let adapter = null; let itemId = null;
+  // The second upright video beside the first (st.side), and the "start together" countdown over both.
+  let side = null; let sideId = null; let startTimer = null; let countTimer = null; let sideRuns = null;
+  const countEl = h('div', { class: 'wt-count', 'aria-live': 'assertive', hidden: true });
+  // Each video keeps its own slot: changing one never moves the other (moving a frame reloads it).
+  const mainSlot = h('div', { class: 'wt-slot' });
+  const sideSlot = h('div', { class: 'wt-slot' });
   let quietUntil = 0; // ignore our own player's events for a moment after we move it
   // Seeks we make ourselves (following everyone else) are recognised by where they land, not by a quiet
   // period: a seek you make a moment after a drift correction still counts.
@@ -204,6 +262,7 @@ function createPlayer(room, initialCtx) {
 
   // The viewer did something in the player itself.
   const onEvent = (ev, value) => {
+    if (ev === 'loaded') return; // (an Instagram frame: nothing to move)
     if (ev === 'ready') { follow(true); return; }
     if (ev === 'blocked') { drawBar(true); return; }
     if (ev === 'error') { toast('That video couldn’t be played here.', 'error'); return; }
@@ -226,7 +285,13 @@ function createPlayer(room, initialCtx) {
     const st = self.state;
     // (A video from another site that this viewer hasn't agreed to load yet has nothing to move; once it loads,
     // its 'ready' brings it in step.)
-    if (!adapter || !st || adapter.live || (adapter.waiting && adapter.waiting())) return;
+    if (!adapter || !st) return;
+    // The second video only starts and stops with the first (each plays on its own after that).
+    const counting = st.playing && st.startAt && Date.now() + self.offset < st.startAt;
+    const sideShould = st.playing && !counting;
+    if (side && !side.manual && (force || sideShould !== sideRuns)) { sideRuns = sideShould; if (sideShould) side.play(); else side.pause(); }
+    if (adapter.live || adapter.manual || (adapter.waiting && adapter.waiting())) return;
+    if (counting) { if (adapter.playing()) { quiet(); adapter.pause(); } if (force) { quiet(); ownSeek = st.position; adapter.seek(st.position); } return; }
     const want = expectedPosition(st, self.offset);
     const off = Math.abs(adapter.time() - want);
     if (force || off > DRIFT) { quiet(); ownSeek = want; adapter.seek(want); }
@@ -262,18 +327,35 @@ function createPlayer(room, initialCtx) {
     const who = self.ctx.userName(st.item.addedBy);
     const ctl = canControl() && !st.item.live;
     const ib = (ic, label, fn) => h('button', { class: 'icon-btn sm wt-ctl', 'aria-label': label, 'data-tip': label, disabled: !ctl, onclick: fn }, ic);
-    bar.append(h('div', { class: 'wt-controls' },
+    const upright = UPRIGHT.has(st.item.kind);
+    const sideBtn = upright && canControl() ? (st.side
+      ? h('button', { class: 'btn ghost sm', onclick: () => self.ctx.socket.emit('watch:side', { url: null }, (r) => r && r.error && toast(r.error, 'error')) }, 'One video')
+      : h('button', { class: 'btn ghost sm', 'data-tip': 'Show a second TikTok or reel next to this one', onclick: () => self.ctx.openSide && self.ctx.openSide() }, '+ Side by side')) : null;
+    if (st.item.manual) {
+      // Instagram: no player to move. A shared countdown, a ready check and next together, said plainly.
+      const ready = (st.ready || []).includes(self.ctx.me.id);
+      bar.append(h('div', { class: 'wt-controls wt-manual' },
+        canControl() ? h('button', { class: 'btn primary sm', onclick: () => emit('watch:control', { action: 'play', position: 0 }) }, icon('play'), st.playing ? 'Start again together' : 'Start together') : null,
+        h('button', { class: `btn ghost sm${ready ? ' active' : ''}`, 'aria-pressed': String(ready), onclick: () => self.ctx.socket.emit('watch:ready', { itemId, ready: !ready }, () => {}) }, ready ? '✓ Ready' : 'I’m ready'),
+        h('span', { class: 'wt-time' }, `${(st.ready || []).length} ready`),
+        h('button', { class: 'btn ghost sm', 'data-tip': canControl() ? 'Go to the next video for everyone' : 'Moves on once most of the call is done', onclick: () => self.ctx.socket.emit('watch:next', canControl() ? { itemId, skip: true } : { itemId }, (r) => r && r.error && toast(r.error, 'error')) }, canControl() ? 'Next' : 'I’m done'),
+        sideBtn,
+        h('button', { class: 'icon-btn sm wt-ctl wt-fs', 'aria-label': isFull() ? 'Exit full screen' : 'Full screen', 'data-tip': isFull() ? 'Exit full screen (Esc)' : 'Full screen (F)', onclick: toggleFull }, icon(isFull() ? 'minimize' : 'maximize'))),
+        h('p', { class: 'wt-note' }, 'Instagram doesn’t let other apps control its player, so this one isn’t kept in step: press ▶ in the video when the countdown ends. Pausing and jumping aren’t shared.'));
+    } else bar.append(h('div', { class: 'wt-controls' },
       ib(h('span', { class: 'wt-skip' }, '\u21ba10'), 'Back 10 seconds', () => seekTo(now() - 10)),
       ib(icon(st.playing ? 'pause' : 'play'), st.playing ? 'Pause for everyone' : 'Play for everyone', togglePlay),
       ib(h('span', { class: 'wt-skip' }, '10\u21bb'), 'Ahead 10 seconds', () => seekTo(now() + 10)),
       ib(h('span', { class: 'wt-skip' }, '30\u21bb'), 'Ahead 30 seconds', () => seekTo(now() + 30)),
       timeEl,
       h('button', { class: 'btn ghost sm', 'data-tip': 'Jump to where everyone else is', onclick: () => follow(true) }, 'Sync'),
+      sideBtn,
       h('button', { class: 'icon-btn sm wt-ctl wt-fs', 'aria-label': isFull() ? 'Exit full screen' : 'Full screen', 'data-tip': isFull() ? 'Exit full screen (Esc)' : 'Full screen (F)', onclick: toggleFull }, icon(isFull() ? 'minimize' : 'maximize'))));
+    if (st.side && !st.item.manual) bar.append(h('p', { class: 'wt-note' }, st.side.kind === 'instagram' ? 'Side by side: the Instagram reel can’t be controlled from here, so press ▶ in it when the countdown ends.' : 'Side by side: both start together; after that the second one plays on its own.'));
     drawTime();
     bar.append(
       h('div', { class: 'wt-title' }, h('span', { class: 'wt-kind' }, KIND_LABEL[st.item.kind] || 'Video'),
-        h('strong', null, st.item.title || st.item.link), h('span', { class: 'wt-sub' }, `shared by ${who}${st.hostOnly ? ` · ${self.ctx.userName(st.by)} controls playback` : ' · anyone can control'}`)),
+        h('strong', null, st.item.title || st.item.link, st.side ? ` + ${st.side.title || KIND_LABEL[st.side.kind]}` : ''), h('span', { class: 'wt-sub' }, `shared by ${who}${st.hostOnly ? ` · ${self.ctx.userName(st.by)} controls playback` : ' · anyone can control'}`)),
       h('div', { class: 'wt-actions' },
         blocked ? h('button', { class: 'btn primary sm', onclick: () => { adapter.play(); drawBar(); } }, icon('send'), 'Click to start playing') : null,
         h('button', { class: 'btn ghost sm', onclick: () => addDialog(true) }, '+ Queue'),
@@ -299,6 +381,7 @@ function createPlayer(room, initialCtx) {
         const name = self.ctx.userName(st.lastBy);
         if (st.lastAction === 'seek') toast(`${name} jumped to ${clock(st.position)}`);
         else if (st.lastAction === 'pause') toast(`${name} paused the video`);
+        else if (st.lastAction === 'play' && st.startAt) toast(`${name} started the countdown`);
       }
       lastSeq = st.seq;
     }
@@ -307,23 +390,57 @@ function createPlayer(room, initialCtx) {
     if (!st) {
       if (isFull()) exitFull();
       if (adapter) { adapter.destroy(); adapter = null; }
-      itemId = null; clear(stage); clear(bar); clear(queueEl);
-      clearInterval(timer); timer = null; clearTimeout(playCheck);
+      if (side) { side.destroy(); side = null; }
+      itemId = null; sideId = null; clear(mainSlot); clear(sideSlot); clear(stage); clear(bar); clear(queueEl);
+      clearInterval(timer); timer = null; clearTimeout(playCheck); clearTimeout(startTimer); clearInterval(countTimer); countEl.hidden = true;
       return;
     }
-    if (st.item.id !== itemId) {
-      if (adapter) adapter.destroy();
-      itemId = st.item.id;
-      adapter = (ADAPTERS[st.item.kind] || videoAdapter)(st.item, onEvent);
-      clear(stage).append(adapter.el);
-      quiet(2500);
+    const newSide = (st.side && st.side.id) || null;
+    if (st.item.id !== itemId || newSide !== sideId) {
+      if (mainSlot.parentNode !== stage) clear(stage).append(mainSlot, countEl);
+      if (st.item.id !== itemId) {
+        if (adapter) adapter.destroy();
+        itemId = st.item.id;
+        adapter = (ADAPTERS[st.item.kind] || videoAdapter)(st.item, onEvent);
+        clear(mainSlot).append(adapter.el);
+        quiet(2500);
+      }
+      if (newSide !== sideId) {
+        if (side) side.destroy();
+        sideId = newSide;
+        // Its own events change nothing for everyone else: only the first video is shared.
+        sideRuns = null;
+        side = st.side && UPRIGHT.has(st.side.kind) ? ADAPTERS[st.side.kind](st.side, (ev) => { if (ev === 'ready') { sideRuns = null; follow(); } }) : null;
+        if (side) { clear(sideSlot).append(side.el); if (sideSlot.parentNode !== stage) mainSlot.after(sideSlot); } else { sideSlot.remove(); clear(sideSlot); }
+      }
+      stage.classList.toggle('wt-upright', UPRIGHT.has(st.item.kind));
+      stage.classList.toggle('wt-split', !!side);
     } else follow();
+    countdown(st);
     drawBar();
     // Every second: update the clock; every 3 seconds: gentle drift correction.
     if (!timer) timer = setInterval(() => { drawTime(); if (++ticks % 3 === 0) follow(); }, 1000);
   };
+  // "Start together": 3, 2, 1 over the video, then play (or, for Instagram, "press play now").
+  function countdown(st) {
+    clearTimeout(startTimer); clearInterval(countTimer);
+    const at = st.playing && st.startAt ? st.startAt - self.offset : 0; // on this computer's clock
+    if (!at || at < Date.now() - 4000) { countEl.hidden = true; return; }
+    const manual = (adapter && adapter.manual) || (side && side.manual);
+    const tick = () => {
+      const left = Math.ceil((at - Date.now()) / 1000);
+      if (left > 0) { countEl.hidden = false; countEl.textContent = String(left); return; }
+      countEl.textContent = manual ? '▶ Press play now' : '▶';
+      if (Date.now() - at > (manual ? 4000 : 800)) { countEl.hidden = true; clearInterval(countTimer); }
+    };
+    tick();
+    countTimer = setInterval(tick, 200);
+    startTimer = setTimeout(() => follow(true), Math.max(0, at - Date.now()));
+  }
   self.destroy = () => {
     if (isFull()) exitFull();
+    clearTimeout(startTimer); clearInterval(countTimer);
+    if (side) side.destroy();
     document.removeEventListener('fullscreenchange', onFullChange);
     document.removeEventListener('webkitfullscreenchange', onFullChange);
     document.removeEventListener('keydown', onF);

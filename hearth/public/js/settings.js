@@ -1514,6 +1514,18 @@ function linkPreviewSection(app, c, set) {
     toggle('Show link previews in messages', c.linkCards !== false, (v) => set('linkCards', v), 'Built by the sender and sent inside the encrypted message: your device never contacts the linked site.'));
 }
 
+// TikTok and Instagram players in messages (social-embed.js, docs/design/SOCIAL-EMBEDS.md). Kept on this device.
+function socialPlayersSection(c, set) {
+  const mode = h('select', { class: 'input sm', 'aria-label': 'TikTok and Instagram players', onchange: (e) => set('socialPlayers', e.target.value) },
+    h('option', { value: 'ask' }, 'Load when I tap (default)'), h('option', { value: 'always' }, 'Always load'), h('option', { value: 'off' }, 'Just show the link'));
+  mode.value = ['ask', 'always', 'off'].includes(c.socialPlayers) ? c.socialPlayers : 'ask';
+  return section('TikTok and Instagram',
+    h('div', { class: 'toggle-row' },
+      h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Play videos in the chat'),
+        h('span', { class: 'field-hint' }, 'TikTok videos and Instagram reels play right in the message. The player loads from TikTok or Instagram, which then see your IP address (and may set their own cookies in the player), so by default it waits for a tap. “Always load” loads them as messages show, except short TikTok links, which your Hearth server has to look up first.')),
+      mode));
+}
+
 // Spelling (spelling.js): everything happens on this device; nothing typed is looked up anywhere. In the desktop app,
 // "Check spelling" is also its spell checker's switch (the one place for it), so it shows Off if that was turned off.
 function spellingSection(c, set) {
@@ -1549,6 +1561,7 @@ function chatTab(app) {
       toggle('Format messages with Markdown', c.markdown, (v) => set('markdown', v), '**bold**, *italic*, `code`, ||spoilers||, # headings, - lists, > and >>> quotes, and #channel links.'),
       toggle('Large emoji when a message is only emoji', c.jumbo, (v) => set('jumbo', v))),
     linkPreviewSection(app, c, set),
+    socialPlayersSection(c, set),
     section('Screen sharing',
       toggle('Hide DMs while I share my screen', c.hideDmsWhileSharing !== false, (v) => set('hideDmsWhileSharing', v), 'Direct messages and group chats are covered, and their previews and notifications hidden, while you share your screen. You can still open one with \u201cShow while sharing\u201d.')),
   );
