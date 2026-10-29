@@ -720,7 +720,9 @@ test('the app checks which account a start-up is for, and pushed records can’t
   assert.match(app, /S\.users = Object\.fromEntries\(Object\.entries\(b\.users \|\| \{\}\)\.filter\(\(\[id, u\]\) => u && u\.id === id\)\.map\(\(\[id, u\]\) => \[id, cleanKeys\(u\)\]\)\);\n  S\.users\[me\.id\] = \{ \.\.\.\(S\.users\[me\.id\] \|\| \{\}\), \.\.\.me \};/);
   // A record pushed for yourself never carries new public keys into S.me.
   const setUser = app.slice(app.indexOf('function setUser(u)'), app.indexOf('function getUser(id)'));
-  assert.match(setUser, /delete rest\.publicKey; delete rest\.signPublicKey;/);
+  // (The post-quantum branch drops the post-quantum key fields too: OWN_KEYS.)
+  assert.match(setUser, /delete rest\.publicKey; delete rest\.signPublicKey;|OWN_KEYS\.forEach\(\(k\) => \{ delete rest\[k\]; \}\)/);
+  if (/OWN_KEYS/.test(setUser)) assert.match(app, /const OWN_KEYS = \[[^\]]*'publicKey', 'signPublicKey'/);
   assert.match(setUser, /S\.me = mergeUser\(S\.me, rest\);/);
 });
 
@@ -981,8 +983,8 @@ test('each tab checks a start-up against the account it started as, not the one 
   assert.match(boot, /sec\.proveOwnKeys\(b\.me, b\.encSignPrivateKey, \{ account: signedInAs \}\)/);
   assert.match(app, /function startApp\(account\) \{\n  signedInAs = account;/);
   assert.match(app, /setTokenOwner\(account\);/);
-  assert.match(app, /if \(key\) \{ S\.privateKey = key; return startApp\(uid\); \}/);
-  const fin = app.slice(app.indexOf('async function finishLogin(res, privateKey)'), app.indexOf('let loggingOut = null;'));
+  assert.match(app, /if \(key\) \{ S\.privateKey = key;(?: S\.pqSeed = await E2EE\.loadPqSeed\(uid\);)? return startApp\(uid\); \}/);
+  const fin = app.slice(app.indexOf('async function finishLogin(res, privateKey'), app.indexOf('let loggingOut = null;'));
   assert.match(fin, /startApp\(res\.user\.id\);/);
   assert.ok(fin.indexOf("localStorage.setItem('hearth.userId', res.user.id);") < fin.indexOf('setToken(res.token);'));
 });
