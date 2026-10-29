@@ -87,9 +87,10 @@ export async function runCryptoChecks() {
   await check('Hybrid server key handoff: needs both the post-quantum and the P-256 key', async () =>
     (await expectFail(() => open2({ myPq: pe }))) && expectFail(() => open2({ myPriv: eve.privateKey })));
   const dmKey = E2EE.newDmKey();
-  const dk = await E2EE.wrapDmKey({ raw: dmKey, dmId: 'dm1', epoch: 1, recipientId: 'B', recipientPub: b.publicKey, recipientPq: pb.publicKey, senderId: 'A', myPriv: a.privateKey, myPub: a.publicKey });
+  const dkTag = await E2EE.dmKeysTag({ A: { publicKey: a.publicKey, pq: pa.publicKey }, B: { publicKey: b.publicKey, pq: pb.publicKey } });
+  const dk = await E2EE.wrapDmKey({ raw: dmKey, dmId: 'dm1', epoch: 1, madeAt: Date.now(), tag: dkTag, recipientId: 'B', recipientPub: b.publicKey, recipientPq: pb.publicKey, senderId: 'A', myPriv: a.privateKey, myPub: a.publicKey });
   await check('Hybrid direct message: the other person reads it; an outsider can’t', async () => {
-    const got = await E2EE.unwrapDmKey({ wrapped: dk, dmId: 'dm1', epoch: 1, myId: 'B', myPriv: b.privateKey, myPub: b.publicKey, myPq: pb, senderId: 'A', senderPub: a.publicKey });
+    const { raw: got } = await E2EE.unwrapDmKey({ wrapped: dk, dmId: 'dm1', epoch: 1, myId: 'B', myPriv: b.privateKey, myPub: b.publicKey, myPq: pb, senderId: 'A', senderPub: a.publicKey });
     const d3 = await E2EE.encryptDm3({ raw: dmKey, epoch: 1, dmId: 'dm1', authorId: 'A', payload: { t: 'pq secret' } });
     return (await E2EE.decryptDm3({ raw: got, dmId: 'dm1', authorId: 'A', text: d3 })).payload.t === 'pq secret'
       && expectFail(() => E2EE.unwrapDmKey({ wrapped: dk, dmId: 'dm1', epoch: 1, myId: 'B', myPriv: eve.privateKey, myPub: eve.publicKey, myPq: pe, senderId: 'A', senderPub: a.publicKey }));

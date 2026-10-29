@@ -1751,8 +1751,6 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_servers_discoverable ON servers(discover
 // dm_keys: a DM's epoch keys once both people have post-quantum keys, each wrapped (dk1:, hybrid ML-KEM + ECDH) for one of
 //   the two, with the public keys it was wrapped for (so apps know when it's time for a new one). Kept as long as the DM:
 //   that's what lets every device you sign in on read the whole history.
-// pq_handoffs: a device that was signed in before its account had a post-quantum key asks another of the account's
-//   devices for it (devicePk: a one-off ML-KEM key, signed with the account's signing key); sealed: the answer.
 addColumn('users', 'pq_public_key', 'TEXT');
 addColumn('users', 'pq_sig', 'TEXT');
 // users.recovery_pq: 1 when the recovery key was made while the account had its post-quantum key (so it holds the seed);
@@ -1770,16 +1768,6 @@ CREATE TABLE IF NOT EXISTS dm_keys (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (dm_id, epoch, user_id)
 );
-CREATE TABLE IF NOT EXISTS pq_handoffs (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  device_pk TEXT NOT NULL,
-  sig TEXT NOT NULL,
-  sealed TEXT,
-  created_at INTEGER NOT NULL,
-  sealed_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS idx_pq_handoffs_user ON pq_handoffs(user_id, created_at);
 `);
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);

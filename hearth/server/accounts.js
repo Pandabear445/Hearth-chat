@@ -396,7 +396,10 @@ module.exports = function setupAccounts(ctx) {
     const eph = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
     const nonce = crypto.randomBytes(24).toString('base64url');
     db.prepare('UPDATE auth_tokens SET data = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(t.data || '{}'), proof: { priv: seal({ k: eph.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64') }), nonce } }), t.id);
+    // hasPq / recoveryPq: whether the account has a post-quantum key, and whether its recovery key was made since (so
+    // holds its seed), so the app can say exactly what a reset with it keeps.
     res.json({ username: row.username, userId: row.id, hasRecovery: !!row.enc_private_key_recovery, recoverySalt: row.recovery_salt || null, encPrivateKeyRecovery: row.enc_private_key_recovery || null, need2fa: !!row.totp_enabled,
+      hasPq: !!row.pq_public_key, pqPublicKey: row.pq_public_key || null, recoveryPq: !!row.recovery_pq,
       keyChallenge: { serverPublicKey: eph.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'), nonce } });
   });
   function keyProofOk(t, row, proof) {
@@ -427,6 +430,10 @@ module.exports = function setupAccounts(ctx) {
     const servers = db.prepare('SELECT server_id FROM members WHERE user_id = ?').all(row.id).map((m) => m.server_id);
     db.transaction(() => {
       db.prepare("UPDATE users SET auth_hash = ?, kdf = 'argon2id', kdf_salt = ?, enc_private_key = ? WHERE id = ?").run(hash, b.kdfSalt, b.encPrivateKey, row.id);
+      // Keeping the keys with a recovery key made before the account's post-quantum key: that envelope doesn't hold its
+      // seed (the app says so: pqInEnvelope false). The key it published goes, rather than stay listed with nobody able to
+      // open what's locked to it; the app publishes a new one as it starts. (Apps that don't say are taken as before.)
+      if (keep && b.pqInEnvelope === false) db.prepare('UPDATE users SET pq_public_key = NULL, pq_sig = NULL WHERE id = ?').run(row.id);
       if (!keep) {
         // New keys: the old ones are gone for good. Friends' apps see the change (and say so), and re-share
         // every server's current key with the new one once someone verifies it. The old PUBLIC keys are kept on
@@ -452,7 +459,6 @@ module.exports = function setupAccounts(ctx) {
         db.prepare('DELETE FROM key_vouches WHERE user_id = ?').run(row.id);
       }
       db.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND kind = 'reset'").run(row.id);
-      db.prepare('DELETE FROM pq_handoffs WHERE user_id = ?').run(row.id); // asked by devices that are signed out now
     })();
     revokeSessions(row.id, { reason: 'password_reset' });
     // New public key first, then "please share": members must already know the new key when they re-share.

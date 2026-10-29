@@ -2497,7 +2497,7 @@ function eraseAccount(row) {
     // Their settings and bookmarks (saved messages with their notes, read positions, mention counts, notification
     // choices, folders and other preferences), and which servers they were in (former_members only matters to
     // someone who could come back).
-    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'pq_handoffs', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters',
+    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters',
       'saved_messages', 'read_states', 'mention_marks', 'notify_prefs', 'user_prefs', 'former_members']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(row.id);
     db.prepare('DELETE FROM profile_comments WHERE profile_id = ?').run(row.id); // the comments on their profile page go with it
     // Call relays they offered (Settings → Help host) leave everyone's calls and backups (everyone's apps are told to
@@ -2579,7 +2579,7 @@ api.post('/me/sign-key', auth, wrap(async (req, res) => {
 // stolen session nor a device's keys alone can plant one. With encPrivateKey, the password-locked envelope is replaced
 // too (the one-time upgrade at sign-in, which puts the new seed inside it).
 // A key already published is only replaced (replace: true) together with a new envelope, i.e. with the password: after
-// a reset with a recovery key made before the upgrade, whose envelope has no seed. Replacing drops pending handoffs.
+// a reset with a recovery key made before the upgrade, whose envelope has no seed.
 const PQ_B64 = /^[A-Za-z0-9+/]{1579}=$/;
 const envelopeHashOf = (x) => crypto.createHash('sha256').update(String(x || ''), 'utf8').digest('hex');
 function pqSigOk(row, pq, sig) {
@@ -2606,57 +2606,12 @@ api.post('/me/pq-key', auth, wrap(async (req, res) => {
   const args = envelope ? [b.pqPublicKey, b.pqSig, b.encPrivateKey] : [b.pqPublicKey, b.pqSig];
   // Unchanged identity and signing keys (the signature covers them), and the published key as the app last saw it.
   const was = row.pq_public_key || null;
-  const done = db.transaction(() => {
-    const n = db.prepare(`UPDATE users SET ${sets} WHERE id = ? AND public_key = ? AND sign_public_key = ? AND pq_public_key IS ? AND enc_private_key = ?`).run(...args, row.id, row.public_key, row.sign_public_key, was, row.enc_private_key).changes;
-    if (n && was && was !== b.pqPublicKey) db.prepare('DELETE FROM pq_handoffs WHERE user_id = ?').run(row.id);
-    return n;
-  })();
+  const done = db.prepare(`UPDATE users SET ${sets} WHERE id = ? AND public_key = ? AND sign_public_key = ? AND pq_public_key IS ? AND enc_private_key = ?`).run(...args, row.id, row.public_key, row.sign_public_key, was, row.enc_private_key).changes;
   if (!done) fail(409, 'Your keys changed on another device. Reload the page.', 'pq_exists');
   auditLog(req, !was ? 'pq_key_created' : was !== b.pqPublicKey ? 'pq_key_replaced' : 'pq_key_resaved', req.userId, row.username);
   broadcastUser(req.userId);
   res.json(selfUser(getUserRow(req.userId)));
 }));
-
-// Handing the post-quantum seed to another of your own devices (e2ee.js pqHandoffRequest / sealPqHandoff). The server
-// only passes sealed bytes along: a request must carry the account's signature (checked here too, so nobody fills the
-// table with junk), at most 5 are open per account, and they go after a week.
-const HANDOFF_MS = 7 * 24 * 3600 * 1000;
-const isHandoffId = (x) => typeof x === 'string' && /^[0-9a-f]{32}$/.test(x);
-const isSealedSeed = (x) => {
-  if (typeof x !== 'string' || x.length > 2000) return false;
-  const p = x.split(':');
-  return p.length === 5 && p[0] === 'ph1' && b64Len(p[1]) >= 60 && b64Len(p[1]) <= 120 && b64Len(p[2]) === 1088 && b64Len(p[3]) === 12 && b64Len(p[4]) === 80;
-};
-const handoffsOf = (uid) => db.prepare('SELECT id, device_pk, sig, sealed, created_at FROM pq_handoffs WHERE user_id = ? AND created_at > ? ORDER BY created_at').all(uid, now() - HANDOFF_MS)
-  .map((r) => ({ id: r.id, devicePk: r.device_pk, sig: r.sig, sealed: r.sealed || null, createdAt: r.created_at }));
-api.get('/me/pq-handoff', auth, (req, res) => res.json({ requests: handoffsOf(req.userId) }));
-api.post('/me/pq-handoff', auth, (req, res) => {
-  rateLimit('pqhandoff:' + req.userId, 20, 60 * 60 * 1000);
-  const b = req.body || {};
-  const row = getUserRow(req.userId);
-  if (!isHandoffId(b.id) || typeof b.devicePk !== 'string' || !PQ_B64.test(b.devicePk) || typeof b.sig !== 'string' || b.sig.length > 100) fail(400, 'Bad request.');
-  const signing = row.sign_public_key && p256Key(row.sign_public_key);
-  let ok = false;
-  try { ok = !!signing && crypto.verify('sha256', Buffer.from(`hearth-pq-handoff|${row.id}|${b.id}|${b.devicePk}`), { key: signing, dsaEncoding: 'ieee-p1363' }, Buffer.from(b.sig, 'base64')); } catch { ok = false; }
-  if (!ok) fail(403, 'That request couldn\u2019t be confirmed. Reload the page.', 'bad_key_proof');
-  db.prepare('DELETE FROM pq_handoffs WHERE user_id = ? AND created_at <= ?').run(row.id, now() - HANDOFF_MS);
-  if (db.prepare('SELECT COUNT(*) AS n FROM pq_handoffs WHERE user_id = ? AND sealed IS NULL').get(row.id).n >= 5) fail(429, 'Too many devices are waiting for keys. Open Hearth on a device that has them.', 'rate_limited', 600);
-  db.prepare('INSERT OR IGNORE INTO pq_handoffs (id, user_id, device_pk, sig, created_at) VALUES (?, ?, ?, ?, ?)').run(b.id, row.id, b.devicePk, b.sig, now());
-  io.to(`user:${row.id}`).emit('pq:handoff', { id: b.id });
-  res.json({ ok: true });
-});
-api.post('/me/pq-handoff/:id', auth, (req, res) => {
-  rateLimit('pqhandoffseal:' + req.userId, 60, 60 * 60 * 1000);
-  const sealed = (req.body || {}).sealed;
-  if (!isHandoffId(req.params.id) || !isSealedSeed(sealed)) fail(400, 'Bad request.');
-  const n = db.prepare('UPDATE pq_handoffs SET sealed = ?, sealed_at = ? WHERE id = ? AND user_id = ? AND sealed IS NULL').run(sealed, now(), req.params.id, req.userId).changes;
-  if (n) io.to(`user:${req.userId}`).emit('pq:handoff', { id: req.params.id });
-  res.json({ sealed: n });
-});
-api.delete('/me/pq-handoff/:id', auth, (req, res) => {
-  db.prepare('DELETE FROM pq_handoffs WHERE id = ? AND user_id = ?').run(String(req.params.id), req.userId);
-  res.json({ ok: true });
-});
 
 // Your password-locked private key, for changing the password or making a recovery key on this device.
 // It needs the password (not just a session): with only a stolen session, someone could otherwise take the
@@ -3366,6 +3321,7 @@ function isWrapped(w) {
   if (typeof w === 'string' && w.startsWith('w2:')) {
     if (w.length > 2000) return false;
     const q = w.split(':');
+    if (q.length !== 6) return false;
     const e = b64Len(q[1]);
     const g = b64Len(q[5]);
     return q.length === 6 && e >= 60 && e <= 120 && b64Len(q[2]) === 1088 && b64Len(q[3]) === 12 && b64Len(q[4]) === 48 && g >= 64 && g <= 72;
@@ -4410,15 +4366,17 @@ api.post('/dms/:id/messages', auth, (req, res) => {
   res.json(postDmMessage(d, req.userId, { ciphertext, files, replyTo, replyFile: replyFileIn('dm_messages', replyTo, fileAsked) }, req.body));
 });
 // A DM's post-quantum epoch keys (e2ee.js wrapDmKey). Each epoch has one copy for each of the two, wrapped dk1:
-// <ephemeral P-256>:<ML-KEM-768 ciphertext>:<iv>:<key + tag> for the identity and post-quantum keys named with it
+// <made at>:<keys tag>:<ephemeral P-256>:<ML-KEM-768 ciphertext>:<iv>:<key + tag> for the identity and post-quantum keys named with it
 // (checked against the account now, as for server keys, so a copy is never made for keys someone no longer has).
 // Either of the two may start the next epoch, one at a time and only as the next number; the server keeps them all,
 // so every device either of them signs in on can read the whole conversation.
+// (Since the review: dk1:<made at, ms>:<keys tag, 18 bytes>:<…>, the first two authenticated inside the wrap.)
 const isDmWrapped = (w) => {
-  if (typeof w !== 'string' || w.length > 2000) return false;
+  if (typeof w !== 'string' || w.length > 2100) return false;
   const p = w.split(':');
-  const e = b64Len(p[1]);
-  return p.length === 5 && p[0] === 'dk1' && e >= 60 && e <= 120 && b64Len(p[2]) === 1088 && b64Len(p[3]) === 12 && b64Len(p[4]) === 48;
+  if (p.length !== 7) return false;
+  const e = b64Len(p[3]);
+  return p[0] === 'dk1' && /^[1-9][0-9]{12,13}$/.test(p[1]) && b64Len(p[2]) === 18 && e >= 60 && e <= 120 && b64Len(p[4]) === 1088 && b64Len(p[5]) === 12 && b64Len(p[6]) === 48;
 };
 function dmKeysFor(d, userId) {
   const rows = db.prepare('SELECT epoch, user_id, wrapped, wrapper_id, public_key, pq_public_key, created_at FROM dm_keys WHERE dm_id = ? ORDER BY epoch').all(d.id);

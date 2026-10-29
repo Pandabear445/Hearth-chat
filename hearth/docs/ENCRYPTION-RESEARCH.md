@@ -169,10 +169,9 @@ the user's own device, on ciphertexts the server can't usefully vary (AES-GCM re
 | Where | Before | Now (when both sides have a PQ key) | Format |
 |---|---|---|---|
 | Account keys | P-256 ECDH identity + ECDSA signing | + an **ML-KEM-768 key pair** from a 64-byte seed | seed inside the password envelope; public key published, ECDSA-signed |
-| DMs | `K = HKDF(ECDH(a, b))`, one static key forever | **Epoch keys**: random 256-bit per DM and epoch, wrapped for each of the two with **ML-KEM-768 + ECDH(eph, them) + ECDH(me, them)**, rotated weekly and on key changes | `dk1:` wraps, `d3:<epoch>:` messages |
+| DMs | `K = HKDF(ECDH(a, b))`, one static key forever | **Epoch keys**: random 256-bit per DM and epoch, wrapped for each of the two with **ML-KEM-768 + ECDH(eph, them) + ECDH(me, them)**, the time made and the key set it's for authenticated inside, rotated weekly and on key changes by what each copy says | `dk1:` wraps, `d3:<epoch>:` messages |
 | Server/group key handoffs | ECIES: ephemeral ECDH P-256 → HKDF → AES-GCM, ECDSA-signed | **ML-KEM-768 + ephemeral ECDH**, ECDSA-signed under its own label | `w2:` |
-| Your own stored copies of server keys | `w1` | re-stored as `w2` once you have a PQ key | `w2:` |
-| Device-to-device PQ seed handoff | (new) | ML-KEM-768 to a one-off device key + ECDH to your identity key | `ph1:` |
+| Your own stored copies of server keys | `w1` | re-stored as `w2` by a device that holds your seed, once your recovery key (if any) holds it too | `w2:` |
 | Channel messages, files | AES-256-GCM from the group key / per-file key | unchanged (symmetric: already quantum-safe) | `c2:` |
 | Personal vault (study tools, saved notes, drafts, word filter) | `HKDF(ECDH(me, me))` | **unchanged for now** (see open items) | `x1:` |
 | Photo tags / chat backgrounds in DMs | static DM key | **unchanged for now** (see open items) | `td1:` / `lkd1:` |
@@ -180,7 +179,8 @@ the user's own device, on ciphertexts the server can't usefully vary (AES-GCM re
 **The combiner** (`e2ee.js hybridKey`):
 `AES key = HKDF-SHA256(ikm = ss_mlkem ‖ dh₁ [‖ dh₂], salt = SHA-256(label ‖ ctx ‖ framed(eph_pub, kem_ct, recipient_pub, [sender_pub], recipient_pq_pub)), info = label ‖ ctx)`.
 Every element is length-prefixed. `ctx` names the server, DM, epoch, recipient and sender. Each format has its own
-label (`hearth-gk2`, `hearth-dmk1`, `hearth-ph1`), so nothing made for one ever opens as another.
+label (`hearth-gk2`, `hearth-dmk1`), so nothing made for one ever opens as another. A DM epoch's ctx also carries
+when it was made and a tag of the four public keys it's for (`dmKeysTag`), so neither can be changed by the server.
 
 **Authentication.** Server-key handoffs stay ECDSA-signed. The signature covers the ML-KEM ciphertext, and its
 label differs from `w1`'s, so neither form's signature verifies for the other. DM epoch keys aren't signed: the
@@ -189,7 +189,7 @@ as before. Each account's PQ public key is signed with its ECDSA key over
 `hearth-pq-key-v1|<account>|<identity key>|<pq key>`. A server can't swap it, or move it to another account or
 identity key. It is covered transitively by the existing safety numbers, which cover the signing key.
 
-**Migration, invisible to users.**
+**Migration (one password prompt at most).**
 - **New accounts** get the PQ key at sign-up.
 - **Existing accounts** get one at their next sign-in with the password. The app opens the envelope, adds a seed
   and saves it back with the public key, in one request that also checks the password.
@@ -197,13 +197,20 @@ identity key. It is covered transitively by the existing safety numbers, which c
   every path that re-locks it carries it unchanged: password change, recovery key, PBKDF2→Argon2id upgrade. The seed
   is deliberately **not** locked with anything derived from the P-256 identity key, the way the signing key is.
   Shor's algorithm would recover that key from the public one, and the PQ key would then protect nothing.
-- **Devices already signed in** (they don't keep the password) ask your other devices for the seed. They make a
-  one-off ML-KEM key, sign its public half with your signing key, and any of your devices that has the seed seals
-  it to that key. No password prompt. Until it arrives, such a device shows "Waiting for your keys from another of
-  your devices…" on post-quantum DMs it can't open yet. It can still write: writing only needs public keys.
+- **Devices already signed in** (they don't keep the password) show a bar asking for the password once: it opens
+  the envelope and gives them the seed. Until then they show "enter your password once" on what's locked to the
+  new key, and can still write DMs (that only needs public keys). An earlier version of this change handed the seed
+  between devices automatically; a review showed why that's wrong. The only thing that could authenticate such a
+  request is your P-256 signing key, so whoever can forge P-256 (a future quantum computer, recomputing your keys
+  from your public ones) could have asked your devices for the seed and then decrypted everything recorded. The
+  seed now comes only from the password envelope.
+- **Never locked to a key you don't hold.** A device only writes copies "for itself" with a post-quantum key whose
+  seed it holds (and that's in your envelope), so a device without the seed never replaces a copy it can read
+  with one it can't.
 - **Old messages** (`v1`, `d2`, `w1`) open exactly as before.
-- **Fallback.** New messages use P-256 alone only while the other person has no PQ key. That's visible in the code
-  and invisible to users.
+- **Fallback.** New messages use P-256 alone only while one of the two has no *published* PQ key (an account from
+  before that hasn't signed in with the password yet; a seed that was never published, until the password publishes
+  it). Never because the server stops listing a key a device has already seen (below).
 
 **Downgrade protection.**
 - (a) Once a device has checked someone's PQ key, it notes so in its trust-on-first-use pin. A server that later
@@ -213,13 +220,30 @@ identity key. It is covered transitively by the existing safety numbers, which c
   any app that says what it wrapped for (every app since 1.40; older apps' copies are taken as before). The sharer's
   app then fetches the key and wraps again. That's how a member's first PQ key reaches every server
   they're in.
-- (c) DM epochs are wrapped only for the exact keys the server checks as current.
+- (c) The same for your own key: once a device has seen yours published (signed by you), it refuses to write P-256
+  alone for you if the listing goes. If the keys the server lists as yours don't match what this device's password
+  unlocked, it sends nothing at all; your own copy of a new server key goes to your keys *as this device proved
+  them*, never to the listed ones.
+- (d) DM epochs: whether to keep writing in one is decided from your own copy's authenticated time and key set
+  (younger than a week, made for the keys you both have now), and a local high-water mark means a device never
+  writes in a lower epoch than one it has seen, whatever the server lists. An epoch vouched for only by someone's
+  older key opens only messages dated while that key was theirs.
+- (e) A P-256-only DM from someone whose PQ key you've seen, in a DM that already has epochs, is flagged.
 
-**Races and losses.** The seed must never end up held by nobody. A password change saved from an older envelope than
-the server's (one that raced the upgrade on another device) is refused and retried, and the upgrade itself is a
-compare-and-swap on both the published key and the envelope. If it's lost anyway, a sign-in with the password whose
-handoff request has gone unanswered for 3 days makes a new key. A recovery key made before the upgrade doesn't hold
-the seed: Settings asks for a new one, and a reset with an old one says that recent DMs won't open.
+**Races and losses.** The published key's seed must always be in the current envelope. A password change saved
+from an older envelope than the server's (one that raced the upgrade on another device) is refused and retried, and
+the upgrade itself is a compare-and-swap on both the published key and the envelope. A recovery key made before the
+upgrade doesn't hold the seed, which is the one real loss:
+- While it's the account's recovery key, copies that open with the identity key alone are never replaced with
+  hybrid ones, so a reset with it keeps all history from before the upgrade.
+- What was locked to the post-quantum key since the upgrade (d3 DMs, server keys handed out since) can't be opened
+  by the account after such a reset; the people it talked to, and other members, still have them. Each server's
+  current key is shared again.
+- A reset that keeps the keys tells the server whether its envelope holds the seed. If not, the server drops the
+  published key instead of leaving a key nobody holds, and the app makes a new one (asking for the password at the
+  next start if that first start was interrupted).
+- The app says exactly this after such a reset, asks for a new recovery key right after the upgrade, and Settings
+  keeps saying so until there is one.
 
 **Cost.** A `w2` wrap is ~1.75 KB (a `w1` is ~0.3 KB). A DM epoch is two ~1.66 KB wraps a week per active DM.
 Messages themselves don't grow. An ML-KEM-768 decapsulation plus the HKDF/AES work is ~1.7 ms in Node, and
@@ -241,12 +265,15 @@ The two are in direct tension:
    trade.
 
 What Hearth's DM epochs do give:
-- **A leaked epoch key exposes one epoch** (a week at most), not the whole conversation, past and future. Before,
-  one leaked `ECDH(a, b)` value exposed every DM between two people forever.
+- **A leaked epoch key exposes one epoch** (a week at most, by the time authenticated inside it, which its maker
+  sets: one of the two people could keep an epoch longer, the server can't), not the whole conversation, past and
+  future. Before, one leaked `ECDH(a, b)` value exposed every DM between two people forever.
 - **Post-compromise healing for epoch keys.** The next epoch is fresh randomness, wrapped with fresh ephemeral ECDH
   and a fresh ML-KEM encapsulation. Someone who learned an old epoch key (but not your long-term keys) loses access
   at the next rotation.
-- **Rotation on key changes.** A password reset with new keys, or a new PQ key, starts a new epoch at once.
+- **Rotation on key changes.** A password reset with new keys, or a new PQ key, starts a new epoch at the next message,
+  because the epoch's authenticated key set no longer matches (the server can't relabel an old epoch as made for the
+  new keys).
 
 What they **don't** give:
 - **No FS against your long-term secrets.** Someone with your password (or an unlocked device) **and** a copy of the
@@ -270,9 +297,9 @@ What it would take to go further (not built; listed for the record):
 ## 7. Recommendation (and what was done)
 
 1. **Do now (done):** hybrid ML-KEM-768 + P-256 for every identity-to-identity key agreement that protects stored
-   or recorded data: DM keys (as epoch keys), server key handoffs, your own stored key copies, and the device-to-
-   device seed handoff. There is no visible change; old messages keep opening, and there is downgrade protection
-   as described.
+   or recorded data: DM keys (as epoch keys), server key handoffs and your own stored key copies. The only visible
+   change is a one-time password prompt on devices that were signed in before the upgrade, and a request for a new
+   recovery key. Old messages keep opening, and there is downgrade protection as described.
 2. **Do now (done):** rotating DM epoch keys, which contains a leaked key and heals after compromise, with history
    kept. Don't claim forward secrecy.
 3. **Next:**

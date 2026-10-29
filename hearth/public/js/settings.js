@@ -458,6 +458,9 @@ function accountTab(app, setDirty, go) {
       // browser switches to it and reconnects.
       if (r.token) setToken(r.token);
       S.me = { ...S.me, kdf: 'argon2id', kdfSalt: salt };
+      // The other devices were just signed out: this one takes the post-quantum key from the envelope it re-locked, in case
+      // it didn't have it yet (it was signed in before the account got it).
+      app.unlockPq({ authKey: newK.authKey, wrapKey: newK.wrapKey, encPrivateKey: enc }).catch(() => {});
       oldPw.value = ''; newPw.value = ''; confirmPw.value = ''; pwCode.input.value = '';
       toast('Password changed. Other devices were logged out.');
     } catch (e) {
@@ -597,7 +600,7 @@ async function lockedKey(authKey, code = {}) {
 // this device (a recovery key) or is confirmed in a second step (deleting the account). The password must unlock
 // your key here. Resolves with the derived keys, the locked private key (encPrivateKey) and the step-up ticket for
 // the next request (ticket: pass it to withCode), or null if cancelled.
-function askPassword(app, { title = 'Confirm it’s you', text = '', button = 'Continue' } = {}) {
+export function askPassword(app, { title = 'Confirm it’s you', text = '', button = 'Continue' } = {}) {
   const S = app.S;
   return new Promise((resolve) => {
     const pw = h('input', { class: 'input', type: 'password', autocomplete: 'current-password' });

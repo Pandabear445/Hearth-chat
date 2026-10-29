@@ -167,15 +167,28 @@ test('server key handoff, hybrid (w2): round trip; tampering, other contexts and
   assert.ok(await fails(() => open(`w1:${p[1]}:${p[3]}:${p[4]}:${p[5]}`)), 'w2 signature on a w1');
 });
 
-test('DM epoch keys (dk1): round trip both ways; only the two of them can make one, for that DM and epoch only', async () => {
+test('DM epoch keys (dk1): round trip both ways; only the two of them can make one; its time and key set are authenticated', async () => {
   const a = await person('a'); const b = await person('b'); const eve = await person('eve');
   const raw = E.newDmKey();
-  const w = await E.wrapDmKey({ raw, dmId: 'dm1', epoch: 1, recipientId: 'b', recipientPub: b.publicKey, recipientPq: b.pq.publicKey, senderId: 'a', myPriv: a.privateKey, myPub: a.publicKey });
-  const self = await E.wrapDmKey({ raw, dmId: 'dm1', epoch: 1, recipientId: 'a', recipientPub: a.publicKey, recipientPq: a.pq.publicKey, senderId: 'a', myPriv: a.privateKey, myPub: a.publicKey });
+  const keys = { a: { publicKey: a.publicKey, pq: a.pq.publicKey }, b: { publicKey: b.publicKey, pq: b.pq.publicKey } };
+  const tag = await E.dmKeysTag(keys);
+  const madeAt = Date.now();
+  const mk = (o) => E.wrapDmKey({ raw, dmId: 'dm1', epoch: 1, madeAt, tag, recipientId: 'b', recipientPub: b.publicKey, recipientPq: b.pq.publicKey, senderId: 'a', myPriv: a.privateKey, myPub: a.publicKey, ...o });
+  const w = await mk();
+  const self = await mk({ recipientId: 'a', recipientPub: a.publicKey, recipientPq: a.pq.publicKey });
   const open = (x, o = {}) => E.unwrapDmKey({ wrapped: x, dmId: 'dm1', epoch: 1, myId: 'b', myPriv: b.privateKey, myPub: b.publicKey, myPq: b.pq, senderId: 'a', senderPub: a.publicKey, ...o });
-  assert.deepEqual(Buffer.from(await open(w)), Buffer.from(raw));
-  assert.deepEqual(Buffer.from(await open(self, { myId: 'a', myPriv: a.privateKey, myPub: a.publicKey, myPq: a.pq })), Buffer.from(raw), 'the sender’s own copy');
-  for (const f of [1, 2, 3, 4]) assert.ok(await fails(() => open(tamper(w, f))), `field ${f}`);
+  const got = await open(w);
+  assert.deepEqual(Buffer.from(got.raw), Buffer.from(raw));
+  assert.equal(got.madeAt, madeAt);
+  assert.equal(got.tag, tag);
+  assert.deepEqual(Buffer.from((await open(self, { myId: 'a', myPriv: a.privateKey, myPub: a.publicKey, myPq: a.pq })).raw), Buffer.from(raw), 'the sender’s own copy');
+  for (const f of [3, 4, 5, 6]) assert.ok(await fails(() => open(tamper(w, f))), `field ${f}`);
+  // The time and the key set can't be changed: they're inside the authenticated context.
+  const p = w.split(':');
+  assert.ok(await fails(() => open([p[0], String(madeAt + 86400000 * 30), ...p.slice(2)].join(':'))), 'made-at moved');
+  const otherTag = await E.dmKeysTag({ ...keys, b: { publicKey: eve.publicKey, pq: eve.pq.publicKey } });
+  assert.notEqual(otherTag, tag);
+  assert.ok(await fails(() => open([p[0], p[1], otherTag, ...p.slice(3)].join(':'))), 'key set swapped');
   assert.ok(await fails(() => open(w, { dmId: 'dm2' })), 'another DM');
   assert.ok(await fails(() => open(w, { epoch: 2 })), 'another epoch');
   assert.ok(await fails(() => open(w, { senderId: 'eve' })), 'another sender named');
@@ -183,9 +196,11 @@ test('DM epoch keys (dk1): round trip both ways; only the two of them can make o
   assert.ok(await fails(() => open(w, { myPriv: eve.privateKey })), 'ML-KEM alone');
   await assert.rejects(() => open(w, { myPq: null }), (e) => e.code === 'no_pq');
   // The server (or eve) wrapping a key "from a": it can't compute ECDH(a, b), so it doesn't open as a's.
-  const forged = await E.wrapDmKey({ raw: E.newDmKey(), dmId: 'dm1', epoch: 1, recipientId: 'b', recipientPub: b.publicKey, recipientPq: b.pq.publicKey, senderId: 'a', myPriv: eve.privateKey, myPub: eve.publicKey });
+  const forged = await mk({ raw: E.newDmKey(), myPriv: eve.privateKey, myPub: eve.publicKey });
   assert.ok(await fails(() => open(forged)), 'not from a');
-  assert.ok(await fails(() => E.unwrapDmKey({ wrapped: w, dmId: 'dm1', epoch: 1, myId: 'b', myPriv: eve.privateKey, myPub: eve.publicKey, myPq: eve.pq, senderId: 'a', senderPub: a.publicKey })), 'an outsider');
+  // The key set tag depends on every key, and on nothing else.
+  assert.equal(await E.dmKeysTag({ b: keys.b, a: keys.a }), tag, 'order doesn’t matter');
+  await assert.rejects(() => E.dmKeysTag({ a: keys.a }));
 });
 
 test('DM messages in an epoch (d3): round trip; tampering, another DM, epoch or author fail; d2 and v1 still open', async () => {
@@ -210,30 +225,7 @@ test('DM messages in an epoch (d3): round trip; tampering, another DM, epoch or 
   assert.ok(await fails(() => E.decryptDm({ myPriv: b.privateKey, theirPub: a.publicKey, dmId: 'dm1', authorId: 'a', text })), 'd3 is never read as d2');
 });
 
-test('post-quantum key handoff between devices: only the device that asked can open it, and only the account’s key is taken', async () => {
-  const a = await person('a'); const m = await person('mallory');
-  const req = await E.pqHandoffRequest(a.signKey, 'a');
-  assert.ok(await E.verifyPqHandoffRequest(a.signPublicKey, 'a', req));
-  assert.equal(await E.verifyPqHandoffRequest(m.signPublicKey, 'a', req), false, 'signed by someone else');
-  assert.equal(await E.verifyPqHandoffRequest(a.signPublicKey, 'mallory', req), false, 'for another account');
-  const mreq = await E.pqHandoffRequest(m.signKey, 'a');
-  assert.equal(await E.verifyPqHandoffRequest(a.signPublicKey, 'a', { ...mreq, sig: req.sig }), false, 'another device key under the real signature');
-  const sealed = await E.sealPqHandoff({ pqSeed: a.pqSeed, userId: 'a', id: req.id, devicePk: req.devicePk, myPriv: a.privateKey, myPub: a.publicKey });
-  const open = (o = {}) => E.openPqHandoff({ sealed, userId: 'a', id: req.id, deviceSeed: req.seed, myPriv: a.privateKey, myPub: a.publicKey, expectPq: a.pq.publicKey, ...o });
-  assert.deepEqual(Buffer.from(await open()), Buffer.from(a.pqSeed));
-  assert.ok(await fails(() => open({ deviceSeed: mreq.seed })), 'another device');
-  assert.ok(await fails(() => open({ myPriv: m.privateKey })), 'without the identity key');
-  assert.ok(await fails(() => open({ id: mreq.id })), 'another request');
-  for (const f of [1, 2, 3, 4]) assert.ok(await fails(() => E.openPqHandoff({ sealed: tamper(sealed, f), userId: 'a', id: req.id, deviceSeed: req.seed, myPriv: a.privateKey, myPub: a.publicKey, expectPq: a.pq.publicKey })), `field ${f}`);
-  // A well-sealed seed that isn't the account's published key (a server passing on one of its own) is refused.
-  // Sealing at all takes a's identity key: the server (here mallory, who has only public keys of a's) can't seal one.
-  const byServer = await E.sealPqHandoff({ pqSeed: a.pqSeed, userId: 'a', id: req.id, devicePk: req.devicePk, myPriv: m.privateKey, myPub: a.publicKey });
-  assert.ok(await fails(() => open({ sealed: byServer })), 'sealed without the identity key');
-  const wrong = await E.sealPqHandoff({ pqSeed: m.pqSeed, userId: 'a', id: req.id, devicePk: req.devicePk, myPriv: a.privateKey, myPub: a.publicKey });
-  await assert.rejects(() => E.openPqHandoff({ sealed: wrong, userId: 'a', id: req.id, deviceSeed: req.seed, myPriv: a.privateKey, myPub: a.publicKey, expectPq: a.pq.publicKey }), /isn’t this account’s/);
-});
-
-test('downgrade pins: once seen, a missing post-quantum key is noticed; accepting new keys starts over', () => {
+test('downgrade pins: once seen, a missing post-quantum key is noticed; only a new identity key starts over', () => {
   store.clear();
   const bob = { id: 'bob', publicKey: 'E1', signPublicKey: 'S1', pq: 'fp1' };
   assert.equal(E.checkPin('me', bob), 'ok');
@@ -242,6 +234,22 @@ test('downgrade pins: once seen, a missing post-quantum key is noticed; acceptin
   assert.equal(E.pinnedPq('me', bob), true);
   assert.equal(E.pinnedPq('me', { ...bob, publicKey: 'E2' }), false, 'only next to the identity key it was seen with');
   assert.equal(E.checkPin('me', { ...bob, pq: null }), 'ok', 'the pin check itself is unchanged');
+  // Review finding 6: "Numbers match" for someone whose keys didn't change keeps the post-quantum pin.
+  assert.equal(E.acceptPin('me', bob), true);
+  assert.equal(E.pinnedPq('me', bob), true, 'kept for the same identity key');
   assert.equal(E.acceptPin('me', { ...bob, publicKey: 'E2', signPublicKey: 'S2' }), true);
-  assert.equal(E.pinnedPq('me', { ...bob, publicKey: 'E2' }), false);
+  assert.equal(E.pinnedPq('me', { ...bob, publicKey: 'E2' }), false, 'a new identity key starts over');
+});
+
+test('your own post-quantum pin and the DM epoch high-water mark are kept per account', () => {
+  store.clear();
+  assert.equal(E.ownPqPinned('me'), false);
+  E.pinOwnPq('me', 'fp');
+  assert.equal(E.ownPqPinned('me'), true);
+  assert.equal(E.ownPqPinned('other'), false);
+  assert.equal(E.dmHighWater('me', 'dm1'), 0);
+  E.noteDmEpoch('me', 'dm1', 3);
+  E.noteDmEpoch('me', 'dm1', 2);
+  assert.equal(E.dmHighWater('me', 'dm1'), 3, 'never goes down');
+  assert.equal(E.dmHighWater('other', 'dm1'), 0);
 });
