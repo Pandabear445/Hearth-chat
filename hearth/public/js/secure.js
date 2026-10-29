@@ -397,7 +397,10 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     const wraps = {};
     const pubs = {}; // the public key each one is wrapped for, so the server can refuse stale ones
     for (const uid of userIds) {
-      const u = uid === S.me.id ? S.me : await userWithKeys(uid);
+      // Our own copy goes only to keys proven to be ours (see ownKeysOk), never to whatever the server lists for us
+      // just now: a server that pushed its own public key as ours would otherwise get every new server key.
+      if (uid === S.me.id && !(await ownKeysOk())) throw ownKeysMismatch();
+      const u = uid === S.me.id ? { ...S.me, publicKey: proven.e } : await userWithKeys(uid);
       if (!u || !u.publicKey) throw new Error(`Missing encryption key for a member.`);
       if (!trust(u)) {
         const err = new Error(`${u.username}'s security key changed. Verify them before sharing keys.`);
