@@ -1270,6 +1270,10 @@ async function loadBootstrap() {
   S.relationships = Object.fromEntries(b.relationships.map((r) => [r.userId, r]));
   S.blocked = new Set(b.blocked || []);
   S.voice = b.voice;
+  // Reading back through a conversation when the connection came back: it opens again where you were (below), not at
+  // the newest messages.
+  const readingKey = S.me && $('#messages') ? currentKey() : null;
+  const reading = readingKey ? readingAt() : undefined;
   S.msgs = {};
   S.threads = {};
   S.threadState = {};
@@ -1284,6 +1288,7 @@ async function loadBootstrap() {
   if (S.view.serverId && !S.servers.find((s) => s.id === S.view.serverId)) S.view = { type: 'home' };
   if (S.view.dmId && !S.dms.find((d) => d.id === S.view.dmId)) S.view = { type: 'home' };
   if (!S.view.serverId && !S.view.dmId && !['friends', 'saved', 'people'].includes(S.view.type)) S.view = { type: 'home' };
+  if (reading && currentKey() === readingKey && !S.view.jumpTo) S.view.restoreAt = reading;
   applyUserState(await extras);
   const savedFilter = await filterList;
   if (savedFilter) await WF.apply(savedFilter, { quiet: true }).catch(() => {});
@@ -4253,12 +4258,28 @@ const copies = createCopies();
 // a copy of this very message it fetched itself (the older edit now), which none of the chat's lists have.
 function noteBinding(m) {
   const ids = noteMessage(m, keyOfMessage(m), { versions, copies });
-  for (const id of ids) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  redrawLater(ids);
   if (SIDE.messages().some((x) => ids.includes(x.id) || (x.id === m.id && x !== m))) later(redrawSide);
 }
 // The side view drawn again (side-view.js refresh: only the cards whose flags changed are drawn anew), once a frame
 // however many ask.
 const redrawSide = () => SIDE.refresh();
+// Messages drawn again by id, each once a frame however often it's asked for, and looked up once for all of them. A
+// message the server repeats asks for every other copy each time one more comes in: drawn one by one, a few hundred
+// copies (a long read back through them) froze the app for longer with each page, until its connection dropped.
+const redrawIds = new Set();
+function drawQueued() {
+  const ids = [...redrawIds];
+  redrawIds.clear();
+  const want = new Set(ids);
+  const found = new Map();
+  for (const st of Object.values(S.msgs)) for (const x of (st && st.list) || []) if (want.has(x.id) && !found.has(x.id)) found.set(x.id, x);
+  for (const id of ids) { const x = found.get(id) || findThreadMessage(id); if (x) replaceMessageEl(x); }
+}
+function redrawLater(ids) {
+  for (const id of ids) redrawIds.add(id);
+  if (redrawIds.size) later(drawQueued);
+}
 // A message loaded anywhere in this conversation: its list, a thread, a thread's first message.
 function loadedMessage(id) {
   for (const st of Object.values(S.msgs)) { const m = st && st.list && st.list.find((x) => x.id === id); if (m) return m; }
@@ -4287,7 +4308,7 @@ const originals = createOriginals(async (id) => {
 function redrawRepliesTo(id) {
   const all = [...Object.values(S.msgs).flatMap((st) => (st && st.list) || []), ...Object.values(S.threads).flatMap((th) => [th.root, ...(th.list || [])])];
   const replies = (x) => !!x && !!x.dec && !!x.dec.b && x.dec.b.r === id;
-  for (const x of all) if (replies(x)) later(() => replaceMessageEl(x));
+  redrawLater(all.filter(replies).map((x) => x.id));
   if (SIDE.messages().some(replies)) later(redrawSide);
 }
 // { issues, notes, … } for a message (binding.js bindingState), or null when it carries nothing to check. A reply
@@ -4303,7 +4324,7 @@ function bindingOfMessage(m) {
 // side view too.
 function forgetBindings(key, gone) {
   const ids = copies.drop(key, gone);
-  for (const id of ids) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  redrawLater(ids);
   if (SIDE.messages().some((x) => ids.includes(x.id))) later(redrawSide);
 }
 // The one small flag for a message the server may have moved, repeated or rolled back, naming what didn't match.
@@ -11179,16 +11200,18 @@ const inputClick = HTMLInputElement.prototype.click;
 HTMLInputElement.prototype.click = function () { choosing(this); return inputClick.call(this); };
 addEventListener('click', (e) => { if (e.isTrusted && e.target instanceof HTMLInputElement) choosing(e.target); }, true);
 // Remember where you were (and unsent messages) across the reload.
+// Scrolled up into older messages: the one at the top of the screen, to come back to (after an update's reload, or a
+// connection that dropped and came back). Nothing when you're at the newest ones.
+function readingAt() {
+  const sc = $('#messages');
+  if (!sc || !$('#jump-latest') || $('#jump-latest[hidden]')) return undefined;
+  const top = sc.getBoundingClientRect().top;
+  const first = [...sc.querySelectorAll(':scope > .msg[data-mid]')].find((m) => m.getBoundingClientRect().bottom > top + 8);
+  return first ? first.dataset.mid : undefined;
+}
 function saveResume() {
   for (const c of Object.values(composers)) c.keepDraft();
-  // Scrolled up into older messages: come back to the one at the top of the screen.
-  let at;
-  const sc = $('#messages');
-  if (sc && !$('#jump-latest[hidden]') && $('#jump-latest')) {
-    const top = sc.getBoundingClientRect().top;
-    const first = [...sc.querySelectorAll(':scope > .msg[data-mid]')].find((m) => m.getBoundingClientRect().bottom > top + 8);
-    if (first) at = first.dataset.mid;
-  }
+  const at = readingAt();
   const thread = S.panel === 'thread' && S.thread ? { id: S.thread.rootId, channelId: S.thread.channelId, serverId: S.thread.serverId } : null;
   try { sessionStorage.setItem('hearth.resume', JSON.stringify({ view: { ...S.view, jumpTo: at }, thread, drafts: [...drafts.entries()].filter(([, v]) => v) })); } catch { /* ignore */ }
 }

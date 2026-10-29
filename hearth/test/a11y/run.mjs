@@ -462,6 +462,9 @@ try {
   await lp.reload(); await lp.waitForSelector('#app:not([hidden]):not(.loading)');
   await lp.click('#rail button[aria-label^="Quality checks"]');
   await lp.waitForSelector('#messages .msg[data-mid]'); await settle(lp, 500);
+  // How long the page stops answering at a time while reading back (a message the server repeats redraws its other
+  // copies: one by one, each page took longer than the last, until the connection timed out).
+  await lp.evaluate(() => { window.__longest = 0; new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__longest = Math.max(window.__longest, e.duration); }).observe({ type: 'longtask' }); });
   const domIds = () => lp.evaluate(() => [...document.querySelectorAll('#messages > .msg[data-mid]')].map((m) => m.dataset.mid));
   const ordered = (ids) => ids.every((id, i) => !i || ids[i - 1] < id);
   for (let i = 0; i < 15; i++) {
@@ -475,6 +478,23 @@ try {
   check(ordered(far) && new Set(far).size === far.length, 'what stays is in order, without repeats');
   check(!(await lp.locator('#jump-latest[hidden]').count()), '"Jump to latest" shows once the newest messages were let go');
   check(await lp.evaluate(() => document.querySelectorAll('#messages > .msg[tabindex="0"]').length) === 1, 'keyboard navigation still has exactly one current message');
+  const longest = Math.round(await lp.evaluate(() => window.__longest));
+  check(longest < 3000, 'reading back never freezes the page for seconds', `${longest} ms`);
+  // The connection drops and comes back (here: the server restarts) while you're far back: you stay where you were.
+  const topVisible = () => lp.evaluate(() => {
+    const sc = document.querySelector('#messages'); const top = sc.getBoundingClientRect().top;
+    const el = [...sc.querySelectorAll(':scope > .msg[data-mid]')].find((m) => m.getBoundingClientRect().bottom > top + 8);
+    return el ? el.dataset.mid : null;
+  });
+  const reading = await topVisible();
+  const boots = [];
+  lp.on('response', (r) => { if (r.url().endsWith('/api/bootstrap')) boots.push(r.status()); });
+  await H.srv.restart();
+  for (let t = 0; t < 120 && !boots.length; t++) await lp.waitForTimeout(250);
+  await settle(lp, 1500);
+  const after = await topVisible();
+  check(boots.length > 0 && !!(await lp.locator('#messages > .msg[data-mid="' + reading + '"]').count()) && !!(await lp.locator('#jump-latest:not([hidden])').count()),
+    'a dropped connection coming back leaves you where you were reading', { reading, after, boots });
   // Scrolling back down brings the newer ones back, page by page, still bounded.
   for (let i = 0; i < 40 && await lp.locator('#jump-latest:not([hidden])').count(); i++) {
     const last = (await domIds()).at(-1);
