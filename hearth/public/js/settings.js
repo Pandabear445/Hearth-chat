@@ -521,7 +521,9 @@ function profileTab(app, setDirty, go, start = null) {
 function accountTab(app, setDirty, go) {
   const S = app.S;
   const fp = h('code', { class: 'fingerprint' }, '…');
-  E2EE.keyFingerprint(S.me).then((f) => { fp.textContent = f; }).catch(() => { fp.textContent = 'Unavailable'; });
+  // Your keys as this device proved them (secure.js ownKeys), never what a record of you says.
+  const own = app.sec.ownKeys();
+  (own ? E2EE.keyFingerprint(own) : Promise.reject()).then((f) => { fp.textContent = f; }).catch(() => { fp.textContent = 'Unavailable'; });
 
   const oldPw = h('input', { class: 'input', type: 'password', autocomplete: 'current-password' });
   const newPw = h('input', { class: 'input', type: 'password', autocomplete: 'new-password' });

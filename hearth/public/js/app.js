@@ -17,7 +17,7 @@ import { CHUNKED_ABOVE, uploadResumable, uploadSimple, download, makeUrlCache, m
 import { EMOJI, EMOJI_NAMES, CATEGORY_ICONS, QUICK_REACTIONS, recentEmoji, pushRecentEmoji, searchEmoji } from './emoji.js';
 import { Voice } from './voice.js';
 import { openCallDiagnostics } from './call-diagnostics.js';
-import { createSecure, mergeUser, callRefusedText, noSafetyNumbersText } from './secure.js';
+import { createSecure, mergeUser, cleanKeys, callRefusedText, noSafetyNumbersText } from './secure.js';
 import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, realName, forwardText, nameMatches, setPersonalNames, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong, songPlaying } from './profile-ui.js';
 import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
@@ -290,7 +290,7 @@ async function init() {
   const uid = localStorage.getItem('hearth.userId');
   if (getToken() && uid) {
     const key = await E2EE.loadKey(uid).catch(() => null);
-    if (key) { S.privateKey = key; return startApp(); }
+    if (key) { S.privateKey = key; return startApp(uid); }
   }
   showSignIn();
 }
@@ -406,6 +406,8 @@ function showSignIn() {
       if (params.kdf !== 'argon2id') {
         // Older account: upgrade password hashing from PBKDF2 to Argon2id. Same password, same keys.
         btn.textContent = 'Upgrading your encryption…';
+        // Named before its token, as finishLogin does: another tab still signed in as someone else never takes it.
+        localStorage.setItem('hearth.userId', res.user.id);
         setToken(res.token);
         const salt = E2EE.newKdfSalt();
         const next = await E2EE.deriveKeys(username, password, { kdf: 'argon2id', salt });
@@ -514,11 +516,13 @@ async function openReset(token) {
 }
 
 async function finishLogin(res, privateKey) {
-  setToken(res.token);
+  // Whose sign-in this browser holds goes first: another tab still signed in as someone else sees the new token only
+  // after it, and so never takes it for its own (api.js sameOwner).
   localStorage.setItem('hearth.userId', res.user.id);
+  setToken(res.token);
   await E2EE.storeKey(res.user.id, privateKey);
   S.privateKey = privateKey;
-  startApp();
+  startApp(res.user.id);
 }
 
 // Signing out runs once: the server answers our own "Log out" by also telling this device its sign-in ended
@@ -557,8 +561,22 @@ async function signOutHere() {
   location.href = '/';
 }
 
+// The first start-up was refused (another account, or keys that aren't yours): the loading screen says why, for good,
+// with a way out.
+function showStartRefused(text) {
+  const box = $('#app .app-loader');
+  if (!box) return;
+  clear(box).append(h('p', { class: 'muted-p', role: 'alert', style: { maxWidth: '34em', textAlign: 'center', padding: '0 16px' } }, text),
+    h('button', { class: 'btn', onclick: () => logout() }, 'Sign out'));
+}
+
 // ======================================================================= realtime
-function startApp() {
+// The account this tab started as: the one whose private key it unlocked (signing in here, or the one stored for this
+// browser when the page opened). Every start-up must be for it (loadBootstrap). Never read again from storage, which
+// every tab of this browser shares: another tab signing in as someone else changes that, not which account this is.
+let signedInAs = null;
+function startApp(account) {
+  signedInAs = account;
   // Desktop app: Ctrl+, (and the tray's "Settings…") open Settings.
   if (window.hearthDesktop && typeof window.hearthDesktop.onOpenSettings === 'function' && !window.__hearthSettingsHook) {
     window.__hearthSettingsHook = true;
@@ -586,7 +604,7 @@ function startApp() {
   $('#auth').hidden = true;
   $('#app').hidden = false;
   $('#app').classList.add('loading');
-  setTokenOwner(localStorage.getItem('hearth.userId'));
+  setTokenOwner(account);
   // Asked for the token on every (re)connect, so a token that changed meanwhile is the one used.
   socket = io({ auth: (cb) => { socketToken = getToken(); cb({ token: socketToken }); }, transports: ['websocket', 'polling'] });
   // Tells the server when this app goes unused (and comes back), for automatic Away. Until the account has
@@ -656,6 +674,7 @@ function startApp() {
     ensureIce: () => iceBeforeCall(),
     signSdp: (toUserId, desc) => sec.signSdp(voice.channelId, toUserId, desc),
     verifySdp: (fromUserId, desc, sig) => sec.checkSdp(voice.channelId, fromUserId, desc, sig),
+    mayConnect: (room, userId) => sec.mayCall(room, userId), // a 1-to-1 call: only the person the DM is with
     onSecurityWarning: (userId, why) => callWarning(userId, why),
     onChange: () => {
       if (!voice.channelId) S.regionWarned.clear();
@@ -698,6 +717,10 @@ function startApp() {
       // Turned away: unless another tab of this browser has just stored a newer token for this sign-in (then the
       // connection is made again with it, above), this device was signed out.
       if (e.status === 401) { if (await tokenMovedFrom(used, 5000)) return; return logout(); }
+      // A start-up for another account, or with keys that aren't yours: none of it was used (loadBootstrap). Until
+      // one has checked out there's nothing to carry on with, so the app stops there with the reason on screen; after
+      // that it carries on with what it had proven.
+      if (e.code === 'own_key_mismatch' && !S.me) showStartRefused(e.message);
       toast(e.message, 'error');
     }
   });
@@ -1035,7 +1058,10 @@ function startApp() {
     if (S.panel === 'pins' && currentKey() === key) renderPanel();
   });
   socket.on('dm:message', async ({ dm, message, user }) => {
-    if (!S.me) return;
+    if (!S.me || !dm || !message) return;
+    // Opened as a message of the conversation it's shown in, never of the one the server labels it with: the
+    // conversation is bound into every DM (e2ee.js), and only opening it with this one's id checks that.
+    message.dmId = dm.id;
     if (user) setUser(user);
     const i = S.dms.findIndex((d) => d.id === dm.id);
     if (i >= 0) S.dms.splice(i, 1);
@@ -1243,19 +1269,32 @@ async function loadBootstrap() {
       setTimeout(() => toast(`This device’s clock is off by about ${Math.round(Math.abs(off) / 86400000)} day${Math.round(Math.abs(off) / 86400000) === 1 ? '' : 's'}. Set it right in its settings: until then, other people’s apps may flag the messages you send for their time.`, 'error'), 1500);
     }
   }
-  S.me = b.me;
+  // Your own record is proven before anything of this start-up is used (secure.js proveOwnKeys): it's for the account
+  // this tab started as, never another one the server names (every pin and trust record on this device is kept under
+  // that id, so a different one would quietly start them all from nothing), and its keys are the ones your password
+  // unlocks. If not, this throws with nothing assigned, so S keeps what was proven before.
+  const me = await sec.proveOwnKeys(b.me, b.encSignPrivateKey, { account: signedInAs });
+  S.me = me;
   drafts = createDrafts(S.me.id);
   S.mediaToken = b.mediaToken;
   bootIce(b.iceServers, askedAt);
   setTimeout(() => rankNearest(), 4000);
   S.e2eeSince = rememberE2eeSince(b.e2eeSince);
-  S.users = b.users;
+  // Only records filed under their own id (see mergeUser: pins are looked up by the record's id), with only keys in
+  // their one spelling (cleanKeys). Yours has the keys just proven, whatever the list says.
+  S.users = Object.fromEntries(Object.entries(b.users || {}).filter(([id, u]) => u && u.id === id).map(([id, u]) => [id, cleanKeys(u)]));
+  S.users[me.id] = { ...(S.users[me.id] || {}), ...me };
   S.servers = b.servers;
   S.serversLoaded = true;
   S.dms = b.dms;
   S.relationships = Object.fromEntries(b.relationships.map((r) => [r.userId, r]));
   S.blocked = new Set(b.blocked || []);
   S.voice = b.voice;
+  // Reading back through a conversation when the connection came back: it opens again where you were (below), not at
+  // the newest messages. Only the chat that fills the main area, which renderAll draws anew (and so takes restoreAt up):
+  // a voice channel's chat beside its call is kept as it is, and would leave it waiting for whenever it's drawn next.
+  const readingKey = S.me && $('#main #messages') ? currentKey() : null;
+  const reading = readingKey ? readingAt() : undefined;
   S.msgs = {};
   S.threads = {};
   S.threadState = {};
@@ -1264,13 +1303,13 @@ async function loadBootstrap() {
   // comments, tags or edits made while this app was away aren't in them.)
   MEDIA.reset({ all: true });
   SIDE.reset(); // (and the side view loads what's pinned there again: edited or deleted meanwhile)
-  await sec.ensureSigningKey(b.encSignPrivateKey);
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(b.keyStates || {})) await sec.applyState(st);
   LOOK.fromBootstrap(b.dms, b.servers); // (after the keys: a group chat's background opens with its group's)
   if (S.view.serverId && !S.servers.find((s) => s.id === S.view.serverId)) S.view = { type: 'home' };
   if (S.view.dmId && !S.dms.find((d) => d.id === S.view.dmId)) S.view = { type: 'home' };
   if (!S.view.serverId && !S.view.dmId && !['friends', 'saved', 'people'].includes(S.view.type)) S.view = { type: 'home' };
+  if (reading && currentKey() === readingKey && !S.view.jumpTo) S.view.restoreAt = reading;
   applyUserState(await extras);
   const savedFilter = await filterList;
   if (savedFilter) await WF.apply(savedFilter, { quiet: true }).catch(() => {});
@@ -1344,9 +1383,17 @@ async function showUpdateNotes() {
 }
 
 function setUser(u) {
-  if (!u) return;
+  if (!u || !u.id) return;
+  // Your own keys only ever come from a start-up the app checked (bootstrap, through sec.proveOwnKeys's proof): a
+  // record pushed for you later can't swap them, or the app would lock what it keeps for itself to the server's key.
+  if (S.me && u.id === S.me.id) {
+    const rest = { ...u };
+    delete rest.publicKey; delete rest.signPublicKey;
+    S.users[u.id] = mergeUser(S.users[u.id], { ...rest, publicKey: S.me.publicKey, signPublicKey: S.me.signPublicKey });
+    S.me = mergeUser(S.me, rest);
+    return;
+  }
   S.users[u.id] = mergeUser(S.users[u.id], u);
-  if (S.me && u.id === S.me.id) S.me = mergeUser(S.me, u);
 }
 function getUser(id) {
   const u = S.users[id];
@@ -2056,7 +2103,9 @@ function goFriends(tab = 'online') { setView({ type: 'friends', tab }); }
 function openDm(dmId) { setView({ type: 'dm', dmId }); }
 async function openDmWith(userId) {
   try {
-    const d = await api('POST', '/dms', { userId });
+    // Only a conversation with exactly the person asked for, remembered as being with them before it's shown
+    // (secure.js dmWith): never whichever one the server answers with.
+    const d = sec.dmWith(await api('POST', '/dms', { userId }), userId);
     if (!S.dms.find((x) => x.id === d.id)) S.dms.unshift(d);
     if (d.look !== undefined) LOOK.onEvent('dm:look', { dmId: d.id, look: d.look }); // its chat background (chat-look.js)
     openDm(d.id);
@@ -2532,7 +2581,7 @@ const updates = createUpdates({
 // Study tools: Recall in a sandboxed frame, with its decks end-to-end encrypted and synced (recall-host.js).
 // Input in its frame doesn't reach this page, so the frame says when it's in use (for automatic Away, and so an update
 // waits; while Study is open an update waits anyway: updateBlockedBy).
-const study = createRecall({ S, onEnabled: () => { if (!S.view.serverId) renderSidebar(); }, onActive: () => { if (away) away.used(); autoUpdate.input(); } });
+const study = createRecall({ S, vaultKey: () => myVaultKey(), onEnabled: () => { if (!S.view.serverId) renderSidebar(); }, onActive: () => { if (away) away.used(); autoUpdate.input(); } });
 const folders = createFolders({
   S, servers: () => realServers(), favorites: () => new Set(P.favorites.filter((f) => f.startsWith('s:')).map((f) => f.slice(2))),
   rerender: () => renderRail(), serverUnread: (s) => serverUnread(s), setNotify: (k, v) => setNotify(k, v), railSide: () => railSide(),
@@ -4091,8 +4140,14 @@ function friendsView() {
 
 // Saved messages: kept on the server as message ids (plus a note encrypted with your own key), so they follow
 // you to every device. Each one is fetched and decrypted here; one you can't see anymore says so.
+// The vault key is worked out from your public key as this device proved it (secure.js ownKeys), never one a record of
+// you lists: with a key of the server's in its place, the server could work it out too and open everything in it.
 let vaultKeyP = null;
-const myVaultKey = () => (vaultKeyP ||= E2EE.vaultKey(S.privateKey, S.me.publicKey));
+function myVaultKey() {
+  const own = sec.ownKeys();
+  if (!vaultKeyP && !own) return Promise.reject(new Error('Your own keys haven\u2019t been checked on this device yet. Reload the page.'));
+  return (vaultKeyP ||= E2EE.vaultKey(S.privateKey, own.publicKey));
+}
 async function openNote(it) {
   if (!it.note) return '';
   try { return (await E2EE.openVault(await myVaultKey(), 'saved', it.messageId, it.note)).n || ''; } catch { return ''; }
@@ -4375,7 +4430,8 @@ async function loadMessages(key, mode = 'latest') {
     const res = await api('GET', msgUrl(key) + q);
     applyThreadStates(res.threads);
     const known = new Set(store.list.map((m) => m.id));
-    const fresh = res.messages.filter((m) => !known.has(m.id));
+    // Each opened as a message of this conversation, whichever one the server labels it with (see dm:message).
+    const fresh = res.messages.filter((m) => !known.has(m.id)).map((m) => (key.startsWith('d:') ? { ...m, dmId: key.slice(2) } : { ...m, channelId: key.slice(2) }));
     store.list = [...store.list, ...fresh].sort((a, b) => (a.id < b.id ? -1 : 1));
     if (mode !== 'newer') store.hasMore = res.hasMore;
     // The page that reaches the start says whether the server left older messages out for you (joined a server where
@@ -4512,12 +4568,28 @@ const copies = createCopies();
 // a copy of this very message it fetched itself (the older edit now), which none of the chat's lists have.
 function noteBinding(m) {
   const ids = noteMessage(m, keyOfMessage(m), { versions, copies });
-  for (const id of ids) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  redrawLater(ids);
   if (SIDE.messages().some((x) => ids.includes(x.id) || (x.id === m.id && x !== m))) later(redrawSide);
 }
 // The side view drawn again (side-view.js refresh: only the cards whose flags changed are drawn anew), once a frame
 // however many ask.
 const redrawSide = () => SIDE.refresh();
+// Messages drawn again by id, each once a frame however often it's asked for, and looked up once for all of them. A
+// message the server repeats asks for every other copy each time one more comes in: drawn one by one, a few hundred
+// copies (a long read back through them) froze the app for longer with each page, until its connection dropped.
+const redrawIds = new Set();
+function drawQueued() {
+  const ids = [...redrawIds];
+  redrawIds.clear();
+  const want = new Set(ids);
+  const found = new Map();
+  for (const st of Object.values(S.msgs)) for (const x of (st && st.list) || []) if (want.has(x.id) && !found.has(x.id)) found.set(x.id, x);
+  for (const id of ids) { const x = found.get(id) || findThreadMessage(id); if (x) replaceMessageEl(x); }
+}
+function redrawLater(ids) {
+  for (const id of ids) redrawIds.add(id);
+  if (redrawIds.size) later(drawQueued);
+}
 // A message loaded anywhere in this conversation: its list, a thread, a thread's first message.
 function loadedMessage(id) {
   for (const st of Object.values(S.msgs)) { const m = st && st.list && st.list.find((x) => x.id === id); if (m) return m; }
@@ -4546,7 +4618,7 @@ const originals = createOriginals(async (id) => {
 function redrawRepliesTo(id) {
   const all = [...Object.values(S.msgs).flatMap((st) => (st && st.list) || []), ...Object.values(S.threads).flatMap((th) => [th.root, ...(th.list || [])])];
   const replies = (x) => !!x && !!x.dec && !!x.dec.b && x.dec.b.r === id;
-  for (const x of all) if (replies(x)) later(() => replaceMessageEl(x));
+  redrawLater(all.filter(replies).map((x) => x.id));
   if (SIDE.messages().some(replies)) later(redrawSide);
 }
 // { issues, notes, … } for a message (binding.js bindingState), or null when it carries nothing to check. A reply
@@ -4562,7 +4634,7 @@ function bindingOfMessage(m) {
 // side view too.
 function forgetBindings(key, gone) {
   const ids = copies.drop(key, gone);
-  for (const id of ids) { const x = loadedMessage(id); if (x) later(() => replaceMessageEl(x)); }
+  redrawLater(ids);
   if (SIDE.messages().some((x) => ids.includes(x.id))) later(redrawSide);
 }
 // The one small flag for a message the server may have moved, repeated or rolled back, naming what didn't match.
@@ -9542,7 +9614,11 @@ async function openSafetyNumber(u) {
     // compare, and nothing to accept.
     const none = user.id !== S.me.id && noSafetyNumbersText(user, displayName(user));
     if (none) return toast(none, 'error');
-    const groupsN = await E2EE.safetyNumber(S.me, user);
+    // Yours are the keys this device proved are yours, never a record of you the server sent: numbers worked out from
+    // keys of its own would match what it shows the other person, and they'd trust its keys as yours.
+    const own = sec.ownKeys();
+    if (!own) return toast('Your own keys haven\u2019t been checked on this device yet, so there are no safety numbers to compare. Reload the page.', 'error');
+    const groupsN = await E2EE.safetyNumber(own, user.id === S.me.id ? own : user);
     const changed = sec.keyChanged(user);
     // They're waiting to be verified, and you may be the one to do it (the server checks you knew them before).
     // Not keys from a reset link you made yourself (the owner): someone else has to vouch for those.
@@ -11239,6 +11315,8 @@ function renderCallStages() { $$('.call-stage').forEach(fillStage); }
 const diagCtx = () => ({ voice, name: (id) => nameInServer(voice && voice.channelId ? serverOfChannel(voice.channelId) : null, getUser(id)), relays: (S.iceServers || []).filter((e) => e.region).map((e) => ({ urls: e.urls, region: e.region })), region: () => (voice && voice.channelId ? regionName(callRegion(voice.channelId)) : '') });
 
 async function joinRoom(room, { video = false } = {}) {
+  // Only a call this device knows (secure.js callRoom): a DM it has, or a voice channel of one of its servers or groups.
+  if (!sec.callRoom(room)) return toast('That call isn\u2019t available.', 'error');
   try {
     stopRinging(room);
     await voice.join(room, { video });
@@ -11272,9 +11350,30 @@ function stopRinging(room) {
   clearInterval(r.timer); clearTimeout(r.timeout); r.el.remove();
   ringing.delete(room);
 }
-function onRing({ room, from, video }) {
-  if (!S.me || from === S.me.id || ringing.has(room) || (voice && voice.channelId === room) || S.me.status === 'dnd') return;
-  const u = getUser(from);
+const ringBusy = (room, from) => !S.me || typeof room !== 'string' || from === S.me.id || ringing.has(room) || (voice && voice.channelId === room) || S.me.status === 'dnd';
+// A ring for a DM made since this device started (the caller pressed "Message", then called, before writing anything):
+// the conversation "Message <caller>" opens, only if it's exactly the one ringing (secure.js dmForCall). False if not.
+async function ringingDm(room, from) {
+  if (S.dms.some((x) => x.id === room.slice(3))) return true;
+  if (typeof from !== 'string' || !from) return false;
+  try {
+    const d = sec.dmForCall(room, from, await api('POST', '/dms', { userId: from }));
+    if (!S.dms.find((x) => x.id === d.id)) S.dms.unshift(d);
+    if (d.look !== undefined) LOOK.onEvent('dm:look', { dmId: d.id, look: d.look });
+    if (!S.view.serverId) renderSidebar();
+    return true;
+  } catch { return false; }
+}
+async function onRing({ room, from, video }) {
+  if (ringBusy(room, from)) return;
+  // Only a call this device knows rings (secure.js callRoom), naming only someone who can be in it: in a 1-to-1 call
+  // the person this device has the DM as being with (only they can connect in it: secure.js mayCall), never just
+  // whoever the server says is calling; in a group's call only one of its members. Any other room doesn't ring.
+  if (room.startsWith('dm:') && !(await ringingDm(room, from))) return;
+  const known = sec.callRoom(room);
+  const caller = !known ? null : known.dm ? sec.callPeer(room) : !isGroup(known.server) || (known.server.memberIds || []).includes(from) ? from : null;
+  if (!caller || ringBusy(room, from)) return;
+  const u = getUser(caller);
   const where = room.startsWith('dm:') ? '' : ` in ${roomTitle(room)}`;
   const decline = () => { socket.emit('call:decline', { room }, () => {}); stopRinging(room); };
   const el = h('div', { class: 'ring-card', role: 'alertdialog', 'aria-label': `Incoming call from ${displayName(u)}` },
@@ -11293,6 +11392,7 @@ function onRing({ room, from, video }) {
 }
 async function acceptRing(room, video = false) {
   stopRinging(room);
+  if (!sec.callRoom(room) || (room.startsWith('dm:') && !sec.callPeer(room))) return toast('That call isn\u2019t available.', 'error');
   if (room.startsWith('dm:')) openDm(room.slice(3));
   else { const s = serverOfChannel(room); if (s) { const c = textChannel(s); if (isGroup(s) && c) openChannel(c.id, s.id); } }
   await joinRoom(room, { video });
@@ -11416,16 +11516,18 @@ const inputClick = HTMLInputElement.prototype.click;
 HTMLInputElement.prototype.click = function () { choosing(this); return inputClick.call(this); };
 addEventListener('click', (e) => { if (e.isTrusted && e.target instanceof HTMLInputElement) choosing(e.target); }, true);
 // Remember where you were (and unsent messages) across the reload.
+// Scrolled up into older messages: the one at the top of the screen, to come back to (after an update's reload, or a
+// connection that dropped and came back). Nothing when you're at the newest ones.
+function readingAt() {
+  const sc = $('#messages');
+  if (!sc || !$('#jump-latest') || $('#jump-latest[hidden]')) return undefined;
+  const top = sc.getBoundingClientRect().top;
+  const first = [...sc.querySelectorAll(':scope > .msg[data-mid]')].find((m) => m.getBoundingClientRect().bottom > top + 8);
+  return first ? first.dataset.mid : undefined;
+}
 function saveResume() {
   for (const c of Object.values(composers)) c.keepDraft();
-  // Scrolled up into older messages: come back to the one at the top of the screen.
-  let at;
-  const sc = $('#messages');
-  if (sc && !$('#jump-latest[hidden]') && $('#jump-latest')) {
-    const top = sc.getBoundingClientRect().top;
-    const first = [...sc.querySelectorAll(':scope > .msg[data-mid]')].find((m) => m.getBoundingClientRect().bottom > top + 8);
-    if (first) at = first.dataset.mid;
-  }
+  const at = readingAt();
   const thread = S.panel === 'thread' && S.thread ? { id: S.thread.rootId, channelId: S.thread.channelId, serverId: S.thread.serverId } : null;
   try { sessionStorage.setItem('hearth.resume', JSON.stringify({ view: { ...S.view, jumpTo: at }, thread, drafts: [...drafts.entries()].filter(([, v]) => v) })); } catch { /* ignore */ }
 }

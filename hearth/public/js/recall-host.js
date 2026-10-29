@@ -27,7 +27,7 @@ async function sha256Hex(text) {
 }
 
 export function createRecall(ctx) {
-  // ctx: { S, onEnabled(), onActive() }
+  // ctx: { S, vaultKey(), onEnabled(), onActive() } (vaultKey: your personal vault key, from your proven public key)
   const items = new Map(); // id -> { kind, obj, updatedAt }
   let key = null; let since = 0; let loading = null; let loaded = false;
   let layer = null; let frame = null; let ready = false; let slot = null; let raf = 0;
@@ -38,7 +38,7 @@ export function createRecall(ctx) {
   let warnedBig = false;
 
   // ------------------------------------------------------------------ encrypted sync
-  async function vkey() { if (!key) key = await E2EE.vaultKey(ctx.S.privateKey, ctx.S.me.publicKey); return key; }
+  async function vkey() { if (!key) key = await ctx.vaultKey(); return key; }
   // Pull everything changed since last time. Returns the ids that changed (deleted ones included).
   // The server answers a page at a time (`more` = there's another), and everything has to be in before the first
   // load counts as done: tidying up (migrate, unused pictures) on half a list would overwrite or delete the rest.
