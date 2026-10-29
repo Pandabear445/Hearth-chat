@@ -323,6 +323,32 @@ Before this, a thread reply counted nowhere: not as unread, not as a mention, an
     Messages and Move Members count in a channel override too, for a role or for one member, whose highest role
     then counts). Changing a webhook someone else made also goes by role order, but there roles members pick
     themselves don't count on either side (`perms.topAssigned`), so those can still sit above Manage Channels.
+- **Nicknames only you see** (`server/personalnames.js`, `public/js/personal-names.js`): a name you give someone
+  that only you see, shown instead of theirs everywhere (`profile-ui.js` `displayName` and `displayNameIn` ask it
+  first: yours, then their nickname in that server, then their display name, then their username; `realName` is
+  their own). Their profile adds a "Your nickname · Really <name> (@username)" line.
+  - The list `{ v, n, names: { userId: name }, pad }` is sealed with the personal vault key (`E2EE.sealVault`, kind
+    `nicknames`, bound to your account), padded to a multiple of 4 KB, and stored as ciphertext in
+    `personal_nicknames` (removed with the account). `n` goes up with every save; each device keeps the newest
+    sealed copy it opened and uses it when the server serves an older one or none ("behind").
+  - Names follow the server-nickname rules in the app (`cleanName`): up to 32 characters, no control, invisible or
+    direction-changing characters, at least one visible character; up to 1,000 people. Never for yourself.
+  - A saved list the device can't open is never replaced by a change: the app loads it again first, and only
+    "Start a new list" (Privacy & safety, after a confirmation) replaces it.
+  - A save against an older version is refused (409 `stale`); the app loads the newer list and makes the same
+    change on top of it, so two devices never undo each other.
+  - Not in OS push notifications sent by the server while the app is closed (the server can't know the names).
+- **Custom emoji at their real size** (`server/emojiimage.js`, `public/js/emoji-upload.js`): every emoji is stored
+  at most 128×128 and 512 KB (uploads up to 2 MB). The app shrinks still pictures on a canvas (shape and transparency
+  kept, PNG or WebP, whichever is smaller) and shows each as it will look. The server checks every upload in the
+  picture worker after its metadata is removed (`fitEmojiFile`): a GIF over 128×128 is shrunk there in pure
+  JavaScript (LZW decode, nearest neighbour per frame, positions scaled alike, timing, looping, disposal,
+  transparency and palettes kept); anything else over 128×128 (a still picture sent straight to the API, an animated
+  WebP or APNG) is refused with 400 `bad_emoji` and a message saying what fits, and nothing is kept. Before decoding,
+  a GIF whose screen is over 4096 px a side, whose frames add up to over 48 M pixels or that has over 1,500 frames
+  is refused; decoding stops at each frame's own size. A GIF whose frames reach past its screen (which browsers would draw bigger than the screen says) is always rewritten with every frame clipped to the screen, even when the screen fits. GIFs from GIPHY/KLIPY go through the same check. Emoji are
+  drawn in fixed boxes whatever the file (22 px inline, 48 px jumbo, 16-17 px reactions), so older, bigger uploads
+  look the same.
 - **Reports**:
   - Reporters can see the status of their own reports (`GET /me/reports`, without staff notes).
   - Reporting the same message again while the first report is still open returns the existing report

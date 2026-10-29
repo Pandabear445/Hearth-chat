@@ -4,7 +4,7 @@ Generated from the code by enumerating every `api.*`/`app.*` route and `socket.o
 then annotated during the security audit (which middleware and checks actually run, limits, tests). "Gaps" lists
 what the audit found missing at the time; items fixed since are tracked in [ENGINEERING-REPORT.md](ENGINEERING-REPORT.md).
 
-Routes: 387 HTTP, 15 socket events.
+Routes: 389 HTTP, 15 socket events.
 
 ## HTTP routes
 
@@ -184,8 +184,8 @@ Routes: 387 HTTP, 15 socket events.
 | POST | `/api/servers/:id/voice/:uid/move` | server/index.js:4360 | session |  |  |  |  |  |
 | POST | `/api/servers/:id/voice/:uid/mute` | server/index.js:4393 | session |  |  |  |  |  |
 | DELETE | `/api/servers/:id/voice/:uid/mute` | server/index.js:4394 | session |  |  |  |  |  |
-| POST | `/api/servers/:id/emojis` | server/index.js:4424 | session | member + MANAGE_EMOJIS; yes | uploadImage; ≤2MB; name [A-Za-z0-9_] 2..32; ≤200; unique | limited(): up:user 60/min, up:userh 600/h, up:session 40/min, up:net 150/min + quotas (index.js:492-501) | attack.test.js (generic: unauth/fuzz/outsider ids) | none |
-| POST | `/api/servers/:id/emojis/from-giphy` | server/index.js:4435 | session | member + MANAGE_EMOJIS; yes | gifId regex; media host allowlist; ≤2MB | none | attack.test.js (generic: unauth/fuzz/outsider ids) | no rate limit on outbound GIPHY fetch (out of authz scope) |
+| POST | `/api/servers/:id/emojis` | server/index.js:4424 | session | member + MANAGE_EMOJIS; yes | uploadImage; ≤2MB; name [A-Za-z0-9_] 2..32; ≤200; unique; stored ≤128×128 and ≤512 KB (GIFs shrunk, others refused; server/emojiimage.js) | limited(): up:user 60/min, up:userh 600/h, up:session 40/min, up:net 150/min + quotas (index.js:492-501) | attack.test.js (generic: unauth/fuzz/outsider ids) | none |
+| POST | `/api/servers/:id/emojis/from-giphy` | server/index.js:4435 | session | member + MANAGE_EMOJIS; yes | gifId regex; media host allowlist; ≤2MB; must be a GIF; shrunk to ≤128×128, ≤512 KB | none | attack.test.js (generic: unauth/fuzz/outsider ids) | no rate limit on outbound GIPHY fetch (out of authz scope) |
 | PATCH | `/api/emojis/:id` | server/index.js:4463 | session | member of emoji's server + MANAGE_EMOJIS; yes (server from emoji row) | emojiName; unique | none | attack.test.js (generic: unauth/fuzz/outsider ids) | none |
 | DELETE | `/api/emojis/:id` | server/index.js:4475 | session | member of emoji's server + MANAGE_EMOJIS; yes | none | none | attack.test.js (generic: unauth/fuzz/outsider ids) | none |
 | POST | `/api/groups` | server/index.js:4501 | session | each added user: not blocked with adder, friend or shares a server; n.a. | ≤24 others | groupnew:<uid> 30/h | features.test.js, attack.test.js (generic: unauth/fuzz/outsider ids) | ignores target privacy.dms=friends (authz-6, verified); no consent |
@@ -399,6 +399,8 @@ Routes: 387 HTTP, 15 socket events.
 | DELETE | `/api/channels/:id/webhooks/:hookId` | server/webhooks.js:729 | session |  |  |  |  |  |
 | GET | `/api/me/word-filter` | server/wordfilter.js:101 | session |  |  |  |  |  |
 | PUT | `/api/me/word-filter` | server/wordfilter.js:106 | session |  |  |  |  |  |
+| GET | `/api/me/personal-nicknames` | server/personalnames.js:29 | session | your own only | | 120/min | test/personal-nicknames.test.js |  |
+| PUT | `/api/me/personal-nicknames` | server/personalnames.js:34 | session | your own only | `x1:` sealed string ≤ 192 KB or null; integer `base` | 30/min, 600/hour, 120/min per network | test/personal-nicknames.test.js |  |
 | GET | `/api/servers/:id/word-filter` | server/wordfilter.js:138 | session |  |  |  |  |  |
 | PUT | `/api/servers/:id/word-filter` | server/wordfilter.js:144 | session |  |  |  |  |  |
 

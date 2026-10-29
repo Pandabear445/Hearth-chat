@@ -3,7 +3,7 @@ import { h, clear, icon, toast, playSound } from './util.js';
 import { api, upload, setToken } from './api.js';
 import { EVENTS as SOUND_EVENTS, LIBRARY as SOUND_LIBRARY, soundPrefs, setSoundPrefs, resetSoundPrefs, setCustomSound, customSoundName } from './sounds.js';
 import * as E2EE from './e2ee.js';
-import { profileCard, FONT_STACKS, cropStyle, customFxLayer } from './profile-ui.js';
+import { profileCard, FONT_STACKS, cropStyle, customFxLayer, avatarEl } from './profile-ui.js';
 import { pageEditorTab } from './page.js';
 import { openCropper } from './cropper.js';
 import { modal, confirmDialog, field } from './ui.js';
@@ -1658,6 +1658,8 @@ function privacyTab(app) {
       blockedHost),
     // Your word filter and the lists your servers suggest (wordfilter-app.js).
     app.wordFilter ? app.wordFilter.settingsSection() : null,
+    // Nicknames you gave people, only you see them (personal-names.js).
+    app.personalNames ? app.personalNames.settingsSection({ getUser: (id) => app.S.users[id] || null, realName: app.realName, avatarEl }) : null,
     exportSection(app),
   );
 }
@@ -1696,7 +1698,7 @@ function exportSection(app) {
     ctl = new AbortController();
     start.disabled = true; cancel.hidden = false; bar.hidden = false;
     try {
-      const { blob, manifest } = await underWay(runExport({ token: res.token, S: app.S, sec: app.sec, decryptMessage: app.decryptMessage, signal: ctl.signal, wordFilter: app.wordFilter ? app.wordFilter.exportable() : null,
+      const { blob, manifest } = await underWay(runExport({ token: res.token, S: app.S, sec: app.sec, decryptMessage: app.decryptMessage, signal: ctl.signal, wordFilter: app.wordFilter ? app.wordFilter.exportable() : null, personalNicknames: app.personalNames ? app.personalNames.exportable() : null,
         onProgress: (text, f) => { status.textContent = text; bar.firstChild.style.width = Math.round(f * 100) + '%'; } }));
       const url = URL.createObjectURL(blob);
       h('a', { href: url, download: `hearth-export-${app.S.me.username}-${new Date().toISOString().slice(0, 10)}.zip` }).click();

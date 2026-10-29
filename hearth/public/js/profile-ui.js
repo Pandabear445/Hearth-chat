@@ -20,9 +20,34 @@ export const FONT_STACKS = {
   Monoton: "'Monoton', cursive",
 };
 
-export function displayName(u) {
+// Personal nicknames (personal-names.js): a name you gave someone that only you see. It comes before their nickname in
+// a server and their display name everywhere a name is shown; their profile still shows who they really are.
+let personalOf = () => '';
+export function setPersonalNames(fn) { personalOf = typeof fn === 'function' ? fn : () => ''; }
+export const personalName = (u) => (u && u.id ? personalOf(u.id) || '' : '');
+// Their own name, whatever you call them: their display name, else their username.
+export function realName(u) {
   if (!u) return 'Unknown';
   return (u.profile && u.profile.displayName) || u.username;
+}
+export function displayName(u) {
+  if (!u) return 'Unknown';
+  return personalName(u) || realName(u);
+}
+// For search boxes and suggestions: does any name you know them by contain q (already lower case)? Your nickname for
+// them, their display name, their username and (with a server) their nickname there.
+export function nameMatches(u, q, server = null) {
+  if (!q) return true;
+  if (!u) return false;
+  return [personalName(u), realName(u), u.username || '', nicknameIn(server, u.id)].some((n) => n && n.toLowerCase().includes(q));
+}
+// The line under a name on a profile when it's your nickname for them: who they really are, and that only you see it.
+export function personalNameNote(u, { cls = 'pc-personal', onEdit = null } = {}) {
+  const mine = personalName(u);
+  if (!mine) return null;
+  return h('div', { class: cls, title: 'A nickname only you see. They aren\u2019t told.' },
+    h('span', { class: 'pnick-badge' }, 'Your nickname'), h('span', { class: 'pnick-real' }, `Really ${realName(u)} (@${u.username})`),
+    onEdit ? h('button', { class: 'link-btn', 'aria-label': `Change your nickname for ${realName(u)}`, onclick: onEdit }, 'Change') : null);
 }
 // Someone's nickname in one server (server/nicknames.js), or ''. Group chats have none, and without a server (DMs,
 // friends, profiles) there's never one.
@@ -33,7 +58,7 @@ export function nicknameIn(server, userId) {
 // The name someone goes by in this server: their nickname there, else their display name. Pass the server only
 // where the name is shown inside it (its member list, messages, calls); everywhere else use displayName.
 export function displayNameIn(server, u) {
-  return (u && nicknameIn(server, u.id)) || displayName(u);
+  return personalName(u) || (u && nicknameIn(server, u.id)) || realName(u);
 }
 
 export function presenceOf(u, meId) {
@@ -174,7 +199,7 @@ export function songPlayer(u, p) {
 }
 // nickname: { name, place, edit } when the card is opened inside a server where they have one: the nickname, the
 // server's name, and (when the viewer may change it) what Change does. The big name stays their display name.
-export function profileCard(u, { meId = '', actions = null, compact = false, mutual = null, topFriends = null, nickname = null } = {}) {
+export function profileCard(u, { meId = '', actions = null, compact = false, mutual = null, topFriends = null, nickname = null, editPersonal = null } = {}) {
   const p = u.profile || {};
   const style = p.cardStyle || 'gradient';
   const noBanner = p.showBanner === false;
@@ -196,6 +221,8 @@ export function profileCard(u, { meId = '', actions = null, compact = false, mut
   inner.append(nameEl(u, { tag: 'div', cls: 'pc-name' }));
   inner.append(h('div', { class: 'pc-handle' }, u.username, p.pronouns ? h('span', { class: 'pc-pronouns' }, p.pronouns) : null,
     u.supporter ? h('span', { class: 'supporter-tag', title: 'Helps pay for this server' }, '\uD83D\uDC9C Supporter') : null));
+  const pn = personalNameNote(u, { onEdit: editPersonal });
+  if (pn) inner.append(pn);
   if (nickname && nickname.name) {
     inner.append(h('div', { class: 'pc-section pc-nick' }, h('div', { class: 'pc-label' }, `Nickname in ${nickname.place}`),
       h('div', { class: 'pc-nick-row' }, h('span', { class: 'pc-nick-name' }, nickname.name),

@@ -1,7 +1,7 @@
 // MySpace-style profile pages: rendering, safe custom CSS, and the editor (Settings → Profile page).
 import { h, clear, icon, toast, fmtStamp, fmtDay } from './util.js';
 import { api, upload } from './api.js';
-import { avatarEl, nameEl, displayName, effectLayer, splitGlyphs, FONT_STACKS, cropStyle, songPlayer, bannerEl } from './profile-ui.js';
+import { avatarEl, nameEl, displayName, personalNameNote, effectLayer, splitGlyphs, FONT_STACKS, cropStyle, songPlayer, bannerEl } from './profile-ui.js';
 import { confirmDialog, modal } from './ui.js';
 import { renderDoc, render as md } from './markdown.js';
 import { activityCards, favoriteGamesEl, recentGamesEl } from './activity.js';
@@ -152,6 +152,7 @@ export function renderPage(d, u, opts = {}) {
         nameEl(u, { tag: 'h1', cls: `mys-name${p.glitterTitle ? ' glitter' : ''}` }),
         h('div', { class: 'mys-handle' }, '@' + u.username, prof.pronouns ? h('span', null, ` \u00b7 ${prof.pronouns}`) : null,
           u.supporter ? h('span', { class: 'supporter-tag' }, '\uD83D\uDC9C Supporter') : null),
+        personalNameNote(u, { cls: 'pc-personal mys-personal', onEdit: opts.editPersonal || null }),
         prof.headline ? h('p', { class: 'mys-headline' }, `\u201C${prof.headline}\u201D`) : null,
         h('div', { class: 'mys-chips' }, chips)),
       heroActions.length ? h('div', { class: 'mys-hero-actions' }, heroActions) : null));
