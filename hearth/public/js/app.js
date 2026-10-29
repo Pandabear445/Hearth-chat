@@ -1183,6 +1183,9 @@ function startApp(account) {
   $('#sidebar').addEventListener('click', (e) => { const r = e.target.closest('[data-nav-key]'); if (r && window.CSS && CSS.escape) M.returnSel = `[data-nav-key="${CSS.escape(r.dataset.navKey)}"]`; }, true);
   document.addEventListener('keydown', () => { M.keys = true; }, true);
   document.addEventListener('pointerdown', () => { M.keys = false; }, true);
+  // An Esc that closes a menu, a picker, a sheet, a dialog or a picture closes only that (their own handlers run first,
+  // and the menu is gone by the time globalKeys looks): so whether one was open is judged before anyone handles it.
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape') M.escBusy = !!document.querySelector('#layer > *, .popover, .sheet-backdrop, .modal-backdrop, .viewer'); }, true);
   $('#sidebar').append(resizeHandle('sidebar'));
   phoneNav();
 }
@@ -2557,7 +2560,7 @@ function globalKeys(e) {
     else if (S.panel === 'thread') { e.preventDefault(); closeThread(); }
     // Phones: nothing else to close, so the conversation goes back to its list (not from Reels or Brainrot full
     // screen, whose own Esc turns them off: brainrot.js).
-    else if (isPhoneUI() && M.level === 'conv' && !$('.reels-layer.full:not([hidden])')) { e.preventDefault(); phoneBack(); }
+    else if (isPhoneUI() && M.level === 'conv' && !M.escBusy && !$('.reels-layer.full:not([hidden])')) { e.preventDefault(); phoneBack(); }
   }
 }
 // Ctrl+/ (⌘+/ on a Mac), Settings → Keybinds or the user menu: every shortcut, with this person's own call keys.
@@ -3739,7 +3742,7 @@ function closeNav() {
 // to return to it. The list is drawn in #rail and #sidebar, the conversation in #main, as on a computer; the level
 // that's out of sight is inert. Nothing here runs on a computer's screen (isPhoneUI is the phone layout: device.js).
 const M_UI = true; // (false: the phone layout keeps the old drawer)
-const M = { tab: 'home', level: 'list', server: null, pending: null, returnSel: null, inerted: false, keys: false, inboxSeen: 0 };
+const M = { tab: 'home', level: 'list', server: null, pending: null, returnSel: null, inerted: false, keys: false, escBusy: false, inboxSeen: 0 };
 const isPhoneUI = () => M_UI && isPhoneLayout();
 const TABS = [['home', 'home', 'Home'], ['dms', 'message', 'Messages'], ['inbox', 'bell', 'Notifications'], ['you', 'user', 'You']];
 const TAB_LABEL = Object.fromEntries(TABS.map(([t, , l]) => [t, l]));
