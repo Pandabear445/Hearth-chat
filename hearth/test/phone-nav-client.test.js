@@ -183,7 +183,7 @@ test('Forward onto an old step, or a step left from before a reload, is not left
 
 // ------------------------------------------------------------------ swipes
 // A document, a two-part drawer (rail + channels, 72 + 256 wide), a scrim and a full-screen side panel.
-function screen({ enabled = true } = {}) {
+function screen({ enabled = true, noDrawer = false } = {}) {
   const listeners = {};
   const el = (w) => ({ style: {}, offsetWidth: w, contains(t) { return t === this; } });
   const rail = el(72); const side = el(256); const scrim = el(390); const panelEl = el(390); const chat = el(390);
@@ -199,7 +199,7 @@ function screen({ enabled = true } = {}) {
     win: { document: doc, innerWidth: 390 },
     enabled: () => state.enabled,
     blocked: () => state.blocked,
-    drawer: { isOpen: () => state.drawer, parts: () => [rail, side], scrim: () => scrim, setOpen: (on) => { state.drawer = on; } },
+    drawer: noDrawer ? null : { isOpen: () => state.drawer, parts: () => [rail, side], scrim: () => scrim, setOpen: (on) => { state.drawer = on; } },
     panel: { isOpen: () => state.panel, el: () => panelEl, close: () => { state.panel = false; } },
   });
   let ts = 0; let x = 0; let y = 0; let target = chat;
@@ -306,4 +306,22 @@ test('the swipes only listen in the phone layout on a touch screen', () => {
   assert.equal(s.state.drawer, true);
   s.state.enabled = false; s.sw.update();
   assert.equal(s.listeners.touchmove.size, 0, 'and they go again (a window made wider)');
+});
+
+test('no drawer: an edge swipe with nothing open does nothing; with the panel open it closes', () => {
+  const s = screen({ noDrawer: true });
+  const f = s.finger.down(10, 300).move(300, 304);
+  assert.ok(f.moves.every((m) => !m.prevented), 'nothing to pull out: the browser keeps the swipe');
+  assert.ok(!s.classes.has('nav-swiping') && !s.classes.has('panel-swiping'));
+  f.up();
+  assert.equal(s.state.drawer, false);
+  s.swipe(300, 300, 40, 300, { on: s.side });
+  assert.ok(!s.classes.has('nav-swiping'), 'a left swipe anywhere is left alone too');
+  s.state.panel = true;
+  const g = s.finger.down(8, 300).move(140, 300);
+  assert.equal(s.panelEl.style.transform, 'translateX(132px)', 'the panel (or the conversation) follows the finger');
+  assert.ok(g.moves.every((m) => m.prevented));
+  g.move(330, 300).up();
+  assert.equal(s.state.panel, false, 'and goes');
+  assert.equal(s.panelEl.style.transform, '');
 });

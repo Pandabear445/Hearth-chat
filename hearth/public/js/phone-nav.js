@@ -60,7 +60,9 @@ export function backStack({ win = window, layers, enabled }) {
 // swipe left on the open drawer, or on the dimmed chat beside it, to put it away. While the side panel is open (it
 // covers the screen on a phone), the same swipe from the left edge closes the panel instead, like Back. Taps, scrolling
 // up and down, and swipes that start anywhere else are left alone, so nothing else in the app changes.
-//   drawer: { isOpen(), parts() (the elements that slide), scrim(), setOpen(bool) }
+//   drawer: { isOpen(), parts() (the elements that slide), scrim(), setOpen(bool) }, or null when there's none (the
+//           phone layout's list and conversation stack: the swipe from the edge only takes a panel, or the
+//           conversation, away)
 //   panel:  { isOpen(), el(), close() }
 //   blocked(): true while something covers both (a dialog, a picture)
 // Listens only while enabled() (call update() when that may have changed): a touch listener that can stop scrolling
@@ -71,15 +73,15 @@ export function edgeSwipes({ win = window, enabled, blocked, drawer, panel }) {
   let g = null; // the touch under way: { kind: 'open' | 'close' | 'panel', x, y, t, id, on, dx, v, w }
   const reduced = () => doc.documentElement.classList.contains('reduce-motion') || (typeof win.matchMedia === 'function' && win.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const clamp = (n) => Math.max(0, Math.min(1, n));
-  const inDrawer = (target) => [...drawer.parts(), drawer.scrim()].some((el) => el && el.contains(target));
+  const inDrawer = (target) => !!drawer && [...drawer.parts(), drawer.scrim()].some((el) => el && el.contains(target));
 
   function start(e) {
     g = null;
     if (e.touches.length !== 1 || blocked()) return;
     const t = e.touches[0];
     let kind = null;
-    if (drawer.isOpen()) kind = inDrawer(e.target) ? 'close' : null;
-    else if (t.clientX <= EDGE) kind = panel.isOpen() ? 'panel' : 'open';
+    if (drawer && drawer.isOpen()) kind = inDrawer(e.target) ? 'close' : null;
+    else if (t.clientX <= EDGE) kind = panel.isOpen() ? 'panel' : drawer ? 'open' : null;
     if (kind) g = { kind, x: t.clientX, y: t.clientY, t: e.timeStamp, lx: t.clientX, lt: e.timeStamp, id: t.identifier, on: false, dx: 0, v: 0, w: 0 };
   }
   function move(e) {
