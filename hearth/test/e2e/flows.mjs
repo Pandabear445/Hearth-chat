@@ -3452,17 +3452,17 @@ async function personalNicknames(t) {
 }
 
 // ------------------------------------------------------------------ 26c. emoji at the size they're shown
-// Two pictures picked at once: a big PNG shrunk on the device (shown as it will be stored, with a name from its file
+// Two pictures picked at once (by Bob, who owns the server by now): a big PNG shrunk on the device (shown as it will be stored, with a name from its file
 // name) and a big animated GIF the server shrinks, still animated. Both are stored at most 128×128 and drawn 22 px
 // tall in a line of text, 48 px on their own.
 async function emojiSizes(t) {
-  const { alice, bob } = t.people;
+  const { alice: viewer, bob: owner } = t.people; // Bob owns the server by now
   // A GIF with two frames (the harness's one frame, twice).
   const one = makeGif(300, 200);
   const frame = one.subarray(13 + 384, one.length - 1);
   const dance = Buffer.concat([one.subarray(0, one.length - 1), frame, Buffer.from([0x3b])]);
-  await alice.serverMenu('Server settings');
-  const ss = alice.$('.modal.server-settings');
+  await owner.serverMenu('Server settings');
+  const ss = owner.$('.modal.server-settings');
   await ss.locator('.ss-tab', { hasText: 'Emoji' }).click();
   await ss.locator('input[type=file]').setInputFiles([{ name: 'Big Photo.png', mimeType: 'image/png', buffer: makePng(400, 300) }, { name: 'dance.gif', mimeType: 'image/gif', buffer: dance }]);
   const q = ss.locator('.emoji-queue');
@@ -3474,30 +3474,30 @@ async function emojiSizes(t) {
   const prev = await photo.locator('img.s-inline').evaluate((i) => [i.getBoundingClientRect().height, i.naturalWidth]);
   check(prev[0] === 22 && prev[1] === 128, `The preview should show the shrunk picture at 22 px (got ${prev}).`);
   await ss.locator('button', { hasText: 'Upload 2 emoji' }).click();
-  await alice.toast('Added 2 emoji.');
-  await alice.page.waitForFunction(() => {
+  await owner.toast('Added 2 emoji.');
+  await owner.page.waitForFunction(() => {
     const imgs = [...document.querySelectorAll('.modal.server-settings .emoji-admin-grid img.cemoji')];
     return imgs.length >= 3 && imgs.every((i) => i.complete && i.naturalWidth > 0 && i.naturalWidth <= 128 && i.naturalHeight <= 128);
   });
   const sizes = t.server.rows('SELECT name, animated FROM emojis WHERE name IN (?, ?) ORDER BY name', 'big_photo', 'dance');
   check(sizes.map((e) => `${e.name}:${e.animated}`).join(' ') === 'big_photo:0 dance:1', `The GIF should stay animated (got ${JSON.stringify(sizes)}).`);
   await ss.locator('.modal-x').click();
-  await alice.noModals();
+  await owner.noModals();
   // In a line of text, then on its own.
-  await alice.$('#composer-input').fill('Sized right :big_ph');
-  await alice.$('.composer-wrap .suggest:not([hidden])', { hasText: ':big_photo:' }).waitFor();
-  await alice.$('#composer-input').press('Tab');
-  await alice.$('#composer-input').press('Enter');
-  const inline = bob.message('Sized right').locator('img.cemoji[alt=":big_photo:"]');
+  await owner.$('#composer-input').fill('Sized right :big_ph');
+  await owner.$('.composer-wrap .suggest:not([hidden])', { hasText: ':big_photo:' }).waitFor();
+  await owner.$('#composer-input').press('Tab');
+  await owner.$('#composer-input').press('Enter');
+  const inline = viewer.message('Sized right').locator('img.cemoji[alt=":big_photo:"]');
   await inline.waitFor();
-  await bob.page.waitForFunction(() => { const i = document.querySelector('#messages img.cemoji[alt=":big_photo:"]'); return i && i.complete && i.naturalWidth === 128; });
+  await viewer.page.waitForFunction(() => { const i = document.querySelector('#messages img.cemoji[alt=":big_photo:"]'); return i && i.complete && i.naturalWidth === 128; });
   const h = await inline.evaluate((i) => Math.round(i.getBoundingClientRect().height));
   check(h >= 20 && h <= 24, `An emoji in a line of text should be about 22 px tall (got ${h}).`);
-  await alice.$('#composer-input').fill(':danc');
-  await alice.$('.composer-wrap .suggest:not([hidden])', { hasText: ':dance:' }).waitFor();
-  await alice.$('#composer-input').press('Tab');
-  await alice.$('#composer-input').press('Enter');
-  const jumbo = bob.page.locator('#messages .msg-text.jumbo img.cemoji[alt=":dance:"]').last();
+  await owner.$('#composer-input').fill(':danc');
+  await owner.$('.composer-wrap .suggest:not([hidden])', { hasText: ':dance:' }).waitFor();
+  await owner.$('#composer-input').press('Tab');
+  await owner.$('#composer-input').press('Enter');
+  const jumbo = viewer.page.locator('#messages .msg-text.jumbo img.cemoji[alt=":dance:"]').last();
   await jumbo.waitFor();
   const j = await jumbo.evaluate((i) => Math.round(i.getBoundingClientRect().height));
   check(j === 48, `An emoji on its own should be 48 px (got ${j}).`);
