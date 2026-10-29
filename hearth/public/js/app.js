@@ -3964,7 +3964,7 @@ function homeView() {
   wrap.append(upcomingSlot);
   upcomingSection().then((sec) => { if (sec) upcomingSlot.replaceWith(sec); });
   if (pinned.length) wrap.append(section('Pinned conversations', null, h('div', { class: 'conv-cards' }, pinned.map(convCard))));
-  wrap.append(h('button', { class: 'btn ghost sm home-myreels', onclick: () => setView({ type: 'myreels' }) }, icon('play'), 'My Reels'));
+  wrap.append(h('div', { class: 'home-links' }, h('button', { class: 'btn ghost sm home-myreels', onclick: () => setView({ type: 'myreels' }) }, icon('play'), 'My Reels')));
   wrap.append(section('Recent conversations', h('button', { class: 'link-btn', onclick: () => openNewConversation() }, 'New message'),
     convs.length ? h('div', { class: 'conv-cards' }, convs.filter((c) => !favs.includes(c.fav)).slice(0, 6).map(convCard))
       : h('p', { class: 'muted-p' }, 'No conversations yet.')));

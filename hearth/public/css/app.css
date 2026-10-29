@@ -3895,3 +3895,4 @@ html.reduce-motion :is(.pc-banner.bfx-flow, .pc-banner.bfx-aurora, .pc-banner.bf
 .import-progress { height: 6px; border-radius: 3px; background: rgb(var(--s3)); overflow: hidden; }
 .import-progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 .bookmarklet { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; background: rgb(var(--accent-rgb) / .16); color: var(--text); font-weight: 700; text-decoration: none; cursor: grab; }
+.home-links { display: flex; gap: 8px; flex-wrap: wrap; }
