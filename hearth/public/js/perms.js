@@ -5,7 +5,7 @@ export const PERMS = {
   CREATE_INVITE: 1 << 8, KICK_MEMBERS: 1 << 9, BAN_MEMBERS: 1 << 10, MANAGE_CHANNELS: 1 << 11,
   MANAGE_ROLES: 1 << 12, MANAGE_SERVER: 1 << 13, MANAGE_EMOJIS: 1 << 14, CREATE_THREADS: 1 << 15,
   EMBED_LINKS: 1 << 16, MUTE_MEMBERS: 1 << 17, MOVE_MEMBERS: 1 << 18, VIEW_AUDIT_LOG: 1 << 19,
-  CHANGE_NICKNAME: 1 << 20, MANAGE_NICKNAMES: 1 << 21, ADMINISTRATOR: 1 << 30,
+  CHANGE_NICKNAME: 1 << 20, MANAGE_NICKNAMES: 1 << 21, USE_SOUNDBOARD: 1 << 22, ADMINISTRATOR: 1 << 30,
 };
 const P = PERMS;
 export const PERM_GROUPS = [
@@ -36,6 +36,7 @@ export const PERM_GROUPS = [
   ['Voice', [
     ['CONNECT', 'Connect', 'Join voice channels.', true],
     ['SPEAK', 'Speak', 'Talk in voice channels (otherwise listen only).', true],
+    ['USE_SOUNDBOARD', 'Use soundboard', 'Play sounds from their own soundboard into voice calls. Can be turned off per voice channel.', true],
     ['MUTE_MEMBERS', 'Mute members', 'Server-mute people below them: nobody hears them in any voice channel here until it\u2019s lifted.', false],
     ['MOVE_MEMBERS', 'Move members', 'Disconnect people below them from voice, or move them to another voice channel. Can be given per voice channel.', false],
   ]],
@@ -47,7 +48,7 @@ export const ALL = Object.values(P).reduce((a, b) => a | b, 0);
 export const has = (perms, bit) => (perms & bit) === bit;
 // What everyone in a group chat can do (its owner can do everything), as on the server.
 export const GROUP_MEMBER = P.VIEW_CHANNEL | P.SEND_MESSAGES | P.ADD_REACTIONS | P.ATTACH_FILES | P.EMBED_LINKS
-  | P.CONNECT | P.SPEAK | P.CREATE_INVITE | P.CREATE_THREADS | P.MENTION_EVERYONE;
+  | P.CONNECT | P.SPEAK | P.CREATE_INVITE | P.CREATE_THREADS | P.MENTION_EVERYONE | P.USE_SOUNDBOARD;
 
 // Roles a member has, highest first (excluding @everyone).
 export function memberRoles(server, userId) {

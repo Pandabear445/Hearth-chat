@@ -4,6 +4,10 @@
 //
 // Every connection negotiates four lanes up front, always in this order:
 //   0 microphone (audio) · 1 camera (video) · 2 screen (video) · 3 screen audio (audio)
+// plus a fifth, 4 soundboard (audio), when both apps have one (v25: the server's list of who's in the call says
+// `board: true` for them, and so does every offer and answer). It's its own lane so each listener can turn other
+// people's soundboards down or off without touching their voice, and it only plays while the server says a sound
+// is playing (see boardPlayed).
 // Turning the camera or a screen share on/off just plugs a track into its lane (replaceTrack), so no
 // renegotiation is ever needed and two people toggling video at once can't collide.
 //
@@ -12,7 +16,10 @@
 // reconnects, and the server keeps our place for a short while (see docs/VOICE.md).
 import { dropAvoidedCandidates, relayHosts } from './relays.js';
 
-const LANE = { mic: 0, cam: 1, screen: 2, screenAudio: 3 };
+const LANE = { mic: 0, cam: 1, screen: 2, screenAudio: 3, board: 4 };
+// A soundboard lane stays open this much longer than the sound the server announced (network delay).
+export const BOARD_SLACK_MS = 600;
+export const BOARD_MAX_MS = 5000;
 
 // Which state may follow which. Anything else is a bug and is refused (and logged), never applied.
 export const TRANSITIONS = {
@@ -44,7 +51,7 @@ const hasWindow = typeof window !== 'undefined';
 const md = () => (typeof navigator !== 'undefined' && navigator.mediaDevices) || null;
 
 export class Voice {
-  constructor({ socket, getIceServers, ensureIce, avoidHosts, avoids, memberRelayHosts, onChange, onSpeaking, signSdp, verifySdp, onSecurityWarning, isPeerMuted, onNotice, onRegion, onMoved, myId }) {
+  constructor({ socket, getIceServers, ensureIce, avoidHosts, avoids, memberRelayHosts, onChange, onSpeaking, signSdp, verifySdp, onSecurityWarning, isPeerMuted, onNotice, onRegion, onMoved, myId, boardTrack, onBoard }) {
     this.socket = socket;
     this.isPeerMuted = isPeerMuted;
     // Offers/answers are signed with the sender's signing key and checked before use. The DTLS
@@ -74,6 +81,12 @@ export class Voice {
     this.onRegion = onRegion || (() => {}); // the server's current region for the call we joined
     this.onMoved = onMoved || (() => {}); // a moderator moved us to another voice channel: app.js joins it
     this.myId = myId || (() => null);
+    // Soundboard (soundboard.js): the track our sounds play into (null: this app has no soundboard lane), who in the
+    // call has one too, and whose soundboard is playing right now (userId -> { until, timer }), as the server said.
+    this.boardTrack = boardTrack || null;
+    this.onBoard = onBoard || (() => {});
+    this.boardPeers = new Set();
+    this.boardOpen = new Map();
     this.channelId = null;
     this.peers = new Map(); // socketId -> { pc, pcId, remotePc, userId, socketId, initiator, audio, pending: [], … }
     this.localStream = null;
@@ -115,8 +128,13 @@ export class Voice {
     this.signalChains = new Map(); // socketId -> promise of the last signal handled
     this.early = new Map(); // socketId -> candidates that came before the connection they belong to
     socket.on('voice:signal', (p) => this.queueSignal(p));
-    socket.on('voice:peer-left', ({ socketId } = {}) => this.closePeer(socketId, 'left the call'));
+    socket.on('voice:peer-left', ({ socketId } = {}) => {
+      const gone = this.peers.get(socketId);
+      if (gone) this.boardPeers.delete(gone.userId); // they may come back on another app
+      this.closePeer(socketId, 'left the call');
+    });
     socket.on('voice:peer-joined', (p) => this.onPeerJoined(p || {}));
+    socket.on('voice:board', (p) => this.boardPlayed(p || {}));
     socket.on('voice:kicked', ({ by } = {}) => {
       if (!this.channelId) return;
       this.log(by === 'moderator' ? 'Disconnected by a moderator' : 'Removed from the call by the server');
@@ -256,7 +274,7 @@ export class Voice {
       this.gateOpen = true;
       this.applyLocalTrackState();
       this.channelId = channelId;
-      const res = await this.emit('voice:join', { channelId, muted: this.muted, deafened: this.deafened, video });
+      const res = await this.emit('voice:join', { channelId, muted: this.muted, deafened: this.deafened, video, ...(this.boardTrack ? { board: true } : {}) });
       if (a !== this.attempt) return; // left (or started over) while waiting: that answer is stale
       if (res.error) { this.cleanup(); throw new Error(res.error); }
       if (res.regionVersion !== undefined) this.onRegion(channelId, res.region || null, res.regionVersion);
@@ -337,6 +355,9 @@ export class Voice {
     this.failReason = '';
     this.listed = new Set();
     this.theyAvoid.clear();
+    this.boardPeers.clear();
+    for (const o of this.boardOpen.values()) clearTimeout(o.timer);
+    this.boardOpen.clear();
     if (this.state === 'leaving') this.setState('idle');
     this.onChange();
   }
@@ -397,7 +418,7 @@ export class Voice {
   async rejoin(a) {
     clearTimeout(this.rejoinTimer);
     if (a !== this.attempt || !this.socket.connected || this.state !== 'reconnecting') return;
-    const res = await this.emit('voice:join', { channelId: this.channelId, resume: true, muted: this.muted, deafened: this.deafened, video: !!this.camStream, screen: !!this.screenStream });
+    const res = await this.emit('voice:join', { channelId: this.channelId, resume: true, muted: this.muted, deafened: this.deafened, video: !!this.camStream, screen: !!this.screenStream, ...(this.boardTrack ? { board: true } : {}) });
     if (a !== this.attempt || this.state !== 'reconnecting') return;
     if (res.error && res.movedTo) {
       // A moderator moved us while the connection was down: go where they put us.
@@ -614,7 +635,7 @@ export class Voice {
     await this.setCamera(true);
   }
   setOutputDevice(id) {
-    for (const p of this.peers.values()) for (const el of [p.audio, p.screenAudio]) if (el && el.setSinkId) el.setSinkId(id || '').catch(() => {});
+    for (const p of this.peers.values()) for (const el of [p.audio, p.screenAudio, p.board]) if (el && el.setSinkId) el.setSinkId(id || '').catch(() => {});
   }
   micBlocked() {
     this.micDenied = true;
@@ -646,6 +667,7 @@ export class Voice {
   // Who in the call avoids member relays, from the server's list (the answer to voice:join).
   noteAvoiders(peers) {
     for (const p of peers || []) if (p && p.userId) { if (p.avoid === true) this.theyAvoid.add(p.userId); else this.theyAvoid.delete(p.userId); }
+    for (const p of peers || []) if (p && p.userId) { if (p.board === true) this.boardPeers.add(p.userId); else this.boardPeers.delete(p.userId); }
   }
   // New relay logins (the old ones run out): connections in progress use them from their next network change on.
   // (An address it already has on a member relay stays in use meanwhile, so that relay stays among its memberHosts.)
@@ -768,6 +790,8 @@ export class Voice {
       pc.addTransceiver('video', { direction: 'sendrecv' });
       pc.addTransceiver('video', { direction: 'sendrecv' });
       pc.addTransceiver('audio', { direction: 'sendrecv' });
+      // The soundboard lane, only when their app has one too (an older app would take it for a microphone).
+      if (this.boardTrack && this.boardPeers.has(userId)) pc.addTransceiver('audio', { direction: 'sendrecv' });
       await this.fillLanes(peer);
     }
 
@@ -788,6 +812,21 @@ export class Voice {
         this.onChange();
         return;
       }
+      if (lane === LANE.board) {
+        if (!this.boardTrack) return; // (an offer we never asked for: nothing of ours plays it)
+        if (!peer.board) {
+          peer.board = document.createElement('audio');
+          peer.board.autoplay = true;
+          document.getElementById('audio-sink').append(peer.board);
+        }
+        peer.board.srcObject = new MediaStream([e.track]);
+        this.applyBoardAudio(peer);
+        const prefs = JSON.parse(localStorage.getItem('hearth.audio') || '{}');
+        if (prefs.outputId && peer.board.setSinkId) peer.board.setSinkId(prefs.outputId).catch(() => {});
+        peer.board.play().catch(() => {});
+        return;
+      }
+      if (lane > LANE.board) return;
       if (lane === LANE.screenAudio) {
         if (!peer.screenAudio) {
           peer.screenAudio = document.createElement('audio');
@@ -918,7 +957,7 @@ export class Voice {
     const sdp = { type: desc.type, sdp: desc.sdp };
     const sig = await this.signSdp(toUserId, sdp);
     if (peer && peer.closed) return;
-    this.signal(peer ? peer.socketId : to, { sdp, sig, ...(this.avoids() ? { avoid: true } : {}) }, peer);
+    this.signal(peer ? peer.socketId : to, { sdp, sig, ...(this.avoids() ? { avoid: true } : {}), ...(this.boardTrack ? { board: true } : {}) }, peer);
   }
   // Sets our offer or answer and sends it (signed). The network candidates found meanwhile wait, and follow it once
   // it's out, so the other side never gets candidates for a description it hasn't seen. (If a newer offer started
@@ -994,6 +1033,9 @@ export class Voice {
       if (peer && peer.socketId !== from) this.rekey(peer, from);
       // They avoid member relays (or not, any more): what our connection with them is built with from now on.
       if (userId) { if (data.avoid === true) this.theyAvoid.add(userId); else this.theyAvoid.delete(userId); }
+      // Whether their app has a soundboard lane, as of their latest offer or answer (they may have come back on an
+      // older app, which would take a fifth lane for a microphone).
+      if (userId) { if (data.board === true) this.boardPeers.add(userId); else this.boardPeers.delete(userId); }
       // Our connection with them may use a member relay, and they avoid them: none of their addresses go into it (a
       // member relay would be told them), it starts over without member relays instead.
       const restartFor = (p) => {
@@ -1065,6 +1107,7 @@ export class Voice {
     try { pc.close(); } catch { /* ignore */ }
     if (peer.audio) { peer.audio.srcObject = null; peer.audio.remove(); }
     if (peer.screenAudio) { peer.screenAudio.srcObject = null; peer.screenAudio.remove(); }
+    if (peer.board) { peer.board.srcObject = null; peer.board.remove(); }
     this.peers.delete(socketId);
     if (![...this.peers.values()].some((p) => p.userId === peer.userId)) this.unwatch(peer.userId);
     this.recompute();
@@ -1107,14 +1150,60 @@ export class Voice {
   // Someone's audio plays unless we're deafened or they're silenced (server-muted, or not allowed to speak there).
   peerAudioOff(userId) { return this.deafened || this.silenced.has(userId); }
   applyPeerAudio() {
-    for (const p of this.peers.values()) { if (p.audio) p.audio.muted = this.peerAudioOff(p.userId); if (p.screenAudio) p.screenAudio.muted = this.peerAudioOff(p.userId); }
+    for (const p of this.peers.values()) { if (p.audio) p.audio.muted = this.peerAudioOff(p.userId); if (p.screenAudio) p.screenAudio.muted = this.peerAudioOff(p.userId); this.applyBoardAudio(p); }
+  }
+
+  // ---- soundboard
+  // What this person chose for other people's soundboards (Settings → Soundboard): { volume 0–1, off, muted: { userId } }.
+  boardPrefs() {
+    try {
+      const p = JSON.parse(localStorage.getItem('hearth.board') || '{}');
+      return { volume: Math.min(1, Math.max(0, Number.isFinite(+p.volume) ? +p.volume : 0.8)), off: !!p.off, muted: p.muted && typeof p.muted === 'object' ? p.muted : {} };
+    } catch { return { volume: 0.8, off: false, muted: {} }; }
+  }
+  // Someone's soundboard plays only while the server says one of their sounds is playing, and never when we're
+  // deafened, they're silenced, or we turned theirs (or everyone's) off.
+  boardAudible(userId) {
+    const o = this.boardOpen.get(userId);
+    const prefs = this.boardPrefs();
+    return !!o && o.until > Date.now() && !this.peerAudioOff(userId) && !prefs.off && !prefs.muted[userId];
+  }
+  applyBoardAudio(peer) {
+    if (!peer || !peer.board) return;
+    peer.board.muted = !this.boardAudible(peer.userId);
+    peer.board.volume = Math.min(1, this.boardPrefs().volume * this.volumeFor(peer.userId));
+  }
+  // The server says someone in our call is playing a sound for `ms` (at most BOARD_MAX_MS). A newer one replaces it.
+  boardPlayed({ channelId, userId, ms }) {
+    if (!this.channelId || channelId !== this.channelId || !userId || userId === this.myId()) return;
+    const len = Math.min(BOARD_MAX_MS, Math.max(0, +ms || 0)) + BOARD_SLACK_MS;
+    const old = this.boardOpen.get(userId);
+    if (old) clearTimeout(old.timer);
+    const o = { until: Date.now() + len, timer: null };
+    o.timer = setTimeout(() => {
+      if (this.boardOpen.get(userId) !== o) return;
+      this.boardOpen.delete(userId);
+      for (const p of this.peers.values()) if (p.userId === userId) this.applyBoardAudio(p);
+      this.onBoard(userId, false);
+    }, len);
+    this.boardOpen.set(userId, o);
+    for (const p of this.peers.values()) if (p.userId === userId) this.applyBoardAudio(p);
+    this.onBoard(userId, this.boardAudible(userId));
+  }
+  // Asks the server to play one of our sounds (`ms` long) into the call. Resolves to the length it allowed, or
+  // throws with the server's reason (no permission, muted, too many).
+  async requestBoardPlay(ms) {
+    if (!this.channelId || !LIVE.has(this.state)) throw new Error('Join a call to play sounds.');
+    const res = await this.emit('voice:board', { ms: Math.round(Math.min(BOARD_MAX_MS, Math.max(100, +ms || BOARD_MAX_MS))) });
+    if (!res || res.error) throw new Error((res && res.error) || 'Couldn\u2019t play that sound.');
+    return res.ms;
   }
 
   volumeFor(userId) { return this.volumes[userId] ?? 1; }
   setVolume(userId, v) {
     this.volumes[userId] = v;
     localStorage.setItem('hearth.volumes', JSON.stringify(this.volumes));
-    for (const p of this.peers.values()) if (p.userId === userId) { if (p.audio) p.audio.volume = v; if (p.screenAudio) p.screenAudio.volume = v; }
+    for (const p of this.peers.values()) if (p.userId === userId) { if (p.audio) p.audio.volume = v; if (p.screenAudio) p.screenAudio.volume = v; this.applyBoardAudio(p); }
   }
 
   // ---- video: camera and screen sharing
@@ -1134,6 +1223,7 @@ export class Voice {
     await put(LANE.cam, this.camStream ? this.camStream.getVideoTracks()[0] : null);
     await put(LANE.screen, this.screenStream ? this.screenStream.getVideoTracks()[0] : null);
     await put(LANE.screenAudio, this.screenStream ? this.screenStream.getAudioTracks()[0] || null : null);
+    if (ts[LANE.board] && this.boardTrack) await put(LANE.board, this.boardTrack());
     this.tuneEncoding(peer);
   }
   // Camera: 720p, ~900 kbps. Screen: sharp text first, up to ~2.5 Mbps.

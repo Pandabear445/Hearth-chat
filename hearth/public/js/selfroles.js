@@ -22,7 +22,7 @@ const REACH_IN_CHANNEL = P.MANAGE_MESSAGES | P.MOVE_MEMBERS;
 // Channel permissions, as the server checks them for overrides.
 const CHANNEL_SCOPED = P.VIEW_CHANNEL | P.SEND_MESSAGES | P.ADD_REACTIONS | P.ATTACH_FILES | P.EMBED_LINKS
   | P.MENTION_EVERYONE | P.MANAGE_MESSAGES | P.CONNECT | P.SPEAK | P.CREATE_THREADS | P.MANAGE_CHANNELS | P.MANAGE_ROLES
-  | P.MOVE_MEMBERS;
+  | P.MOVE_MEMBERS | P.USE_SOUNDBOARD;
 
 // Overrides are only sent to people who manage roles or channels; for everyone else this finds none.
 const allowsIn = (server, roleId, bits) => (server.channels || []).find((c) => (c.overrides || []).some((o) => o.type === 'role' && o.id === roleId && (o.allow & bits)));

@@ -90,14 +90,18 @@ export function popover(anchor, content, { side = 'right', align = 'start', clas
   layer().append(pop);
   openPop = pop;
   const r = anchor.getBoundingClientRect();
-  const pr = pop.getBoundingClientRect();
+  // Its layout size, not getBoundingClientRect(): the entry animation starts it scaled down (.97), which would place
+  // it off centre and let the edge clamps push it a few pixels past the screen.
+  const pr = { width: pop.offsetWidth, height: pop.offsetHeight };
   const gap = 8;
   let x;
   let y;
+  // Above or below the anchor: lined up with its left edge, its right edge (align 'end') or its middle ('center').
+  const along = () => (align === 'end' ? r.right - pr.width : align === 'center' ? r.left + r.width / 2 - pr.width / 2 : r.left);
   if (side === 'right') { x = r.right + gap; y = align === 'end' ? r.bottom - pr.height : r.top; }
   else if (side === 'left') { x = r.left - pr.width - gap; y = r.top; }
-  else if (side === 'top') { x = align === 'end' ? r.right - pr.width : r.left; y = r.top - pr.height - gap; }
-  else { x = align === 'end' ? r.right - pr.width : r.left; y = r.bottom + gap; }
+  else if (side === 'top') { x = along(); y = r.top - pr.height - gap; }
+  else { x = along(); y = r.bottom + gap; }
   if (side === 'right' && x + pr.width > window.innerWidth - 8) x = r.left - pr.width - gap;
   if (side === 'left' && x < 8) x = r.right + gap;
   x = Math.max(8, Math.min(x, window.innerWidth - pr.width - 8));

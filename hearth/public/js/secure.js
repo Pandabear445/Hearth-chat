@@ -631,7 +631,8 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
         err.code = 'untrusted';
         throw err;
       }
-      // Our own copy: to our keys as this device proved them, never to whatever the server lists for us now, and with our
+      // Our own copy goes only to keys proven to be ours (see ownKeysOk), never to whatever the server lists for us just
+      // now: a server that pushed its own public key as ours would otherwise get every new server key. And with our
       // post-quantum key whenever the account has one (myLockPq throws rather than fall back).
       const self = uid === S.me.id;
       if (self && !(await ownKeysOk())) throw ownKeysMismatch();

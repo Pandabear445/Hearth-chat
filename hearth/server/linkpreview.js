@@ -19,6 +19,7 @@ const net = require('net');
 const netguard = require('./netguard');
 const jobs = require('./jobs');
 const log = require('./log');
+const social = require('./social');
 
 const L = log.child('linkpreview');
 
@@ -475,6 +476,7 @@ module.exports = function setupLinkPreviews(ctx) {
   const YT_OEMBED = process.env.LINK_PREVIEW_YOUTUBE_OEMBED || 'https://www.youtube.com/oembed';
   const YTIMG = (process.env.LINK_PREVIEW_YTIMG_BASE || 'https://i.ytimg.com').replace(/\/+$/, '');
   const X_OEMBED = process.env.LINK_PREVIEW_X_OEMBED || 'https://publish.twitter.com/oembed';
+  const TIKTOK_OEMBED = process.env.LINK_PREVIEW_TIKTOK_OEMBED || 'https://www.tiktok.com/oembed';
 
   // This server's own names: a preview of them would be this server fetching itself.
   function ownHosts(req) {
@@ -552,6 +554,47 @@ module.exports = function setupLinkPreviews(ctx) {
     return { title: name ? `${name} (@${s.handle})` : `@${s.handle}`, description: text, siteName: 'X', kind: 'post', image: null };
   }
 
+  // ---- TikTok (server/social.js). A video link: its oEmbed answer (title, author, picture), never the page,
+  // which needs JavaScript. The picture must come from TikTok's picture hosts.
+  const TIKTOK_PICS = /(^|\.)tiktokcdn(-us|-eu)?\.com$/;
+  async function tiktok(p, opts) {
+    const j = await oembed(TIKTOK_OEMBED, `url=${encodeURIComponent(p.link)}`, opts);
+    const title = cleanText(j.title, TITLE_MAX);
+    const author = cleanText(j.author_name, 100);
+    if (!title && !author) throw new Stop('none');
+    let image = null;
+    const pic = typeof j.thumbnail_url === 'string' ? j.thumbnail_url : '';
+    if (pic && pic.length <= URL_MAX) {
+      const ok = hopOk(opts.own);
+      image = await fetchImage(pic, { ...opts, allowUrl: (x) => ok(x) && TIKTOK_PICS.test(x.hostname) });
+    }
+    return { title: title || `${author} on TikTok`, description: title && author ? author : '', siteName: 'TikTok', kind: 'video', image };
+  }
+  // A short TikTok link (vm.tiktok.com/…, tiktok.com/t/…) says where it goes only in its redirect. Each hop is
+  // asked on its own (no redirect is followed blindly), only TikTok's own names are ever contacted, and the
+  // first hop that names a video ends it: the video's page itself is never fetched.
+  const tiktokHop = (u) => u.protocol === 'https:' && (TEST_SITES || u.port === '') && !u.username && !u.password
+    && (social.TIKTOK_HOSTS.has(u.hostname) || social.TIKTOK_SHORT_HOSTS.has(u.hostname));
+  async function resolveTikTokShort(link, { signal, deadline }) {
+    let url = link;
+    for (let hop = 0; hop < 4; hop++) {
+      const r = await guard(netguard.request(url, {
+        protocols: ['https:'], allowUrl: tiktokHop, allowPrivate: ALLOW_PRIVATE, maxRedirects: 0,
+        timeout: Math.max(500, Math.min(5000, deadline - Date.now())), maxBytes: 16 * 1024, truncate: true, signal,
+        headers: { 'User-Agent': UA, Accept: 'text/html', 'Accept-Language': ACCEPT_LANGUAGE },
+      }));
+      const loc = r.headers && r.headers.location;
+      if (![301, 302, 303, 307, 308].includes(r.status) || !loc) throw new Stop('none');
+      let next;
+      try { next = new URL(String(loc), url); } catch { throw new Stop('none'); }
+      const p = social.parseSocial(next, { anyPort: TEST_SITES });
+      if (p && p.kind === 'tiktok' && p.id) return p;
+      if (!tiktokHop(next)) throw new Stop('none');
+      url = next.href;
+    }
+    throw new Stop('none');
+  }
+
   async function generic(fetchUrl, u, opts) {
     const r = await guard(netguard.request(fetchUrl, {
       protocols: ['https:'], allowUrl: hopOk(opts.own), allowPrivate: ALLOW_PRIVATE, maxRedirects: PAGE_REDIRECTS,
@@ -593,6 +636,8 @@ module.exports = function setupLinkPreviews(ctx) {
       if (xs) return { preview: await xPost(xs, opts) };
       // Other X pages are never fetched: they need JavaScript and a sign-in to show anything.
       if (isXHost(u.hostname)) return { preview: null, reason: 'none' };
+      const tt = social.parseSocial(u, { anyPort: TEST_SITES });
+      if (tt && tt.kind === 'tiktok') return { preview: await tiktok(tt.id ? tt : await resolveTikTokShort(tt.link, opts), opts) };
       return { preview: await generic(fetchUrl, u, opts) };
     } catch (e) {
       if (e instanceof Stop) return { preview: null, reason: e.reason };
@@ -690,6 +735,32 @@ module.exports = function setupLinkPreviews(ctx) {
     if (!gone) { gone = true; job.waiters--; }
     if (res.writableEnded || res.destroyed) return;
     say(result, false);
+  }));
+
+  // ---- short TikTok links, for the app's in-place player and watch together (docs/design/SOCIAL-EMBEDS.md).
+  // Asked only when someone taps a short link's player (or starts watching one together): this server then sees
+  // that link, as with a preview. The answer is the video's id, checked like any other (server/social.js).
+  // Per-account only, never cached between accounts.
+  api.post('/social/resolve', auth, wrap(async (req, res) => {
+    if (features().linkPreviews === false) fail(404, 'This server doesn’t look up links (link previews are turned off). Open it on TikTok instead.', 'off');
+    rateLimit('soc:' + req.userId, 20, 60000);
+    if (req.session) rateLimit('socs:' + req.session.id, 20, 60000);
+    limitNet(req, 'soc', 60, 60000);
+    const raw = (req.body || {}).url;
+    const p = typeof raw === 'string' && raw.length <= URL_MAX ? social.parseSocial(raw, { anyPort: TEST_SITES }) : null;
+    if (!p) fail(400, 'That isn’t a TikTok or Instagram video link.', 'bad_url');
+    if (p.id) return res.json({ kind: p.kind, id: p.id, type: p.type, link: p.link });
+    // Real lookups (up to 4 requests to TikTok each) share the preview fetches' hourly budget.
+    rateLimit('lpf:' + req.userId, 100, 3600000);
+    const ctl = new AbortController();
+    res.on('close', () => { if (!res.writableFinished) ctl.abort(); });
+    let r;
+    try { r = await resolveTikTokShort(p.link, { signal: ctl.signal, deadline: Date.now() + 6000 }); } catch (e) {
+      if (e && e.code === 'ABORTED') { if (!res.headersSent) res.end(); return; }
+      if (e instanceof Stop) fail(404, 'That short link doesn’t lead to a TikTok video.', 'none');
+      throw e;
+    }
+    res.json({ kind: 'tiktok', id: r.id, link: r.link });
   }));
 };
 

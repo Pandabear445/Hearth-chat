@@ -29,19 +29,22 @@ const PERMS = {
   // (server/nicknames.js). Everyone has the first by default; the second is a moderator power.
   CHANGE_NICKNAME: 1 << 20,
   MANAGE_NICKNAMES: 1 << 21,
+  // v25 (soundboard): play sounds from your own soundboard into a voice call (server/soundboard.js). Everyone has it
+  // by default, like Discord's Use Soundboard; it can be taken away per voice channel, and a timeout takes it too.
+  USE_SOUNDBOARD: 1 << 22,
   ADMINISTRATOR: 1 << 30,
 };
 const ALL = Object.values(PERMS).reduce((a, b) => a | b, 0);
 const P = PERMS;
 const DEFAULT_EVERYONE = P.VIEW_CHANNEL | P.SEND_MESSAGES | P.ADD_REACTIONS | P.ATTACH_FILES | P.EMBED_LINKS
-  | P.CONNECT | P.SPEAK | P.CREATE_INVITE | P.CREATE_THREADS | P.CHANGE_NICKNAME;
+  | P.CONNECT | P.SPEAK | P.CREATE_INVITE | P.CREATE_THREADS | P.CHANGE_NICKNAME | P.USE_SOUNDBOARD;
 // Permissions that only make sense per channel (used to validate overrides). Create Invite isn't one: invites
 // are for the whole server, so a per-channel toggle would look like it does something when it doesn't. Nor is
 // Mute Members: a server mute holds in every voice channel. Move Members is: it's checked in the voice channel the
 // person is in (and, for a move, the one they go to).
 const CHANNEL_SCOPED = P.VIEW_CHANNEL | P.SEND_MESSAGES | P.ADD_REACTIONS | P.ATTACH_FILES | P.EMBED_LINKS
   | P.MENTION_EVERYONE | P.MANAGE_MESSAGES | P.CONNECT | P.SPEAK | P.CREATE_THREADS | P.MANAGE_CHANNELS | P.MANAGE_ROLES
-  | P.MOVE_MEMBERS;
+  | P.MOVE_MEMBERS | P.USE_SOUNDBOARD;
 // What everyone in a group chat can do. Only its owner manages it (adds channels, deletes other people's
 // messages…); renaming it and changing its picture are allowed to everyone by those routes themselves. Group chats
 // have no nicknames.
@@ -52,7 +55,7 @@ const GROUP_MEMBER = (DEFAULT_EVERYONE | P.MENTION_EVERYONE) & ~P.CHANGE_NICKNAM
 // A nickname is something everyone in the server sees, so changing your own waits too (and nicknames.js makes
 // Manage Nicknames wait as well).
 const TALK = P.SEND_MESSAGES | P.ADD_REACTIONS | P.ATTACH_FILES | P.MENTION_EVERYONE | P.CREATE_THREADS | P.SPEAK | P.EMBED_LINKS | P.CREATE_INVITE
-  | P.CHANGE_NICKNAME;
+  | P.CHANGE_NICKNAME | P.USE_SOUNDBOARD;
 
 function makePerms(db) {
   // Only roles held by a current member count: a role row left behind by someone who left can never come back

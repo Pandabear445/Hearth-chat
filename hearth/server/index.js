@@ -27,9 +27,10 @@ jobs.setStore((r) => db.prepare(`INSERT INTO job_health (name, every_ms, last_ru
   .run(r.name, r.everyMs, r.lastRun, r.lastOk, r.lastError, r.lastErrorAt, r.lastErrorCategory, r.failures, r.runs, r.totalFailures, r.durationMs, Date.now()));
 const { sanitizeProfile, parseProfile } = require('./profile');
 const { sanitizePage, parsePage } = require('./page');
+const BOARD = require('./soundboard');
 const { PERMS: PM, ALL: ALL_PERMS, DEFAULT_EVERYONE, CHANNEL_SCOPED, makePerms } = require('./perms');
 const TEMPLATES = require('./templates');
-const { stripFile, ImageRejected, StripTimedOut } = require('./imagemeta');
+const { stripFile, fitEmojiFile, ImageRejected, StripTimedOut } = require('./imagemeta');
 // files-10: signed links for the news, webhook-avatar and music-art picture proxies (server/mediasign.js). The server
 // signs each picture's address when it hands it to an app, so the proxies only fetch what this server chose to show.
 const MEDIA_LINKS = require('./mediasign').mediaLinks(atRestKey);
@@ -942,12 +943,13 @@ app.use(express.json({ limit: '2mb', type: jsonBody, verify: (req, res, buf) => 
 //                 barrier: injected markup could still send data out in an https: image or media address, the
 //                 allowed video frames or a navigation. It limits what an XSS bug can do; it doesn't make leaks
 //                 impossible.
-//   frames        Recall (this server) and the YouTube, Vimeo and Twitch players only
+//   frames        Recall (this server) and the YouTube, Vimeo, Twitch, TikTok and Instagram players only (the last
+//                 two: exactly www.tiktok.com and www.instagram.com, server/social.js FRAME_ORIGINS)
 //   framing       nobody can put Hearth inside their page (clickjacking); no plugins; forms only post here
 const CSP_BASE = [
   "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "script-src-attr 'none'", "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:", "img-src 'self' data: blob: https:", "media-src 'self' blob: data: https:",
-  "worker-src 'self' blob:", "frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com https://player.vimeo.com https://player.twitch.tv", "object-src 'none'", "base-uri 'none'",
+  "worker-src 'self' blob:", "frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com https://player.vimeo.com https://player.twitch.tv https://www.tiktok.com https://www.instagram.com", "object-src 'none'", "base-uri 'none'",
   "form-action 'self'", "frame-ancestors 'none'", "manifest-src 'self'",
 ].join('; ');
 // 'self' covers the live connection (wss://) in current browsers; the host is named too for older Safari.
@@ -1046,8 +1048,12 @@ function uploadLimits() {
   };
 }
 const MB = 1024 * 1024;
-const usedBytes = (uid) => db.prepare('SELECT COALESCE(SUM(size), 0) n FROM user_files WHERE user_id = ?').get(uid).n;
-const dayBytes = (uid) => db.prepare('SELECT COALESCE(SUM(size), 0) n FROM user_files WHERE user_id = ? AND created_at > ?').get(uid, now() - 86400000).n;
+// What an account stores, and has uploaded in the last day: its files, and its soundboard's sounds (soundboard.js:
+// encrypted audio kept in the database, counted at its stored size).
+const usedBytes = (uid) => db.prepare(`SELECT (SELECT COALESCE(SUM(size), 0) FROM user_files WHERE user_id = ?)
+  + (SELECT COALESCE(SUM(size), 0) FROM soundboard_items WHERE user_id = ? AND kind = 'sound') n`).get(uid, uid).n;
+const dayBytes = (uid) => { const since = now() - 86400000; return db.prepare(`SELECT (SELECT COALESCE(SUM(size), 0) FROM user_files WHERE user_id = ? AND created_at > ?)
+  + (SELECT COALESCE(SUM(size), 0) FROM soundboard_items WHERE user_id = ? AND kind = 'sound' AND audio_at > ?) n`).get(uid, since, uid, since).n; };
 function quotaOf(uid) {
   const row = getUserRow(uid);
   const lim = uploadLimits();
@@ -2497,7 +2503,7 @@ function eraseAccount(row) {
     // Their settings and bookmarks (saved messages with their notes, read positions, mention counts, notification
     // choices, folders and other preferences), and which servers they were in (former_members only matters to
     // someone who could come back).
-    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters',
+    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'soundboard_items', 'event_rsvps', 'word_filters', 'personal_nicknames',
       'saved_messages', 'read_states', 'mention_marks', 'notify_prefs', 'user_prefs', 'former_members']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(row.id);
     db.prepare('DELETE FROM profile_comments WHERE profile_id = ?').run(row.id); // the comments on their profile page go with it
     // Call relays they offered (Settings → Help host) leave everyone's calls and backups (everyone's apps are told to
@@ -2731,7 +2737,8 @@ api.patch('/me/profile', auth, (req, res) => {
   // same one again (the profile editor sends everything) keeps the time it clears itself.
   const statusChanged = profile.customStatus.emoji !== before.emoji || profile.customStatus.text !== before.text;
   if (statusChanged) PRES.limitStatus(req);
-  checkWords(profile.displayName, profile.pronouns, profile.bio, profile.aboutMe, profile.headline, profile.mood.text, profile.customStatus.text, profile.interests, profile.songTitle, profile.links.map((l) => l.label));
+  checkWords(profile.displayName, profile.pronouns, profile.bio, profile.aboutMe, profile.headline, profile.mood.text, profile.customStatus.text, profile.interests, profile.songTitle, profile.links.map((l) => l.label),
+    profile.favorites.map((f) => [f.label, f.value]), profile.songLink.label, profile.soundShowcase.map((x) => x.name));
   if (!profile.displayName) profile.displayName = row.username;
   // Top friends must actually be friends.
   profile.topFriends = profile.topFriends.filter((id) => areFriends(req.userId, id));
@@ -4839,24 +4846,27 @@ api.post('/servers/:id/voice/:uid/mute', auth, (req, res) => setVoiceMute(req, r
 api.delete('/servers/:id/voice/:uid/mute', auth, (req, res) => setVoiceMute(req, res, false));
 
 // ---------------------------------------------------------------- custom emoji
-// Animated emoji: GIF, animated WebP and APNG all keep animating. We look inside the file rather than
-// trusting its type, so an animated WebP or APNG is recognised too.
-function isAnimatedImage(buf) {
-  if (buf.slice(0, 3).toString('latin1') === 'GIF') {
-    let frames = 0; // count image descriptors (0x2C) that follow a graphic control extension
-    for (let i = 0; i < buf.length - 1 && frames < 2; i++) if (buf[i] === 0x21 && buf[i + 1] === 0xF9) frames++;
-    return frames > 1;
-  }
-  if (buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') return buf.indexOf('ANIM', 12, 'latin1') !== -1;
-  if (buf[0] === 0x89 && buf.slice(1, 4).toString('latin1') === 'PNG') { const idat = buf.indexOf('IDAT', 8, 'latin1'); const actl = buf.indexOf('acTL', 8, 'latin1'); return actl !== -1 && (idat === -1 || actl < idat); }
-  return false;
-}
-const EMOJI_MAX = 2 * 1024 * 1024;
+// Every emoji is stored at most 128×128 and 512 KB (server/emojiimage.js). The app shrinks still pictures before
+// uploading them; here a GIF that's too big is shrunk (still animated), and anything else too big is refused, so a
+// call straight to the API can't store a bigger one. The check runs in the picture worker, after the metadata is
+// removed. GIF, animated WebP and APNG all keep animating: we look inside the file rather than trusting its type.
+const EMOJI_MAX = 2 * 1024 * 1024; // what may be uploaded (a big GIF is shrunk to well under this)
 const emojiName = (n) => String(n || '').trim().replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 32);
 function checkEmojiRoom(s, name) {
   if (name.length < 2) fail(400, 'Emoji names need at least 2 letters, numbers or underscores.');
   if (db.prepare('SELECT COUNT(*) AS n FROM emojis WHERE server_id = ?').get(s.id).n >= 200) fail(400, 'A server can have up to 200 emoji.');
   if (db.prepare('SELECT 1 FROM emojis WHERE server_id = ? AND name = ?').get(s.id, name)) fail(409, `There's already an emoji called :${name}:.`);
+}
+// Makes the stored file fit (in place) and returns whether it's animated. Refuses with a message for the person.
+async function fitStoredEmoji(file) {
+  let r;
+  try { r = await fitEmojiFile(uploadPath(file)); } catch (e) {
+    if (e instanceof StripTimedOut) fail(503, 'Making that emoji fit took too long, so it wasn\u2019t saved. Try again in a moment, or try a smaller picture.', 'too_slow');
+    if (e instanceof ImageRejected) fail(400, e.message, 'bad_emoji');
+    throw e;
+  }
+  if (r.size != null) db.prepare('UPDATE user_files SET size = ? WHERE name = ?').run(r.size, file);
+  return r.animated;
 }
 function addEmoji(s, name, url, animated, userId) {
   checkEmojiRoom(s, name);
@@ -4864,19 +4874,21 @@ function addEmoji(s, name, url, animated, userId) {
   db.prepare('INSERT INTO emojis (id, server_id, name, url, animated, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, s.id, name, url, animated ? 1 : 0, userId, now());
   serverAudit(s, userId, 'emoji_create', id, { name, animated: animated ? true : undefined });
   emitServer(s.id);
-  return { id, name, animated: !!animated };
+  return { id, name, url, animated: !!animated };
 }
-api.post('/servers/:id/emojis', auth, limited('image', uploadImage, 'file'), (req, res) => {
+api.post('/servers/:id/emojis', auth, limited('image', uploadImage, 'file'), wrap(async (req, res) => {
   const s = requirePerm(req.params.id, req.userId, PM.MANAGE_EMOJIS, 'You need the Manage Emoji permission.');
   if (!req.file) fail(400, 'Choose an image.');
   const url = '/uploads/' + req.file.filename;
   try {
     if (req.file.size > EMOJI_MAX) fail(400, 'Emoji images can be up to 2 MB.');
-    const animated = isAnimatedImage(fs.readFileSync(uploadPath(req.file.filename)));
-    res.json(addEmoji(s, emojiName((req.body || {}).name), url, animated, req.userId));
+    const name = emojiName((req.body || {}).name);
+    checkEmojiRoom(s, name); // before the work of shrinking it
+    const animated = await fitStoredEmoji(req.file.filename);
+    res.json(addEmoji(s, name, url, animated, req.userId));
   } catch (e) { removeUpload(url); throw e; }
-});
-// Turn a GIPHY GIF or sticker into a server emoji (uses a small rendition so it stays light).
+}));
+// Turn a GIPHY GIF or sticker into a server emoji (uses a small rendition, shrunk to fit like any other).
 api.post('/servers/:id/emojis/from-giphy', auth, wrap(async (req, res) => {
   const s = requirePerm(req.params.id, req.userId, PM.MANAGE_EMOJIS, 'You need the Manage Emoji permission.');
   if (!gifKey()) fail(400, 'GIF search isn\u2019t set up on this server yet.');
@@ -4898,12 +4910,19 @@ api.post('/servers/:id/emojis/from-giphy', auth, wrap(async (req, res) => {
   if (!r.ok) { cancelBody(r.body); fail(502, 'Couldn\u2019t download that GIF from GIPHY.'); }
   const buf = await readLimited(r, EMOJI_MAX).catch(() => fail(502, 'Couldn\u2019t download that GIF from GIPHY.'));
   if (!buf) fail(400, 'That GIF is too big to use as an emoji.');
+  if (buf.toString('latin1', 0, 3) !== 'GIF') fail(502, 'GIPHY sent something that isn\u2019t a GIF.');
   const over = overLimit(req.userId, q, buf.length);
   if (over) throw over;
   const file = `${newId()}${crypto.randomBytes(8).toString('hex')}.gif`;
   fs.writeFileSync(path.join(UPLOAD_DIR, file), buf);
   recordFile(req.userId, file, 'emoji', buf.length);
-  try { res.json(addEmoji(s, name, '/uploads/' + file, isAnimatedImage(buf), req.userId)); } catch (e) { removeUpload('/uploads/' + file); throw e; }
+  try {
+    const stripped = { size: buf.length };
+    await stripUploadedImage(stripped, uploadPath(file));
+    if (stripped.size !== buf.length) db.prepare('UPDATE user_files SET size = ? WHERE name = ?').run(stripped.size, file);
+    const animated = await fitStoredEmoji(file);
+    res.json(addEmoji(s, name, '/uploads/' + file, animated, req.userId));
+  } catch (e) { removeUpload('/uploads/' + file); throw e; }
 }));
 api.patch('/emojis/:id', auth, (req, res) => {
   const e = db.prepare('SELECT * FROM emojis WHERE id = ?').get(req.params.id);
@@ -5321,16 +5340,17 @@ async function gifCategories() {
     return (json.data || []).slice(0, 30).map((c) => ({ name: c.name, preview: c.gif ? gifItem(c.gif).preview : null })).filter((c) => c.preview);
   });
 }
-// One GIF by id, as a small file suitable for a custom emoji.
+// One GIF by id, as a small file suitable for a custom emoji (the server then shrinks it to fit 128×128).
 async function gifForEmoji(id) {
+  const pick = (list) => list.find((x) => x && x.url && (+x.size || 0) <= 2 * 1024 * 1024);
   if (gifProvider() === 'klipy') {
     const json = await klipy('/v2/posts', { ids: id, media_filter: 'tinygif,nanogif,gif,tinygif_transparent' });
     const f = ((json.results || [])[0] || {}).media_formats || {};
-    return [f.tinygif_transparent, f.tinygif, f.nanogif, f.gif].find((x) => x && x.url && (+x.size || 0) <= 2 * 1024 * 1024);
+    return pick([f.tinygif_transparent, f.tinygif, f.nanogif, f.gif]);
   }
   const json = await giphy(`/v1/gifs/${id}`, {});
   const im = (json.data && json.data.images) || {};
-  return [im.fixed_height_small, im.fixed_width_small, im.fixed_height, im.downsized].find((x) => x && x.url && (+x.size || 0) <= 2 * 1024 * 1024);
+  return pick([im.fixed_height_small, im.fixed_width_small, im.fixed_height, im.downsized]);
 }
 
 api.get('/gifs', auth, wrap(async (req, res) => {
@@ -5612,6 +5632,7 @@ const NEWS = require('./newsbot')({ api, app, auth, db, fail, wrap, rateLimit, s
   } });
 // Study tools (server/study.js): encrypted sync for Recall's decks, pictures and profile.
 require('./study')({ api, auth, db, fail, rateLimit, pushTo: (...a) => pushTo(...a), emitToUser: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
+BOARD.setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, quotaOf, overLimit, emitToUser: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
 ACT = require('./activity')({ api, app, auth, db, emit: (...a) => io && io.emit(...a), fail, wrap, rateLimit, isOnline, getUserRow, getSetting, setSetting, checkMediaToken, mediaLinks: MEDIA_LINKS, sealSecret, openSecret, auditLog,
   requireInstanceAdmin, checkWords, broadcastUser: (id) => broadcastUser(id), DATA_DIR, version: require('../package.json').version });
 
@@ -7014,6 +7035,8 @@ NICK = require('./nicknames')({ api, auth, db, fail, rateLimit, limitNet, requir
 // suggested one (plain). Matching happens only in the apps.
 WFILTER = require('./wordfilter')({ api, auth, db, fail, rateLimit, limitNet, requireServer, perms, PM, serverAudit, getIo: () => io,
   emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
+// Personal nicknames (server/personalnames.js): names you give people that only you see, sealed by your app.
+require('./personalnames')({ api, auth, db, fail, rateLimit, limitNet, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
 function fundingTotals() {
   const f = funding();
   const auto = MONEY.raisedThisMonth();
@@ -7401,6 +7424,7 @@ const watchRooms = new Map(); // room -> { item, queue, playing, position, rate,
 const WATCH_URL_MAX = 2048;
 const WATCH_STATE_MAX = 64 * 1024;
 const { youtubeId } = require('./linkpreview');
+const social = require('./social');
 function parseWatchUrl(raw) {
   let u;
   const text = String(raw || '').trim();
@@ -7424,24 +7448,63 @@ function parseWatchUrl(raw) {
     if (!/^[a-z0-9_]{3,25}$/i.test(ch) || ['videos', 'directory', 'settings'].includes(ch)) fail(400, 'Paste the link of a live Twitch channel (twitch.tv/name).');
     return { kind: 'twitch', src: ch.toLowerCase(), start: 0, link: `https://twitch.tv/${ch}`, live: true };
   }
+  // TikTok and Instagram (server/social.js): only the checked id is kept; the app builds the player from it.
+  // Instagram's player can't be controlled from outside, so its items are `manual` (start together, a ready
+  // check, next by vote) rather than kept in step.
+  const so = social.parseSocial(u);
+  if (so && so.short) fail(400, 'Open that short TikTok link once (or paste the full link): this server needs the video\u2019s own link.');
+  if (so && so.kind === 'tiktok') return { kind: 'tiktok', src: so.id, start: 0, link: so.link };
+  if (so && so.kind === 'instagram') return { kind: 'instagram', src: so.id, postType: so.type, start: 0, link: so.link, manual: true };
+  if (['tiktok.com', 'instagram.com'].includes(host)) fail(400, 'That link doesn\u2019t point to one TikTok video or Instagram reel or post.');
   if (/\.(mp4|webm|ogv|ogg|mov|m4v)$/i.test(u.pathname) && /^https?:$/.test(u.protocol)) {
     if (u.href.length > WATCH_URL_MAX) fail(400, 'That link is too long.'); // URL() can lengthen it (escaping)
     return { kind: 'video', src: u.href, start: 0, link: u.href };
   }
-  fail(400, 'That site isn\u2019t supported yet. YouTube, Vimeo, Twitch (live) and direct video files (.mp4, .webm) work. For anything else, share your screen.');
+  fail(400, 'That site isn\u2019t supported yet. YouTube, Vimeo, Twitch (live), TikTok, Instagram reels and direct video files (.mp4, .webm) work. For anything else, share your screen.');
 }
-async function watchTitle(item) {
+// A video's title for watch together, from YouTube's, Vimeo's or TikTok's oEmbed. It's only a nicety, so it's
+// skipped rather than refused: when link previews are turned off (this server doesn't look up links), and once the
+// person who added it has used the hourly budget link previews share ('lpf:', linkpreview.js). Titles are kept for a
+// while by link, so the same video added again asks nobody. The request goes through netguard, to that site only,
+// with a 64 KB cap on the answer.
+const WATCH_TITLE_MAX_BYTES = 64 * 1024;
+const watchTitles = new Map(); // link -> { title, at }
+async function watchTitle(item, uid) {
   try {
     const api = item.kind === 'youtube' ? `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(item.link)}`
-      : item.kind === 'vimeo' ? `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(item.link)}` : null;
+      : item.kind === 'vimeo' ? `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(item.link)}`
+        : item.kind === 'tiktok' ? `https://www.tiktok.com/oembed?url=${encodeURIComponent(item.link)}` : null;
+    // Instagram's oEmbed needs a Meta app token, so its items keep a plain name.
+    if (item.kind === 'instagram') return item.postType === 'p' ? 'Instagram post' : 'Instagram reel';
     if (!api) return item.kind === 'twitch' ? `${item.src} (live on Twitch)` : decodeURIComponent(item.src.split('/').pop()).slice(0, 120);
-    const r = await fetch(api, { signal: AbortSignal.timeout(4000) });
+    const known = watchTitles.get(item.link);
+    if (known && known.at > now() - 6 * 3600000) return known.title;
+    if (features().linkPreviews === false) return '';
+    if (hitsSoFar('lpf:' + uid) >= 100) return '';
+    countHit('lpf:' + uid, 3600000);
+    const host = new URL(api).host;
+    const r = await netguard.request(api, {
+      protocols: ['https:'], allowUrl: (u) => u.protocol === 'https:' && u.host === host, maxRedirects: 1,
+      timeout: 4000, maxBytes: WATCH_TITLE_MAX_BYTES, headers: { Accept: 'application/json' },
+    });
     if (!r.ok) return '';
-    const j = await r.json();
-    return String(j.title || '').slice(0, 150);
+    const title = String((JSON.parse(r.body.toString('utf8')) || {}).title || '').slice(0, 150);
+    if (watchTitles.size >= 500) watchTitles.delete(watchTitles.keys().next().value);
+    watchTitles.set(item.link, { title, at: now() });
+    return title;
   } catch { return ''; }
 }
-const watchOut = (room) => { const w = watchRooms.get(room); if (!w) return null; const { votes, ...out } = w; return { ...out, serverNow: Date.now() }; };
+// ready: who in the call said they're ready for the current video (a manual one: Instagram), as a list.
+const watchOut = (room) => {
+  const w = watchRooms.get(room); if (!w) return null;
+  const { votes, ready, ...out } = w;
+  const m = voiceChannels.get(room);
+  return { ...out, ready: ready && ready.item === w.item.id ? [...ready.users].filter((u) => m && m.has(u)) : [], serverNow: Date.now() };
+};
+// A manual video (Instagram) has no player to move: "play" means everyone presses play together, at startAt.
+const WATCH_COUNTDOWN_MS = 3000;
+// The second video shown beside the first (side by side): TikTok and Instagram only, both upright.
+const SIDE_KINDS = new Set(['tiktok', 'instagram']);
 // Changes are sent at most 4 times a second per call: quick bursts (dragging through a video, a stream of
 // controls) go out as one update carrying the latest state, so a flood of tiny events can't turn into a
 // flood of full-state broadcasts.
@@ -7456,7 +7519,8 @@ function emitWatch(room) {
 }
 const dropWatch = (room) => { const e = watchEmits.get(room); if (e) clearTimeout(e.timer); watchEmits.delete(room); watchRooms.delete(room); };
 // Where the video is right now, according to the shared state.
-const watchPos = (w) => w.position + (w.playing ? ((Date.now() - w.updatedAt) / 1000) * w.rate : 0);
+// (A countdown's updatedAt is when it ends, so until then the video stays where it is.)
+const watchPos = (w) => w.position + (w.playing ? (Math.max(0, Date.now() - w.updatedAt) / 1000) * w.rate : 0);
 
 // Takes someone out of the voice room they're in (and ends the room's watch-together when it empties).
 // notifyUser: also tell their app (voice:kicked), e.g. when they lost access to the channel.
@@ -7668,10 +7732,10 @@ function setupSockets(server) {
           if (old) old.leave(`voice:${room}`);
         }
         const speak = !!(vp & PM.SPEAK);
-        Object.assign(prev, { socketId: socket.id, reconnecting: false, grace: null, speak, serverMuted, muted: !!p.muted || !speak, deafened: !!p.deafened, video: !!p.video, screen: !!p.screen });
+        Object.assign(prev, { socketId: socket.id, reconnecting: false, grace: null, speak, serverMuted, muted: !!p.muted || !speak, deafened: !!p.deafened, video: !!p.video, screen: !!p.screen, board: p.board === true });
         socket.join(`voice:${room}`);
         const m = voiceChannels.get(room);
-        const peers = [...m.entries()].filter(([userId]) => userId !== uid).map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId) }));
+        const peers = [...m.entries()].filter(([userId]) => userId !== uid).map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId), ...(s.board ? { board: true } : {}) }));
         // Everyone else points their connection to this person at the new socket (and renegotiates if needed).
         socket.to(`voice:${room}`).emit('voice:peer-joined', { userId: uid, socketId: socket.id, resumed: true });
         emitVoiceState(room);
@@ -7684,10 +7748,12 @@ function setupSockets(server) {
       }
       if (!voiceChannels.has(c.id)) voiceChannels.set(c.id, new Map());
       const m = voiceChannels.get(c.id);
-      const peers = [...m.entries()].map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId) }));
+      const peers = [...m.entries()].map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId), ...(s.board ? { board: true } : {}) }));
       // speak: whether they may talk here (the app keeps the mic off without it; recheckVoice keeps it current).
       const speak = !!(vp & PM.SPEAK);
-      m.set(uid, { socketId: socket.id, sid: socket.data.sid, muted: !!p.muted || !speak, deafened: !!p.deafened, video: false, screen: false, speak, serverMuted, reconnecting: false, grace: null });
+      // board: the app has a soundboard lane (voice.js LANE.board), so the people joining after it add one to their
+      // connection with it. Older apps don't, and never get one.
+      m.set(uid, { socketId: socket.id, sid: socket.data.sid, muted: !!p.muted || !speak, deafened: !!p.deafened, video: false, screen: false, speak, serverMuted, reconnecting: false, grace: null, board: p.board === true });
       userVoice.set(uid, c.id);
       socket.join(`voice:${c.id}`);
       // Anyone still connected to this person from before (their app reloaded, or the server restarted) moves
@@ -7731,6 +7797,34 @@ function setupSockets(server) {
       emitVoiceState(ch);
     }));
 
+    // Soundboard (v25): the app asks before it plays one of its sounds into the call, and only plays it once the
+    // server says yes. The listeners' apps let a person's soundboard lane through only while the server says a sound
+    // of theirs is playing (for `ms`, at most PLAY_MAX_MS), so a modified app can't play longer, more often, or
+    // without permission to people running this one. The server never learns which sound it is.
+    socket.on('voice:board', guard((p = {}) => {
+      // Asking at all is counted first, so refused asks (no permission, say) can't be sent without limit either.
+      rateLimit('board-ask:' + uid, 30, 10000);
+      const room = userVoice.get(uid);
+      const s = room && voiceChannels.get(room)?.get(uid);
+      if (!s || s.socketId !== socket.id) fail(400, 'Join the call first.');
+      // Server-muted, timed out or no Speak here: no sounds either. Muted or deafened by choice: the app says unmute.
+      if (!s.speak) fail(403, 'You can\u2019t play sounds in this call.');
+      if (s.muted || s.deafened) fail(400, 'Unmute to play sounds.');
+      if (!String(room).startsWith('dm:')) {
+        const c = db.prepare('SELECT * FROM channels WHERE id = ?').get(room);
+        const srv = c && serverOf(c);
+        if (!c || !srv || !(perms.channel(srv, c, uid) & PM.USE_SOUNDBOARD)) fail(403, 'You don\u2019t have permission to use the soundboard here.');
+      }
+      rateLimit('board-gap:' + uid, 1, BOARD.PLAY_RATE.gapMs);
+      rateLimit('board-play:' + uid, BOARD.PLAY_RATE.burst, BOARD.PLAY_RATE.windowMs);
+      const ms = Math.round(Math.min(BOARD.PLAY_MAX_MS, Math.max(100, +p.ms || BOARD.PLAY_MAX_MS)));
+      // And at most PLAY_RATE.msPerWindow of sound in each window, so back-to-back 5-second plays can't keep the
+      // listeners' soundboard lane open the whole time.
+      rateLimit('board-ms:' + uid, BOARD.PLAY_RATE.msPerWindow, BOARD.PLAY_RATE.windowMs, ms);
+      socket.to(`voice:${room}`).emit('voice:board', { channelId: room, userId: uid, ms });
+      return { ok: true, ms };
+    }));
+
     // Declining a call: tell whoever is calling, and stop this person's other devices ringing.
     socket.on('call:decline', guard((p = {}) => {
       const room = String(p.room || '');
@@ -7760,6 +7854,10 @@ function setupSockets(server) {
       if (!features().watch) fail(403, 'Watch together is turned off on this server.');
       const room = myWatchRoom();
       const item = { ...parseWatchUrl(p.url), id: newId(), title: '', addedBy: uid };
+      // Adding videos (and side-by-side ones) has its own limits, per person and per call: each can mean a title
+      // lookup, and a side video pauses everyone. (A whole queue, 25, fits in a minute.)
+      rateLimit('watch-add:' + uid, 30, 60000);
+      rateLimit('watch-add-room:' + room, 60, 60000);
       const cur = watchRooms.get(room);
       if (cur && p.queue) {
         if (!mayControl(room, cur) && cur.hostOnly) fail(403, 'Only the host can add videos.');
@@ -7768,10 +7866,10 @@ function setupSockets(server) {
         cur.queue.push(item);
       } else {
         if (cur && !mayControl(room, cur)) fail(403, 'Only the host can change the video.');
-        watchRooms.set(room, { item, queue: cur ? cur.queue : [], playing: true, position: item.start || 0, rate: 1, updatedAt: Date.now(), by: cur && cur.hostOnly ? cur.by : uid, hostOnly: cur ? cur.hostOnly : !!p.hostOnly, seq: ((cur && cur.seq) || 0) + 1, lastBy: uid, lastAction: 'start' });
+        watchRooms.set(room, { item, queue: cur ? cur.queue : [], playing: !item.manual, position: item.start || 0, rate: 1, updatedAt: Date.now(), by: cur && cur.hostOnly ? cur.by : uid, hostOnly: cur ? cur.hostOnly : !!p.hostOnly, seq: ((cur && cur.seq) || 0) + 1, lastBy: uid, lastAction: 'start', side: cur && cur.side && SIDE_KINDS.has(item.kind) ? cur.side : null, startAt: 0 });
       }
       emitWatch(room);
-      watchTitle(item).then((t) => { if (t && watchRooms.has(room)) { item.title = t; emitWatch(room); } });
+      watchTitle(item, uid).then((t) => { if (t && watchRooms.has(room)) { item.title = t; emitWatch(room); } });
       return { ok: true };
     }));
     socket.on('watch:control', guard((p = {}) => {
@@ -7781,13 +7879,19 @@ function setupSockets(server) {
       if (!mayControl(room, w)) fail(403, 'Only the host controls playback.');
       if (p.itemId && p.itemId !== w.item.id) return { ok: true }; // about an older video
       const pos = Number.isFinite(+p.position) ? Math.max(0, +p.position) : watchPos(w);
-      if (p.action === 'play') { w.playing = true; w.position = pos; }
+      if (p.action === 'play') { w.playing = true; w.position = pos; w.startAt = w.item.manual || w.side ? Date.now() + WATCH_COUNTDOWN_MS : 0; }
       else if (p.action === 'pause') { w.playing = false; w.position = pos; }
       else if (p.action === 'seek') { w.position = pos; }
       else if (p.action === 'rate' && [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].includes(+p.rate)) { w.position = watchPos(w); w.rate = +p.rate; }
       else if (p.action === 'hostOnly' && (w.by === uid || isStaff(uid))) { w.hostOnly = !!p.value; }
       else return { ok: true };
-      w.updatedAt = Date.now();
+      // (Who controls changes nothing about where the video is.)
+      // A seek or a new speed during a "start together" countdown keeps the countdown; a pause ends it.
+      if (p.action !== 'hostOnly') {
+        const counting = w.playing && w.startAt > Date.now();
+        if (p.action !== 'play' && !counting) w.startAt = 0;
+        w.updatedAt = w.startAt || Date.now();
+      }
       // Who did what, so everyone else's app can say "ana jumped to 12:30".
       w.seq = (w.seq || 0) + 1; w.lastBy = uid; w.lastAction = p.action;
       emitWatch(room);
@@ -7811,8 +7915,40 @@ function setupSockets(server) {
       w.votes = null;
       if (!w.queue.length) { w.playing = false; w.position = watchPos(w); w.updatedAt = Date.now(); emitWatch(room); return { ok: true }; }
       w.item = w.queue.shift();
-      Object.assign(w, { playing: true, position: w.item.start || 0, rate: 1, updatedAt: Date.now() });
+      Object.assign(w, { playing: !w.item.manual, position: w.item.start || 0, rate: 1, updatedAt: Date.now(), startAt: 0, ready: null });
+      if (w.side && !SIDE_KINDS.has(w.item.kind)) w.side = null;
       emitWatch(room);
+      return { ok: true };
+    }));
+    // "I'm ready" for a manual video (Instagram): loaded and tapped, so the countdown can start.
+    socket.on('watch:ready', guard((p = {}) => {
+      const room = myWatchRoom();
+      const w = watchRooms.get(room);
+      if (!w || p.itemId !== w.item.id) return { ok: true };
+      if (!w.ready || w.ready.item !== w.item.id) w.ready = { item: w.item.id, users: new Set() };
+      if (p.ready === false) w.ready.users.delete(uid); else w.ready.users.add(uid);
+      emitWatch(room);
+      return { ok: true };
+    }));
+    // A second upright video beside the first (a TikTok next to a reel): started together with it, and on its own
+    // after that. url null takes it away.
+    socket.on('watch:side', guard((p = {}) => {
+      if (!features().watch) fail(403, 'Watch together is turned off on this server.');
+      const room = myWatchRoom();
+      const w = watchRooms.get(room);
+      if (!w) fail(404, 'Nothing is playing.');
+      if (!mayControl(room, w)) fail(403, 'Only the host can change the videos.');
+      if (p.url == null) { w.side = null; emitWatch(room); return { ok: true }; }
+      if (!SIDE_KINDS.has(w.item.kind)) fail(400, 'Side by side works for TikTok videos and Instagram reels.');
+      const item = { ...parseWatchUrl(p.url), id: newId(), title: '', addedBy: uid };
+      if (!SIDE_KINDS.has(item.kind)) fail(400, 'Side by side works for TikTok videos and Instagram reels.');
+      rateLimit('watch-add:' + uid, 30, 60000); // (shared with watch:start)
+      rateLimit('watch-add-room:' + room, 60, 60000);
+      w.side = item;
+      w.playing = false; w.position = watchPos(w); w.updatedAt = Date.now(); w.startAt = 0;
+      w.seq = (w.seq || 0) + 1; w.lastBy = uid; w.lastAction = 'side';
+      emitWatch(room);
+      watchTitle(item, uid).then((t) => { if (t && watchRooms.get(room) === w && w.side === item) { item.title = t; emitWatch(room); } });
       return { ok: true };
     }));
     socket.on('watch:remove', guard((p = {}) => {

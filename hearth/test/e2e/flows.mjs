@@ -1032,6 +1032,131 @@ async function watchTogether(t) {
   await bob.page.waitForSelector('#voice-panel', { state: 'hidden' });
 }
 
+// ------------------------------------------------------------------ TikTok and Instagram, in a message and watched together
+// The players are stand-ins (page.route): a TikTok player that speaks TikTok's postMessage API and records the
+// commands it gets, and a plain Instagram embed page. Nothing reaches the real sites.
+const TT_ID = '7234567890123456789';
+const FAKE_TIKTOK = `<!doctype html><html><body style="margin:0;background:#111;color:#fff;font:14px sans-serif"><div id="s">fake tiktok</div><script>
+  const log = window.__cmds = []; let state = -1; let t = 0; let at = 0;
+  const post = (type, value) => parent.postMessage({ type, value, 'x-tiktok-player': true }, '*');
+  const now = () => (state === 1 ? t + (Date.now() - at) / 1000 : t);
+  addEventListener('message', (e) => {
+    const d = e.data; if (!d || d['x-tiktok-player'] !== true) return; log.push(d.type);
+    if (d.type === 'play') { t = now(); at = Date.now(); state = 1; post('onStateChange', 1); }
+    else if (d.type === 'pause') { t = now(); state = 2; post('onStateChange', 2); }
+    else if (d.type === 'seekTo') { t = +d.value; at = Date.now(); }
+    document.getElementById('s').textContent = 'state ' + state;
+  });
+  post('onPlayerReady');
+  setInterval(() => post('onCurrentTime', { currentTime: now(), duration: 60 }), 250);
+</script></body></html>`;
+async function fakeSocialSites(p) {
+  const asked = [];
+  await p.context.route(/^https:\/\/www\.(tiktok|instagram)\.com\//, (route) => {
+    const u = route.request().url();
+    asked.push(u);
+    const tt = u.startsWith('https://www.tiktok.com/player/v1/');
+    return route.fulfill({ status: 200, contentType: 'text/html', body: tt ? FAKE_TIKTOK : '<!doctype html><body style="background:#222;color:#fff">fake reel</body>' });
+  });
+  return asked;
+}
+// The commands a stand-in TikTok player got.
+async function tiktokCommands(p, sel) {
+  const frame = await (await p.$(sel).first().elementHandle()).contentFrame();
+  return frame.evaluate(() => window.__cmds || []);
+}
+async function socialVideos(t) {
+  const { alice, bob } = t.people;
+  const bobAsked = await fakeSocialSites(bob);
+  const aliceAsked = await fakeSocialSites(alice);
+  await alice.openChannel('general');
+  await bob.openChannel('general');
+  const text = `Two at once: https://www.tiktok.com/@hearth/video/${TT_ID} and https://www.instagram.com/reel/C9abc_DEF-1/`;
+  await alice.send(text);
+  const msg = bob.message('Two at once:');
+  await msg.locator('.soc-embed').nth(1).waitFor();
+  // Placeholders: nothing from TikTok or Instagram loads until Bob taps, and each says who will see him.
+  const tt = msg.locator('.soc-embed.kind-tiktok');
+  const ig = msg.locator('.soc-embed.kind-instagram');
+  await tt.locator('.soc-note', { hasText: 'Loads from tiktok.com, which sees your IP address.' }).waitFor();
+  await ig.locator('.soc-note', { hasText: 'Loads from instagram.com' }).waitFor();
+  check(!bobAsked.length, `Nothing should load from TikTok or Instagram before a tap (got ${bobAsked.join(', ')}).`);
+  check(!(await msg.locator('iframe').count()), 'No player before a tap.');
+  const box = await tt.boundingBox();
+  check(Math.abs(box.height / box.width - 16 / 9) < 0.05, `The TikTok player is upright, 9:16 (got ${box.width}×${box.height}).`);
+  // Tap: the player loads in place, sandboxed, with no referrer, from the checked id only.
+  await tt.locator('button.soc-play').click();
+  const frame = tt.locator('iframe.soc-frame');
+  await frame.waitFor();
+  const src = await frame.getAttribute('src');
+  check(src.startsWith(`https://www.tiktok.com/player/v1/${TT_ID}?`) && src.includes('autoplay=1'), `TikTok's player, from the id (got ${src}).`);
+  check((await frame.getAttribute('sandbox')) === 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox', 'The player is sandboxed.');
+  check((await frame.getAttribute('referrerpolicy')) === 'no-referrer', 'The player gets no referrer.');
+  check(bobAsked.length === 1 && bobAsked[0].startsWith(`https://www.tiktok.com/player/v1/${TT_ID}`), `Only the TikTok player loaded (got ${bobAsked.join(', ')}).`);
+  await ig.locator('button.soc-play').click();
+  check((await ig.locator('iframe.soc-frame').getAttribute('src')) === 'https://www.instagram.com/reel/C9abc_DEF-1/embed/', 'Instagram’s embed page, from the code.');
+  // Both play at once, side by side; closing one puts its placeholder back.
+  const [a, b] = [await tt.boundingBox(), await ig.boundingBox()];
+  check(Math.abs(a.y - b.y) < 2 && b.x > a.x + a.width - 1, 'Two players in one message sit side by side.');
+  await tt.locator('button.soc-close').click();
+  await tt.locator('button.soc-play').waitFor();
+  await ig.locator('button.soc-close').click();
+  // "Always load": players load as messages show.
+  await bob.openSettings('Chat');
+  await bob.$('select[aria-label="TikTok and Instagram players"]').selectOption('always');
+  await bob.closeSettings();
+  await msg.locator('.soc-embed.kind-tiktok iframe.soc-frame').waitFor();
+  await msg.locator('.soc-embed.kind-instagram iframe.soc-frame').waitFor();
+  await bob.openSettings('Chat');
+  await bob.$('select[aria-label="TikTok and Instagram players"]').selectOption('ask');
+  await bob.closeSettings();
+  await msg.locator('.soc-embed.kind-tiktok button.soc-play').waitFor();
+
+  // Watch together: a TikTok kept in step through its player's messages.
+  for (const p of [alice, bob]) { await p.channelRow('Lounge').locator('.ch-main').click(); await p.$('.voice-room .cs-controls').waitFor(); }
+  await alice.$('.voice-room .cs-tile', { hasText: 'bob' }).waitFor();
+  await alice.openChannel('general');
+  await alice.message('Two at once:').locator('.watch-chip', { hasText: 'Watch together · TikTok video' }).click();
+  await alice.toast('Playing for everyone in the call.');
+  const stage = '.wt-stage.wt-upright iframe.wt-frame';
+  for (const p of [alice, bob]) await p.$(stage).first().waitFor();
+  check((await bob.$(stage).first().getAttribute('src')).startsWith(`https://www.tiktok.com/player/v1/${TT_ID}?`), 'Watch together plays the same TikTok.');
+  for (let i = 0; i < 100 && !(await tiktokCommands(bob, stage)).includes('play'); i++) await bob.page.waitForTimeout(100);
+  check((await tiktokCommands(bob, stage)).includes('play'), 'Bob’s player was told to play.');
+  await bob.$('.wt-controls button[aria-label="Pause for everyone"]').first().click();
+  for (let i = 0; i < 100 && !(await tiktokCommands(alice, stage)).includes('pause'); i++) await alice.page.waitForTimeout(100);
+  check((await tiktokCommands(alice, stage)).includes('pause'), 'Bob’s pause reached Alice’s TikTok player.');
+  await bob.$('.wt-controls button[aria-label="Play for everyone"]').first().waitFor();
+
+  // A queue mixing both: the reel next. Instagram can't be controlled, so it's "start together" with a ready check.
+  await alice.message('Two at once:').locator('.watch-chip', { hasText: 'Watch together · Instagram reel' }).click();
+  await alice.toast('Added to the watch queue.');
+  await bob.$('.wt-queue .wt-qi').first().waitFor();
+  await bob.$('.wt-actions button', { hasText: 'Skip' }).first().click();
+  for (const p of [alice, bob]) await p.$('.wt-stage.wt-upright iframe[src="https://www.instagram.com/reel/C9abc_DEF-1/embed/"]').first().waitFor();
+  await bob.$('.wt-note', { hasText: 'Instagram doesn’t let other apps control its player' }).first().waitFor();
+  await bob.$('.wt-manual button', { hasText: 'I’m ready' }).first().click();
+  await bob.$('.wt-manual button', { hasText: '✓ Ready' }).first().waitFor();
+  await alice.channelRow('Lounge').locator('.ch-main').click();
+  await alice.$('.wt-manual .wt-time', { hasText: '1 ready' }).first().waitFor();
+  await alice.$('.wt-manual button', { hasText: 'Start together' }).first().click();
+  await bob.$('.wt-count:not([hidden])').first().waitFor();
+  await bob.$('.wt-count', { hasText: 'Press play now' }).first().waitFor({ timeout: 8000 });
+
+  // Side by side: the TikTok and the reel at once, for everyone.
+  await alice.openChannel('general');
+  await alice.message('Two at once:').locator('.watch-chip', { hasText: 'Watch side by side' }).click();
+  await alice.toast('Side by side for everyone in the call.');
+  for (const p of [alice, bob]) await p.page.waitForFunction(() => document.querySelectorAll('.wt-stage.wt-split .wt-slot iframe').length === 2);
+  check(!aliceAsked.some((u) => !/^https:\/\/www\.(tiktok\.com\/player\/v1\/|instagram\.com\/reel\/C9abc_DEF-1\/embed\/)/.test(u)), `Only the two players were loaded (got ${aliceAsked.join(', ')}).`);
+  await bob.$('.wt-actions button', { hasText: 'Stop' }).first().click();
+  for (const p of [alice, bob]) await p.$('.wt-title').first().waitFor({ state: 'detached' });
+  await bob.$('#voice-panel button[aria-label="Leave call"]').click();
+  await alice.$('#voice-panel button[aria-label="Leave call"]').click();
+  for (const p of [alice, bob]) await p.page.waitForSelector('#voice-panel', { state: 'hidden' });
+  for (const p of [alice, bob]) await p.context.unroute(/^https:\/\/www\.(tiktok|instagram)\.com\//);
+}
+
 // ------------------------------------------------------------------ the server's own audit log and report inbox
 async function auditAndReports(t) {
   const { alice, bob } = t.people;
@@ -3397,6 +3522,111 @@ async function nicknames(t) {
   await ss.locator('.audit-row', { hasText: 'bob removed the nickname of Alice Wonder (“Quince Queen”)' }).waitFor();
   await ss.locator('.modal-x').click();
   await bob.noModals();
+}
+
+// ------------------------------------------------------------------ 26b. nicknames only you see
+// Bob gives Alice a nickname from her member-list menu: his member list and her messages say it, hers don't, and the
+// server only holds it sealed. Her profile card says it's his name for her and who she really is; @mention
+// suggestions find her by it. With this device's copy gone, a reload gets it back from the server (as another device
+// would). Removing it in Privacy & safety brings her own name back.
+async function personalNicknames(t) {
+  const { alice, bob } = t.people;
+  for (const p of [alice, bob]) { await p.railButton(SERVER); await p.openChannel('general'); await p.showMembers(); }
+  await bob.member('Alice Wonder').click({ button: 'right' });
+  await bob.menuItem('Set nickname (only you see it)…').click();
+  const d = await bob.dialog('Set a nickname for Alice Wonder');
+  await d.locator('input').fill('  Sis\u202e 🌻 ');
+  await d.locator('.modal-foot .btn.primary').click();
+  await bob.toast('Alice Wonder shows as Sis 🌻 for you.');
+  await bob.member('Sis 🌻').waitFor();
+  await bob.message('Nickname check: quince').locator('.msg-name', { hasText: 'Sis 🌻' }).waitFor();
+  // Nobody else sees it, Alice included.
+  await alice.member('Alice Wonder').waitFor();
+  check(!(await alice.page.getByText('Sis 🌻').count()), 'Alice should never see the nickname Bob gave her.');
+  const rows = t.server.rows('SELECT data FROM personal_nicknames');
+  check(rows.length === 1 && /^x1:/.test(rows[0].data) && !rows[0].data.includes('Sis'), 'The server should only hold the nickname sealed.');
+  // Her profile card: his name for her, and who she really is.
+  await bob.member('Sis 🌻').click();
+  const pop = bob.page.locator('.pop-profile');
+  await pop.locator('.pc-personal', { hasText: 'Your nickname' }).waitFor();
+  await pop.locator('.pc-personal', { hasText: /Really Alice Wonder \(@alice\w*\)/ }).waitFor();
+  await bob.page.keyboard.press('Escape');
+  await pop.waitFor({ state: 'detached' });
+  const box = bob.$('#composer-input');
+  await box.fill('@sis');
+  await bob.page.locator('.suggest-item', { hasText: 'Sis 🌻' }).waitFor();
+  await box.fill('');
+  // From the server alone (this device's own copy gone), as another of Bob's devices would get it.
+  await bob.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('hearth.personalNames.')).forEach((k) => localStorage.removeItem(k)));
+  await bob.page.reload();
+  await bob.waitApp();
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await bob.showMembers();
+  await bob.member('Sis 🌻').waitFor();
+  // The list in Privacy & safety: removed there, her own name is back.
+  await bob.openSettings('Privacy & safety');
+  const sec = bob.page.locator('#personal-nicknames');
+  const row = sec.locator('.pnick-row', { hasText: 'Sis 🌻' });
+  await row.waitFor();
+  check((await row.innerText()).includes('Alice Wonder (@alice'), 'The settings list should say who each nickname is for.');
+  await row.locator('button', { hasText: exact('Remove') }).click();
+  await bob.toast('Nickname removed.');
+  await sec.getByText('You haven’t given anyone a nickname.').waitFor();
+  await bob.closeSettings();
+  await bob.member('Alice Wonder').waitFor();
+}
+
+// ------------------------------------------------------------------ 26c. emoji at the size they're shown
+// Two pictures picked at once (by Bob, who owns the server by now): a big PNG shrunk on the device (shown as it will be stored, with a name from its file
+// name) and a big animated GIF the server shrinks, still animated. Both are stored at most 128×128 and drawn 22 px
+// tall in a line of text, 48 px on their own.
+async function emojiSizes(t) {
+  const { alice: viewer, bob: owner } = t.people; // Bob owns the server by now
+  // A GIF with two frames (the harness's one frame, twice).
+  const one = makeGif(300, 200);
+  const frame = one.subarray(13 + 384, one.length - 1);
+  const dance = Buffer.concat([one.subarray(0, one.length - 1), frame, Buffer.from([0x3b])]);
+  await owner.serverMenu('Server settings');
+  const ss = owner.$('.modal.server-settings');
+  await ss.locator('.ss-tab', { hasText: 'Emoji' }).click();
+  await ss.locator('input[type=file]').setInputFiles([{ name: 'Big Photo.png', mimeType: 'image/png', buffer: makePng(400, 300) }, { name: 'dance.gif', mimeType: 'image/gif', buffer: dance }]);
+  const q = ss.locator('.emoji-queue');
+  const photo = q.locator('.pending-emoji', { hasText: 'Shrunk from 400×300 to 128×96' });
+  await photo.waitFor();
+  await q.locator('.pending-emoji', { hasText: 'Animated: shrunk to 128×85' }).waitFor();
+  const names = await q.locator('input[aria-label="Emoji name"]').evaluateAll((els) => els.map((e) => e.value));
+  check(names.join(',') === 'big_photo,dance', `Names should be suggested from the file names (got ${names.join(', ')}).`);
+  const prev = await photo.locator('img.s-inline').evaluate((i) => [i.getBoundingClientRect().height, i.naturalWidth]);
+  check(prev[0] === 22 && prev[1] === 128, `The preview should show the shrunk picture at 22 px (got ${prev}).`);
+  await ss.locator('button', { hasText: 'Upload 2 emoji' }).click();
+  await owner.toast('Added 2 emoji.');
+  await owner.page.waitForFunction(() => {
+    const imgs = [...document.querySelectorAll('.modal.server-settings .emoji-admin-grid img.cemoji')];
+    return imgs.length >= 3 && imgs.every((i) => i.complete && i.naturalWidth > 0 && i.naturalWidth <= 128 && i.naturalHeight <= 128);
+  });
+  const sizes = t.server.rows('SELECT name, animated FROM emojis WHERE name IN (?, ?) ORDER BY name', 'big_photo', 'dance');
+  check(sizes.map((e) => `${e.name}:${e.animated}`).join(' ') === 'big_photo:0 dance:1', `The GIF should stay animated (got ${JSON.stringify(sizes)}).`);
+  await ss.locator('.modal-x').click();
+  await owner.noModals();
+  // In a line of text, then on its own.
+  await owner.$('#composer-input').fill('Sized right :big_ph');
+  await owner.$('.composer-wrap .suggest:not([hidden])', { hasText: ':big_photo:' }).waitFor();
+  await owner.$('#composer-input').press('Tab');
+  await owner.$('#composer-input').press('Enter');
+  const inline = viewer.message('Sized right').locator('img.cemoji[alt=":big_photo:"]');
+  await inline.waitFor();
+  await viewer.page.waitForFunction(() => { const i = document.querySelector('#messages img.cemoji[alt=":big_photo:"]'); return i && i.complete && i.naturalWidth === 128; });
+  const h = await inline.evaluate((i) => Math.round(i.getBoundingClientRect().height));
+  check(h >= 20 && h <= 24, `An emoji in a line of text should be about 22 px tall (got ${h}).`);
+  await owner.$('#composer-input').fill(':danc');
+  await owner.$('.composer-wrap .suggest:not([hidden])', { hasText: ':dance:' }).waitFor();
+  await owner.$('#composer-input').press('Tab');
+  await owner.$('#composer-input').press('Enter');
+  const jumbo = viewer.page.locator('#messages .msg-text.jumbo img.cemoji[alt=":dance:"]').last();
+  await jumbo.waitFor();
+  const j = await jumbo.evaluate((i) => Math.round(i.getBoundingClientRect().height));
+  check(j === 48, `An emoji on its own should be 48 px (got ${j}).`);
 }
 
 // ------------------------------------------------------------------ 27. a message the server moved, repeated or rolled back
@@ -5879,6 +6109,110 @@ async function community(t) {
   delete t.people.nova;
 }
 
+// ------------------------------------------------------------------ soundboards and profile extras (v25)
+// A WAV made here: a beep `seconds` long (8 kHz, 8-bit mono).
+function beepWav(seconds) {
+  const n = Math.round(8000 * seconds);
+  const b = Buffer.alloc(44 + n);
+  b.write('RIFF', 0); b.writeUInt32LE(36 + n, 4); b.write('WAVE', 8); b.write('fmt ', 12); b.writeUInt32LE(16, 16);
+  b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(8000, 24); b.writeUInt32LE(8000, 28); b.writeUInt16LE(1, 32); b.writeUInt16LE(8, 34);
+  b.write('data', 36); b.writeUInt32LE(n, 40);
+  for (let i = 0; i < n; i++) b[44 + i] = 128 + Math.round(90 * Math.sin((2 * Math.PI * 660 * i) / 8000));
+  return b;
+}
+async function soundboardAndProfile(t) {
+  const { alice, bob } = t.people;
+  const aliceId = await alice.page.evaluate(() => localStorage.getItem('hearth.userId'));
+  // Settings → Soundboard: a page renamed .mp3 and a sound that's too long are refused before anything is sent.
+  await alice.openSettings('Soundboard');
+  const page = alice.$('.set-content .sb-editor');
+  await page.locator('.set-h', { hasText: 'Your sounds (0/24)' }).waitFor();
+  const file = page.locator('input[type=file]');
+  await file.setInputFiles({ name: 'evil.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('<html><script>alert(1)</script>'.padEnd(400, ' ')) });
+  await alice.toast('isn’t a sound Hearth can play');
+  await file.setInputFiles({ name: 'long.wav', mimeType: 'audio/wav', buffer: beepWav(7) });
+  await alice.toast('up to 5 seconds long');
+  check(!t.server.rows('SELECT 1 FROM soundboard_items').length, 'Nothing should reach the server for a refused file.');
+  // A real one: named, with an emoji and a color.
+  await file.setInputFiles({ name: 'airhorn.wav', mimeType: 'audio/wav', buffer: beepWav(0.8) });
+  const add = await alice.dialog('Add a sound');
+  await add.locator('label.field', { hasText: 'Name' }).locator('input').fill('Airhorn');
+  await add.locator('input[aria-label="Emoji"]').fill('📯');
+  await add.locator('.modal-foot .btn.primary').click();
+  await alice.toast('Sound added.');
+  await page.locator('.sb-edit-item .sb-btn', { hasText: 'Airhorn' }).waitFor();
+  await page.locator('.set-h', { hasText: 'Your sounds (1/24)' }).waitFor();
+  // The server only has ciphertext: neither the name nor the WAV header.
+  const rows = t.server.rows("SELECT kind, meta, audio FROM soundboard_items WHERE user_id = ?", aliceId);
+  check(rows.some((r) => r.kind === 'sound') && rows.every((r) => r.meta.startsWith('x1:') && !r.meta.includes('Airhorn')), 'Sound details should be sealed on the server.');
+  check(rows.every((r) => !Buffer.from(r.audio || '', 'base64').includes('WAVE')), 'Sound audio should be encrypted on the server.');
+  // Layout: a list, and a second page.
+  await page.locator('.chips[aria-label="Show as"] .chip', { hasText: exact('List') }).click();
+  await page.locator('.sb-edit-list.sb-list').waitFor();
+  await page.locator('button', { hasText: '+ Page' }).click();
+  await page.locator('.sb-tab', { hasText: 'Page 2' }).waitFor();
+  await page.locator('.sb-tab', { hasText: 'Sounds' }).click();
+  await page.locator('.sb-edit-item .sb-btn', { hasText: 'Airhorn' }).waitFor();
+  // On her profile, by choice.
+  await page.locator('.toggle-row', { hasText: 'Show my soundboard on my profile' }).locator('.switch').click();
+  for (let i = 0; i < 50 && !t.server.rows("SELECT 1 FROM users WHERE id = ? AND profile LIKE '%\"showSoundboard\":true%'", aliceId).length; i++) await new Promise((r) => setTimeout(r, 100));
+
+  // Profile extras: a favorite thing and a crown.
+  await alice.page.locator('.set-nav .set-nav-btn', { hasText: exact('Profile') }).click();
+  const form = alice.$('.set-content .set-form');
+  await form.locator('details summary', { hasText: 'Favorite things' }).click();
+  await form.locator('button', { hasText: '+ Add a favorite' }).click();
+  await form.locator('input[aria-label="Emoji"]').last().fill('🍕');
+  await form.locator('input[aria-label="What it is"]').fill('Food');
+  await form.locator('input[aria-label="Your favorite"]').fill('Pizza');
+  await form.locator('details summary', { hasText: 'Avatar shape & ring' }).click();
+  await form.locator('.chip', { hasText: 'Crown' }).click();
+  await alice.$('.set-preview .pc-fav', { hasText: 'Pizza' }).waitFor();
+  await alice.$('.save-bar .btn.primary').click();
+  await alice.toast('Profile saved.');
+  await alice.closeSettings();
+
+  // In a call: her press plays to bob (his tile for her lights up), and stops being heard once he mutes her soundboard.
+  await alice.railButton(SERVER);
+  await bob.railButton(SERVER);
+  for (const p of [alice, bob]) { await p.channelRow('Lounge').locator('.ch-main').click(); await p.$('.voice-room .cs-controls').waitFor(); }
+  for (const p of [alice, bob]) await p.page.waitForFunction(() => (window.__e2ePeers || []).some((pc) => pc.connectionState === 'connected'), null, { timeout: 30000 });
+  for (const label of ['Unmute', 'Undeafen']) if (await alice.$(`.voice-room .cs-controls button[aria-label="${label}"]`).count()) await alice.$(`.voice-room .cs-controls button[aria-label="${label}"]`).click();
+  const play = async () => {
+    await alice.$('.voice-room .cs-controls button[aria-label="Soundboard"]').click();
+    const pop = alice.page.locator('.sb-popover');
+    await pop.locator('.sb-btn', { hasText: 'Airhorn' }).click();
+    await alice.page.keyboard.press('Escape');
+  };
+  const lit = bob.page.locator(`.voice-room .cs-tile[data-speak="${aliceId}"].board-playing`);
+  await play();
+  await lit.waitFor({ timeout: 10000 });
+  await lit.waitFor({ state: 'detached', timeout: 10000 });
+  await bob.$(`.voice-room .cs-tile[data-speak="${aliceId}"]`).click({ button: 'right' });
+  await bob.page.locator('.vol-pop .toggle-row', { hasText: 'Mute their soundboard' }).locator('input').check();
+  await bob.page.keyboard.press('Escape');
+  await play();
+  await alice.page.waitForTimeout(1500);
+  check(!(await lit.count()), 'A muted soundboard should not play for bob.');
+  // Bob unmutes it from Settings → Soundboard.
+  await bob.openSettings('Soundboard');
+  await bob.$('.sb-muted li button', { hasText: 'Unmute' }).click();
+  await bob.$('.sb-muted').waitFor({ state: 'detached' });
+  await bob.closeSettings();
+  await bob.$('#voice-panel button[aria-label="Leave call"]').click();
+  await alice.$('#voice-panel button[aria-label="Leave call"]').click();
+
+  // Bob sees her favorite, crown and soundboard (names only) on her profile card.
+  await bob.openChannel('general');
+  await bob.showMembers();
+  await bob.page.locator('#members .member').filter({ has: bob.page.locator(`[data-user-av="${aliceId}"]`) }).first().click();
+  const card = bob.page.locator('.pop-profile');
+  await card.locator('.pc-fav', { hasText: 'Pizza' }).waitFor();
+  await card.locator('.pc-sound', { hasText: 'Airhorn' }).waitFor();
+  await card.locator('.av-deco.deco-crown').waitFor();
+  await bob.page.keyboard.press('Escape');
+}
+
 export const FLOWS = [
   ['accounts: register two people, sign out and back in', accounts],
   ['servers: create a server, invite, join', servers],
@@ -5897,6 +6231,7 @@ export const FLOWS = [
   ['voice: two people connected in a call', voiceCall],
   ['moderator toolkit: server mute in and out of a call, bulk delete', moderatorTools],
   ['watch together: start, pause for everyone, stop; a video file from another site says so before it loads; leave the call', watchTogether],
+  ['tiktok and instagram: tap to load in place (nothing before), sandboxed, side by side, Always; watch together keeps a TikTok in step, a reel starts together after a ready check, a mixed queue, side by side', socialVideos],
   ['audit log and reports: moderation as sentences, filters, live entries; a report reaches the server’s moderators', auditAndReports],
   ['dm call: ring, accept, hang up, decline', dmCall],
   ['group chat: create, talk both ways, call rings', groupChat],
@@ -5919,6 +6254,8 @@ export const FLOWS = [
   ['voice chat: open beside the call, both ways, a picture link from another site waits for a click, no threads, unread only once opened, pings always, pins, All messages, in a call', voiceChat],
   ['send later: schedule from the send button, edit, reschedule and send now from the list; cancel one in a DM; re-encrypted by itself when the key changes, never from a copy it can’t confirm; a signed-out session’s message waits for Keep; overdue ones ask first', sendLater],
   ['nicknames: set your own, seen in the member list, messages and @mention suggestions; a moderator changes and removes it; audit log', nicknames],
+  ['nicknames only you see: set from the member menu, shown in his lists and messages but never to her, sealed on the server, on her profile with her real name, found by @mention, back after a reload from the server alone, removed in settings', personalNicknames],
+  ['emoji sizes: a big PNG shrunk on the device and a big animated GIF shrunk on the server, previews, names from file names, 22 px inline and 48 px on their own', emojiSizes],
   ['message binding: nothing earlier flagged; a reply moved, a message re-dated, replayed and rolled back in the database are each flagged after a reload, with details; deleting a copy clears the other', messageBinding],
   ['reset without a recovery key: held back (in a voice channel’s chat too) and no invites until a member compares safety numbers and verifies her', resetVerify],
   ['word filter: your own list hides a disguised word (sealed on the server, never your own messages, search doesn’t quote it); a server’s suggested list blurs live, is audited, and can be turned off; a hidden message keeps its tampering flag', wordFilter],
@@ -5940,6 +6277,7 @@ export const FLOWS = [
   ['where the chat puts you: a DM reopens at its newest message as GIFs load, the "New messages" line above; Jump on a pin or a search result lands on the message and keeps it there; on a phone the pins close on Jump', keepYourPlace],
   ['post-quantum keys: an account from before them gets one at its next sign-in, unseen; DMs and a server key go hybrid', postQuantum],
   ['community: a server from the Gaming template, shown in server search and joined from there; the main server a new account joins at sign-up and reads in', community],
+  ['soundboards: a page renamed .mp3 and a 7-second sound refused, a sound added sealed, list layout and pages, shown on the profile; played in a call and lit up for bob, muted by him and unmuted; favorite things and a crown on her card', soundboardAndProfile],
   ['member relays: a member offers a machine in Help host, it checks in, the owner approves it with a password, it’s in everyone’s calls under a made-up login; the member avoids members’ relays, removes theirs and gets the uninstall command', memberRelays],
   // Last: it restarts the server.
   ['an update puts itself in place: no bar to click; never while a dialog is open, then by itself, in the same place, keeping a half-typed message', updateBar],

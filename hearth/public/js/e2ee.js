@@ -28,7 +28,8 @@
 //                        post-quantum key (w2), and signed by whoever shared it.
 //                        A new epoch starts whenever someone leaves (or a former member comes back), so
 //                        former members can't read on.
-//   Still P-256 only    The personal vault (x1), DM photo tags (td1) and DM chat backgrounds (lkd1): see the
+//   Still P-256 only    The personal vault (x1: study tools, saved notes, drafts, word filter, soundboards), DM photo
+//                        tags (td1) and DM chat backgrounds (lkd1): see the
 //                        research note's open items.
 
 import { ml_kem768 } from '../vendor/ml-kem.js';

@@ -18,9 +18,11 @@ import { EMOJI, EMOJI_NAMES, CATEGORY_ICONS, QUICK_REACTIONS, recentEmoji, pushR
 import { Voice } from './voice.js';
 import { openCallDiagnostics } from './call-diagnostics.js';
 import { createSecure, mergeUser, callRefusedText, noSafetyNumbersText } from './secure.js';
-import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong, songPlaying } from './profile-ui.js';
+import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, realName, forwardText, nameMatches, setPersonalNames, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong, songPlaying } from './profile-ui.js';
 import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
+import { socialLinks, parseSocialUrl, playerMode } from './social.js';
+import { socialEmbedEl, resolveSocial } from './social-embed.js';
 import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice, voicePlaying } from './features.js';
 import { rankRelays, chooseIce, relayTime, iceStale, usableIce, memberRelayHosts, avoidsMemberRelays, isMemberRelay, isRelay } from './relays.js';
 import { watchConnection } from './conn.js';
@@ -43,6 +45,7 @@ import { loadAppearance, saveAppearance, setServerTheme, BACKGROUNDS } from './a
 import { createDrafts, clearAllDrafts, clearLocalCopies, expireLocalCopies, claimOnce, rememberNotification, closeNotifications, closeNotificationFor, alsoCloseNotifications, quietNow } from './usability.js';
 import { label as disLabel, deadline, expired as isExpired, disappears, serverKept, nextDeadline, waitFor, sysLineParts, remaining, TIMERS, setChoices as setTimerChoices, weaker as weakerTimer, stricter as stricterTimer } from './disappear.js';
 import { createScheduled } from './scheduled.js';
+import { createSoundboard } from './soundboard.js';
 import { createMediaPanel } from './media-panel.js';
 import { createPhotoNotes } from './photo-notes.js';
 import { createChatLook } from './chat-look.js';
@@ -57,6 +60,8 @@ import { backStack, edgeSwipes } from './phone-nav.js';
 import { initAway, CLEAR_AFTER, clearAfterMs, clearsLabel, onlyPresenceChanged } from './presence.js';
 import { createTyping, typingLine, typingPreview } from './typing.js';
 import { createWordFilter, filterLabel, previewLabel } from './wordfilter-app.js';
+import { createPersonalNames } from './personal-names.js';
+import { prepareEmoji, suggestName, sizeLabel } from './emoji-upload.js';
 import { inviteMessage, movingMessage, joinNote, signUpMode, canShare, nudgeWanted, nudgeDismissed, dismissNudge } from './invite-share.js';
 
 // ======================================================================= state
@@ -91,6 +96,7 @@ const S = {
   notifySettings: { dnd: { on: false }, previews: 'hidden' },
   savedIds: new Set(),  // saved messages (ids only; on the server)
   speaking: new Set(),
+  boardPlaying: new Set(), // people in the call whose soundboard sound is playing (their tiles glow, like speaking)
   clockOffset: 0,       // the server's clock minus this device's (disappearing messages go by the server's time)
 };
 // The server's time now: disappearing messages are hidden by it, whatever this device's clock says.
@@ -104,12 +110,33 @@ let socketToken = '';
 onTokenChange((t) => { if (socket && socket.connected && t !== socketToken) { socket.disconnect(); socket.connect(); } });
 let hadController = false; // was a service worker already in charge when the page loaded?
 let voice;
+// Your own soundboard (soundboard.js): played into calls from the call controls, edited in Settings → Soundboard.
+const board = createSoundboard({
+  S, vaultKey: () => myVaultKey(), voice: () => voice,
+  canPlay: (room) => boardBlocked(room),
+  emojiPicker: (anchor, onPick) => emojiPicker(anchor, onPick),
+  openSettings: () => openSettings(app, 'soundboard'),
+  onMe: (u) => app.onMe(u),
+  userName: (id) => displayName(getUser(id)),
+});
+// Why this person can't play a sound into this call right now ('' when they can). The server checks the same.
+function boardBlocked(room) {
+  if (!voice || voice.channelId !== room) return 'Join a voice call to play sounds.';
+  if (voice.speakLocked || voice.serverMuted) return 'You can\u2019t talk in this call, so you can\u2019t play sounds either.';
+  if (voice.muted || voice.deafened) return 'Unmute to play sounds.';
+  const c = !room.startsWith('dm:') && channelById(room);
+  if (c && !canIn(c, PERMS.USE_SOUNDBOARD)) return 'You don\u2019t have permission to use the soundboard here.';
+  return '';
+}
 let away = null; // automatic Away (presence.js)
 const sec = createSecure({ S, onKeysChanged, onKeyWarning, onDmKeys, onNeedPassword: (why) => pqUnlockBar(why), onPqUpgraded: () => pqUpgraded() });
 // Who's typing where (typing.js): drawn under the open conversation's box and in the conversation lists.
 const TYPING = createTyping({ onChange: (key) => typingChanged(key) });
 // Word filter (wordfilter-app.js): your own list and your servers' suggested ones, applied on this device only.
 const WF = createWordFilter({ S, vaultKey: () => myVaultKey(), serverOf: (m) => msgServer(m), onChange: () => wordFilterChanged() });
+// Nicknames only you see (personal-names.js): every name the app shows asks profile-ui.js, which asks this first.
+const PN = createPersonalNames({ S, vaultKey: () => myVaultKey(), onChange: () => personalNamesChanged() });
+setPersonalNames((id) => PN.get(id));
 const fetchingUsers = new Set();
 
 // ---- per-device preferences
@@ -186,6 +213,7 @@ export const app = {
   },
   P,
   get voice() { return voice; },
+  soundboard: board,
   onMe(u) { setUser(u); renderUserPanel(); },
   checkAway: () => away && away.check(), // after "Away after" changes
   logout,
@@ -216,6 +244,8 @@ export const app = {
   setNotifySettings: (body) => setNotifySettings(body),
   decryptMessage: (m) => decryptMessage(m),
   wordFilter: WF,
+  personalNames: PN,
+  realName: (u) => realName(u),
   openShortcuts: () => openShortcuts(),
   // A server event for a settings page that follows it live (Help host: relays:mine). Returns how to stop listening.
   onSocket: (ev, fn) => { if (!socket) return () => {}; socket.on(ev, fn); return () => socket.off(ev, fn); },
@@ -608,6 +638,13 @@ function startApp() {
   // while it was closed (same tag).
   if (androidApp.cancel) alsoCloseNotifications(androidApp.cancel);
   voice = new Voice({
+    // The call's soundboard lane carries our sounds; someone else's lights up their tile while one plays.
+    boardTrack: () => board.track(),
+    // Remembered, so tiles and avatars drawn again while it plays (someone joins, a camera turns on) still glow.
+    onBoard: (id, on) => {
+      if (on) S.boardPlaying.add(id); else S.boardPlaying.delete(id);
+      $$(`[data-speak="${id}"]`).forEach((el) => el.classList.toggle('board-playing', on));
+    },
     // Lets the speaking detector ignore people whose mic is off (their state comes from the server).
     isPeerMuted: (userId) => { const st = voice && (S.voice[voice.channelId] || []).find((x) => x.userId === userId); return !!(st && (st.muted || st.deafened)); },
     socket,
@@ -882,6 +919,7 @@ function startApp() {
     toast(until ? `You\u2019re timed out in ${sv.name} until ${fmtStamp(until)}. You can still read.` : `Your timeout in ${sv.name} is over.`);
   });
   socket.on('study:changed', (p) => { if (S.me.studyEnabled) study.onRemoteChange(p); });
+  socket.on('soundboard:changed', () => { board.load(true).catch(() => {}); });
   socket.on('study:enabled', ({ enabled }) => { S.me.studyEnabled = enabled; if (!S.view.serverId) renderSidebar(); });
   socket.on('updates:new', (p) => { updates.onNew(p); if (S.view.type === 'updates') renderMain(); });
   socket.on('server:update', (server) => {
@@ -946,6 +984,7 @@ function startApp() {
   // A nickname set, changed or removed in one of your servers (server/nicknames.js).
   socket.on('member:nick', ({ serverId, userId, nickname } = {}) => applyNick(serverId, userId, typeof nickname === 'string' ? nickname : null));
   WF.listen(socket); // your word filter saved on another device, a server's suggested list changed
+  PN.listen(socket); // your nicknames for people, changed on another device
   socket.on('channel:create', (ch) => {
     const s = S.servers.find((x) => x.id === ch.serverId);
     if (s && !s.channels.find((c) => c.id === ch.id)) s.channels.push(ch);
@@ -1207,6 +1246,7 @@ async function loadBootstrap() {
   const extras = Promise.all(['/me/unread', '/me/notify', '/me/saved/ids'].map((p) => api('GET', p).catch(() => null)));
   // Your word filter comes alongside too, and is opened before anything is drawn, so nothing it hides shows first.
   const filterList = api('GET', '/me/word-filter').catch(() => null);
+  const personalList = api('GET', '/me/personal-nicknames').catch(() => null);
   const asked = Date.now();
   const askedAt = performance.now(); // (for the relay list in it: see bootIce)
   const b = await api('GET', '/bootstrap');
@@ -1257,6 +1297,8 @@ async function loadBootstrap() {
   applyUserState(await extras);
   const savedFilter = await filterList;
   if (savedFilter) await WF.apply(savedFilter, { quiet: true }).catch(() => {});
+  const savedNames = await personalList;
+  if (savedNames) await PN.apply(savedNames, { quiet: true }).catch(() => {});
   renderAll();
   loadPreviews();
   SCHED.load(); // your scheduled messages (after the keys above: some may need re-encrypting)
@@ -1409,6 +1451,25 @@ function applyNick(serverId, userId, nickname) {
   renderCallStages();
   if (S.view.type === 'voice') renderMain();
 }
+
+// Your nicknames for people changed (here or on another device): every name drawn follows, and the lists that sort or
+// search by name, the typing line, call tiles and the conversation list are drawn again.
+function personalNamesChanged() {
+  if (!S.me || !S.serversLoaded) return;
+  $$('[data-user-name]').forEach((el) => { const u = S.users[el.dataset.userName]; if (u) redrawName(el, u); });
+  renderSidebar();
+  if (panelMode()) renderPanel();
+  renderTyping();
+  renderCallStages();
+  if (S.view.type === 'voice' || S.view.type === 'friends' || S.view.type === 'home') renderMain();
+}
+// "Set nickname (only you see it)" for someone else: in their menus and on their profile.
+function personalNameItem(u) {
+  if (!u || !S.me || u.id === S.me.id || !u.username) return null;
+  const has = !!PN.get(u.id);
+  return { label: has ? 'Change your nickname for them\u2026' : 'Set nickname (only you see it)\u2026', icon: 'edit', action: () => openPersonalName(u) };
+}
+const openPersonalName = (u) => PN.openEditor(u, { realName });
 
 // ======================================================================= conversation previews (decrypted locally)
 // Each DM and group chat keeps its newest message (d.last / s.last: from the server, then kept up to date by new
@@ -2711,6 +2772,7 @@ function dmMenuItems(d) {
     '-',
     LOOK.menuItem('d:' + d.id), // "Chat background…" (none once they're blocked or their account is gone)
     { label: 'View profile', icon: 'user', action: () => openProfileModal(u.id) },
+    personalNameItem(u),
     { label: 'Verify encryption', icon: 'shield', action: () => openSafetyNumber(u) },
   ];
 }
@@ -3056,6 +3118,7 @@ function renderSidebarVoiceUsers() {
       const av = avatarEl(u, 22);
       av.dataset.speak = u.id;
       if (S.speaking.has(u.id)) av.classList.add('speaking');
+      if (S.boardPlaying.has(u.id)) av.classList.add('board-playing');
       el.append(h('button', { class: 'vc-user', 'data-pop-anchor': '', onclick: (e) => openProfilePop(e.currentTarget, u.id, 'right'),
         oncontextmenu: server ? (e) => contextMenu(e, memberMenuItems(server, u)) : null },
         av, nameEl(u, { server }),
@@ -3123,6 +3186,7 @@ function renderVoicePanel() {
       ibtn(voice.muted ? 'micOff' : 'mic', voice.muted ? 'Unmute' : 'Mute', toggleMute, { cls: voice.muted ? 'off' : '' }),
       ibtn(voice.camStream ? 'video' : 'videoOff', voice.camStream ? 'Turn camera off' : 'Turn camera on', toggleCamera, { cls: voice.camStream ? 'on' : '' }),
       ibtn('monitor', voice.screenStream ? 'Stop sharing' : 'Share your screen', toggleScreen, { cls: voice.screenStream ? 'on' : '' }),
+      ibtn('music', 'Soundboard', (e) => board.openPicker(e.currentTarget), { attrs: { 'data-pop-anchor': '' } }),
       ibtn('phoneOff', 'Leave call', () => { voice.leave(); playSound('selfLeave'); }, { cls: 'hang' })),
     voice.pttMode() ? h('div', { class: `ptt-hint${voice.pttHeld && !voice.muted ? ' on' : ''}` }, icon('mic'),
       getKeybinds().ptt ? (voice.pttHeld && !voice.muted ? 'Talking' : `Push to talk: hold ${comboLabel(getKeybinds().ptt)}`) : h('button', { class: 'link-btn', onclick: () => openSettings(app, 'keybinds') }, 'Push to talk is on, but no key is set')) : '',
@@ -3711,7 +3775,7 @@ function friendsView() {
       if (v.tab === 'online') list = list.filter((r) => (getUser(r.userId).presence || 'offline') !== 'offline');
     }
     const q = search.value.trim().toLowerCase();
-    if (q) list = list.filter((r) => { const u = getUser(r.userId); return u.username.toLowerCase().includes(q) || displayName(u).toLowerCase().includes(q); });
+    if (q) list = list.filter((r) => { const u = getUser(r.userId); return nameMatches(u, q); });
     list.sort((a, b) => displayName(getUser(a.userId)).localeCompare(displayName(getUser(b.userId))));
     const label = { online: 'Online', all: 'All friends', pending: 'Pending' }[v.tab];
     listEl.append(h('div', { class: 'list-label' }, `${label} \u2014 ${list.length}`));
@@ -3731,6 +3795,7 @@ function friendsView() {
         actions.push(ibtn('message', 'Message', () => openDmWith(u.id)));
         actions.push(ibtn('more', 'More', (e) => menu(e.currentTarget, [
           { label: 'View profile', icon: 'user', action: () => openProfileModal(u.id) },
+          personalNameItem(u),
           { label: 'Start a group chat with them', icon: 'people', action: () => openNewConversation(null, { group: true, preselect: [u.id] }) },
           ...groups().filter((g) => !g.memberIds.includes(u.id) && g.memberIds.length < GROUP_MAX).slice(0, 8).map((g) => ({ label: `Add to ${groupName(g)}`, icon: 'userPlus', action: () => api('POST', `/groups/${g.id}/members`, { userId: u.id }).then(() => toast('Added.')).catch((x) => toast(x.message, 'error')) })),
           { label: 'Remove friend', icon: 'trash', danger: true, action: async () => {
@@ -4876,8 +4941,18 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
       out.append(h('div', { class: `msg-text${chat.jumbo && isJumbo(text) ? ' jumbo' : ''}`, html: html + (m.editedAt ? '<span class="edited" title="Edited">(edited)</span>' : '') }));
     }
     // A link preview built by the sender: it came inside the encrypted message, so nothing is fetched to show it.
-    const links = chat.linkCards !== false && senderMayEmbed(m) ? linksOf(m) : [];
+    const cards = chat.linkCards !== false && senderMayEmbed(m) ? linksOf(m) : [];
+    // TikTok videos and Instagram reels play in place (social-embed.js): a placeholder until tapped. One with a
+    // preview card shows the card's picture and title instead of the card.
+    const socials = playerMode(chat) !== 'off' && senderMayEmbed(m) ? socialLinks(text) : [];
+    const links = cards.filter((l) => !socials.some((p) => p.url === l.url));
     if (links.length) out.append(h('div', { class: 'msg-links' }, links.map(linkCardEl)));
+    if (socials.length) {
+      out.append(h('div', { class: `msg-socials${socials.length > 1 ? ' many' : ''}` }, socials.map((p) => socialEmbedEl(p, {
+        // Blurred by the word filter: always a placeholder, so nothing loads for a message you chose to hide.
+        key: `${m.id}|${p.kind}:${p.id || p.short}`, card: cards.find((l) => l.url === p.url) || null, mode: blur ? 'ask' : playerMode(chat), blurred: !!blur,
+      }))));
+    }
     // Image links wait for a click unless they load from here or you chose Always (embedEl). Blurred, the Load button
     // is under the blur with the rest; hidden, the row drawn out of sight (filteredEl) has only the placeholder, so a
     // picture from another site loads for it only when it would have loaded anyway.
@@ -5496,7 +5571,8 @@ function openForward(m) {
     dests.filter((d) => !q || d.label.toLowerCase().includes(q) || d.sub.toLowerCase().includes(q)).slice(0, 40).forEach((d) => list.append(
       h('button', { class: 'quick-row', onclick: async () => {
         try {
-          const fwd = `${note.value.trim() ? note.value.trim() + '\n' : ''}> Forwarded from ${displayName(getUser(m.authorId))}\n${textOf(m).split('\n').map((l) => '> ' + l).join('\n')}`;
+          // Sent to other people, so the author goes by their own name, never your private nickname for them.
+          const fwd = forwardText({ note: note.value, author: getUser(m.authorId), text: textOf(m) });
           // A link preview goes along: the quoted text still has its link, so readers there keep the card.
           const all = filesOf(m);
           const go = (f) => sendTo(d.key, null, { t: fwd, f, ...(linksOf(m).length ? { l: linksOf(m) } : {}) }, null);
@@ -6605,9 +6681,9 @@ function membersPanel(el) {
   const draw = () => {
     clear(list);
     const q = search.value.trim().toLowerCase();
-    // Search finds people by username, display name or nickname here; the list shows and sorts by the nickname.
-    const users = server.memberIds.map(getUser).filter((u) => !q || u.username.toLowerCase().includes(q) || displayName(u).toLowerCase().includes(q)
-      || nicknameIn(server, u.id).toLowerCase().includes(q));
+    // Search finds people by username, display name, nickname here or your own nickname for them; the list shows and
+    // sorts by the name shown.
+    const users = server.memberIds.map(getUser).filter((u) => nameMatches(u, q, server));
     const changedKeys = sec.keysChanged(users);
     // Like Discord: online people grouped under their highest "show separately" role, then Online, then Offline.
     const hoisted = (server.roleDefs || []).filter((r) => r.hoist && !r.everyone).sort((a, b) => b.position - a.position);
@@ -6642,7 +6718,7 @@ function membersPanel(el) {
     }
     if (online.length) list.append(h('div', { class: 'group-label' }, h('span', null, `Online \u2014 ${online.length}`)), ...online.sort(byName).map(row));
     // Bots working for this server (the news bot while it follows something), like Discord shows them.
-    const bots = (server.bots || []).map(getUser).filter((u) => !q || u.username.toLowerCase().includes(q) || displayName(u).toLowerCase().includes(q));
+    const bots = (server.bots || []).map(getUser).filter((u) => nameMatches(u, q));
     if (bots.length) list.append(h('div', { class: 'group-label' }, h('span', null, `Bots \u2014 ${bots.length}`)), ...bots.map((u) => h('button', {
       class: 'member', 'data-pop-anchor': '', onclick: (e) => openProfilePop(e.currentTarget, u.id, 'left'),
     }, avatarEl(u, 34, { status: true, meId: S.me.id }),
@@ -6665,6 +6741,7 @@ function memberMenuItems(server, u) {
     { label: 'View profile', icon: 'user', action: () => openProfileModal(u.id) },
     !me ? { label: 'Message', icon: 'message', action: () => openDmWith(u.id) } : null,
     { label: 'Copy username', icon: 'copy', action: () => { copyText(u.username); toast('Copied.'); } },
+    personalNameItem(u),
     mayNickname(server, u) ? { label: me ? 'Change my nickname\u2026' : 'Change nickname\u2026', icon: 'edit', action: () => openNickname(server, u) } : null,
   ];
   if (isGroup(server)) return items;
@@ -6710,7 +6787,7 @@ function mayNickname(server, u) {
 function openNickname(server, u) {
   const me = u.id === S.me.id;
   const cur = nicknameIn(server, u.id);
-  const global = displayName(u);
+  const global = realName(u);
   const inp = h('input', { class: 'input', maxlength: '32', value: cur, placeholder: global, autocomplete: 'off' });
   const save = async (nickname) => {
     const r = await api('PUT', `/servers/${server.id}/members/${u.id}/nickname`, { nickname });
@@ -7560,7 +7637,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     const q = m[2].toLowerCase();
     const sv = suggServer();
     const items = candidates().filter((c) => (c.special ? c.special.startsWith(q) : c.role ? c.role.name.toLowerCase().includes(q)
-      : (c.username.toLowerCase().startsWith(q) || displayName(c).toLowerCase().includes(q) || nicknameIn(sv, c.id).toLowerCase().includes(q)))).slice(0, 8);
+      : (c.username.toLowerCase().startsWith(q) || nameMatches(c, q, sv)))).slice(0, 8);
     sugg = { items, i: 0, start: pos - m[2].length - 1, kind: 'at' };
     drawSuggest();
   };
@@ -8674,7 +8751,7 @@ function openSearch({ scope = null } = {}) {
     const exact = users.find((u) => u.username.toLowerCase() === n);
     if (exact) return { id: exact.id, user: exact };
     if (f.exact) return { error: `No one with the username @${f.name} in your servers or DMs.` };
-    const named = users.filter((u) => displayName(u).toLowerCase() === n);
+    const named = users.filter((u) => displayName(u).toLowerCase() === n || realName(u).toLowerCase() === n);
     if (named.length > 1) return { error: `Several people are called “${f.name}” (${handles(named)}). Use from:@username.` };
     const near = named.length ? named : users.filter((u) => u.username.toLowerCase().startsWith(n) || displayName(u).toLowerCase().startsWith(n));
     if (near.length === 1) return { id: near[0].id, user: near[0] };
@@ -8992,7 +9069,7 @@ function openSearch({ scope = null } = {}) {
     }
     // People and places only for plain words (filters are about messages).
     if (!scopeKey && !q.filters.length && (tab === 'people' || (tab === 'all' && !empty))) {
-      const people = Object.values(S.users).filter((u) => u.id !== S.me.id && (!words || u.username.toLowerCase().includes(words) || displayName(u).toLowerCase().includes(words)))
+      const people = Object.values(S.users).filter((u) => u.id !== S.me.id && (!words || nameMatches(u, words)))
         .sort((a, b) => displayName(a).localeCompare(displayName(b))).slice(0, tab === 'all' ? 5 : 30);
       add('People', people.map((u) => item('u:' + u.id, { av: avatarEl(u, 30, { status: true, meId: S.me.id }), title: displayName(u), sub: u.username, action: go(() => openDmWith(u.id)) })));
     }
@@ -9085,6 +9162,7 @@ function relationshipActions(u) {
       { label: 'View full profile', icon: 'user', action: () => openProfileModal(u.id) },
       { label: 'Verify encryption', icon: 'shield', action: () => openSafetyNumber(u) },
       { label: 'Copy username', icon: 'copy', action: () => { copyText(u.username); toast('Copied.'); } },
+      personalNameItem(u),
       r && r.status === 'accepted' ? { label: 'Remove friend', icon: 'trash', action: () => api('DELETE', '/friends/' + u.id).catch((x) => toast(x.message, 'error')) } : null,
       '-', blockItem(u), { label: 'Report', icon: 'shield', danger: true, action: () => openReport({ user: u }) }];
     menu(e.currentTarget, items, { align: 'end' });
@@ -9119,7 +9197,8 @@ function openProfilePop(anchor, userId, side = 'right') {
   const sv = currentServer();
   const nick = sv && sv.memberIds.includes(u.id) ? nicknameIn(sv, u.id) : '';
   const nickname = nick ? { name: nick, place: sv.name, edit: mayNickname(sv, u) ? () => { closePopover(); openNickname(sv, u); } : null } : null;
-  const card = profileCard(u, { meId: S.me.id, compact: true, actions: relationshipActions(u), mutual: mutualServersEl(u), nickname });
+  const editPersonal = u.id === S.me.id ? null : () => { closePopover(); openPersonalName(u); };
+  const card = profileCard(u, { meId: S.me.id, compact: true, actions: relationshipActions(u), mutual: mutualServersEl(u), nickname, editPersonal });
   // The full page is the best part of a profile: make it one obvious click away.
   const open = () => openProfileModal(u.id);
   card.querySelector('.pc-inner')?.prepend(h('button', { class: 'btn primary pc-open-page', onclick: open }, icon('user'), u.id === S.me.id ? 'View my page' : 'View full profile'));
@@ -9190,6 +9269,7 @@ async function openProfileModal(userId) {
     actions: u.id === S.me.id ? null : relationshipActions(u),
     openUser: (id) => { m.close(); openProfileModal(id); },
     onEdit: () => { m.close(); openSettings(app, 'page'); },
+    editPersonal: u.id === S.me.id ? null : () => { m.close(); openPersonalName(u); },
   });
   m = modal({ size: 'full', className: 'mys-modal', title: `${displayName(u)}'s profile`, body: h('div', { class: 'mys-host' }, h('button', { class: 'icon-btn mys-close', 'aria-label': 'Close', onclick: () => m.close() }, icon('close')), view), onClose: stopSong });
 }
@@ -9380,7 +9460,7 @@ function openAddServer() {
   });
 }
 function openCreateServer() {
-  const name = h('input', { class: 'input', maxlength: '64', value: `${displayName(S.me)}'s place` });
+  const name = h('input', { class: 'input', maxlength: '64', value: `${realName(S.me)}'s place` });
   let iconFile = null;
   const preview = h('div', { class: 'icon-preview' }, icon('image'));
   const fileIn = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', hidden: true, onchange: (e) => {
@@ -9865,7 +9945,7 @@ function openServerSettings(server, startTab = 'overview') {
       clear(listEl);
       const term = q.value.trim().toLowerCase();
       const muted = new Set(s.voiceMutes || []);
-      s.memberIds.map(getUser).filter((u) => !term || u.username.toLowerCase().includes(term) || displayName(u).toLowerCase().includes(term) || nicknameIn(s, u.id).toLowerCase().includes(term)).forEach((u) => {
+      s.memberIds.map(getUser).filter((u) => nameMatches(u, term, s)).forEach((u) => {
         const rs = memberRoles(s, u.id);
         add(listEl, h('div', { class: 'ss-row' }, avatarEl(u, 32, { status: true, meId: S.me.id }),
           h('span', { class: 'ss-row-name' }, nameEl(u, { roleColor: topColor(s, u.id), server: s }), h('span', null, u.username + (s.ownerId === u.id ? ' \u00b7 Owner' : '') + (muted.has(u.id) ? ' \u00b7 Server muted' : ''))),
@@ -9892,41 +9972,58 @@ function openServerSettings(server, startTab = 'overview') {
 
   function emoji(s) {
     const list = s.emojis || [];
-    const nameOf = (f) => f.name.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 32) || 'emoji';
-    // Pick one or many images (animated GIF/WebP/PNG welcome), name them, upload them all.
+    // Pick one or many images (animated GIF/WebP/PNG welcome). Each is made to fit 128×128 first (emoji-upload.js) and
+    // shown as it will look (in a line of text and on its own), with a name suggested from its file name.
     const queue = h('div', { class: 'emoji-queue' });
     const pending = [];
+    const taken = () => new Set([...list.map((e) => e.name), ...pending.map((it) => it.name)]);
     const fileIn = h('input', { type: 'file', multiple: true, accept: 'image/png,image/gif,image/webp,image/jpeg', hidden: true, onchange: () => {
       for (const f of fileIn.files) {
-        if (f.size > 2 * 1024 * 1024) { toast(`${f.name} is over 2 MB.`, 'error'); continue; }
-        const item = { file: f, url: URL.createObjectURL(f), name: nameOf(f) };
+        const item = { file: f, name: suggestName(f.name, taken()), prep: null };
         pending.push(item);
+        prepareEmoji(f).catch(() => ({ error: 'That picture couldn\u2019t be opened.' })).then((r) => {
+          item.prep = r;
+          if (r.blob) item.url = URL.createObjectURL(r.blob);
+          if (pending.includes(item)) drawQueue();
+        });
       }
       fileIn.value = '';
       drawQueue();
     } });
+    const forget = (it) => { if (it.url) URL.revokeObjectURL(it.url); pending.splice(pending.indexOf(it), 1); };
+    const infoOf = (p) => {
+      if (!p) return 'Getting it ready\u2026';
+      if (p.error) return p.error;
+      const size = `${p.width}\u00d7${p.height}`;
+      if (p.note) return `${p.note} \u00b7 ${size}`;
+      return p.was ? `Shrunk from ${p.was.width}\u00d7${p.was.height} to ${size} \u00b7 ${sizeLabel(p.blob.size)}` : `${size} \u00b7 ${sizeLabel(p.blob.size)}`;
+    };
     const drawQueue = () => {
       clear(queue);
-      pending.forEach((it, i) => queue.append(h('div', { class: 'emoji-admin pending-emoji' },
-        h('img', { class: 'cemoji big', src: it.url, alt: '' }),
-        h('input', { class: 'input sm', value: it.name, 'aria-label': 'Emoji name', oninput: (e) => { it.name = e.target.value; } }),
-        ibtn('close', 'Remove', () => { URL.revokeObjectURL(it.url); pending.splice(i, 1); drawQueue(); }, { cls: 'sm' }))));
-      if (pending.length) queue.append(h('div', { class: 'row gap' }, h('button', { class: 'btn primary', onclick: async () => {
+      pending.forEach((it) => queue.append(h('div', { class: `emoji-admin pending-emoji${it.prep && it.prep.error ? ' bad' : ''}` },
+        it.url ? h('span', { class: 'ep-sizes', 'aria-hidden': 'true' }, h('img', { class: 'cemoji s-jumbo', src: it.url, alt: '' }), h('img', { class: 'cemoji s-inline', src: it.url, alt: '' })) : null,
+        h('input', { class: 'input sm', value: it.name, maxlength: '32', 'aria-label': 'Emoji name', oninput: (e) => { it.name = e.target.value; } }),
+        ibtn('close', 'Remove', () => { forget(it); drawQueue(); }, { cls: 'sm' }),
+        h('span', { class: `ep-info${it.prep && it.prep.error ? ' bad' : ''}`, role: it.prep && it.prep.error ? 'alert' : null }, infoOf(it.prep)))));
+      const ready = pending.filter((it) => it.prep && it.prep.blob);
+      const waiting = pending.some((it) => !it.prep);
+      if (pending.length) queue.append(h('div', { class: 'row gap' }, h('button', { class: 'btn primary', disabled: waiting || !ready.length, onclick: async (e) => {
+        e.currentTarget.disabled = true;
         let ok = 0;
-        for (const it of [...pending]) {
-          const fd = new FormData(); fd.append('file', it.file); fd.append('name', it.name);
-          try { await api('POST', `/servers/${s.id}/emojis`, fd); ok++; pending.splice(pending.indexOf(it), 1); URL.revokeObjectURL(it.url); } catch (e) { toast(`:${it.name}: \u2014 ${e.message}`, 'error'); }
+        for (const it of ready) {
+          const fd = new FormData(); fd.append('file', it.prep.blob, it.prep.filename); fd.append('name', it.name);
+          try { await api('POST', `/servers/${s.id}/emojis`, fd); ok++; forget(it); } catch (err) { toast(`:${it.name}: \u2014 ${err.message}`, 'error'); }
         }
         if (ok) toast(`Added ${ok} emoji.`);
         await nextServerUpdate(s.id);
         draw();
-      } }, `Upload ${pending.length} emoji`), h('span', { class: 'field-hint' }, 'Names can use letters, numbers and _')));
+      } }, `Upload ${ready.length} emoji`), h('span', { class: 'field-hint' }, 'Names can use letters, numbers and _')));
     };
     const fromGiphy = () => {
       let m;
       const panel = gifPanel({ startTab: 'stickers', height: 420, onPick: (g) => {
         m.close();
-        const nameIn = h('input', { class: 'input', maxlength: '32', value: nameOf({ name: g.title || 'gif' }).toLowerCase().slice(0, 32) });
+        const nameIn = h('input', { class: 'input', maxlength: '32', value: suggestName(`${g.title || 'gif'}.gif`, taken()) });
         modal({ title: 'Name your emoji', size: 'sm', body: h('div', { class: 'stack' }, h('div', { class: 'row gap' }, h('img', { class: 'cemoji big', src: mediaUrl(g.preview), alt: '' }), field('Name', nameIn))),
           actions: [{ label: 'Cancel' }, { label: 'Add emoji', kind: 'primary', action: () => run(() => api('POST', `/servers/${s.id}/emojis/from-giphy`, { gifId: g.id, name: nameIn.value }), `Added :${nameIn.value}:`) }] });
       } });
@@ -9934,7 +10031,7 @@ function openServerSettings(server, startTab = 'overview') {
     };
     const animated = list.filter((e) => e.animated).length;
     add(body, h('h3', null, `Emoji \u2014 ${list.length} / 200`),
-      h('p', { class: 'muted-p' }, `Members can use these in any server or DM and as reactions. PNG, JPG, GIF or WebP up to 2 MB \u2014 animated GIF, WebP and PNG keep moving. 128\u00d7128 looks best.${animated ? ` (${animated} animated)` : ''}`),
+      h('p', { class: 'muted-p' }, `Members can use these in any server or DM and as reactions. PNG, JPG, GIF or WebP up to 2 MB \u2014 animated GIF, WebP and PNG keep moving. Every emoji is stored at most 128\u00d7128: bigger pictures and GIFs are shrunk for you, keeping their shape and transparency.${animated ? ` (${animated} animated)` : ''}`),
       h('div', { class: 'emoji-upload' },
         h('button', { class: 'btn primary', onclick: () => fileIn.click() }, icon('plus'), 'Upload emoji'),
         S.config.gifsEnabled ? h('button', { class: 'btn ghost', onclick: fromGiphy }, icon('gif'), 'Add from GIPHY') : null,
@@ -10086,7 +10183,7 @@ function openEditChannel(c, startTab = 'overview', { overrides } = {}) {
   // A voice channel's chat follows the chat permissions too (deny Send Messages to keep it voice only); it has no threads.
   const VOICE_CHAT = hasChat(ch0) ? ['SEND_MESSAGES', 'EMBED_LINKS', 'ATTACH_FILES', 'ADD_REACTIONS', 'MENTION_EVERYONE', 'MANAGE_MESSAGES'] : [];
   const scoped = PERM_GROUPS.flatMap(([, l]) => l).filter(([k]) => (c.type === 'voice'
-    ? ['VIEW_CHANNEL', 'CONNECT', 'SPEAK', 'MOVE_MEMBERS', 'MANAGE_CHANNELS', 'MANAGE_ROLES', ...VOICE_CHAT]
+    ? ['VIEW_CHANNEL', 'CONNECT', 'SPEAK', 'MOVE_MEMBERS', 'USE_SOUNDBOARD', 'MANAGE_CHANNELS', 'MANAGE_ROLES', ...VOICE_CHAT]
     : ['VIEW_CHANNEL', 'SEND_MESSAGES', 'CREATE_THREADS', 'EMBED_LINKS', 'ATTACH_FILES', 'ADD_REACTIONS', 'MENTION_EVERYONE', 'MANAGE_MESSAGES', 'MANAGE_CHANNELS', 'MANAGE_ROLES']).includes(k));
   const label = (o) => {
     if (o.type === 'member') return nameInServer(server, getUser(o.id));
@@ -10196,7 +10293,7 @@ function openNewConversation(existingGroup = null, { group = false, preselect = 
     picked.forEach((id) => { const u = getUser(id); chips.append(h('button', { class: 'chip active', onclick: () => { picked.delete(id); draw(); } }, displayName(u), icon('close'))); });
     clear(results);
     const q = input.value.trim().toLowerCase();
-    const match = (u) => !q || u.username.toLowerCase().includes(q) || displayName(u).toLowerCase().includes(q);
+    const match = (u) => nameMatches(u, q);
     const byName = (a, b) => displayName(a).localeCompare(displayName(b));
     const friends = known.filter((u) => isFriend(u.id) && match(u)).sort(byName);
     const others = known.filter((u) => !isFriend(u.id) && match(u)).sort(byName).slice(0, 40);
@@ -10585,7 +10682,7 @@ function tileEl(room, t, big) {
   const shown = nameInServer(serverOfChannel(room), t.u);
   const name = t.kind === 'screen' ? `${shown}\u2019s screen` : shown;
   const el = h('div', {
-    class: `cs-tile kind-${t.kind}${big ? ' big' : ''}${t.kind !== 'screen' && S.speaking.has(t.u.id) ? ' speaking' : ''}`,
+    class: `cs-tile kind-${t.kind}${big ? ' big' : ''}${t.kind !== 'screen' && S.speaking.has(t.u.id) ? ' speaking' : ''}${t.kind !== 'screen' && S.boardPlaying.has(t.u.id) ? ' board-playing' : ''}`,
     dataset: { speak: t.kind === 'screen' ? '' : t.u.id, key: t.key }, tabindex: '0',
     'aria-label': name, onclick: (e) => { if (e.target.closest('button')) return; stageSpotlight.set(room, stageSpotlight.get(room) === t.key ? null : t.key); renderCallStages(); },
   });
@@ -10593,6 +10690,7 @@ function tileEl(room, t, big) {
     if (t.u.banner) el.append(h('div', { class: 'vr-bg' }, h('img', { class: 'cropped', src: t.u.banner, alt: '', style: cropStyle(t.u.profile.bannerCrop) })));
     const av = avatarEl(t.u, big ? 96 : 64); av.dataset.speak = t.u.id;
     if (S.speaking.has(t.u.id)) av.classList.add('speaking');
+    if (S.boardPlaying.has(t.u.id)) av.classList.add('board-playing');
     el.append(av);
   } else {
     const v = videoEl(t.key, t.track, t.me && t.kind === 'cam');
@@ -10617,7 +10715,9 @@ function tileEl(room, t, big) {
       e.preventDefault();
       const slider = h('input', { type: 'range', class: 'range', min: '0', max: '2', step: '0.05', value: String(voice.volumeFor(t.u.id)), 'aria-label': `Volume for ${shown}`, oninput: (ev) => voice.setVolume(t.u.id, +ev.target.value) });
       const pt = h('span', { style: { position: 'fixed', left: e.clientX + 'px', top: e.clientY + 'px' } }); document.body.append(pt);
-      popover(pt, h('div', { class: 'menu vol-pop' }, h('div', { class: 'menu-header' }, `Volume \u2014 ${shown}`), slider), { side: 'bottom' });
+      const sbMute = h('label', { class: 'toggle-row sm' }, h('span', { class: 'toggle-label' }, 'Mute their soundboard'),
+        h('input', { type: 'checkbox', checked: board.mutedFor(t.u.id), onchange: (ev) => board.setMutedFor(t.u.id, ev.target.checked) }));
+      popover(pt, h('div', { class: 'menu vol-pop' }, h('div', { class: 'menu-header' }, `Volume \u2014 ${shown}`), slider, sbMute), { side: 'bottom' });
       pt.remove();
     });
   }
@@ -10637,6 +10737,7 @@ function callControls(room) {
     h('button', { class: `round-btn${camOn ? ' on' : ''}`, 'data-tip': camOn ? 'Turn camera off' : 'Turn camera on', 'aria-label': camOn ? 'Turn camera off' : 'Turn camera on', 'aria-pressed': String(camOn), onclick: () => toggleCamera() }, icon(camOn ? 'video' : 'videoOff')),
     (S.config.features || {}).watch === false ? null : h('button', { class: `round-btn${S.watch[room] ? ' on' : ''}`, 'data-tip': S.watch[room] ? 'Add a video to the queue' : 'Watch together', 'aria-label': 'Watch together', onclick: () => openWatchStart(room, !!S.watch[room]) }, icon('eye')),
     h('button', { class: `round-btn${scrOn ? ' on' : ''}`, 'data-tip': scrOn ? 'Stop sharing' : 'Share your screen', 'aria-label': scrOn ? 'Stop sharing your screen' : 'Share your screen', 'aria-pressed': String(scrOn), onclick: () => toggleScreen() }, icon('monitor')),
+    h('button', { class: 'round-btn sb-open', 'data-tip': 'Soundboard', 'aria-label': 'Soundboard', 'data-pop-anchor': '', onclick: (e) => board.openPicker(e.currentTarget) }, icon('music')),
     h('button', { class: 'round-btn hang', 'data-tip': 'Leave call', 'aria-label': 'Leave call', onclick: () => { voice.leave(); playSound('selfLeave'); } }, icon('phoneOff')));
 }
 // The call area: a grid, or one big spotlighted tile (screen shares get it automatically) with the rest in a strip.
@@ -10682,7 +10783,20 @@ const watchCtx = (room) => ({
   socket, me: S.me, isStaff: !!S.me.staffRole,
   userName: (id) => (id ? nameInServer(serverOfChannel(room), getUser(id)) : 'someone'),
   openStart: (queue) => openWatchStart(room, queue),
+  openSide: () => openWatchSide(room),
 });
+// Put a second TikTok or reel beside the one playing (watch:side).
+function openWatchSide(room) {
+  const url = h('input', { class: 'input', placeholder: 'Paste a TikTok or Instagram reel link', autocomplete: 'off', spellcheck: 'false' });
+  modal({
+    title: 'Side by side', size: 'sm',
+    body: h('div', { class: 'stack' },
+      h('p', { class: 'muted-p' }, 'A second upright video next to this one, for everyone in the call. Both start together; after that each plays on its own.'),
+      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Link'), url)),
+    actions: [{ label: 'Cancel' }, { label: 'Show side by side', kind: 'primary', action: async () => emitAck('watch:side', { url: await watchLink(url.value) }) }],
+  });
+  setTimeout(() => url.focus(), 50);
+}
 // Open the page of the call you're in (voice channel, DM or group).
 function goToCall(room) {
   if (!room) return;
@@ -10789,25 +10903,34 @@ function watchKind(raw) {
   if (/^(youtube\.com|youtube-nocookie\.com|youtu\.be)$/.test(host)) return 'YouTube video';
   if (/^(player\.)?vimeo\.com$/.test(host)) return 'Vimeo video';
   if (host === 'twitch.tv') return 'Twitch live stream';
+  const so = parseSocialUrl(u);
+  if (so) return so.kind === 'tiktok' ? 'TikTok video' : so.type === 'p' ? 'Instagram post' : 'Instagram reel';
   if (/\.(mp4|webm|ogv|ogg|mov|m4v)$/i.test(u.pathname)) return 'Video file';
   return null;
 }
 const watchRecent = () => { try { return JSON.parse(localStorage.getItem('hearth.watchRecent') || '[]').slice(0, 6); } catch { return []; } };
 function rememberWatch(link) { try { localStorage.setItem('hearth.watchRecent', JSON.stringify([link, ...watchRecent().filter((x) => x !== link)].slice(0, 6))); } catch { /* private mode */ } }
-function startWatching(room, link, queue) {
-  return new Promise((resolve, reject) => {
-    socket.emit('watch:start', { url: link, queue }, (r) => {
-      if (r && r.error) return reject(new Error(r.error));
-      rememberWatch(String(link).trim());
-      resolve();
-    });
-  });
+// A short TikTok link is opened first (this server asks TikTok where it goes), so watch together gets the
+// video's own link.
+async function watchLink(link) {
+  const p = parseSocialUrl(String(link || '').trim());
+  return p && p.short ? (await resolveSocial(p)).link : String(link || '').trim();
+}
+const emitAck = (ev, data) => new Promise((resolve, reject) => socket.emit(ev, data, (r) => (r && r.error ? reject(new Error(r.error)) : resolve(r))));
+async function startWatching(room, link, queue, extra = {}) {
+  await emitAck('watch:start', { url: await watchLink(link), queue, ...extra });
+  rememberWatch(String(link).trim());
+}
+// Two upright videos side by side (a TikTok and a reel): the first plays, the second sits beside it.
+async function startSideBySide(room, a, b) {
+  await startWatching(room, a, false);
+  await emitAck('watch:side', { url: await watchLink(b) });
 }
 function openWatchStart(room, queue = false) {
-  const url = h('input', { class: 'input', placeholder: 'Paste a YouTube, Vimeo or Twitch link', autocomplete: 'off', spellcheck: 'false' });
-  const kind = h('span', { class: 'field-hint' }, 'YouTube, Vimeo, Twitch (live) and video files (.mp4, .webm). For anything else (like Netflix), share your screen.');
+  const url = h('input', { class: 'input', placeholder: 'Paste a YouTube, Vimeo, Twitch, TikTok or Instagram link', autocomplete: 'off', spellcheck: 'false' });
+  const kind = h('span', { class: 'field-hint' }, 'YouTube, Vimeo, Twitch (live), TikTok, Instagram reels and video files (.mp4, .webm). For anything else (like Netflix), share your screen.');
   const hostOnly = h('input', { type: 'checkbox' });
-  const check = () => { const k = watchKind(url.value); kind.textContent = url.value.trim() ? (k ? `✓ ${k}` : 'That link isn’t a video this can play. Try a YouTube, Vimeo or Twitch link.') : kind.textContent; kind.classList.toggle('ok', !!k); };
+  const check = () => { const k = watchKind(url.value); kind.textContent = url.value.trim() ? (k ? `✓ ${k}${k.startsWith('Instagram') ? ' (Instagram’s player can’t be kept in step: everyone starts it together)' : ''}` : 'That link isn’t a video this can play. Try a YouTube, Vimeo, Twitch, TikTok or Instagram link.') : kind.textContent; kind.classList.toggle('ok', !!k); };
   url.addEventListener('input', check);
   let m;
   const submit = () => startWatching(room, url.value, queue).then(() => m && m.close());
@@ -10822,9 +10945,9 @@ function openWatchStart(room, queue = false) {
       recent.length ? h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Watched recently'),
         h('div', { class: 'wt-recent' }, recent.map((link) => h('button', { class: 'chip', type: 'button', title: link, onclick: () => { url.value = link; check(); submit().catch((x) => toast(x.message, 'error')); } }, link.replace(/^https?:\/\/(www\.)?/, '').slice(0, 40))))) : null,
       queue ? null : h('label', { class: 'row gap' }, hostOnly, 'Only I can play, pause and skip'),
-      h('p', { class: 'field-hint' }, 'The video loads straight from YouTube/Vimeo/Twitch, so they can see each viewer’s IP address, like when you watch there. A video file on another site does too, so each viewer is told before it loads.')),
+      h('p', { class: 'field-hint' }, 'The video loads straight from YouTube/Vimeo/Twitch/TikTok/Instagram, so they can see each viewer’s IP address, like when you watch there. A video file on another site does too, so each viewer is told before it loads.')),
     actions: [{ label: 'Cancel' }, { label: queue ? 'Add to queue' : 'Start watching', kind: 'primary', action: () => new Promise((resolve, reject) => {
-      socket.emit('watch:start', { url: url.value, queue, hostOnly: hostOnly.checked }, (r) => { if (r && r.error) return reject(new Error(r.error)); rememberWatch(url.value.trim()); resolve(); });
+      startWatching(room, url.value, queue, { hostOnly: hostOnly.checked }).then(resolve, reject);
     }) }],
   });
   setTimeout(() => url.focus(), 50);
@@ -10833,17 +10956,37 @@ function openWatchStart(room, queue = false) {
 const WATCH_LINK = /https?:\/\/(?:www\.|m\.|music\.)?(?:youtube\.com\/(?:watch\?[^\s<>"']*v=|shorts\/|live\/)[\w-]{11}[^\s<>"']*|youtu\.be\/[\w-]{11}[^\s<>"']*|vimeo\.com\/\d{5,12}[^\s<>"']*|twitch\.tv\/[a-z0-9_]{3,25}(?=[\s/?#]|$)|[^\s<>"']+\.(?:mp4|webm|m4v)(?=[\s?#]|$))/gi;
 function watchChips(text) {
   if ((S.config.features || {}).watch === false || !text) return null;
-  const links = [...new Set(String(text).match(WATCH_LINK) || [])].slice(0, 2);
+  // TikTok and Instagram links too (social.js), counted once each however they're written.
+  const socials = socialLinks(text).map((p) => p.url);
+  const links = [...new Set([...(String(text).match(WATCH_LINK) || []), ...socials])].slice(0, 4);
   if (!links.length) return null;
-  return h('div', { class: 'watch-chips' }, links.map((link) => h('button', {
+  const inCall = () => {
+    const room = voice && voice.channelId;
+    if (!room) toast('Join a voice channel or call first, then press this to watch it together.');
+    return room;
+  };
+  const chips = links.map((link) => h('button', {
     class: 'watch-chip', 'data-tip': 'Play it for everyone in your call',
     onclick: () => {
-      const room = voice && voice.channelId;
-      if (!room) return toast('Join a voice channel or call first, then press this to watch it together.');
+      const room = inCall();
+      if (!room) return;
       const queued = !!S.watch[room];
       startWatching(room, link, queued).then(() => toast(queued ? 'Added to the watch queue.' : 'Playing for everyone in the call.')).catch((e) => toast(e.message, 'error'));
     },
-  }, icon('play'), `Watch together${links.length > 1 ? ` · ${watchKind(link) || 'video'}` : ''}`)));
+  }, icon('play'), `Watch together${links.length > 1 ? ` · ${watchKind(link) || 'video'}` : ''}`));
+  // Two upright videos (a TikTok and a reel, say): both at once, side by side, or all of them in the queue.
+  if (socials.length >= 2) {
+    chips.push(h('button', { class: 'watch-chip', 'data-tip': 'Both at once, next to each other, for everyone in your call', onclick: () => {
+      const room = inCall();
+      if (room) startSideBySide(room, socials[0], socials[1]).then(() => toast('Side by side for everyone in the call.')).catch((e) => toast(e.message, 'error'));
+    } }, icon('play'), 'Watch side by side'));
+    chips.push(h('button', { class: 'watch-chip', 'data-tip': 'One after the other, for everyone in your call', onclick: async () => {
+      const room = inCall();
+      if (!room) return;
+      try { for (const [i, link] of socials.entries()) await startWatching(room, link, i > 0 || !!S.watch[room]); toast(`${socials.length} videos in the watch queue.`); } catch (e) { toast(e.message, 'error'); }
+    } }, icon('play'), `Queue all ${socials.length}`));
+  }
+  return h('div', { class: 'watch-chips' }, chips);
 }
 function renderCallStages() { $$('.call-stage').forEach(fillStage); }
 // What the diagnostics panel needs: names, and the relays' region names (never their addresses).

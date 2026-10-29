@@ -3,7 +3,7 @@ import { h, clear, icon, toast, playSound } from './util.js';
 import { api, upload, setToken } from './api.js';
 import { EVENTS as SOUND_EVENTS, LIBRARY as SOUND_LIBRARY, soundPrefs, setSoundPrefs, resetSoundPrefs, setCustomSound, customSoundName } from './sounds.js';
 import * as E2EE from './e2ee.js';
-import { profileCard, FONT_STACKS, cropStyle, customFxLayer } from './profile-ui.js';
+import { profileCard, FONT_STACKS, cropStyle, customFxLayer, avatarEl, DECORATION_LABELS, PROFILE_SECTIONS, sectionOrder, songService } from './profile-ui.js';
 import { pageEditorTab } from './page.js';
 import { openCropper } from './cropper.js';
 import { modal, confirmDialog, field } from './ui.js';
@@ -84,7 +84,7 @@ function privacyLink(cfg) {
 // Closely related pages share one entry and switch with tabs at the top (SUBTABS), which keeps the list short.
 const TAB_GROUPS = [
   ['Account', [['profile', 'Profile', 'user'], ['account', 'Security', 'lock'], ['privacy', 'Privacy & safety', 'shield'], ['study', 'Study tools', 'graduation']]],
-  ['App', [['appearance', 'Appearance', 'palette'], ['chat', 'Chat', 'message'], ['notifications', 'Notifications', 'bell'], ['voice', 'Voice & video', 'mic'], ['keybinds', 'Keybinds', 'monitor'], ['apps', 'Apps & devices', 'download']]],
+  ['App', [['appearance', 'Appearance', 'palette'], ['chat', 'Chat', 'message'], ['notifications', 'Notifications', 'bell'], ['voice', 'Voice & video', 'mic'], ['soundboard', 'Soundboard', 'music'], ['keybinds', 'Keybinds', 'monitor'], ['apps', 'Apps & devices', 'download']]],
   ['Servers', [['servers', 'Server settings', 'gear'], ['host', 'Help host', 'globe'], ['instance', 'Instance', 'monitor', 'admin']]],
 ];
 const SUBTABS = {
@@ -154,7 +154,7 @@ export function openSettings(app, tab = 'profile') {
         class: `set-subtab${k === current ? ' active' : ''}`, role: 'tab', 'aria-selected': String(k === current), onclick: () => go(k),
       }, label))));
     }
-    const views = { study: studyTab, keybinds: keybindsTab, activity: activityTab, page: pageEditorTab, instance: instanceTab, apps: appsTab, layout: layoutTab, profile: profileTab, account: accountTab, storage: storageTab, sessions: sessionsTab, voice: voiceTab, appearance: appearanceTab, chat: chatTab, notifications: notificationsTab, privacy: privacyTab, servers: serversTab, host: hostTab };
+    const views = { soundboard: (a) => a.soundboard.editor(), study: studyTab, keybinds: keybindsTab, activity: activityTab, page: pageEditorTab, instance: instanceTab, apps: appsTab, layout: layoutTab, profile: profileTab, account: accountTab, storage: storageTab, sessions: sessionsTab, voice: voiceTab, appearance: appearanceTab, chat: chatTab, notifications: notificationsTab, privacy: privacyTab, servers: serversTab, host: hostTab };
     content.append(views[current](app, (d) => { dirty = d; }, go));
     content.scrollTop = 0;
   };
@@ -173,14 +173,31 @@ const PRESETS = [
   { name: 'Lemonade', bannerColor: '#f5e663', themePrimary: '#3f3a14', themeSecondary: '#17150a', accentColor: '#fff27a' },
 ];
 
-function profileTab(app, setDirty) {
+// Complete looks (v25): a whole style at once (colors, card, banner, name, ring, decoration and effect), as a start
+// to change from. Only what's listed changes; pictures, words and links stay.
+const LOOKS = [
+  { name: 'Cozy cabin', bannerColor: '#c8643b', bannerColor2: '#f2a541', bannerFx: 'gradient', themePrimary: '#3a2418', themeSecondary: '#1b1412', accentColor: '#f2a541', cardStyle: 'gradient', nameFont: 'Caveat', nameEffect: 'glow', avatarRing: 'glow', ringColor: '#f2a541', avatarDecoration: 'leaves', profileEffect: 'embers' },
+  { name: 'Arcade', bannerColor: '#ff4fd8', bannerColor2: '#4ff0ff', bannerFx: 'stripes', themePrimary: '#1a1033', themeSecondary: '#07051a', accentColor: '#4ff0ff', cardStyle: 'solid', nameFont: 'Press Start 2P', nameEffect: 'neon', avatarRing: 'spin', ringColor: '#ff4fd8', avatarDecoration: 'headphones', profileEffect: 'stars' },
+  { name: 'Vaporwave', bannerColor: '#ff71ce', bannerColor2: '#01cdfe', bannerFx: 'flow', themePrimary: '#2b1050', themeSecondary: '#0d0b2a', accentColor: '#b967ff', cardStyle: 'glass', nameFont: 'Monoton', nameEffect: 'flow', avatarRing: 'gradient', ringColor: '#ff71ce', avatarDecoration: 'sparkle-frame', profileEffect: 'sparkles' },
+  { name: 'Night sky', bannerColor: '#0b1d51', bannerColor2: '#6c3ec1', bannerFx: 'aurora', themePrimary: '#101a3a', themeSecondary: '#05070f', accentColor: '#9fb4ff', cardStyle: 'gradient', nameFont: 'Playfair Display', nameEffect: 'shimmer', avatarRing: 'double', ringColor: '#9fb4ff', avatarDecoration: 'stars', profileEffect: 'fireflies' },
+  { name: 'Garden', bannerColor: '#3f9b5a', bannerColor2: '#f29cc0', bannerFx: 'gradient', themePrimary: '#1b3a26', themeSecondary: '#0f1a13', accentColor: '#f29cc0', cardStyle: 'gradient', nameFont: 'Comfortaa', nameEffect: 'none', avatarRing: 'solid', ringColor: '#7fdc8f', avatarDecoration: 'flowers', profileEffect: 'sakura' },
+  { name: 'Royal', bannerColor: '#5b1f8a', bannerColor2: '#e8b923', bannerFx: 'flow', themePrimary: '#2a1240', themeSecondary: '#120818', accentColor: '#e8b923', cardStyle: 'glass', nameFont: 'Playfair Display', nameEffect: 'shimmer', avatarRing: 'glow', ringColor: '#e8b923', avatarDecoration: 'crown', profileEffect: 'sparkles' },
+  { name: 'Spooky', bannerColor: '#3d0f17', bannerColor2: '#ff7a1a', bannerFx: 'aurora', themePrimary: '#1c0d14', themeSecondary: '#080406', accentColor: '#ff7a1a', cardStyle: 'solid', nameFont: 'Creepster', nameEffect: 'glitch', avatarRing: 'pulse', ringColor: '#ff7a1a', avatarDecoration: 'horns', profileEffect: 'embers' },
+];
+
+// start: a draft to show instead of the saved profile (after a complete look is applied, say).
+function profileTab(app, setDirty, go, start = null) {
   const S = app.S;
   const CROPS = ['avatarCrop', 'bannerCrop', 'backgroundCrop'];
   const withoutCrops = (p) => { const o = { ...(p || {}) }; CROPS.forEach((k) => delete o[k]); return o; };
   const original = JSON.stringify(withoutCrops(S.me.profile));
-  const draft = JSON.parse(original);
+  const draft = start ? JSON.parse(JSON.stringify(start)) : JSON.parse(original);
   draft.links = Array.isArray(draft.links) ? draft.links : [];
   draft.customStatus = draft.customStatus || { emoji: '', text: '' };
+  draft.favorites = Array.isArray(draft.favorites) ? draft.favorites : [];
+  draft.songLink = draft.songLink && typeof draft.songLink === 'object' ? draft.songLink : { url: '', label: '' };
+  draft.sectionOrder = sectionOrder(draft.sectionOrder);
+  draft.hiddenSections = Array.isArray(draft.hiddenSections) ? draft.hiddenSections : [];
 
   const previewHost = h('div', { class: 'set-preview-card' });
   const saveBar = h('div', { class: 'save-bar', hidden: true },
@@ -215,6 +232,10 @@ function profileTab(app, setDirty) {
       // (Not called `body`: that's this tab, which is swapped for a fresh one below.)
       const payload = { ...draft };
       if (JSON.stringify(draft.customStatus) === JSON.stringify(JSON.parse(original).customStatus)) delete payload.customStatus;
+      // The soundboard on the profile is only ever set from the soundboard (soundboard.js setShowcase, syncShowcase):
+      // this page's copy may be from before it was turned off or a sound was renamed, and must not bring it back.
+      delete payload.showSoundboard;
+      delete payload.soundShowcase;
       const u = await api('PATCH', '/me/profile', payload);
       app.onMe(u);
       setDirty(false);
@@ -329,6 +350,64 @@ function profileTab(app, setDirty) {
   };
   drawLinks();
 
+  // ---- favorite things
+  const favHost = h('div', { class: 'links-edit' });
+  const drawFavs = () => {
+    clear(favHost);
+    draft.favorites.forEach((f, i) => favHost.append(h('div', { class: 'link-edit-row fav-edit-row' },
+      h('input', { class: 'input emoji-input', maxlength: '16', placeholder: '\uD83C\uDF55', value: f.emoji || '', 'aria-label': 'Emoji', oninput: (e) => { draft.favorites[i] = { ...draft.favorites[i], emoji: e.target.value }; changed(); } }),
+      h('input', { class: 'input', maxlength: '24', placeholder: 'Food', value: f.label || '', 'aria-label': 'What it is', oninput: (e) => { draft.favorites[i] = { ...draft.favorites[i], label: e.target.value }; changed(); } }),
+      h('input', { class: 'input', maxlength: '60', placeholder: 'Pizza', value: f.value || '', 'aria-label': 'Your favorite', oninput: (e) => { draft.favorites[i] = { ...draft.favorites[i], value: e.target.value }; changed(); } }),
+      h('button', { class: 'icon-btn sm', 'aria-label': 'Remove favorite', onclick: () => { draft.favorites.splice(i, 1); drawFavs(); changed(); } }, icon('close')))));
+    if (draft.favorites.length < 6) favHost.append(h('button', { class: 'btn ghost sm', onclick: () => { draft.favorites.push({ emoji: '', label: '', value: '' }); drawFavs(); changed(); } }, '+ Add a favorite'));
+  };
+  drawFavs();
+
+  // ---- song link
+  const songHint = h('span', { class: 'field-hint' });
+  const drawSongHint = () => {
+    const u = (draft.songLink.url || '').trim();
+    const svc = u ? songService(u) : '';
+    songHint.textContent = !u ? 'A Spotify, Apple Music, YouTube, SoundCloud, Bandcamp, TIDAL, Deezer or Amazon Music link.' : svc ? `Shows as a ${svc} card.` : 'That link isn\u2019t from a music service Hearth shows (it needs to start with https://).';
+  };
+  drawSongHint();
+  const songUrl = h('input', { class: 'input', maxlength: '300', placeholder: 'https://open.spotify.com/track/\u2026', value: draft.songLink.url || '', 'aria-label': 'Song link', oninput: (e) => { draft.songLink = { ...draft.songLink, url: e.target.value.trim() }; drawSongHint(); changed(); } });
+  const songLabel = h('input', { class: 'input', maxlength: '80', placeholder: 'Song \u2013 Artist', value: draft.songLink.label || '', 'aria-label': 'Song title', oninput: (e) => { draft.songLink = { ...draft.songLink, label: e.target.value }; changed(); } });
+
+  // ---- which sections show, and in what order
+  const orderHost = h('ol', { class: 'section-order' });
+  const drawOrder = () => {
+    clear(orderHost);
+    const names = Object.fromEntries(PROFILE_SECTIONS);
+    draft.sectionOrder.forEach((k, i) => {
+      const shown = !draft.hiddenSections.includes(k);
+      const swap = (by) => { const o = [...draft.sectionOrder]; [o[i], o[i + by]] = [o[i + by], o[i]]; draft.sectionOrder = o; drawOrder(); changed(); };
+      orderHost.append(h('li', { class: `section-order-row${shown ? '' : ' off'}` },
+        h('label', { class: 'row gap' }, h('input', { type: 'checkbox', checked: shown, onchange: (e) => {
+          draft.hiddenSections = e.target.checked ? draft.hiddenSections.filter((x) => x !== k) : [...draft.hiddenSections, k];
+          drawOrder(); changed();
+        } }), names[k]),
+        h('span', { class: 'row' },
+          h('button', { class: 'icon-btn sm', 'aria-label': `Move ${names[k]} up`, disabled: i === 0, onclick: () => swap(-1) }, icon('arrowUp')),
+          h('button', { class: 'icon-btn sm', 'aria-label': `Move ${names[k]} down`, disabled: i === draft.sectionOrder.length - 1, onclick: () => swap(1) }, icon('arrowDown')))));
+    });
+  };
+  drawOrder();
+
+  const lookRow = h('div', { class: 'presets' }, LOOKS.map((l) => h('button', {
+    type: 'button', class: 'preset look', title: l.name,
+    style: { '--p1': l.bannerColor, '--p2': l.themePrimary, '--p3': l.themeSecondary },
+    onclick: () => {
+      const { name, ...look } = l;
+      const fresh = profileTab(app, setDirty, go, { ...draft, ...look });
+      body.replaceWith(fresh);
+      setDirty(true);
+      fresh.querySelector('.save-bar').hidden = false;
+      toast(`${name} applied. Save to keep it.`);
+    },
+  }, h('span', { class: 'preset-sw' }), h('span', { class: 'preset-name' }, l.name))));
+  const bannerColor2Wrap = h('div', { hidden: !draft.bannerFx || draft.bannerFx === 'none' }, colorInput(draft.bannerColor2 || '#7c4dff', set('bannerColor2'), 'Second banner color'));
+
   // ---- build-your-own effect
   const FX_DEFAULT = { glyphs: '✦★', motion: 'fall', count: 16, speed: 5, size: 16, color: '', glow: false };
   draft.customFx = { ...FX_DEFAULT, ...(draft.customFx || {}) };
@@ -403,10 +482,19 @@ function profileTab(app, setDirty) {
         field('Ring color', colorInput(draft.ringColor, set('ringColor'), 'Ring color')),
         field('Second color', colorInput(draft.ringColor2 || draft.accentColor || '#f2a541', set('ringColor2'), 'Second ring color'), 'Gradient, glow, double and spinning rings use it.')),
       field('Third color (spinning ring)', colorInput(draft.ringColor3 || '#38c6d9', set('ringColor3'), 'Third ring color')),
-      sliderRow('Spin speed', 1, 10, 1, draft.ringSpeed || 4, (v) => `${v}`, (v) => { draft.ringSpeed = v; changed(); })),
+      sliderRow('Spin speed', 1, 10, 1, draft.ringSpeed || 4, (v) => `${v}`, (v) => { draft.ringSpeed = v; changed(); }),
+      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Decoration'),
+        chips(DECORATION_LABELS, draft.avatarDecoration || 'none', set('avatarDecoration')),
+        h('span', { class: 'field-hint' }, 'Shown on your profile and in calls.'))),
     fold('Card theme', 'Presets, colors and effects',
+      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Complete looks'), lookRow, h('span', { class: 'field-hint' }, 'Colors, banner, name, ring, decoration and effect in one go. Your pictures and words stay.')),
       h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Presets'), presetRow),
       colorsHost,
+      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Banner style'),
+        chips([['none', 'One color'], ['gradient', 'Gradient'], ['flow', 'Flowing gradient'], ['aurora', 'Aurora'], ['stripes', 'Moving stripes']], draft.bannerFx || 'none', (v) => { set('bannerFx')(v); bannerColor2Wrap.hidden = v === 'none'; }),
+        bannerColor2Wrap, h('span', { class: 'field-hint' }, 'Shown when you have no banner picture.')),
+      h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Text size'),
+        chips([['sm', 'Small'], ['md', 'Normal'], ['lg', 'Large'], ['xl', 'Extra large']], draft.textSize || 'md', set('textSize'))),
       h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Card style'),
         chips([['solid', 'Solid'], ['gradient', 'Gradient'], ['glass', 'Glass']], draft.cardStyle || 'gradient', set('cardStyle'))),
       h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Profile effect'),
@@ -414,6 +502,10 @@ function profileTab(app, setDirty) {
         fxHost)),
     profilePageSection(app, draft, set),
     fold('Links', 'Up to 6', linksHost),
+    fold('Favorite things', 'Up to 6, like \u201c\uD83C\uDF55 Food: Pizza\u201d', favHost),
+    fold('Song link', 'A song from a music service', field('Link', songUrl), songHint, field('Title', songLabel)),
+    fold('Sections', 'Which parts of your card show, and in what order', orderHost,
+      h('p', { class: 'field-hint' }, 'Your soundboard shows only if you turn it on in Settings \u2192 Soundboard.')),
   );
 
   body = h('div', { class: 'set-profile' },
@@ -1432,6 +1524,18 @@ function linkPreviewSection(app, c, set) {
     toggle('Show link previews in messages', c.linkCards !== false, (v) => set('linkCards', v), 'Built by the sender and sent inside the encrypted message: your device never contacts the linked site.'));
 }
 
+// TikTok and Instagram players in messages (social-embed.js, docs/design/SOCIAL-EMBEDS.md). Kept on this device.
+function socialPlayersSection(c, set) {
+  const mode = h('select', { class: 'input sm', 'aria-label': 'TikTok and Instagram players', onchange: (e) => set('socialPlayers', e.target.value) },
+    h('option', { value: 'ask' }, 'Load when I tap (default)'), h('option', { value: 'always' }, 'Always load'), h('option', { value: 'off' }, 'Just show the link'));
+  mode.value = ['ask', 'always', 'off'].includes(c.socialPlayers) ? c.socialPlayers : 'ask';
+  return section('TikTok and Instagram',
+    h('div', { class: 'toggle-row' },
+      h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Play videos in the chat'),
+        h('span', { class: 'field-hint' }, 'TikTok videos and Instagram reels play right in the message. The player loads from TikTok or Instagram, which then see your IP address (and may set their own cookies in the player), so by default it waits for a tap. “Always load” loads them as messages show, except short TikTok links, which your Hearth server has to look up first.')),
+      mode));
+}
+
 // Spelling (spelling.js): everything happens on this device; nothing typed is looked up anywhere. In the desktop app,
 // "Check spelling" is also its spell checker's switch (the one place for it), so it shows Off if that was turned off.
 function spellingSection(c, set) {
@@ -1467,6 +1571,7 @@ function chatTab(app) {
       toggle('Format messages with Markdown', c.markdown, (v) => set('markdown', v), '**bold**, *italic*, `code`, ||spoilers||, # headings, - lists, > and >>> quotes, and #channel links.'),
       toggle('Large emoji when a message is only emoji', c.jumbo, (v) => set('jumbo', v))),
     linkPreviewSection(app, c, set),
+    socialPlayersSection(c, set),
     section('Screen sharing',
       toggle('Hide DMs while I share my screen', c.hideDmsWhileSharing !== false, (v) => set('hideDmsWhileSharing', v), 'Direct messages and group chats are covered, and their previews and notifications hidden, while you share your screen. You can still open one with \u201cShow while sharing\u201d.')),
   );
@@ -1664,6 +1769,8 @@ function privacyTab(app) {
       blockedHost),
     // Your word filter and the lists your servers suggest (wordfilter-app.js).
     app.wordFilter ? app.wordFilter.settingsSection() : null,
+    // Nicknames you gave people, only you see them (personal-names.js).
+    app.personalNames ? app.personalNames.settingsSection({ getUser: (id) => app.S.users[id] || null, realName: app.realName, avatarEl }) : null,
     exportSection(app),
   );
 }
@@ -1702,7 +1809,7 @@ function exportSection(app) {
     ctl = new AbortController();
     start.disabled = true; cancel.hidden = false; bar.hidden = false;
     try {
-      const { blob, manifest } = await underWay(runExport({ token: res.token, S: app.S, sec: app.sec, decryptMessage: app.decryptMessage, signal: ctl.signal, wordFilter: app.wordFilter ? app.wordFilter.exportable() : null,
+      const { blob, manifest } = await underWay(runExport({ token: res.token, S: app.S, sec: app.sec, decryptMessage: app.decryptMessage, signal: ctl.signal, wordFilter: app.wordFilter ? app.wordFilter.exportable() : null, personalNicknames: app.personalNames ? app.personalNames.exportable() : null,
         onProgress: (text, f) => { status.textContent = text; bar.firstChild.style.width = Math.round(f * 100) + '%'; } }));
       const url = URL.createObjectURL(blob);
       h('a', { href: url, download: `hearth-export-${app.S.me.username}-${new Date().toISOString().slice(0, 10)}.zip` }).click();

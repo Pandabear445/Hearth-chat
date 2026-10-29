@@ -4,7 +4,7 @@ Generated from the code by enumerating every `api.*`/`app.*` route and `socket.o
 then annotated during the security audit (which middleware and checks actually run, limits, tests). "Gaps" lists
 what the audit found missing at the time; items fixed since are tracked in [ENGINEERING-REPORT.md](ENGINEERING-REPORT.md).
 
-Routes: 387 HTTP, 15 socket events.
+Routes: 390 HTTP, 17 socket events.
 
 ## HTTP routes
 
@@ -184,8 +184,8 @@ Routes: 387 HTTP, 15 socket events.
 | POST | `/api/servers/:id/voice/:uid/move` | server/index.js:4360 | session |  |  |  |  |  |
 | POST | `/api/servers/:id/voice/:uid/mute` | server/index.js:4393 | session |  |  |  |  |  |
 | DELETE | `/api/servers/:id/voice/:uid/mute` | server/index.js:4394 | session |  |  |  |  |  |
-| POST | `/api/servers/:id/emojis` | server/index.js:4424 | session | member + MANAGE_EMOJIS; yes | uploadImage; ≤2MB; name [A-Za-z0-9_] 2..32; ≤200; unique | limited(): up:user 60/min, up:userh 600/h, up:session 40/min, up:net 150/min + quotas (index.js:492-501) | attack.test.js (generic: unauth/fuzz/outsider ids) | none |
-| POST | `/api/servers/:id/emojis/from-giphy` | server/index.js:4435 | session | member + MANAGE_EMOJIS; yes | gifId regex; media host allowlist; ≤2MB | none | attack.test.js (generic: unauth/fuzz/outsider ids) | no rate limit on outbound GIPHY fetch (out of authz scope) |
+| POST | `/api/servers/:id/emojis` | server/index.js:4424 | session | member + MANAGE_EMOJIS; yes | uploadImage; ≤2MB; name [A-Za-z0-9_] 2..32; ≤200; unique; stored ≤128×128 and ≤512 KB (GIFs shrunk, others refused; server/emojiimage.js) | limited(): up:user 60/min, up:userh 600/h, up:session 40/min, up:net 150/min + quotas (index.js:492-501) | attack.test.js (generic: unauth/fuzz/outsider ids) | none |
+| POST | `/api/servers/:id/emojis/from-giphy` | server/index.js:4435 | session | member + MANAGE_EMOJIS; yes | gifId regex; media host allowlist; ≤2MB; must be a GIF; shrunk to ≤128×128, ≤512 KB | none | attack.test.js (generic: unauth/fuzz/outsider ids) | no rate limit on outbound GIPHY fetch (out of authz scope) |
 | PATCH | `/api/emojis/:id` | server/index.js:4463 | session | member of emoji's server + MANAGE_EMOJIS; yes (server from emoji row) | emojiName; unique | none | attack.test.js (generic: unauth/fuzz/outsider ids) | none |
 | DELETE | `/api/emojis/:id` | server/index.js:4475 | session | member of emoji's server + MANAGE_EMOJIS; yes | none | none | attack.test.js (generic: unauth/fuzz/outsider ids) | none |
 | POST | `/api/groups` | server/index.js:4501 | session | each added user: not blocked with adder, friend or shares a server; n.a. | ≤24 others | groupnew:<uid> 30/h | features.test.js, attack.test.js (generic: unauth/fuzz/outsider ids) | ignores target privacy.dms=friends (authz-6, verified); no consent |
@@ -287,6 +287,7 @@ Routes: 387 HTTP, 15 socket events.
 | GET | `/invite/:code` | server/invitepreview.js:133 |  |  |  |  |  |  |
 | GET | `/api/invites/:code/preview` | server/invitepreview.js:141 |  |  |  |  |  |  |
 | POST | `/api/link-previews` | server/linkpreview.js:642 | session |  |  |  |  |  |
+| POST | `/api/social/resolve` | server/linkpreview.js | session | none (any signed-in account) | server/social.js parseSocial (TikTok/Instagram video links only) | 20/min per account, 60/min per network | social-embeds.test.js |  |
 | POST | `/api/pay/memberships` | server/memberships.js:168 | none (webhook; Stripe-Signature HMAC) | HMAC-SHA256 v1, 300 s tolerance; metadata tier must belong to metadata server; user must exist; role only if member | event type switch; subscription re-fetched from Stripe for invoice.paid | memberships-hook:<ip> 600/min | memberships.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | none beyond admin-10 (tier role perms not re-checked at grant time) |
 | GET | `/api/servers/:id/memberships` | server/memberships.js:196 | session | member of server (requireServer); owner view if owner_id; yes | none | none | memberships.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | none |
 | POST | `/api/servers/:id/memberships/tiers/:tid/checkout` | server/memberships.js:221 | session | member of server; not the server owner; tier belongs to server and active; not already live | price/currency/fee/destination from DB | membership-checkout:<uid> 20/h | memberships.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | success_url uses Host header when PUBLIC_URL unset (self-only effect). |
@@ -373,6 +374,10 @@ Routes: 387 HTTP, 15 socket events.
 | GET | `/api/me/study` | server/study.js:36 | session | self; yes | since int | none | features.test.js, attack.test.js (generic: unauth/fuzz/outsider ids) | none |
 | PUT | `/api/me/study/:id` | server/study.js:56 | session | self; yes (user_id, id) PK | id regex, kind enum, data x1: ≤1MB, 100MB/5000 items | study:<uid> 600/min | features.test.js, attack.test.js (generic: unauth/fuzz/outsider ids) | none |
 | DELETE | `/api/me/study/:id` | server/study.js:77 | session | self; yes | id regex | none | features.test.js, attack.test.js (generic: unauth/fuzz/outsider ids) | none |
+| GET | `/api/me/soundboard` | server/soundboard.js | session | self | none | board-list:<uid> 120/min | soundboard.test.js, attack.test.js (generic) | Sealed details and layout only, never audio. |
+| GET | `/api/me/soundboard/:id/audio` | server/soundboard.js | session | self; yes (user_id, id) | id regex | board-audio:<uid> 600/min | soundboard.test.js | Encrypted audio, base64; `Cache-Control: no-store`. |
+| PUT | `/api/me/soundboard/:id` | server/soundboard.js | session | self; requireUnlocked | id regex or `layout`; kind; meta `x1:` ≤ 4 KB (layout ≤ 16 KB); audio base64 ≤ 1 MB + 28 bytes before base64; 24 sounds | board-save:<uid> 60/min | soundboard.test.js | Ciphertext only: the app checks type, size and length before encrypting. |
+| DELETE | `/api/me/soundboard/:id` | server/soundboard.js | session | self | id regex | board-save:<uid> 60/min | soundboard.test.js | |
 | GET | `/api/me/saved` | server/usability.js:96 | session |  |  |  |  |  |
 | GET | `/api/me/saved/ids` | server/usability.js:105 | session |  |  |  |  |  |
 | PUT | `/api/me/saved/:id` | server/usability.js:108 | session |  |  |  |  |  |
@@ -399,6 +404,8 @@ Routes: 387 HTTP, 15 socket events.
 | DELETE | `/api/channels/:id/webhooks/:hookId` | server/webhooks.js:729 | session |  |  |  |  |  |
 | GET | `/api/me/word-filter` | server/wordfilter.js:101 | session |  |  |  |  |  |
 | PUT | `/api/me/word-filter` | server/wordfilter.js:106 | session |  |  |  |  |  |
+| GET | `/api/me/personal-nicknames` | server/personalnames.js:29 | session | your own only | | 120/min | test/personal-nicknames.test.js |  |
+| PUT | `/api/me/personal-nicknames` | server/personalnames.js:34 | session | your own only | `x1:` sealed string ≤ 192 KB or null; integer `base` | 30/min, 600/hour, 120/min per network | test/personal-nicknames.test.js |  |
 | GET | `/api/servers/:id/word-filter` | server/wordfilter.js:138 | session |  |  |  |  |  |
 | PUT | `/api/servers/:id/word-filter` | server/wordfilter.js:144 | session |  |  |  |  |  |
 
@@ -419,6 +426,8 @@ Routes: 387 HTTP, 15 socket events.
 | EVENT | `watch:next` | server/index.js:7275 | session (handshake token) | in room; skip needs mayControl; yes | itemId | socket bucket | none | none |
 | EVENT | `watch:remove` | server/index.js:7296 | session (handshake token) | in room; adder or mayControl; yes | itemId | socket bucket | none | none |
 | EVENT | `watch:stop` | server/index.js:7304 | session (handshake token) | in room + mayControl; yes | none | socket bucket | none | none |
+| EVENT | `watch:ready` | server/index.js | session (handshake token) | in room; yes | itemId must be the current one | socket bucket | social-embeds.test.js | none |
+| EVENT | `watch:side` | server/index.js | session (handshake token) | in room + mayControl; yes | parseWatchUrl; TikTok/Instagram only | socket bucket | social-embeds.test.js | none |
 | EVENT | `voice:leave` | server/index.js:7314 | session (handshake token) | own state only; yes | none | socket bucket | none | none |
 | EVENT | `disconnect` | server/index.js:7321 | n.a. | n.a.; n.a. | n.a. | n.a. | sessions.test.js (indirect) | A socket drop ends the call on every side; no grace period or rejoin (voice-13). |
 

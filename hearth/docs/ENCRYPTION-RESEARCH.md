@@ -173,7 +173,7 @@ the user's own device, on ciphertexts the server can't usefully vary (AES-GCM re
 | Server/group key handoffs | ECIES: ephemeral ECDH P-256 → HKDF → AES-GCM, ECDSA-signed | **ML-KEM-768 + ephemeral ECDH**, ECDSA-signed under its own label | `w2:` |
 | Your own stored copies of server keys | `w1` | re-stored as `w2` by a device that holds your seed, once your recovery key (if any) holds it too | `w2:` |
 | Channel messages, files | AES-256-GCM from the group key / per-file key | unchanged (symmetric: already quantum-safe) | `c2:` |
-| Personal vault (study tools, saved notes, drafts, word filter) | `HKDF(ECDH(me, me))` | **unchanged for now** (see open items) | `x1:` |
+| Personal vault (study tools, saved notes, drafts, word filter, soundboards) | `HKDF(ECDH(me, me))` | **unchanged for now** (see open items) | `x1:` |
 | Photo tags / chat backgrounds in DMs | static DM key | **unchanged for now** (see open items) | `td1:` / `lkd1:` |
 
 **The combiner** (`e2ee.js hybridKey`):

@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 25;
+const SCHEMA_VERSION = 26;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1570,6 +1570,17 @@ CREATE TABLE IF NOT EXISTS word_filters (
 `);
 addColumn('servers', 'word_filter', 'TEXT');
 
+// Personal nicknames (server/personalnames.js): names someone gave other people that only they see, sealed by their
+// app with their personal vault key like their word filter (ciphertext only); data NULL once they delete it. A new
+// table only, which older versions leave alone, so the schema version stays.
+db.exec(`
+CREATE TABLE IF NOT EXISTS personal_nicknames (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  data TEXT,
+  updated_at INTEGER NOT NULL
+);
+`);
+
 // v19 (join history): "New members can't read messages from before they joined", a server setting (off by default;
 // server/joinhistory.js). hide_history: the setting. join_rotate_at: when a join that's waiting for the next key may
 // have it (joins close together share one new key; NULL when nobody is waiting). members.key_from: for someone who
@@ -1743,7 +1754,33 @@ addColumn('servers', 'discover_tags', "TEXT NOT NULL DEFAULT '[]'");
 addColumn('servers', 'discover_at', 'INTEGER');
 db.exec('CREATE INDEX IF NOT EXISTS idx_servers_discoverable ON servers(discoverable) WHERE discoverable = 1');
 
-// v25 (post-quantum keys, public/js/e2ee.js): each account's ML-KEM-768 public key, published next to its identity key
+// v25 (soundboard): everyone's own soundboard (server/soundboard.js). Each sound is end-to-end encrypted by the app
+// with a key only its owner's devices can derive (the personal vault key, e2ee.js vaultKey): the server stores
+// ciphertext and never learns a sound's name, picture or audio.
+//   soundboard_items  one row per sound (kind 'sound': meta = the sealed name, emoji, color, volume and the audio's
+//                     own key; audio = the encrypted audio, base64) and one for the board's layout (kind 'layout':
+//                     meta = the sealed grid, size, order and pages; audio = ''). A sound's size counts toward its
+//                     owner's storage limit, and audio_at (when its audio was last written) toward the day's
+//                     upload allowance (index.js usedBytes, dayBytes).
+// The new Use Soundboard permission (perms.js) is on for @everyone by default, as in Discord, so servers made
+// before it get it on their @everyone role too.
+db.exec(`
+CREATE TABLE IF NOT EXISTS soundboard_items (
+  id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  meta TEXT NOT NULL DEFAULT '',
+  audio TEXT NOT NULL DEFAULT '',
+  size INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  audio_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, id)
+);
+`);
+addColumn('soundboard_items', 'audio_at', 'INTEGER NOT NULL DEFAULT 0');
+if (hasData && fromVersion < 25) db.prepare('UPDATE roles SET permissions = permissions | ? WHERE id = server_id').run(1 << 22);
+
+// v26 (post-quantum keys, public/js/e2ee.js): each account's ML-KEM-768 public key, published next to its identity key
 // and signed with its signing key (the apps check that signature; so does POST /me/pq-key). The seed it comes from is
 // inside enc_private_key, locked with the password like the identity key.
 //   users.pq_public_key   ML-KEM-768 public key (base64, 1184 bytes), or NULL until the account's next sign-in

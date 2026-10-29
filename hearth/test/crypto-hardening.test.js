@@ -657,6 +657,24 @@ test('a server that lists its own keys as yours can’t plant a "self-wrapped" c
   assert.equal(d.sec.currentKey(s.id), null);
 });
 
+test('a server that pushes its own key as yours while the app is open never gets your copy of a new server key', async () => {
+  const A = await person(uname('alice')); const B = await person(uname('bob')); const X = await serverKeys();
+  const { s } = await serverWith(A, [B]);
+  await rotate(A, s.id, 1, [A, B]);
+  const d = await device(A, new Map());
+  // The server tells the open app (user:update for yourself) that your public key is now one it holds...
+  d.S.me = { ...d.S.me, publicKey: X.publicKey };
+  // ...then asks for a new key: the app refuses rather than wrap your copy to it, and nothing new is stored.
+  await assert.rejects(d.sec.forceRotate(s.id), (e) => e.code === 'own_key_mismatch');
+  assert.deepEqual(rowsOf(s.id, A.id).map((r) => r.epoch), [1]);
+  // With your real key listed again, the new key is wrapped to it and opens with your private key.
+  d.S.me = { ...d.S.me, publicKey: A.publicKey };
+  await d.sec.forceRotate(s.id);
+  const mine = srv.sql('SELECT wrapped FROM server_keys WHERE server_id = ? AND user_id = ? AND epoch = 2', s.id, A.id)[0];
+  assert.ok(mine);
+  assert.ok(await E.unwrapGroupKey({ wrapped: mine.wrapped, serverId: s.id, epoch: 2, myId: A.id, myPriv: A.privateKey, wrapperId: A.id, wrapperSignPub: A.signPublicKey }));
+});
+
 test('refused rotations don’t use up the hour: the owner can still replace the key, and only real keys count', async () => {
   const A = await person(uname('alice')); const B = await person(uname('bob')); const M = await person(uname('mallory'));
   const { s } = await serverWith(A, [B, M]);
