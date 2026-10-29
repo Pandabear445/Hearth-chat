@@ -19,6 +19,11 @@ Every connection negotiates four transceivers up front, always in this order: 0 
 3 screen audio. Turning the camera or a share on or off, or switching microphones, plugs a track into its lane
 with `replaceTrack`. No renegotiation is ever needed for that, so two people toggling video at once can't collide.
 
+v25 adds a fifth lane, 4 soundboard (audio), between two apps that both have it: `voice:join { board: true }` tells
+the server, the peer list in its answer says `board: true` for those apps, and every offer and answer carries the flag
+too, so the side that makes the offer only adds the lane when the other side will understand it (an older app would
+take a fifth audio lane for a microphone). See "Soundboard" in section 1.
+
 ### Signaling
 
 Signaling goes over the app's Socket.IO connection.
@@ -34,6 +39,7 @@ Signaling goes over the app's Socket.IO connection.
 | `voice:peer-left`, `voice:kicked { by? }`, `voice:perms { canSpeak, serverMuted? }` | server → clients | Someone left; you were removed (`by: 'moderator'` for a moderator's disconnect); your Speak permission or server mute changed. |
 | `voice:moved { channelId, to, serverId }` | server → client | A moderator moved you: the server already took you out of `channelId`; the app joins `to` (every join check runs again). |
 | `voice:leave` | client → server | Hang up (also accepted for a place kept after a dropped connection, from the same session). |
+| `voice:board { ms }` | client → server → room | v25: ask to play a soundboard sound `ms` long. Refused unless you're in the call on this socket, may Speak there, aren't muted or deafened, have Use Soundboard in that voice channel (DM calls: always), and are within the rate limit (one play per 800 ms, 12 per 30 s). Answers `{ ok, ms }` (capped at 5000); the others get `voice:board { channelId, userId, ms }`. The server never learns which sound it is. |
 | `call:region { room, region, version, by }` | server → room | The call's region changed (section 3). |
 
 The newcomer is the initiator toward every existing member. Offers and answers are signed (section 6).
@@ -58,6 +64,22 @@ gives way.
   STUN plus the two fastest relays.
 - A call can be pinned to one region (`POST /api/calls/region`; Manage Channels in a server, anyone in a DM or
   group). A pinned call uses that region's relay only (`iceTransportPolicy: 'relay'`).
+
+### Soundboard
+
+Everyone's own soundboard (`public/js/soundboard.js`, `server/soundboard.js`, FEATURES.md "Soundboards") plays into
+the call on the soundboard lane, not mixed into the microphone, so each listener controls it apart from the voice:
+
+- The player's app asks the server first (`voice:board`) and only plays once it says yes, for at most the length the
+  server allowed (5 s). The sound goes into a WebAudio `MediaStreamDestination` whose track sits on lane 4 (silence the
+  rest of the time), and to the player's own speakers at their soundboard volume.
+- Each listener's app keeps a person's soundboard lane muted except while the server says one of their sounds is
+  playing (`voice:board`, for `ms` plus 600 ms for the network). A modified app that sends sound on the lane without
+  asking, for longer, or more often than allowed is simply not heard. It could still put sound on its microphone lane,
+  as it always could.
+- The lane plays at the listener's soundboard volume (Settings → Soundboard, `hearth.board` in `localStorage`)
+  times that person's volume, and never when the listener muted everyone's soundboards or that person's (right-click
+  their tile), is deafened, or that person is silenced (server-muted, timed out, no Speak).
 
 ### Text chat beside the call
 

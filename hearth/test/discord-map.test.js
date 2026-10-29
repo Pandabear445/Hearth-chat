@@ -47,7 +47,8 @@ const TABLE = [
   ['MANAGE_SERVER', ['MANAGE_GUILD']], ['MANAGE_EMOJIS', ['MANAGE_GUILD_EXPRESSIONS']],
   ['CREATE_THREADS', ['SEND_MESSAGES_IN_THREADS', 'CREATE_PUBLIC_THREADS']], ['EMBED_LINKS', ['EMBED_LINKS']],
   ['MUTE_MEMBERS', ['MUTE_MEMBERS']], ['MOVE_MEMBERS', ['MOVE_MEMBERS']], ['VIEW_AUDIT_LOG', ['VIEW_AUDIT_LOG']],
-  ['CHANGE_NICKNAME', ['CHANGE_NICKNAME']], ['MANAGE_NICKNAMES', ['MANAGE_NICKNAMES']], ['ADMINISTRATOR', ['ADMINISTRATOR']],
+  ['CHANGE_NICKNAME', ['CHANGE_NICKNAME']], ['MANAGE_NICKNAMES', ['MANAGE_NICKNAMES']], ['USE_SOUNDBOARD', ['USE_SOUNDBOARD']],
+  ['ADMINISTRATOR', ['ADMINISTRATOR']],
 ];
 
 test('mapRolePermissions maps every Hearth permission from its Discord permission, one at a time', () => {
@@ -133,10 +134,10 @@ test('mapOverwrite drops Create Invite and other server-wide permissions, and re
 // ------------------------------------------------------------------ the sample template
 test('planFromTemplate(sample): @everyone becomes Hearth\'s default, and what it loses or gains is listed', () => {
   const p = plan();
-  assert.equal(p.everyone.permissions, 1147343);
+  assert.equal(p.everyone.permissions, 1147343 | (1 << 22)); // with Use Soundboard (v25)
   assert.equal(p.everyone.permissions, DEFAULT_EVERYONE);
   assert.equal(p.everyone.dangerous, false);
-  assert.deepEqual(p.everyone.lost, ['REQUEST_TO_SPEAK', 'CREATE_PRIVATE_THREADS', 'USE_EXTERNAL_STICKERS', 'USE_SOUNDBOARD', 'USE_EXTERNAL_SOUNDS', 'USE_EXTERNAL_APPS']);
+  assert.deepEqual(p.everyone.lost, ['REQUEST_TO_SPEAK', 'CREATE_PRIVATE_THREADS', 'USE_EXTERNAL_STICKERS', 'USE_EXTERNAL_SOUNDS', 'USE_EXTERNAL_APPS']);
   // In Hearth anyone who can post can make events; Discord's @everyone here couldn't.
   assert.deepEqual(p.everyone.widened, ['CREATE_EVENTS']);
   assert.equal(p.name, 'Pinecone Club');
@@ -265,7 +266,7 @@ test('planFromTemplate(sample): every Discord permission that can\'t come over i
   assert.deepEqual(p.report.lost, [
     { bit: 'PRIORITY_SPEAKER', where: ['Event Host'] }, { bit: 'REQUEST_TO_SPEAK', where: ['@everyone'] }, { bit: 'MANAGE_EVENTS', where: ['Event Host'] },
     { bit: 'MANAGE_THREADS', where: ['Moderator'] }, { bit: 'CREATE_PRIVATE_THREADS', where: ['@everyone'] }, { bit: 'USE_EXTERNAL_STICKERS', where: ['@everyone'] },
-    { bit: 'USE_SOUNDBOARD', where: ['@everyone'] }, { bit: 'USE_EXTERNAL_SOUNDS', where: ['@everyone'] }, { bit: 'USE_EXTERNAL_APPS', where: ['@everyone'] },
+    { bit: 'USE_EXTERNAL_SOUNDS', where: ['@everyone'] }, { bit: 'USE_EXTERNAL_APPS', where: ['@everyone'] },
   ]);
   assert.deepEqual(p.report.dropped, [{ bit: 'CREATE_INSTANT_INVITE', where: ['mod-chat'] }]);
   // A denied Read Message History can't be kept: anyone who can see a Hearth channel reads all of it. Builder's

@@ -2165,3 +2165,74 @@ and Create Threads, and allow them for the template's moderator roles. @everyone
   stops if the main server stops working part-way. Both are in the instance audit log.
 
 Tests: `test/community.test.js`; the e2e flow "community".
+
+## Soundboards (v25)
+
+What the owner asked for: "add soundboards to each user with customizable sounds and layout". Like Discord's
+soundboard, but every person has their own, and it plays into any call they're in.
+
+**Your board** (Settings → Soundboard, `public/js/soundboard.js`):
+
+- Up to 24 sounds, each up to 5 seconds and 1 MB: MP3, OGG, WAV, M4A, WebM or FLAC. The app checks the file before
+  anything leaves the device: its size, the type the browser reports (audio only), its first bytes (an MP3, OGG, WAV,
+  M4A, WebM or FLAC header, so a renamed page or picture is refused), and its length once decoded (a little padding
+  past 5 s is fine; every play is cut at 5 s anyway). Each sound has a name (32 characters), an emoji, a button color
+  and a volume, and can be previewed, edited or deleted.
+- Layout: grid or list, small, medium or large buttons, drag to reorder (or the arrow buttons, without a mouse), and up
+  to 8 named pages (drag a sound onto a page's tab, or pick its page). Removing a page moves its sounds to the first.
+- The same board on every device, live (`soundboard:changed`).
+
+**Privacy.** Sounds are end-to-end encrypted, like attachments. The audio is encrypted with a random key of its own
+(`E2EE.encryptFile`); that key, the name, emoji, color, volume, format and length are sealed with the personal vault key
+(`E2EE.vaultKey`/`sealVault`, kind `sound`, bound to the sound's id), and so is the layout (kind `sound-layout`). The
+server (`soundboard_items`, `server/soundboard.js`) stores ciphertext and sizes: it can't tell what a sound is called,
+what it sounds like, or even that it is audio, so the type checks are the app's. The people in a call only ever hear
+a sound; nobody but its owner can download it. A profile shows the board only if its owner turns that on, and then only
+the names, emoji and colors of the first 12 sounds, copied into the profile in the clear (`soundShowcase`).
+
+**Playing** (the music-note button in the call controls and the call bar): the app asks the server first
+(`voice:board`), which allows it only for someone in that call, unmuted and not deafened, allowed to speak there (not
+server-muted or timed out), with **Use soundboard** in that voice channel (DM and group calls: always), at most one play
+every 800 ms and 12 in 30 seconds. The sound then goes out on the call's own soundboard lane (docs/VOICE.md), not mixed
+into the microphone, so each listener decides how loud it is: Settings → Soundboard has a volume for everyone else's
+soundboards and a switch to mute them all, and right-clicking someone in a call mutes theirs. Listeners' apps only let
+someone's soundboard lane through while the server says one of their sounds is playing, so a modified app can't play
+longer, more often or without permission to them. A tile lights up while that person's sound plays. Older apps in the
+call don't get the lane and don't hear soundboards.
+
+**Use soundboard** (`1 << 22`, `perms.js`): on for @everyone, as in Discord, including servers made before v25 (the
+v25 upgrade adds it to every @everyone role); deny it per voice channel or role. A timeout takes it away with Speak.
+Discord imports map Discord's USE_SOUNDBOARD onto it.
+
+| Route | What |
+|---|---|
+| `GET /api/me/soundboard` | `{ items: [{ id, kind: 'sound' \| 'layout', meta, size, updatedAt }], limits }`: sealed, no audio |
+| `GET /api/me/soundboard/:id/audio` | `{ audio }`: one sound's encrypted audio, base64 (only your own) |
+| `PUT /api/me/soundboard/:id` | `{ kind: 'sound', meta, audio? }` (audio needed for a new sound; without it, only the details change) or, at id `layout`, `{ kind: 'layout', meta }`. `meta` must be sealed (`x1:`). 400 bad input, 413 over 1 MB or 24 sounds. 60 saves a minute |
+| `DELETE /api/me/soundboard/:id` | deletes one sound |
+
+Deleting an account deletes its soundboard. Tests: `test/soundboard.test.js` (storage, limits, the play checks and
+rate limit, the permission, the soundboard lane in the call engine, the app's file and layout checks), and the e2e
+flow `soundboardAndProfile` in `test/e2e/flows.mjs`.
+
+## More profile customization (v25)
+
+All free, all in Settings → Profile (`server/profile.js` validates every field; `public/js/profile-ui.js` draws them):
+
+- **Banner style** (`bannerFx`, `bannerColor2`): one color, a gradient, a flowing gradient, an aurora or moving
+  stripes, for a banner without a picture. Pictures already move and zoom (`bannerCrop`).
+- **Complete looks**: seven whole styles in one click (Cozy cabin, Arcade, Vaporwave, Night sky, Garden, Royal,
+  Spooky): colors, banner, name font and effect, ring, decoration and effect. Pictures and words stay; save to keep.
+- **Avatar decorations** (`avatarDecoration`): cat ears, halo, crown, horns, flowers, orbiting stars, headphones,
+  hearts, flames, leaves or a sparkle frame, drawn with CSS and emoji (no pictures to load), on avatars 40 px and up.
+- **Text size** (`textSize`): small, normal, large or extra large words on the card.
+- **Favorite things** (`favorites`): up to 6 "🍕 Food: Pizza" cards (label 24, value 60 characters, one line, no `<>`).
+- **Song link** (`songLink`): a card for a song on Spotify, Apple Music, YouTube (Music), SoundCloud, Bandcamp, TIDAL,
+  Deezer or Amazon Music. Only https links to those services are kept, without logins or ports in the address, and
+  the app checks the same before drawing it. It's a link (opened in a new tab): nothing loads from the service.
+- **Sections** (`sectionOrder`, `hiddenSections`): which parts of the card show and in what order (what I'm doing,
+  about me, favorite things, links, song, soundboard, interests, favorite games, recently played, more about me, top
+  friends, member since). Mutual friends and servers always show, before "Member since".
+- **Soundboard on the profile** (`showSoundboard`, `soundShowcase`): see Soundboards.
+
+Every text goes through the instance's word filter like the rest of the profile.

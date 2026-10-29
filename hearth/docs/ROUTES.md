@@ -373,6 +373,10 @@ Routes: 387 HTTP, 15 socket events.
 | GET | `/api/me/study` | server/study.js:36 | session | self; yes | since int | none | features.test.js, attack.test.js (generic: unauth/fuzz/outsider ids) | none |
 | PUT | `/api/me/study/:id` | server/study.js:56 | session | self; yes (user_id, id) PK | id regex, kind enum, data x1: ≤1MB, 100MB/5000 items | study:<uid> 600/min | features.test.js, attack.test.js (generic: unauth/fuzz/outsider ids) | none |
 | DELETE | `/api/me/study/:id` | server/study.js:77 | session | self; yes | id regex | none | features.test.js, attack.test.js (generic: unauth/fuzz/outsider ids) | none |
+| GET | `/api/me/soundboard` | server/soundboard.js | session | self | none | board-list:<uid> 120/min | soundboard.test.js, attack.test.js (generic) | Sealed details and layout only, never audio. |
+| GET | `/api/me/soundboard/:id/audio` | server/soundboard.js | session | self; yes (user_id, id) | id regex | board-audio:<uid> 600/min | soundboard.test.js | Encrypted audio, base64; `Cache-Control: no-store`. |
+| PUT | `/api/me/soundboard/:id` | server/soundboard.js | session | self; requireUnlocked | id regex or `layout`; kind; meta `x1:` ≤ 4 KB (layout ≤ 16 KB); audio base64 ≤ 1 MB + 28 bytes before base64; 24 sounds | board-save:<uid> 60/min | soundboard.test.js | Ciphertext only: the app checks type, size and length before encrypting. |
+| DELETE | `/api/me/soundboard/:id` | server/soundboard.js | session | self | id regex | board-save:<uid> 60/min | soundboard.test.js | |
 | GET | `/api/me/saved` | server/usability.js:96 | session |  |  |  |  |  |
 | GET | `/api/me/saved/ids` | server/usability.js:105 | session |  |  |  |  |  |
 | PUT | `/api/me/saved/:id` | server/usability.js:108 | session |  |  |  |  |  |

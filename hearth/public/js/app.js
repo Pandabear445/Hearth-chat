@@ -43,6 +43,7 @@ import { loadAppearance, saveAppearance, setServerTheme, BACKGROUNDS } from './a
 import { createDrafts, clearAllDrafts, clearLocalCopies, expireLocalCopies, claimOnce, rememberNotification, closeNotifications, closeNotificationFor, alsoCloseNotifications, quietNow } from './usability.js';
 import { label as disLabel, deadline, expired as isExpired, disappears, serverKept, nextDeadline, waitFor, sysLineParts, remaining, TIMERS, setChoices as setTimerChoices, weaker as weakerTimer, stricter as stricterTimer } from './disappear.js';
 import { createScheduled } from './scheduled.js';
+import { createSoundboard } from './soundboard.js';
 import { createMediaPanel } from './media-panel.js';
 import { createPhotoNotes } from './photo-notes.js';
 import { createChatLook } from './chat-look.js';
@@ -103,6 +104,24 @@ let socketToken = '';
 onTokenChange((t) => { if (socket && socket.connected && t !== socketToken) { socket.disconnect(); socket.connect(); } });
 let hadController = false; // was a service worker already in charge when the page loaded?
 let voice;
+// Your own soundboard (soundboard.js): played into calls from the call controls, edited in Settings → Soundboard.
+const board = createSoundboard({
+  S, vaultKey: () => myVaultKey(), voice: () => voice,
+  canPlay: (room) => boardBlocked(room),
+  emojiPicker: (anchor, onPick) => emojiPicker(anchor, onPick),
+  openSettings: () => openSettings(app, 'soundboard'),
+  onMe: (u) => app.onMe(u),
+  userName: (id) => displayName(getUser(id)),
+});
+// Why this person can't play a sound into this call right now ('' when they can). The server checks the same.
+function boardBlocked(room) {
+  if (!voice || voice.channelId !== room) return 'Join a voice call to play sounds.';
+  if (voice.speakLocked || voice.serverMuted) return 'You can\u2019t talk in this call, so you can\u2019t play sounds either.';
+  if (voice.muted || voice.deafened) return 'Unmute to play sounds.';
+  const c = !room.startsWith('dm:') && channelById(room);
+  if (c && !canIn(c, PERMS.USE_SOUNDBOARD)) return 'You don\u2019t have permission to use the soundboard here.';
+  return '';
+}
 let away = null; // automatic Away (presence.js)
 const sec = createSecure({ S, onKeysChanged, onKeyWarning });
 // Who's typing where (typing.js): drawn under the open conversation's box and in the conversation lists.
@@ -179,6 +198,7 @@ export const app = {
   sec,
   P,
   get voice() { return voice; },
+  soundboard: board,
   onMe(u) { setUser(u); renderUserPanel(); },
   checkAway: () => away && away.check(), // after "Away after" changes
   logout,
@@ -574,6 +594,9 @@ function startApp() {
   // while it was closed (same tag).
   if (androidApp.cancel) alsoCloseNotifications(androidApp.cancel);
   voice = new Voice({
+    // The call's soundboard lane carries our sounds; someone else's lights up their tile while one plays.
+    boardTrack: () => board.track(),
+    onBoard: (id, on) => $$(`[data-speak="${id}"]`).forEach((el) => el.classList.toggle('board-playing', on)),
     // Lets the speaking detector ignore people whose mic is off (their state comes from the server).
     isPeerMuted: (userId) => { const st = voice && (S.voice[voice.channelId] || []).find((x) => x.userId === userId); return !!(st && (st.muted || st.deafened)); },
     socket,
@@ -844,6 +867,7 @@ function startApp() {
     toast(until ? `You\u2019re timed out in ${sv.name} until ${fmtStamp(until)}. You can still read.` : `Your timeout in ${sv.name} is over.`);
   });
   socket.on('study:changed', (p) => { if (S.me.studyEnabled) study.onRemoteChange(p); });
+  socket.on('soundboard:changed', () => { board.load(true).catch(() => {}); });
   socket.on('study:enabled', ({ enabled }) => { S.me.studyEnabled = enabled; if (!S.view.serverId) renderSidebar(); });
   socket.on('updates:new', (p) => { updates.onNew(p); if (S.view.type === 'updates') renderMain(); });
   socket.on('server:update', (server) => {
@@ -3080,6 +3104,7 @@ function renderVoicePanel() {
       ibtn(voice.muted ? 'micOff' : 'mic', voice.muted ? 'Unmute' : 'Mute', toggleMute, { cls: voice.muted ? 'off' : '' }),
       ibtn(voice.camStream ? 'video' : 'videoOff', voice.camStream ? 'Turn camera off' : 'Turn camera on', toggleCamera, { cls: voice.camStream ? 'on' : '' }),
       ibtn('monitor', voice.screenStream ? 'Stop sharing' : 'Share your screen', toggleScreen, { cls: voice.screenStream ? 'on' : '' }),
+      ibtn('music', 'Soundboard', (e) => board.openPicker(e.currentTarget), { attrs: { 'data-pop-anchor': '' } }),
       ibtn('phoneOff', 'Leave call', () => { voice.leave(); playSound('selfLeave'); }, { cls: 'hang' })),
     voice.pttMode() ? h('div', { class: `ptt-hint${voice.pttHeld && !voice.muted ? ' on' : ''}` }, icon('mic'),
       getKeybinds().ptt ? (voice.pttHeld && !voice.muted ? 'Talking' : `Push to talk: hold ${comboLabel(getKeybinds().ptt)}`) : h('button', { class: 'link-btn', onclick: () => openSettings(app, 'keybinds') }, 'Push to talk is on, but no key is set')) : '',
@@ -10548,7 +10573,9 @@ function tileEl(room, t, big) {
       e.preventDefault();
       const slider = h('input', { type: 'range', class: 'range', min: '0', max: '2', step: '0.05', value: String(voice.volumeFor(t.u.id)), 'aria-label': `Volume for ${shown}`, oninput: (ev) => voice.setVolume(t.u.id, +ev.target.value) });
       const pt = h('span', { style: { position: 'fixed', left: e.clientX + 'px', top: e.clientY + 'px' } }); document.body.append(pt);
-      popover(pt, h('div', { class: 'menu vol-pop' }, h('div', { class: 'menu-header' }, `Volume \u2014 ${shown}`), slider), { side: 'bottom' });
+      const sbMute = h('label', { class: 'toggle-row sm' }, h('span', { class: 'toggle-label' }, 'Mute their soundboard'),
+        h('input', { type: 'checkbox', checked: board.mutedFor(t.u.id), onchange: (ev) => board.setMutedFor(t.u.id, ev.target.checked) }));
+      popover(pt, h('div', { class: 'menu vol-pop' }, h('div', { class: 'menu-header' }, `Volume \u2014 ${shown}`), slider, sbMute), { side: 'bottom' });
       pt.remove();
     });
   }
@@ -10568,6 +10595,7 @@ function callControls(room) {
     h('button', { class: `round-btn${camOn ? ' on' : ''}`, 'data-tip': camOn ? 'Turn camera off' : 'Turn camera on', 'aria-label': camOn ? 'Turn camera off' : 'Turn camera on', 'aria-pressed': String(camOn), onclick: () => toggleCamera() }, icon(camOn ? 'video' : 'videoOff')),
     (S.config.features || {}).watch === false ? null : h('button', { class: `round-btn${S.watch[room] ? ' on' : ''}`, 'data-tip': S.watch[room] ? 'Add a video to the queue' : 'Watch together', 'aria-label': 'Watch together', onclick: () => openWatchStart(room, !!S.watch[room]) }, icon('eye')),
     h('button', { class: `round-btn${scrOn ? ' on' : ''}`, 'data-tip': scrOn ? 'Stop sharing' : 'Share your screen', 'aria-label': scrOn ? 'Stop sharing your screen' : 'Share your screen', 'aria-pressed': String(scrOn), onclick: () => toggleScreen() }, icon('monitor')),
+    h('button', { class: 'round-btn sb-open', 'data-tip': 'Soundboard', 'aria-label': 'Soundboard', 'data-pop-anchor': '', onclick: (e) => board.openPicker(e.currentTarget) }, icon('music')),
     h('button', { class: 'round-btn hang', 'data-tip': 'Leave call', 'aria-label': 'Leave call', onclick: () => { voice.leave(); playSound('selfLeave'); } }, icon('phoneOff')));
 }
 // The call area: a grid, or one big spotlighted tile (screen shares get it automatically) with the rest in a strip.

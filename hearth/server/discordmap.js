@@ -76,6 +76,8 @@ const MAP = [
   // Per-server nicknames (server/nicknames.js): your own, and other people's below you. Server-wide only, in both.
   ['CHANGE_NICKNAME', ['CHANGE_NICKNAME']],
   ['MANAGE_NICKNAMES', ['MANAGE_NICKNAMES']],
+  // Everyone's own soundboard (server/soundboard.js), played into voice calls. Per voice channel in both.
+  ['USE_SOUNDBOARD', ['USE_SOUNDBOARD']],
   ['ADMINISTRATOR', ['ADMINISTRATOR']],
 ].map(([h, ds]) => { const [lo, hi] = split(ds.reduce((m, d) => m | D(d), 0n)); return { hearth: P[h], lo, hi }; });
 

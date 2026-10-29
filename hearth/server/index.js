@@ -27,6 +27,7 @@ jobs.setStore((r) => db.prepare(`INSERT INTO job_health (name, every_ms, last_ru
   .run(r.name, r.everyMs, r.lastRun, r.lastOk, r.lastError, r.lastErrorAt, r.lastErrorCategory, r.failures, r.runs, r.totalFailures, r.durationMs, Date.now()));
 const { sanitizeProfile, parseProfile } = require('./profile');
 const { sanitizePage, parsePage } = require('./page');
+const BOARD = require('./soundboard');
 const { PERMS: PM, ALL: ALL_PERMS, DEFAULT_EVERYONE, CHANNEL_SCOPED, makePerms } = require('./perms');
 const TEMPLATES = require('./templates');
 const { stripFile, ImageRejected, StripTimedOut } = require('./imagemeta');
@@ -2469,7 +2470,7 @@ function eraseAccount(row) {
     // Their settings and bookmarks (saved messages with their notes, read positions, mention counts, notification
     // choices, folders and other preferences), and which servers they were in (former_members only matters to
     // someone who could come back).
-    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'event_rsvps', 'word_filters',
+    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'soundboard_items', 'event_rsvps', 'word_filters',
       'saved_messages', 'read_states', 'mention_marks', 'notify_prefs', 'user_prefs', 'former_members']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(row.id);
     db.prepare('DELETE FROM profile_comments WHERE profile_id = ?').run(row.id); // the comments on their profile page go with it
     // Call relays they offered (Settings → Help host) leave everyone's calls and backups (everyone's apps are told to
@@ -2662,7 +2663,8 @@ api.patch('/me/profile', auth, (req, res) => {
   // same one again (the profile editor sends everything) keeps the time it clears itself.
   const statusChanged = profile.customStatus.emoji !== before.emoji || profile.customStatus.text !== before.text;
   if (statusChanged) PRES.limitStatus(req);
-  checkWords(profile.displayName, profile.pronouns, profile.bio, profile.aboutMe, profile.headline, profile.mood.text, profile.customStatus.text, profile.interests, profile.songTitle, profile.links.map((l) => l.label));
+  checkWords(profile.displayName, profile.pronouns, profile.bio, profile.aboutMe, profile.headline, profile.mood.text, profile.customStatus.text, profile.interests, profile.songTitle, profile.links.map((l) => l.label),
+    profile.favorites.map((f) => [f.label, f.value]), profile.songLink.label, profile.soundShowcase.map((x) => x.name));
   if (!profile.displayName) profile.displayName = row.username;
   // Top friends must actually be friends.
   profile.topFriends = profile.topFriends.filter((id) => areFriends(req.userId, id));
@@ -5458,6 +5460,7 @@ const NEWS = require('./newsbot')({ api, app, auth, db, fail, wrap, rateLimit, s
   } });
 // Study tools (server/study.js): encrypted sync for Recall's decks, pictures and profile.
 require('./study')({ api, auth, db, fail, rateLimit, pushTo: (...a) => pushTo(...a), emitToUser: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
+BOARD.setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, emitToUser: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
 ACT = require('./activity')({ api, app, auth, db, emit: (...a) => io && io.emit(...a), fail, wrap, rateLimit, isOnline, getUserRow, getSetting, setSetting, checkMediaToken, mediaLinks: MEDIA_LINKS, sealSecret, openSecret, auditLog,
   requireInstanceAdmin, checkWords, broadcastUser: (id) => broadcastUser(id), DATA_DIR, version: require('../package.json').version });
 
@@ -7514,10 +7517,10 @@ function setupSockets(server) {
           if (old) old.leave(`voice:${room}`);
         }
         const speak = !!(vp & PM.SPEAK);
-        Object.assign(prev, { socketId: socket.id, reconnecting: false, grace: null, speak, serverMuted, muted: !!p.muted || !speak, deafened: !!p.deafened, video: !!p.video, screen: !!p.screen });
+        Object.assign(prev, { socketId: socket.id, reconnecting: false, grace: null, speak, serverMuted, muted: !!p.muted || !speak, deafened: !!p.deafened, video: !!p.video, screen: !!p.screen, board: p.board === true });
         socket.join(`voice:${room}`);
         const m = voiceChannels.get(room);
-        const peers = [...m.entries()].filter(([userId]) => userId !== uid).map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId) }));
+        const peers = [...m.entries()].filter(([userId]) => userId !== uid).map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId), ...(s.board ? { board: true } : {}) }));
         // Everyone else points their connection to this person at the new socket (and renegotiates if needed).
         socket.to(`voice:${room}`).emit('voice:peer-joined', { userId: uid, socketId: socket.id, resumed: true });
         emitVoiceState(room);
@@ -7530,10 +7533,12 @@ function setupSockets(server) {
       }
       if (!voiceChannels.has(c.id)) voiceChannels.set(c.id, new Map());
       const m = voiceChannels.get(c.id);
-      const peers = [...m.entries()].map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId) }));
+      const peers = [...m.entries()].map(([userId, s]) => ({ userId, socketId: s.socketId, reconnecting: !!s.reconnecting, ...avoidFlag(userId), ...(s.board ? { board: true } : {}) }));
       // speak: whether they may talk here (the app keeps the mic off without it; recheckVoice keeps it current).
       const speak = !!(vp & PM.SPEAK);
-      m.set(uid, { socketId: socket.id, sid: socket.data.sid, muted: !!p.muted || !speak, deafened: !!p.deafened, video: false, screen: false, speak, serverMuted, reconnecting: false, grace: null });
+      // board: the app has a soundboard lane (voice.js LANE.board), so the people joining after it add one to their
+      // connection with it. Older apps don't, and never get one.
+      m.set(uid, { socketId: socket.id, sid: socket.data.sid, muted: !!p.muted || !speak, deafened: !!p.deafened, video: false, screen: false, speak, serverMuted, reconnecting: false, grace: null, board: p.board === true });
       userVoice.set(uid, c.id);
       socket.join(`voice:${c.id}`);
       // Anyone still connected to this person from before (their app reloaded, or the server restarted) moves
@@ -7575,6 +7580,29 @@ function setupSockets(server) {
       if (p.video !== undefined) s.video = !!p.video;
       if (p.screen !== undefined) s.screen = !!p.screen;
       emitVoiceState(ch);
+    }));
+
+    // Soundboard (v25): the app asks before it plays one of its sounds into the call, and only plays it once the
+    // server says yes. The listeners' apps let a person's soundboard lane through only while the server says a sound
+    // of theirs is playing (for `ms`, at most PLAY_MAX_MS), so a modified app can't play longer, more often, or
+    // without permission to people running this one. The server never learns which sound it is.
+    socket.on('voice:board', guard((p = {}) => {
+      const room = userVoice.get(uid);
+      const s = room && voiceChannels.get(room)?.get(uid);
+      if (!s || s.socketId !== socket.id) fail(400, 'Join the call first.');
+      // Server-muted, timed out or no Speak here: no sounds either. Muted or deafened by choice: the app says unmute.
+      if (!s.speak) fail(403, 'You can\u2019t play sounds in this call.');
+      if (s.muted || s.deafened) fail(400, 'Unmute to play sounds.');
+      if (!String(room).startsWith('dm:')) {
+        const c = db.prepare('SELECT * FROM channels WHERE id = ?').get(room);
+        const srv = c && serverOf(c);
+        if (!c || !srv || !(perms.channel(srv, c, uid) & PM.USE_SOUNDBOARD)) fail(403, 'You don\u2019t have permission to use the soundboard here.');
+      }
+      rateLimit('board-gap:' + uid, 1, BOARD.PLAY_RATE.gapMs);
+      rateLimit('board-play:' + uid, BOARD.PLAY_RATE.burst, BOARD.PLAY_RATE.windowMs);
+      const ms = Math.round(Math.min(BOARD.PLAY_MAX_MS, Math.max(100, +p.ms || BOARD.PLAY_MAX_MS)));
+      socket.to(`voice:${room}`).emit('voice:board', { channelId: room, userId: uid, ms });
+      return { ok: true, ms };
     }));
 
     // Declining a call: tell whoever is calling, and stop this person's other devices ringing.

@@ -10,6 +10,17 @@ const EFFECTS = ['none', 'sparkles', 'snow', 'hearts', 'stars', 'bubbles', 'embe
 const FX_MOTIONS = ['fall', 'rise', 'float', 'drift', 'twinkle', 'spin', 'zoom', 'bounce'];
 const SHAPES = ['circle', 'rounded', 'square', 'hexagon'];
 const NAME_EFFECTS = ['none', 'glow', 'shimmer', 'rainbow', 'flow', 'pulse', 'wave', 'neon', 'glitch', 'outline', 'shadow'];
+// v25 extras. A banner without a picture: one color, a gradient, or a moving one (bannerColor + bannerColor2).
+const BANNER_FX = ['none', 'gradient', 'flow', 'aurora', 'stripes'];
+// Something worn on the avatar on the profile card and in calls (drawn by the app: CSS and emoji, no pictures).
+const DECORATIONS = ['none', 'cat-ears', 'halo', 'crown', 'horns', 'flowers', 'stars', 'headphones', 'hearts', 'flames', 'leaves', 'sparkle-frame'];
+// How big the words on the card are.
+const TEXT_SIZES = ['sm', 'md', 'lg', 'xl'];
+// The card's sections that can be moved or hidden, in their default order.
+const SECTIONS = ['activity', 'bio', 'favorites', 'links', 'song', 'soundboard', 'interests', 'games', 'recent', 'about', 'friends', 'since'];
+// Where a profile's song link may go: music services only (it's shown as a card with the service's name).
+const SONG_HOSTS = ['open.spotify.com', 'music.apple.com', 'youtube.com', 'www.youtube.com', 'music.youtube.com', 'youtu.be', 'soundcloud.com',
+  'on.soundcloud.com', 'bandcamp.com', 'tidal.com', 'listen.tidal.com', 'www.deezer.com', 'deezer.com', 'music.amazon.com'];
 
 const DEFAULTS = {
   displayName: '',
@@ -56,6 +67,22 @@ const graphemes = (v) => {
   const seg = SEGMENTER ? [...SEGMENTER.segment(t)].map((x) => x.segment) : Array.from(t);
   return seg.filter((g) => g.trim()).slice(0, 6).join('');
 };
+// No control characters or angle brackets in short texts shown on the card (they're always set as text, never HTML:
+// this keeps them one tidy line).
+const line = (v, max) => str(v, max * 2).replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, max);
+function songLink(v) {
+  const url = str(v && v.url, 300).trim();
+  if (!url) return { url: '', label: '' };
+  let u;
+  try { u = new URL(url); } catch { return { url: '', label: '' }; }
+  const host = u.hostname.toLowerCase();
+  if (u.protocol !== 'https:' || u.username || u.password || u.port || !(SONG_HOSTS.includes(host) || host.endsWith('.bandcamp.com'))) return { url: '', label: '' };
+  return { url: u.href.slice(0, 300), label: line(v.label, 80) };
+}
+function sectionOrder(v) {
+  const list = (Array.isArray(v) ? v : []).filter((k, i, a) => SECTIONS.includes(k) && a.indexOf(k) === i);
+  return [...list, ...SECTIONS.filter((k) => !list.includes(k))];
+}
 const crop = (c) => ({ x: num(c && c.x, -200, 200, 0), y: num(c && c.y, -200, 200, 0), z: num(c && c.z, 1, 5, 1) });
 
 function sanitizeProfile(input, current = {}) {
@@ -118,6 +145,22 @@ function sanitizeProfile(input, current = {}) {
       .map((g) => ({ id: str(g && g.id, 24), name: str(g && g.name, 80).trim() }))
       .filter((g) => /^(steam:\d{1,10}|wiki:\d{1,12}|rawg:\d{1,10})$/.test(g.id) && g.name)
       .filter((g, i, a) => a.findIndex((x) => x.id === g.id) === i).slice(0, 12),
+    // v25: banner style, avatar decoration, card text size, the sections' order (and which are hidden), favorite
+    // things, a song link, and (only if they turn it on) some of their soundboard.
+    bannerFx: pick(merged.bannerFx, BANNER_FX, 'none'),
+    bannerColor2: hex(merged.bannerColor2, '#7c4dff'),
+    avatarDecoration: pick(merged.avatarDecoration, DECORATIONS, 'none'),
+    textSize: pick(merged.textSize, TEXT_SIZES, 'md'),
+    sectionOrder: sectionOrder(merged.sectionOrder),
+    hiddenSections: (Array.isArray(merged.hiddenSections) ? merged.hiddenSections : []).filter((k, i, a) => SECTIONS.includes(k) && a.indexOf(k) === i),
+    favorites: (Array.isArray(merged.favorites) ? merged.favorites : []).slice(0, 6)
+      .map((f) => ({ emoji: graphemes(f && f.emoji), label: line(f && f.label, 24), value: line(f && f.value, 60) }))
+      .filter((f) => f.label && f.value),
+    songLink: songLink(merged.songLink),
+    showSoundboard: merged.showSoundboard === true,
+    soundShowcase: (Array.isArray(merged.soundShowcase) ? merged.soundShowcase : []).slice(0, 12)
+      .map((x) => ({ emoji: graphemes(x && x.emoji), name: line(x && x.name, 32), color: hex(x && x.color, '#f2a541') }))
+      .filter((x) => x.name),
     links: links.slice(0, 6)
       .map((l) => ({ label: str(l && l.label, 32), url: str(l && l.url, 300) }))
       .filter((l) => /^https?:\/\/[^\s]+$/i.test(l.url)),
@@ -128,4 +171,4 @@ function parseProfile(row) {
   try { return sanitizeProfile(JSON.parse(row.profile || '{}')); } catch { return sanitizeProfile({}); }
 }
 
-module.exports = { sanitizeProfile, parseProfile, FONTS, DEFAULTS, graphemes };
+module.exports = { sanitizeProfile, parseProfile, FONTS, DEFAULTS, graphemes, BANNER_FX, DECORATIONS, TEXT_SIZES, SECTIONS, SONG_HOSTS };

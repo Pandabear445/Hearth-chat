@@ -50,6 +50,11 @@ export function cropStyle(c) {
   return { '--tx': (c.x || 0) + '%', '--ty': (c.y || 0) + '%', '--z': String(c.z || 1) };
 }
 
+// Avatar decorations (profile.js DECORATIONS) that are emoji; the rest are drawn by the stylesheet alone.
+export const DECORATION_GLYPHS = { crown: '\uD83D\uDC51', flowers: '\uD83C\uDF38\uD83C\uDF3C\uD83C\uDF38', stars: '\u2726\u2605\u2726', headphones: '\uD83C\uDFA7', hearts: '\uD83D\uDC95', flames: '\uD83D\uDD25', leaves: '\uD83C\uDF43\uD83C\uDF3F' };
+export const DECORATION_LABELS = [['none', 'None'], ['cat-ears', 'Cat ears'], ['halo', 'Halo'], ['crown', '\uD83D\uDC51 Crown'], ['horns', 'Horns'], ['flowers', '\uD83C\uDF38 Flowers'],
+  ['stars', '\u2605 Orbiting stars'], ['headphones', '\uD83C\uDFA7 Headphones'], ['hearts', '\uD83D\uDC95 Hearts'], ['flames', '\uD83D\uDD25 Flames'], ['leaves', '\uD83C\uDF43 Leaves'], ['sparkle-frame', 'Sparkle frame']];
+
 export function avatarEl(u, size = 40, { status = false, meId = '', speaking = false } = {}) {
   const p = (u && u.profile) || {};
   const shape = p.avatarShape || 'circle';
@@ -66,6 +71,9 @@ export function avatarEl(u, size = 40, { status = false, meId = '', speaking = f
   if (u && u.avatar) inner.append(h('img', { class: 'cropped', src: u.avatar, alt: '', loading: 'lazy', draggable: 'false', style: cropStyle(p.avatarCrop) }));
   else inner.append(h('span', { class: 'av-initials', style: { fontSize: Math.max(10, size * 0.38) + 'px' } }, initials(displayName(u))));
   wrap.append(inner);
+  // Something worn on the avatar (a crown, cat ears…), drawn with CSS and emoji. Too small to see under 40 px.
+  const deco = p.avatarDecoration && p.avatarDecoration !== 'none' && size >= 40 ? p.avatarDecoration : '';
+  if (deco) { wrap.classList.add('has-deco'); wrap.append(h('span', { class: `av-deco deco-${deco}`, 'aria-hidden': 'true' }, DECORATION_GLYPHS[deco] || '')); }
   // The dot's shape differs per status too (ring, moon, bar), and it carries the words for screen readers.
   if (status) wrap.append(h('span', { class: `status-dot st-${presenceOf(u, meId)}`, title: STATUS_LABEL[presenceOf(u, meId)], role: 'img', 'aria-label': STATUS_LABEL[presenceOf(u, meId)] }));
   return wrap;
@@ -145,9 +153,55 @@ export function effectLayer(effect, customFx) {
 
 export function bannerEl(u, height = 110) {
   const p = u.profile || {};
-  const el = h('div', { class: 'pc-banner', style: { height: height + 'px', background: p.bannerColor || '#f2a541' } });
+  // Without a picture: one color, or (v25) a gradient of two, still or moving.
+  const fx = ['gradient', 'flow', 'aurora', 'stripes'].includes(p.bannerFx) ? p.bannerFx : '';
+  const el = h('div', {
+    class: `pc-banner${fx ? ` bfx bfx-${fx}` : ''}`,
+    style: { height: height + 'px', background: fx ? null : p.bannerColor || '#f2a541', '--b1': p.bannerColor || '#f2a541', '--b2': p.bannerColor2 || '#7c4dff' },
+  });
   if (u.banner) el.append(h('img', { class: 'cropped', src: u.banner, alt: '', draggable: 'false', style: cropStyle(p.bannerCrop) }));
   return el;
+}
+
+// The card's sections that can be moved or hidden, in their default order (the same list as server/profile.js).
+export const PROFILE_SECTIONS = [['activity', 'What I\u2019m doing'], ['bio', 'About me'], ['favorites', 'Favorite things'], ['links', 'Links'], ['song', 'Song'],
+  ['soundboard', 'Soundboard'], ['interests', 'Interests'], ['games', 'Favorite games'], ['recent', 'Recently played'], ['about', 'More about me'], ['friends', 'Top friends'], ['since', 'Member since']];
+export function sectionOrder(list) {
+  const keys = PROFILE_SECTIONS.map(([k]) => k);
+  const got = (Array.isArray(list) ? list : []).filter((k, i, a) => keys.includes(k) && a.indexOf(k) === i);
+  return [...got, ...keys.filter((k) => !got.includes(k))];
+}
+// Favorite things: a few "label: value" cards with an emoji ("🍕 Food: Pizza").
+export function favoritesEl(list) {
+  const items = (Array.isArray(list) ? list : []).filter((f) => f && f.label && f.value).slice(0, 6);
+  if (!items.length) return null;
+  return h('div', { class: 'pc-section' }, h('div', { class: 'pc-label' }, 'Favorite things'),
+    h('ul', { class: 'pc-favs' }, items.map((f) => h('li', { class: 'pc-fav' }, f.emoji ? h('span', { class: 'pc-fav-emoji', 'aria-hidden': 'true' }, f.emoji) : null,
+      h('span', { class: 'pc-fav-text' }, h('span', { class: 'pc-fav-label' }, f.label), h('span', { class: 'pc-fav-value' }, f.value))))));
+}
+// A link to a song on a music service (profile.js SONG_HOSTS), as a card with the service's name. Only https links
+// to those services are shown, whatever arrives.
+const SONG_SERVICES = [[/(^|\.)spotify\.com$/, 'Spotify'], [/^music\.apple\.com$/, 'Apple Music'], [/^music\.youtube\.com$/, 'YouTube Music'], [/(^|\.)youtube\.com$|^youtu\.be$/, 'YouTube'],
+  [/(^|\.)soundcloud\.com$/, 'SoundCloud'], [/(^|\.)bandcamp\.com$/, 'Bandcamp'], [/(^|\.)tidal\.com$/, 'TIDAL'], [/(^|\.)deezer\.com$/, 'Deezer'], [/^music\.amazon\.com$/, 'Amazon Music']];
+export function songService(url) {
+  let u;
+  try { u = new URL(url); } catch { return ''; }
+  if (u.protocol !== 'https:') return '';
+  const hit = SONG_SERVICES.find(([re]) => re.test(u.hostname.toLowerCase()));
+  return hit ? hit[1] : '';
+}
+export function songLinkEl(link) {
+  const service = link && link.url ? songService(link.url) : '';
+  if (!service) return null;
+  return h('a', { class: 'pc-songlink', href: link.url, target: '_blank', rel: 'noopener noreferrer nofollow' },
+    h('span', { class: 'pc-songlink-ic', 'aria-hidden': 'true' }, '\u266B'),
+    h('span', { class: 'pc-songlink-text' }, h('span', { class: 'pc-songlink-title' }, link.label || 'Listen'), h('span', { class: 'pc-songlink-service' }, `on ${service}`)));
+}
+// What someone chose to show of their soundboard: names, emoji and colors only (the sounds stay private).
+const HEXCOLOR = /^#[0-9a-f]{6}$/i;
+export function soundShowcaseEl(list) {
+  return h('div', { class: 'pc-sounds' }, (list || []).slice(0, 12).map((x) => h('span', { class: 'pc-sound', style: { '--sb-color': HEXCOLOR.test(x.color) ? x.color : '#f2a541' } },
+    x.emoji ? h('span', { 'aria-hidden': 'true' }, x.emoji) : null, h('span', null, x.name))));
 }
 
 // Full profile card. `actions` is an optional node (buttons).
@@ -178,8 +232,9 @@ export function profileCard(u, { meId = '', actions = null, compact = false, mut
   const p = u.profile || {};
   const style = p.cardStyle || 'gradient';
   const noBanner = p.showBanner === false;
+  const size = ['sm', 'lg', 'xl'].includes(p.textSize) ? ` pc-text-${p.textSize}` : '';
   const card = h('div', {
-    class: `pcard pc-${style}${compact ? ' pc-compact' : ''}${noBanner ? ' pc-no-banner' : ''}`,
+    class: `pcard pc-${style}${compact ? ' pc-compact' : ''}${noBanner ? ' pc-no-banner' : ''}${size}`,
     style: { '--c1': p.themePrimary, '--c2': p.themeSecondary, '--acc': p.accentColor },
   });
   if (u.background) card.append(h('div', { class: 'pc-bg' }, h('img', { class: 'cropped pc-bg-img', src: u.background, alt: '', draggable: 'false', style: cropStyle(p.backgroundCrop) })));
@@ -201,25 +256,33 @@ export function profileCard(u, { meId = '', actions = null, compact = false, mut
       h('div', { class: 'pc-nick-row' }, h('span', { class: 'pc-nick-name' }, nickname.name),
         nickname.edit ? h('button', { class: 'link-btn', 'aria-label': `Change nickname in ${nickname.place}`, onclick: nickname.edit }, 'Change') : null)));
   }
-  const act = activityCards(u, { compact: true });
-  if (act) inner.append(h('div', { class: 'pc-section' }, act));
-  if (p.bio) {
-    inner.append(h('div', { class: 'pc-section' }, h('div', { class: 'pc-label' }, 'About me'), h('div', { class: 'pc-bio', html: md(p.bio) })));
+  // Each section that has something to show, in the order the person picked (profile.js SECTIONS), minus the ones they
+  // hid. Mutual friends and servers aren't theirs to move: they go just before "Member since".
+  const sec = (label, ...kids) => h('div', { class: 'pc-section' }, label ? h('div', { class: 'pc-label' }, label) : null, ...kids);
+  const build = {
+    activity: () => { const act = activityCards(u, { compact: true }); return act ? sec(null, act) : null; },
+    bio: () => (p.bio ? sec('About me', h('div', { class: 'pc-bio', html: md(p.bio) })) : null),
+    favorites: () => favoritesEl(p.favorites),
+    links: () => (p.links && p.links.length ? sec('Links', h('div', { class: 'pc-links' }, p.links.map((l) => h('a', { href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow', class: 'pc-link' }, l.label || new URL(l.url).hostname)))) : null),
+    song: () => {
+      const link = songLinkEl(p.songLink);
+      return u.song || link ? sec(null, u.song ? songPlayer(u, p) : null, link) : null;
+    },
+    soundboard: () => (p.showSoundboard && (p.soundShowcase || []).length ? sec('Soundboard', soundShowcaseEl(p.soundShowcase)) : null),
+    interests: () => ((p.interests || []).length ? sec('Interests', h('div', { class: 'pc-tags' }, p.interests.map((t) => h('span', { class: 'pc-tag' }, t)))) : null),
+    games: () => { const fav = favoriteGamesEl(p.games, { limit: compact ? 6 : 12 }); return fav ? sec('Favorite games', fav) : null; },
+    recent: () => { const recent = !compact && recentGamesEl((u.recentGames || []).slice(0, 4)); return recent ? sec('Recently played', recent) : null; },
+    about: () => (!compact && p.aboutMe ? sec('More about me', h('div', { class: 'pc-about md', html: renderDoc(p.aboutMe) })) : null),
+    friends: () => (!compact && topFriends ? topFriends : null),
+    since: () => [mutual || null, sec('Member since', h('div', { class: 'pc-since' }, fmtDay(u.createdAt)))],
+  };
+  const hidden = new Set(Array.isArray(p.hiddenSections) ? p.hiddenSections : []);
+  const order = sectionOrder(p.sectionOrder);
+  for (const k of order) {
+    if (hidden.has(k)) { if (k === 'since' && mutual) inner.append(mutual); continue; }
+    const out = build[k]();
+    [].concat(out).forEach((x) => { if (x) inner.append(x); });
   }
-  if (p.links && p.links.length) {
-    inner.append(h('div', { class: 'pc-section' }, h('div', { class: 'pc-label' }, 'Links'),
-      h('div', { class: 'pc-links' }, p.links.map((l) => h('a', { href: l.url, target: '_blank', rel: 'noopener noreferrer nofollow', class: 'pc-link' }, l.label || new URL(l.url).hostname)))));
-  }
-  if (u.song) inner.append(h('div', { class: 'pc-section' }, songPlayer(u, p)));
-  if ((p.interests || []).length) inner.append(h('div', { class: 'pc-section' }, h('div', { class: 'pc-label' }, 'Interests'), h('div', { class: 'pc-tags' }, p.interests.map((t) => h('span', { class: 'pc-tag' }, t)))));
-  const fav = favoriteGamesEl(p.games, { limit: compact ? 6 : 12 });
-  if (fav) inner.append(h('div', { class: 'pc-section' }, h('div', { class: 'pc-label' }, 'Favorite games'), fav));
-  const recent = !compact && recentGamesEl((u.recentGames || []).slice(0, 4));
-  if (recent) inner.append(h('div', { class: 'pc-section' }, h('div', { class: 'pc-label' }, 'Recently played'), recent));
-  if (!compact && p.aboutMe) inner.append(h('div', { class: 'pc-section' }, h('div', { class: 'pc-label' }, 'More about me'), h('div', { class: 'pc-about md', html: renderDoc(p.aboutMe) })));
-  if (!compact && topFriends) inner.append(topFriends);
-  if (mutual) inner.append(mutual);
-  inner.append(h('div', { class: 'pc-section' }, h('div', { class: 'pc-label' }, 'Member since'), h('div', { class: 'pc-since' }, fmtDay(u.createdAt))));
   if (actions) inner.append(h('div', { class: 'pc-actions' }, actions));
   body.append(inner);
   card.append(body);
