@@ -50,6 +50,7 @@ export async function brainrot(t) {
   check(split.row ? Math.abs(split.f[2] - split.u[2]) < 4 && split.u[0] >= split.f[0] + split.f[2] - 2 : Math.abs(split.f[3] - split.u[3]) < 4 && split.u[1] >= split.f[1] + split.f[3] - 2, `Half and half (${JSON.stringify(split)}).`);
   // The "tap to start watching" cover (and the empty note) keep to the video's half: a tap on the gameplay, its ✕ or its
   // settings is never taken for consent to load TikTok's and Instagram's players.
+  await alice.page.locator('.modal-backdrop').waitFor({ state: 'detached' }); // (the warning has finished closing)
   const tapsGameplay = await alice.page.evaluate(() => {
     const m = document.querySelector('.reels-layer .reels-main');
     const cover = m.querySelector('.reels-cover'); const empty = m.querySelector('.reels-empty');
