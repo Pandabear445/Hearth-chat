@@ -60,7 +60,7 @@ async function person(name, { legacy = false, sign = true } = {}) {
   const r = await srv.api('POST', '/auth/register', { ip, body: { username: name, authKey, kdfSalt, publicKey: id.publicKey, encPrivateKey: id.encPrivateKey, acceptTos: srv.config.termsVersion || undefined } });
   assert.equal(r.status, 200, r.text);
   const p = { username: name, ip, authKey, wrapKey, kdfSalt, token: r.json.token, id: r.json.user.id, ...id };
-  if (!sign) return p; // (a new account's first start makes its signing key: secure.js ensureSigningKey)
+  if (!sign) return p; // (a new account's first start makes its signing key: secure.js proveOwnKeys)
   const sk = await E.createSigningKey(id.privateKey, id.publicKey);
   Object.assign(p, sk);
   assert.equal((await uploadSignKey(p, sk)).status, 200);
@@ -84,7 +84,7 @@ async function device(user, { pins = new Map(), pqSeed = null, ctx = null, token
   const needs = [];
   const S = { me: boot.me, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: user.privateKey, e2eeSince: boot.e2eeSince, pqSeed: ctx && ctx.pqSeed ? ctx.pqSeed : pqSeed };
   const sec = createSecure({ S, onDmKeys: (id) => dmEvents.push(id), onNeedPassword: (why) => needs.push(why) });
-  await sec.ensureSigningKey(boot.encSignPrivateKey);
+  S.me = await sec.proveOwnKeys(boot.me, boot.encSignPrivateKey); // (app.js loadBootstrap takes what this returns)
   await sec.ensurePqKey(ctx);
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(boot.keyStates || {})) await sec.applyState(st);
@@ -864,23 +864,21 @@ test('second review 14: the password bar doesn’t come back right after the pas
 test('second review 4 and 9: the vault key comes from your proven identity key; the password bar sits in the page and can wait', async () => {
   const { a, aD } = await twoWithPq('r2d');
   use(aD);
-  assert.equal(await aD.sec.provenIdentity(), a.publicKey);
+  // (1.40.1 did the same: secure.js ownKeys, your keys as this device proved them.)
   const evil = await E.createIdentity(a.wrapKey);
-  const real = aD.S.me.publicKey;
   aD.S.me = { ...aD.S.me, publicKey: evil.publicKey };
-  await assert.rejects(() => aD.sec.provenIdentity(), (e) => e.code === 'own_key_mismatch');
-  aD.S.me = { ...aD.S.me, publicKey: real };
-  assert.equal(aD.sec.provenKeys().e, a.publicKey);
+  assert.equal(aD.sec.ownKeys().publicKey, a.publicKey, 'not what S.me lists now');
+  aD.S.me = { ...aD.S.me, publicKey: a.publicKey };
   const read = (f) => require('node:fs').readFileSync(path.join(__dirname, '..', 'public', 'js', f), 'utf8');
   const app = read('app.js');
-  const vault = app.slice(app.indexOf('async function myVaultKey()'), app.indexOf('async function myVaultKey()') + 300);
-  assert.match(vault, /sec\.provenIdentity\(\)/);
+  const vault = app.slice(app.indexOf('function myVaultKey()'), app.indexOf('function myVaultKey()') + 300);
+  assert.match(vault, /sec\.ownKeys\(\)/);
   assert.doesNotMatch(vault, /S\.me\.publicKey/);
   assert.match(app, /createRecall\(\{ S, vaultKey: \(\) => myVaultKey\(\)/);
-  assert.match(read('recall-host.js'), /if \(ctx\.vaultKey\) return ctx\.vaultKey\(\);/);
+  assert.match(read('recall-host.js'), /key = await ctx\.vaultKey\(\)/);
   // (Third review, R3-6: and no record the server pushes sets your own keys.)
   const setUserFn = app.slice(app.indexOf('function setUser(u)'), app.indexOf('function getUser(id)'));
-  assert.match(setUserFn, /OWN_KEYS\.forEach\(\(k\) => \{ delete mine\[k\]; \}\)/);
+  assert.match(setUserFn, /OWN_KEYS\.forEach\(\(k\) => \{ delete rest\[k\]; \}\)/);
   assert.match(app, /const OWN_KEYS = \['publicKey', 'signPublicKey', 'pqPublicKey', 'pqSig'\];/);
   // Review 9: in the layout above the message box, with "Later" for this tab; nothing fixed over the page.
   const bar = app.slice(app.indexOf('function pqNotice('), app.indexOf('async function unlockPq()'));
@@ -1066,7 +1064,8 @@ test('third review R3-6: a new account’s signing key is locked to its own iden
   globalThis.fetch = async (url, opts = {}) => { if (String(url).endsWith('/me/sign-key/challenge')) S.me = { ...S.me, publicKey: n.publicKey }; return f(url, opts); };
   let r;
   try {
-    const going = sec.ensureSigningKey(null);
+    // (1.40.1: the start-up's record is proven as handed over, never read from S.me again: secure.js proveOwnKeys.)
+    const going = sec.proveOwnKeys(boot.me, null).then((me) => { S.me = me; });
     S.me = { ...S.me, publicKey: evil.publicKey };
     r = await going.then(() => 'done', (e) => e.code || e.message);
   } finally { globalThis.fetch = f; }
@@ -1130,7 +1129,7 @@ test('third review R3-9: the upgrade landing while server keys are opened doesn�
   const boot = (await as(v, 'GET', '/bootstrap')).json;
   const S = { me: boot.me, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: v.privateKey, pqSeed: null };
   const sec = createSecure({ S });
-  await sec.ensureSigningKey(boot.encSignPrivateKey);
+  S.me = await sec.proveOwnKeys(boot.me, boot.encSignPrivateKey);
   // The publish lands just after the server keys started opening (here: while o's record is fetched, which comes after
   // the app has looked at what it may keep), and before they're done.
   let snapTaken;

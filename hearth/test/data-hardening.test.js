@@ -446,7 +446,7 @@ test('Recall loads every page before tidying up, so the profile and pictures of 
       },
     };
     handlers.length = 0;
-    const recall = createRecall({ S: { me: { publicKey: 'pk', studyEnabled: true }, privateKey: 'sk' }, onEnabled() {} });
+    const recall = createRecall({ S: { me: { publicKey: 'pk', studyEnabled: true }, privateKey: 'sk' }, vaultKey: async () => 'k', onEnabled() {} });
     recall.view(); // opens the frame
     const own = handlers.slice(); // this instance's message listener (later runs add their own)
     const send = (data) => { for (const fn of own) fn({ source: win, data: { recall: 1, ...data } }); };

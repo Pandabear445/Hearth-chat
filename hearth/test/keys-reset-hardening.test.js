@@ -85,9 +85,10 @@ async function send(u, sid, ch, epoch, raw, t) {
 async function device(user, pins = new Map()) {
   store = pins; curIp = user.ip; API.setToken(user.token);
   const boot = (await as(user, 'GET', '/bootstrap')).json;
-  const S = { me: boot.me, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: user.privateKey, e2eeSince: boot.e2eeSince };
+  const S = { me: null, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: user.privateKey, e2eeSince: boot.e2eeSince };
   const sec = SEC.createSecure({ S });
-  await sec.ensureSigningKey(boot.encSignPrivateKey);
+  S.me = await sec.proveOwnKeys(boot.me, boot.encSignPrivateKey, { account: user.id });
+  S.users[S.me.id] = { ...S.users[S.me.id], ...S.me };
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(boot.keyStates || {})) await sec.applyState(st);
   for (const s of S.servers) await sec.keysSaved(s.id);
