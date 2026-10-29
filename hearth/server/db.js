@@ -1755,6 +1755,9 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_servers_discoverable ON servers(discover
 //   devices for it (devicePk: a one-off ML-KEM key, signed with the account's signing key); sealed: the answer.
 addColumn('users', 'pq_public_key', 'TEXT');
 addColumn('users', 'pq_sig', 'TEXT');
+// users.recovery_pq: 1 when the recovery key was made while the account had its post-quantum key (so it holds the seed);
+// 0 for ones from before, which Settings asks to replace.
+addColumn('users', 'recovery_pq', 'INTEGER NOT NULL DEFAULT 0');
 db.exec(`
 CREATE TABLE IF NOT EXISTS dm_keys (
   dm_id TEXT NOT NULL REFERENCES dm_channels(id) ON DELETE CASCADE,

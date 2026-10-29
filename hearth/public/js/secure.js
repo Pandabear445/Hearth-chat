@@ -289,6 +289,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   // ctx, right after a sign-in with the password: { authKey, wrapKey, encPrivateKey, pqSeed (the envelope's, or
   // null), replace (a reset with the recovery key: an envelope without the account's seed is to get a new one) }.
   let pqBusy = null;
+  const PQ_ORPHAN_MS = 3 * 24 * 3600 * 1000;
   function ensurePqKey(ctx = null) {
     const run = async () => {
       if (!S.signKey || !S.me || !(await ownKeysOk())) return;
@@ -302,7 +303,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
         // Signed in with the password, and the envelope lacks the seed this device has: put it back in.
         if (ctx && !fromEnvelope && ctx.authKey) {
           const { encPrivateKey } = await E2EE.addPqToEnvelope(ctx.wrapKey, ctx.encPrivateKey, { seed, replace: true });
-          await publishPq({ pqPublicKey: pub, pqSig: await E2EE.signPqKey(S.signKey, S.me.id, S.me.publicKey, pub), encPrivateKey, authKey: ctx.authKey });
+          await publishPq({ pqPublicKey: pub, pqSig: await E2EE.signPqKey(S.signKey, S.me.id, S.me.publicKey, pub), encPrivateKey, fromEnvelope: await E2EE.envelopeHash(ctx.encPrivateKey), authKey: ctx.authKey });
         }
         adoptPq(seed);
         return serveHandoffs();
@@ -317,11 +318,19 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       // A seed this device holds while the server lists no key of yours: kept, and published at the next sign-in with
       // the password (until then, what this device locks to you still uses it: myPqPublic).
       if (!pub && seed && !ctx) return adoptPq(seed);
+      // Signed in with the password, the account lists a key, and this device's request for it has gone unanswered for
+      // days (no device of yours has the seed any more): replace it, rather than wait forever.
+      if (ctx && ctx.authKey && pub && !ctx.replace && !seed) {
+        await askForPq();
+        const mine = asking && ((await api('GET', '/me/pq-handoff')).requests || []).find((x) => x.id === asking.id);
+        if (!S.pqSeed && mine && !mine.sealed && Date.now() - mine.createdAt > PQ_ORPHAN_MS) ctx = { ...ctx, replace: true };
+        else return;
+      }
       if (ctx && (!pub || ctx.replace)) {
         // The one-time upgrade: a new seed, locked inside the envelope, and its public key published with it.
         const up = await E2EE.addPqToEnvelope(ctx.wrapKey, ctx.encPrivateKey, { replace: true });
         const pq = E2EE.pqKeyPair(up.pqSeed).publicKey;
-        await publishPq({ pqPublicKey: pq, pqSig: await E2EE.signPqKey(S.signKey, S.me.id, S.me.publicKey, pq), encPrivateKey: up.encPrivateKey, authKey: ctx.authKey, ...(pub ? { replace: true } : {}) });
+        await publishPq({ pqPublicKey: pq, pqSig: await E2EE.signPqKey(S.signKey, S.me.id, S.me.publicKey, pq), encPrivateKey: up.encPrivateKey, fromEnvelope: await E2EE.envelopeHash(ctx.encPrivateKey), authKey: ctx.authKey, ...(pub ? { replace: true } : {}) });
         return adoptPq(up.pqSeed);
       }
       // Another device of yours replaced the key (signed by you): the one held here is out of date.
@@ -331,8 +340,12 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     };
     pqBusy = (pqBusy || Promise.resolve()).then(run, run).catch(async (e) => {
       // Another device published one meanwhile: take its key as listed now, and get the seed from it.
+      // (Only one you signed: a server that answers every publish so, with a key of its own, gets nowhere.)
       if (e.code === 'pq_exists') {
-        try { const k = await api('GET', `/users/${S.me.id}/pq-key`); S.me = { ...S.me, pqPublicKey: k.pqPublicKey, pqSig: k.pqSig }; await askForPq(); } catch { /* next start */ }
+        try {
+          const k = await api('GET', `/users/${S.me.id}/pq-key`);
+          if (proven && await E2EE.verifyPqKey(proven.s, S.me.id, proven.e, k.pqPublicKey, k.pqSig)) { S.me = { ...S.me, pqPublicKey: k.pqPublicKey, pqSig: k.pqSig }; await askForPq(); }
+        } catch { /* next start */ }
       } else console.warn('Post-quantum key', e.message);
     });
     return pqBusy;
@@ -357,7 +370,8 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   }
   async function checkHandoff() {
     const r = asking;
-    if (!r || S.pqSeed || !S.me.pqPublicKey) return;
+    // Only for the key the account publishes signed by you: a seed for any other is never taken.
+    if (!r || S.pqSeed || !(await listedPqIsMine())) return;
     const { requests } = await api('GET', '/me/pq-handoff');
     const got = (requests || []).find((x) => x.id === r.id && x.sealed);
     if (!got) return;
@@ -367,7 +381,8 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     } catch (e) { console.warn('A post-quantum key handoff didn’t check out', e.message); }
     await api('DELETE', `/me/pq-handoff/${r.id}`).catch(() => {});
     if (seed) adoptPq(seed);
-    else { stopAsking(); await E2EE.storePqRequest(S.me.id, null).catch(() => {}); } // asked again at the next start
+    // A bad answer (anyone with a session could post one): asked again, the same request, for a real one.
+    else await api('POST', '/me/pq-handoff', { id: r.id, devicePk: r.devicePk, sig: r.sig }).catch(() => {});
   }
   // Seal the seed for each of your devices that asks, once it proves (with your signing key) it's one of yours.
   async function serveHandoffs() {
@@ -376,7 +391,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     const { requests } = await api('GET', '/me/pq-handoff');
     for (const r of requests || []) {
       if (r.sealed || (asking && r.id === asking.id) || !(await E2EE.verifyPqHandoffRequest(proven.s, S.me.id, r))) continue;
-      const sealed = await E2EE.sealPqHandoff({ pqSeed: S.pqSeed, userId: S.me.id, id: r.id, devicePk: r.devicePk, myPub: proven.e });
+      const sealed = await E2EE.sealPqHandoff({ pqSeed: S.pqSeed, userId: S.me.id, id: r.id, devicePk: r.devicePk, myPriv: S.privateKey, myPub: proven.e });
       await api('POST', `/me/pq-handoff/${r.id}`, { sealed }).catch(() => {});
     }
   }
@@ -925,6 +940,9 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     if (!d) throw new Error('Conversation not found.');
     const peer = await userWithKeys(d.userId);
     if (peer && peer.publicKey) trust(peer);
+    // Their post-quantum key, checked (and so pinned: downgrade protection) as soon as you look at the DM, not only
+    // once you write.
+    if (peer && peer.pq && !peer.deleted) pqKeyOf(peer).catch(() => {});
     return keysOf(peer, 'e', at);
   }
   // DMs aren't signed (so they stay deniable): the key that opens one is all that says who could have written it.

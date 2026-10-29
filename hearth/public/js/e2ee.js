@@ -287,6 +287,9 @@ function pqPublicBytes(pqPubB64) {
   return pqPubCache.get(pqPubB64);
 }
 export const isPqPublicKey = (k) => !!pqPublicBytes(k);
+// Which password envelope a re-lock was made from (hex SHA-256 of its text), so the server can refuse to save one made
+// from an older envelope than it has now (a password change racing the post-quantum upgrade on another device).
+export const envelopeHash = async (encPrivateKey) => toHex(await sha256(enc.encode(String(encPrivateKey))));
 // The short fingerprint the server lists for someone's post-quantum key (server/index.js pqFp).
 export async function pqFingerprint(pqPubB64) {
   const bytes = pqPublicBytes(pqPubB64);
@@ -332,7 +335,9 @@ const isB64 = (x, bytes) => typeof x === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.te
 // seed (that's locked with the password, which a signed-in device doesn't keep). Rather than ask for the password, it
 // makes a one-off ML-KEM-768 key, signs its public half with the account's signing key (so the server can't slip in one
 // of its own) and asks; any of your devices that has the seed seals it to that key and to your identity key (the same
-// hybrid as everything else). The device checks the seed makes the very key the account publishes before using it.
+// hybrid as everything else, plus ECDH of your identity key with itself, so only a holder of the identity key can seal
+// an answer at all). The device checks the seed makes the very key the account publishes, as signed by the account,
+// before using it.
 //   request:  { id, devicePk, sig }   sig over hearth-pq-handoff|<account>|<id>|<devicePk>
 //   answer:   ph1:<ephemeral P-256>:<ML-KEM ciphertext>:<iv>:<ciphertext>
 const handoffText = (userId, id, devicePk) => `hearth-pq-handoff|${userId}|${id}|${devicePk}`;
@@ -344,13 +349,13 @@ export async function pqHandoffRequest(signKey, userId) {
 }
 export const verifyPqHandoffRequest = (signPub, userId, r) => !!r && typeof r.id === 'string' && /^[0-9a-f]{32}$/.test(r.id) && isPqPublicKey(r.devicePk)
   && verify(signPub, handoffText(userId, r.id, r.devicePk), r.sig);
-export async function sealPqHandoff({ pqSeed, userId, id, devicePk, myPub }) {
+export async function sealPqHandoff({ pqSeed, userId, id, devicePk, myPriv, myPub }) {
   const pk = pqPublicBytes(devicePk);
   if (!pk) throw new Error('Bad device key');
   const eph = await ephemeral();
   const { cipherText, sharedSecret } = ml_kem768.encapsulate(pk);
   const ctx = `${userId}|${id}`;
-  const key = await hybridKey({ label: 'hearth-ph1', ctx, kemSs: sharedSecret, dhs: [await dhBits(eph.priv, myPub)], transcript: [unb64(eph.pub), cipherText, unb64(myPub), pk], usage: 'encrypt' });
+  const key = await hybridKey({ label: 'hearth-ph1', ctx, kemSs: sharedSecret, dhs: [await dhBits(eph.priv, myPub), await dhBits(myPriv, myPub)], transcript: [unb64(eph.pub), cipherText, unb64(myPub), pk], usage: 'encrypt' });
   sharedSecret.fill(0);
   const iv = rand(12);
   return `ph1:${eph.pub}:${b64(cipherText)}:${b64(iv)}:${b64(await aesEncrypt(key, iv, pqSeed, `hearth-ph1|${ctx}`))}`;
@@ -363,7 +368,7 @@ export async function openPqHandoff({ sealed, userId, id, deviceSeed, myPriv, my
   const ct = unb64(p[2]);
   const ss = ml_kem768.decapsulate(ct, dev.secretKey);
   const ctx = `${userId}|${id}`;
-  const key = await hybridKey({ label: 'hearth-ph1', ctx, kemSs: ss, dhs: [await dhBits(myPriv, p[1])], transcript: [unb64(p[1]), ct, unb64(myPub), unb64(dev.publicKey)], usage: 'decrypt' });
+  const key = await hybridKey({ label: 'hearth-ph1', ctx, kemSs: ss, dhs: [await dhBits(myPriv, p[1]), await dhBits(myPriv, myPub)], transcript: [unb64(p[1]), ct, unb64(myPub), unb64(dev.publicKey)], usage: 'decrypt' });
   ss.fill(0);
   const seed = await aesDecrypt(key, unb64(p[3]), unb64(p[4]), `hearth-ph1|${ctx}`);
   if (seed.length !== PQ_SEED_BYTES || pqKeyPair(seed).publicKey !== expectPq) throw new Error('That isn’t this account’s post-quantum key');

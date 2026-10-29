@@ -453,7 +453,7 @@ function accountTab(app, setDirty, go) {
       let enc;
       try { enc = await E2EE.rewrapPrivateKey(oldK.wrapKey, newK.wrapKey, locked.encPrivateKey); } catch { throw new Error('Your current password is not right.'); }
       let r;
-      try { r = await withCode((x) => api('POST', '/me/password', { oldAuthKey: oldK.authKey, newAuthKey: newK.authKey, encPrivateKey: enc, salt, ...x }), locked.stepUpTicket); } catch (x) { throw pwCode.error(x) || x; }
+      try { r = await withCode((x) => api('POST', '/me/password', { oldAuthKey: oldK.authKey, newAuthKey: newK.authKey, encPrivateKey: enc, salt, fromEnvelope: await E2EE.envelopeHash(locked.encPrivateKey), ...x }), locked.stepUpTicket); } catch (x) { throw pwCode.error(x) || x; }
       // This device stays signed in with a new token (a copy of the old one stops working); every tab of this
       // browser switches to it and reconnects.
       if (r.token) setToken(r.token);
@@ -758,7 +758,10 @@ function securitySections(app) {
   const drawRec = () => {
     clear(recBox);
     recBox.append(S.me.hasRecovery
-      ? h('div', { class: 'kv' }, h('span', null, 'Recovery key'), h('span', { class: 'rpill ok' }, 'Saved'))
+      ? h('div', { class: 'stack' }, h('div', { class: 'kv' }, h('span', null, 'Recovery key'), h('span', { class: 'rpill ok' }, 'Saved')),
+        // Made before the account's post-quantum key (e2ee.js): it doesn't hold that key, so a reset with it couldn't open
+        // direct messages written since. Only said then.
+        S.me.recoveryStale ? h('p', { class: 'field-hint' }, 'Your recovery key is older than your account’s newest encryption keys. Make a new one so a reset with it keeps every message.') : '')
       : h('p', { class: 'warn-box' }, 'No recovery key yet. If you forget your password, an email reset gets you back in, but your old direct messages would be lost for good.'),
     h('div', { class: 'row gap' }, h('button', { class: `btn ${S.me.hasRecovery ? 'sm' : 'primary'}`, onclick: () => makeRecovery().catch(quiet) }, S.me.hasRecovery ? 'Make a new one' : 'Create a recovery key'),
       S.me.hasRecovery ? h('button', { class: 'btn ghost sm', onclick: () => confirmedCall(app, (x) => api('DELETE', '/me/recovery', x), { text: 'Without a recovery key, a password reset by email can’t bring back your old messages.', button: 'Remove recovery key' }).then((u) => { if (u) { refresh(u); toast('Recovery key removed.'); } }).catch(quiet) }, 'Remove') : ''));

@@ -2401,15 +2401,22 @@ api.post('/me/username', auth, wrap(async (req, res) => {
 
 api.post('/me/password', auth, wrap(async (req, res) => {
   rateLimit('pw:' + req.userId, 10, 10 * 60 * 1000);
-  const { newAuthKey, encPrivateKey, salt, keepSessions } = req.body || {};
+  const { newAuthKey, encPrivateKey, salt, keepSessions, fromEnvelope } = req.body || {};
   // (Checked first, so a request that could never go through doesn't use up a two-factor code.)
   if (typeof newAuthKey !== 'string' || !/^[0-9a-f]{64}$/.test(newAuthKey) || !isB64ish(encPrivateKey, 4000)) fail(400, 'Bad key material.');
   if (!isSalt(salt)) fail(400, 'This page is out of date. Reload and try again.');
   // The step-up ticket from fetching the locked key stands in for the code; the one from signing in only for the
   // old-format re-save (keepSessions).
   const row = await stepUp(req, req.body, 'oldAuthKey', { ticket: keepSessions === true ? 'upgrade' : 'password' });
-  db.prepare(`UPDATE users SET auth_hash = ?, enc_private_key = ?, kdf = 'argon2id', kdf_salt = ? WHERE id = ?`)
-    .run(await bcrypt.hash(newAuthKey, 11), encPrivateKey, salt, req.userId);
+  // Made from an older envelope than the one stored now (another device just put the post-quantum seed in it): saving
+  // it would drop the seed, so it's refused and the app tries again from the new one. Saved only over the envelope it
+  // was checked against, so one stored meanwhile (during the hashing) isn't overwritten either. (Apps that don't say
+  // which envelope they started from are taken as before.)
+  if (typeof fromEnvelope === 'string' && fromEnvelope !== envelopeHashOf(row.enc_private_key)) fail(409, 'Your keys changed on another device just now. Try again.', 'envelope_changed');
+  const hash = await bcrypt.hash(newAuthKey, 11);
+  const n = db.prepare(`UPDATE users SET auth_hash = ?, enc_private_key = ?, kdf = 'argon2id', kdf_salt = ? WHERE id = ? AND (? = 0 OR enc_private_key = ?)`)
+    .run(hash, encPrivateKey, salt, req.userId, typeof fromEnvelope === 'string' ? 1 : 0, row.enc_private_key).changes;
+  if (!n) fail(409, 'Your keys changed on another device just now. Try again.', 'envelope_changed');
   ACCT.dropResetLinks(req.userId); // a reset link sent before the change can't be used to undo it
   // Every other device is signed out — except for the automatic hashing upgrade the app does right after
   // signing in to an old-format account (same password). Only a session that has just signed in can ask for
@@ -2574,6 +2581,7 @@ api.post('/me/sign-key', auth, wrap(async (req, res) => {
 // A key already published is only replaced (replace: true) together with a new envelope, i.e. with the password: after
 // a reset with a recovery key made before the upgrade, whose envelope has no seed. Replacing drops pending handoffs.
 const PQ_B64 = /^[A-Za-z0-9+/]{1579}=$/;
+const envelopeHashOf = (x) => crypto.createHash('sha256').update(String(x || ''), 'utf8').digest('hex');
 function pqSigOk(row, pq, sig) {
   const signing = row.sign_public_key && p256Key(row.sign_public_key);
   if (!signing || typeof sig !== 'string' || sig.length > 100) return false;
@@ -2590,13 +2598,16 @@ api.post('/me/pq-key', auth, wrap(async (req, res) => {
   if (!pqSigOk(row, b.pqPublicKey, b.pqSig)) { secEvent('pq_key_bad_sig', req.ip, row.username); fail(403, 'That key couldn\u2019t be confirmed. Reload the page and try again.', 'bad_key_proof'); }
   if (row.pq_public_key && row.pq_public_key !== b.pqPublicKey && !(b.replace === true && envelope)) fail(409, 'This account already has a post-quantum key. Reload the page.', 'pq_exists');
   row = await stepUp(req, b, 'authKey', { grace: true });
+  // A new envelope must be made from the one stored now (see /me/password).
+  if (envelope && typeof b.fromEnvelope === 'string' && b.fromEnvelope !== envelopeHashOf(row.enc_private_key)) fail(409, 'Your keys changed on another device. Reload the page.', 'pq_exists');
   if (row.pq_public_key === b.pqPublicKey && !envelope) return res.json(selfUser(row));
-  const sets = envelope ? 'pq_public_key = ?, pq_sig = ?, enc_private_key = ?' : 'pq_public_key = ?, pq_sig = ?';
+  // (A key that's new makes a recovery key made before it out of date: it doesn't hold this seed.)
+  const sets = envelope ? `pq_public_key = ?, pq_sig = ?, enc_private_key = ?${row.pq_public_key !== b.pqPublicKey ? ', recovery_pq = 0' : ''}` : 'pq_public_key = ?, pq_sig = ?';
   const args = envelope ? [b.pqPublicKey, b.pqSig, b.encPrivateKey] : [b.pqPublicKey, b.pqSig];
   // Unchanged identity and signing keys (the signature covers them), and the published key as the app last saw it.
   const was = row.pq_public_key || null;
   const done = db.transaction(() => {
-    const n = db.prepare(`UPDATE users SET ${sets} WHERE id = ? AND public_key = ? AND sign_public_key = ? AND pq_public_key IS ?`).run(...args, row.id, row.public_key, row.sign_public_key, was).changes;
+    const n = db.prepare(`UPDATE users SET ${sets} WHERE id = ? AND public_key = ? AND sign_public_key = ? AND pq_public_key IS ? AND enc_private_key = ?`).run(...args, row.id, row.public_key, row.sign_public_key, was, row.enc_private_key).changes;
     if (n && was && was !== b.pqPublicKey) db.prepare('DELETE FROM pq_handoffs WHERE user_id = ?').run(row.id);
     return n;
   })();

@@ -218,7 +218,7 @@ test('post-quantum key handoff between devices: only the device that asked can o
   assert.equal(await E.verifyPqHandoffRequest(a.signPublicKey, 'mallory', req), false, 'for another account');
   const mreq = await E.pqHandoffRequest(m.signKey, 'a');
   assert.equal(await E.verifyPqHandoffRequest(a.signPublicKey, 'a', { ...mreq, sig: req.sig }), false, 'another device key under the real signature');
-  const sealed = await E.sealPqHandoff({ pqSeed: a.pqSeed, userId: 'a', id: req.id, devicePk: req.devicePk, myPub: a.publicKey });
+  const sealed = await E.sealPqHandoff({ pqSeed: a.pqSeed, userId: 'a', id: req.id, devicePk: req.devicePk, myPriv: a.privateKey, myPub: a.publicKey });
   const open = (o = {}) => E.openPqHandoff({ sealed, userId: 'a', id: req.id, deviceSeed: req.seed, myPriv: a.privateKey, myPub: a.publicKey, expectPq: a.pq.publicKey, ...o });
   assert.deepEqual(Buffer.from(await open()), Buffer.from(a.pqSeed));
   assert.ok(await fails(() => open({ deviceSeed: mreq.seed })), 'another device');
@@ -226,7 +226,10 @@ test('post-quantum key handoff between devices: only the device that asked can o
   assert.ok(await fails(() => open({ id: mreq.id })), 'another request');
   for (const f of [1, 2, 3, 4]) assert.ok(await fails(() => E.openPqHandoff({ sealed: tamper(sealed, f), userId: 'a', id: req.id, deviceSeed: req.seed, myPriv: a.privateKey, myPub: a.publicKey, expectPq: a.pq.publicKey })), `field ${f}`);
   // A well-sealed seed that isn't the account's published key (a server passing on one of its own) is refused.
-  const wrong = await E.sealPqHandoff({ pqSeed: m.pqSeed, userId: 'a', id: req.id, devicePk: req.devicePk, myPub: a.publicKey });
+  // Sealing at all takes a's identity key: the server (here mallory, who has only public keys of a's) can't seal one.
+  const byServer = await E.sealPqHandoff({ pqSeed: a.pqSeed, userId: 'a', id: req.id, devicePk: req.devicePk, myPriv: m.privateKey, myPub: a.publicKey });
+  assert.ok(await fails(() => open({ sealed: byServer })), 'sealed without the identity key');
+  const wrong = await E.sealPqHandoff({ pqSeed: m.pqSeed, userId: 'a', id: req.id, devicePk: req.devicePk, myPriv: a.privateKey, myPub: a.publicKey });
   await assert.rejects(() => E.openPqHandoff({ sealed: wrong, userId: 'a', id: req.id, deviceSeed: req.seed, myPriv: a.privateKey, myPub: a.publicKey, expectPq: a.pq.publicKey }), /isn’t this account’s/);
 });
 

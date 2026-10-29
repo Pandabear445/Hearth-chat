@@ -325,6 +325,28 @@ test('publishing a post-quantum key: signed by the account, never replaced witho
   assert.equal((await as(u, 'POST', '/me/pq-handoff', { id: ok.id, devicePk: ok.devicePk, sig: ok.sig })).status, 200);
   assert.equal((await as(other2, 'GET', '/me/pq-handoff')).json.requests.length, 0, 'only the account’s own');
   assert.equal((await as(u, 'POST', `/me/pq-handoff/${ok.id}`, { sealed: 'ph1:junk' })).status, 400);
+
+  // A recovery key made since the account has its post-quantum key holds the seed; one from before is flagged.
+  const env = (await as(u, 'POST', '/me/keys/wrapped', { authKey: u.authKey })).json.encPrivateKey;
+  const recSalt = E.newKdfSalt();
+  const encPrivateKeyRecovery = await E.rewrapPrivateKey(u.wrapKey, await E.recoveryWrapKey(E.newRecoveryCode(), recSalt), env);
+  assert.equal((await as(u, 'PUT', '/me/recovery', { encPrivateKeyRecovery, recoverySalt: recSalt, authKey: u.authKey })).status, 200);
+  const me = async () => (await as(u, 'GET', '/bootstrap')).json.me;
+  assert.equal((await me()).recoveryStale, false);
+  srv.sql('UPDATE users SET recovery_pq = 0 WHERE id = ?', u.id);
+  assert.equal((await me()).recoveryStale, true);
+
+  // A password change made from an older envelope than the stored one (another device just upgraded it) is refused,
+  // so the seed isn't dropped; made from the current one, it goes through.
+  const salt = E.newKdfSalt();
+  const nk = await E.deriveKeys(u.username, 'pw-changed', { kdf: 'argon2id', salt });
+  const enc2 = await E.rewrapPrivateKey(u.wrapKey, nk.wrapKey, env);
+  const change = (fromEnvelope) => as(u, 'POST', '/me/password', { oldAuthKey: u.authKey, newAuthKey: nk.authKey, encPrivateKey: enc2, salt, fromEnvelope });
+  const stale = await change(await E.envelopeHash(`${env}x`));
+  assert.equal(stale.status, 409, stale.text);
+  assert.equal(stale.json.code, 'envelope_changed');
+  assert.equal((await change(await E.envelopeHash(env))).status, 200);
+  assert.ok((await E.unwrapIdentity(nk.wrapKey, srv.sql('SELECT enc_private_key FROM users WHERE id = ?', u.id)[0].enc_private_key)).pqSeed, 'the seed came along');
 });
 
 test('a reset with an older recovery key (no seed in it) gets a new post-quantum key; a reset without one starts over', async () => {

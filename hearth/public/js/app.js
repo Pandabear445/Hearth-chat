@@ -374,7 +374,7 @@ function showSignIn() {
         const encPrivateKey = await E2EE.rewrapPrivateKey(wrapKey, next.wrapKey, res.encPrivateKey);
         // (With two-factor on, the sign-in's step-up ticket stands in for the code just used.) The session gets a
         // new token with the re-saved password.
-        const up = await api('POST', '/me/password', { oldAuthKey: authKey, newAuthKey: next.authKey, encPrivateKey, salt, keepSessions: true, ...(res.stepUpTicket ? { stepUpTicket: res.stepUpTicket } : {}) });
+        const up = await api('POST', '/me/password', { oldAuthKey: authKey, newAuthKey: next.authKey, encPrivateKey, salt, keepSessions: true, fromEnvelope: await E2EE.envelopeHash(res.encPrivateKey), ...(res.stepUpTicket ? { stepUpTicket: res.stepUpTicket } : {}) });
         if (up.token) res.token = up.token;
         pq = { authKey: next.authKey, wrapKey: next.wrapKey, encPrivateKey, pqSeed };
       }
@@ -471,7 +471,8 @@ async function openReset(token) {
       }
       const res = await api('POST', '/auth/reset', body);
       history.replaceState(null, '', '/');
-      toast(body.keepKeys ? 'Password reset. All your messages are still here.'
+      toast(body.keepKeys && !pqSeed ? 'Password reset. Your messages are still here, apart from direct messages sent since your account’s last security upgrade (your recovery key is older than that). Make a new recovery key in Settings.'
+        : body.keepKeys ? 'Password reset. All your messages are still here.'
         : res.user && res.user.keysReset ? 'Password reset with new keys. Ask a member to verify you so you can read your servers and groups again, and add a recovery key in Settings so this can\u2019t happen again.'
           : 'Password reset with new keys. Add a recovery key in Settings so this can\u2019t happen again.');
       // (Every other device was signed out, so none can hand the post-quantum key over: a recovery key made before the
@@ -487,7 +488,9 @@ async function finishLogin(res, privateKey, pq = null) {
   localStorage.setItem('hearth.userId', res.user.id);
   await E2EE.storeKey(res.user.id, privateKey);
   S.privateKey = privateKey;
-  S.pqSeed = pq && pq.pqSeed ? pq.pqSeed : null;
+  // The envelope's seed, else the one this browser kept for the account (an envelope a racing password change saved
+  // without it gets it back: secure.js ensurePqKey).
+  S.pqSeed = (pq && pq.pqSeed) || await E2EE.loadPqSeed(res.user.id);
   if (S.pqSeed) await E2EE.storePqSeed(res.user.id, S.pqSeed).catch(() => {});
   pendingPq = pq;
   startApp();

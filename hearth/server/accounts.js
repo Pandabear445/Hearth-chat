@@ -211,7 +211,8 @@ module.exports = function setupAccounts(ctx) {
     if (!isB64ish(b.encPrivateKeyRecovery, 4000) || !isSalt(b.recoverySalt)) fail(400, 'Bad key material.'); // (before a code is used up)
     // The step-up ticket from fetching the locked key stands in for the code.
     const row = await stepUp(req, b, 'authKey', { ticket: 'recovery' });
-    db.prepare('UPDATE users SET enc_private_key_recovery = ?, recovery_salt = ? WHERE id = ?').run(b.encPrivateKeyRecovery, b.recoverySalt, req.userId);
+    // recovery_pq: made while the account had its post-quantum key, so (made from the envelope then) it holds its seed.
+    db.prepare('UPDATE users SET enc_private_key_recovery = ?, recovery_salt = ?, recovery_pq = ? WHERE id = ?').run(b.encPrivateKeyRecovery, b.recoverySalt, row.pq_public_key ? 1 : 0, req.userId);
     auditLog(req, row.enc_private_key_recovery ? 'recovery_key_replaced' : 'recovery_key_created', req.userId, row.username);
     notify(row, 'a recovery key was created', `A new recovery key was made for ${row.username}. Any older recovery key stopped working.`);
     res.json(selfUser(getUserRow(req.userId)));
@@ -512,6 +513,6 @@ module.exports = function setupAccounts(ctx) {
   });
 
   // What selfUser() adds about these settings (only ever sent to the account itself).
-  const selfExtras = (row) => ({ email: row.email || null, emailVerified: !!row.email_verified, emailMasked: mask(row.email), hasRecovery: !!row.enc_private_key_recovery, totpEnabled: !!row.totp_enabled, backupCodesLeft: row.totp_enabled ? JSON.parse(row.backup_codes || '[]').length : 0 });
+  const selfExtras = (row) => ({ email: row.email || null, emailVerified: !!row.email_verified, emailMasked: mask(row.email), hasRecovery: !!row.enc_private_key_recovery, recoveryStale: !!row.enc_private_key_recovery && !!row.pq_public_key && !row.recovery_pq, totpEnabled: !!row.totp_enabled, backupCodesLeft: row.totp_enabled ? JSON.parse(row.backup_codes || '[]').length : 0 });
   return { require2fa, selfExtras, mailReady, sendMail, mask, notify, dropResetLinks, ownerLinkUntil: (uid, viewer) => { const l = ownerLinkOf(uid); return l && l.by === viewer ? l.expiresAt : null; } };
 };

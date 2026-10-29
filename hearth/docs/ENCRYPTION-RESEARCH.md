@@ -215,6 +215,12 @@ identity key. It is covered transitively by the existing safety numbers, which c
   they're in.
 - (c) DM epochs are wrapped only for the exact keys the server checks as current.
 
+**Races and losses.** The seed must never end up held by nobody. A password change saved from an older envelope than
+the server's (one that raced the upgrade on another device) is refused and retried, and the upgrade itself is a
+compare-and-swap on both the published key and the envelope. If it's lost anyway, a sign-in with the password whose
+handoff request has gone unanswered for 3 days makes a new key. A recovery key made before the upgrade doesn't hold
+the seed: Settings asks for a new one, and a reset with an old one says that recent DMs won't open.
+
 **Cost.** A `w2` wrap is ~1.75 KB (a `w1` is ~0.3 KB). A DM epoch is two ~1.66 KB wraps a week per active DM.
 Messages themselves don't grow. An ML-KEM-768 decapsulation plus the HKDF/AES work is ~1.7 ms in Node, and
 epoch keys are cached per session. A rotation for a 1,000-member server now sends ~1.8 MB, so key routes accept
@@ -276,6 +282,8 @@ What it would take to go further (not built; listed for the record):
      state first.
    - (b) Switch to native WebCrypto ML-KEM where present (Chromium 156+), keeping the vendored one as fallback.
    - (c) Get the vendored library, or a formally verified one such as libcrux via WASM, independently reviewed.
+   - (d) Back off DM epoch creation: a server that keeps answering a device's epoch checks wrongly can make it start
+     a new epoch on every send until the rate limit (30 an hour) stops it sending. Availability only.
 4. **Later, only if wanted:**
    - an opt-in ratcheted "secret chat" mode for real forward secrecy;
    - MLS for large servers;
