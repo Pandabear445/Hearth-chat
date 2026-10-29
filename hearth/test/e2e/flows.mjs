@@ -480,15 +480,10 @@ async function phonePictures(t) {
   // The same messages on bob's phone.
   const phone = await t.open('bob-phone', PHONE);
   await phone.login('bob', t.pw.bob);
-  const nav = phone.$('#main-head .nav-toggle');
-  if (await nav.isVisible()) await nav.tap();
-  await phone.$(`#rail button[aria-label="${SERVER}"]`).tap();
-  await phone.page.locator('#sidebar-head .server-head-name', { hasText: exact(SERVER) }).waitFor({ state: 'attached' });
-  if (!(await phone.$('#composer-input[placeholder="Message #general"]').count())) {
-    if (await nav.isVisible()) await nav.tap();
-    await phone.channelRow('general').locator('.ch-main').tap();
-  }
-  await phone.page.waitForSelector('#composer-input[placeholder="Message #general"]');
+  // (The server's channels on Home's list, beside the server bar; a channel opens full screen over them.)
+  await phone.phoneServer(SERVER);
+  await phone.channelRow('general').locator('.ch-main').tap();
+  await phone.page.waitForSelector('body.m-conv #composer-input[placeholder="Message #general"]');
   const shot = phone.message('A phone screenshot').first();
   const pano = phone.message('A panorama').first();
   await shot.scrollIntoViewIfNeeded();
@@ -1273,13 +1268,23 @@ async function reelsTab(t) {
   await fakeSocialSites(phone);
   const { page } = phone;
   await phone.login('bob', t.pw.bob);
-  if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
-  await page.locator(`#rail button[aria-label="${SERVER}"]`).tap();
-  // (The server opens at general, its last channel, and the drawer closes by itself.)
-  await page.waitForSelector('#composer-input[placeholder="Message #general"]');
-  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  await phone.phoneServer(SERVER);
+  await phone.channelRow('general').locator('.ch-main').tap();
+  await page.waitForSelector('body.m-conv #composer-input[placeholder="Message #general"]');
   await page.locator('.conv-tab', { hasText: 'Reels' }).tap();
   await page.waitForFunction(() => { const r = document.querySelector('.reels-layer').getBoundingClientRect(); return r.top <= 1 && r.width >= innerWidth - 1 && r.height >= innerHeight - 1; });
+  // Nothing of the phone's own is drawn over it: not the tab bar, nor the call bar (both under the Reels layer).
+  check(await page.evaluate(() => {
+    const layer = document.querySelector('.reels-layer');
+    return ['#tabbar', '#m-callbar'].every((sel) => {
+      const el = document.querySelector(sel);
+      if (!el || el.hidden || !el.getClientRects().length) return true;
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+      return !!top && layer.contains(top);
+    });
+  }), 'On a phone the tab bar and call bar should not show over the Reels tab.');
+  check(!(await page.locator('#tabbar').isVisible()), 'The tab bar should be hidden in a conversation (and so under the Reels tab).');
   await shot(phone, 'phone-cover');
   await page.locator('.reels-cover button', { hasText: 'Start watching' }).tap();
   await page.waitForFunction(() => !!document.querySelector('.reels-layer .reel-card[data-i="0"] iframe'));
@@ -1409,6 +1414,9 @@ async function videosIn(t) {
   await shot(phone, 'phone-share');
   await pp.locator('.modal-foot button', { hasText: 'Cancel' }).tap();
   await phone.noModals();
+  // (Home's page: from Home's list on a phone.)
+  await phone.phoneTab('home');
+  await phone.$('#sidebar-body .nav-row', { hasText: exact('Home') }).tap();
   await page.locator('.home-myreels').tap();
   await page.locator('.reels-layer .reels-title', { hasText: 'My Reels' }).waitFor();
   await page.locator('.reels-top button[aria-label="Add a link"]').tap();
@@ -4423,11 +4431,13 @@ async function discordHabits(t) {
   await unread.waitFor({ state: 'detached' });
 }
 
-// ------------------------------------------------------------------ phones: held sideways, the drawer, Back
-// A phone held sideways gets the phone layout too: the chat, with the servers and channels in a drawer. A swipe from
-// the left edge opens the drawer. Back (the gesture, or the Android app's back button: both go back in the page's
-// history) closes the drawer, the side panel, a picture or a dialog instead of leaving Hearth, and closing them with
-// their own buttons leaves nothing behind in the history. A desktop adds nothing to it.
+// ------------------------------------------------------------------ phones: the list, a conversation over it, Back
+// A phone isn't the computer's columns in a drawer: it has a list page (the tab bar at the bottom picks Home,
+// Messages, Notifications or You; Home has the server bar beside its list) and a conversation pushed over it full
+// screen, with a Back button. Held sideways it's the same. Back (the gesture, or the Android app's back button: both
+// go back in the page's history) closes a menu, a picture, a dialog or the side panel first, then takes the
+// conversation back to its list, then another tab's page back to Home's, and only then leaves Hearth. Closing things
+// with their own buttons leaves nothing behind in the history. A desktop adds nothing to it.
 async function phoneNavigation(t) {
   const { bob } = t.people;
   // Bob on his phone (one more new account would go over the sign-ups allowed from one network in an hour).
@@ -4435,93 +4445,132 @@ async function phoneNavigation(t) {
   const { page } = phone;
   await phone.login('bob', t.pw.bob);
   const app = page.url();
-  const drawerOpen = () => page.evaluate(() => document.body.classList.contains('nav-open'));
-  const drawerShut = () => page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  const level = () => page.evaluate(() => (document.body.classList.contains('m-conv') ? 'conv' : document.body.classList.contains('m-list') ? `list:${document.body.dataset.mtab}` : 'none'));
+  const atLevel = (want) => page.waitForFunction((w) => (document.body.classList.contains('m-conv') ? 'conv' : document.body.classList.contains('m-list') ? `list:${document.body.dataset.mtab}` : 'none') === w, want);
   const hist = () => page.evaluate(() => ({ length: history.length, step: !!(history.state && history.state.hearthBack) }));
   const stillHere = async (what) => {
     check(page.url() === app && (await phone.$('#app:not([hidden])').count()) === 1, `Back ${what} should stay in Hearth (now at ${page.url()}).`);
   };
-  const openNav = async () => { await page.locator('#main-head button[aria-label="Open navigation"]').tap(); await page.waitForTimeout(250); };
   const showMembers = async () => { await page.locator('#main-head button[aria-label="Show members"]').tap(); await phone.$('#members .member-list').waitFor(); };
   const membersGone = () => phone.$('#members .member-list').waitFor({ state: 'detached' });
-  // One finger from one point to another, as a phone sends it; then the drawer settles.
+  const general = () => phone.channelRow('general').locator('.ch-main');
+  const openGeneral = async () => { await general().tap(); await atLevel('conv'); await page.waitForTimeout(300); };
+  // One finger from one point to another, as a phone sends it; then what it moved settles.
   const cdp = await phone.context.newCDPSession(page);
   const swipe = async (x0, y0, x1, y1) => {
     const at = (x, y) => [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }];
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(x0, y0) });
     for (let i = 1; i <= 10; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(x0 + ((x1 - x0) * i) / 10, y0 + ((y1 - y0) * i) / 10) });
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(400);
   };
 
-  // A server of its own, with a picture in #general.
-  await openNav();
+  // The tab bar: on screen, at the bottom, four tabs a finger can hit (48 px), each saying which page is showing.
+  check((await level()).startsWith('list:'), `A phone should start on a list page (got ${await level()}).`);
+  const tabs = await page.evaluate(() => [...document.querySelectorAll('#tabbar .tab-btn')].map((b) => {
+    const r = b.getBoundingClientRect();
+    return { tab: b.dataset.tab, label: b.getAttribute('aria-label'), current: b.getAttribute('aria-current'), w: r.width, h: r.height, top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+  }));
+  check(tabs.map((x) => x.tab).join() === 'home,dms,inbox,you', `The tab bar should have Home, Messages, Notifications and You (got ${tabs.map((x) => x.tab)}).`);
+  for (const x of tabs) check(x.w >= 48 && x.h >= 48 && x.left >= 0 && x.right <= 390 && x.bottom <= 844 && x.top >= 844 - 120, `Tab "${x.label}" should be on screen at the bottom and at least 48 px (got ${Math.round(x.w)}×${Math.round(x.h)} at ${Math.round(x.left)},${Math.round(x.top)}).`);
+  check(tabs.filter((x) => x.current === 'page').length === 1, 'Exactly one tab should be marked as the page showing.');
+  // Hidden while the on-screen keyboard is up (app.js trackViewport sets kb-open).
+  await page.evaluate(() => document.documentElement.classList.add('kb-open'));
+  check(!(await phone.$('#tabbar').isVisible()), 'The tab bar should hide while the on-screen keyboard is up.');
+  await page.evaluate(() => document.documentElement.classList.remove('kb-open'));
+  check(await phone.$('#tabbar').isVisible(), 'The tab bar should be back once the keyboard is down.');
+
+  // A server of its own (Add a server is on the server bar beside Home's list), with a picture in #general.
   await phone.createServer('Pocket');
-  await page.waitForSelector('#composer-input[placeholder="Message #general"]');
+  await page.waitForSelector('body.m-conv #composer-input[placeholder="Message #general"]');
+  check(!(await phone.$('#tabbar').isVisible()), 'The tab bar should be hidden in a conversation.');
   await phone.$('.cw-main input[type=file]').setInputFiles({ name: 'sunset.png', mimeType: 'image/png', buffer: makePng(320, 200) });
   await phone.send('A picture from my phone');
   const picture = phone.message('A picture from my phone').first().locator('.att-img');
   await page.waitForFunction(() => { const i = document.querySelector('#messages .att-img'); return i && i.complete && i.naturalWidth > 0; });
 
-  // Sideways: still one column, with no server rail beside the chat and the drawer's button in the header.
+  // Sideways: the conversation has the whole screen (the list is off to the left), with Back in its header; and the
+  // conversation is a step of its own in the history, for Back to take.
   await page.setViewportSize({ width: 844, height: 390 });
   await page.waitForFunction(() => document.querySelector('#rail').getBoundingClientRect().right <= 0 && document.querySelector('#main').getBoundingClientRect().width >= 800);
-  check(await phone.$('#main-head .nav-toggle').isVisible(), 'A phone held sideways should have the button that opens the drawer.');
-  check(!(await hist()).step, 'With nothing open, Hearth should have added nothing to the history.');
+  check(await phone.$('#main-head .head-back').isVisible(), 'A phone held sideways should have Back in the conversation\'s header.');
+  check((await hist()).step, 'An open conversation should have a step in the history for Back to take.');
 
-  // A swipe from the left edge opens the drawer; Back closes it, and stays in Hearth.
-  await swipe(10, 200, 330, 205);
-  check(await drawerOpen(), 'A swipe from the left edge should open the drawer.');
-  check((await hist()).step, 'The open drawer should have a step in the history for Back to take.');
-  await page.goBack();
-  await drawerShut();
-  await stillHere('from the drawer');
-  // Back closes the members panel, then the picture viewer.
+  // Back closes the members panel, then the picture viewer, then a menu (a sheet from the bottom on a phone), each
+  // leaving the conversation open.
   await showMembers();
   await page.goBack();
   await membersGone();
   await stillHere('from the members panel');
+  check(await level() === 'conv', 'Back from the members panel should leave the conversation open.');
   await picture.tap();
   await phone.$('.viewer').waitFor();
   await page.goBack();
   await phone.$('.viewer').waitFor({ state: 'detached' });
   await stillHere('from a picture');
-  // And a menu.
+  check(await level() === 'conv', 'Back from a picture should leave the conversation open.');
   await page.locator('#main-head button[aria-label="More"]').tap();
-  await phone.$('#layer > .popover').waitFor();
+  await phone.$('#layer > .sheet-backdrop:not(.closing)').waitFor();
   await page.goBack();
-  await phone.$('#layer > .popover').waitFor({ state: 'detached' });
-  await stillHere('from a menu');
-  // Settings opened from the drawer: Back closes settings, then the drawer under it.
-  await openNav();
+  await phone.$('#layer > .sheet-backdrop').waitFor({ state: 'detached' });
+  await stillHere('from the More sheet');
+  check(await level() === 'conv', 'Back from the More sheet should leave the conversation open.');
+
+  // Then Back takes the conversation back to its list (the server's channels), still in Hearth, with nothing left for
+  // Back to take there: the next Back leaves the app, as on any phone app's first page.
+  await page.goBack();
+  await atLevel('list:home');
+  await stillHere('from a conversation');
+  check(await phone.$('#sidebar-head .server-head-name', { hasText: exact('Pocket') }).isVisible(), 'Back from a channel should show its server\'s channels.');
+  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+  // Another tab's page goes back to Home's.
+  await page.locator('#tabbar button[data-tab="dms"]').tap();
+  await atLevel('list:dms');
+  check((await hist()).step, 'The Messages page should have a step in the history for Back to take.');
+  await page.goBack();
+  await atLevel('list:home');
+  await stillHere('from the Messages page');
+  await page.setViewportSize(PHONE.viewport);
+
+  // Settings from the You page: Back closes settings, and the You page is still there under it.
+  await phone.phoneTab('you');
   await page.locator('#user-panel button[aria-label="Settings"]').tap();
   await phone.$('.settings-modal').waitFor();
   await page.goBack();
   await phone.$('.settings-modal').waitFor({ state: 'detached' });
-  check(await drawerOpen(), 'Back from settings should leave the drawer it was opened from.');
+  check(await level() === 'list:you', `Back from settings should leave the You page it was opened from (got ${await level()}).`);
   await page.goBack();
-  await drawerShut();
-  await stillHere('from settings and the drawer');
+  await atLevel('list:home');
+  await stillHere('from settings and the You page');
 
-  // Swipes put them away too: left on the open drawer, and right from the left edge on the members panel. Esc closes
-  // the panel as well (it covers the chat on a phone).
-  await openNav();
-  await swipe(250, 200, 30, 195);
-  await drawerShut();
+  // A swipe from the left edge takes the conversation back to its list; on the members panel it closes the panel
+  // first. Esc closes the panel, then goes back to the list too.
+  await phone.phoneServer('Pocket');
+  await openGeneral();
+  await swipe(8, 300, 330, 305);
+  await atLevel('list:home');
+  await openGeneral();
   await showMembers();
-  await swipe(8, 200, 600, 205);
+  await swipe(8, 300, 330, 305);
   await membersGone();
+  check(await level() === 'conv', 'A swipe on the members panel should close only the panel.');
   await showMembers();
   await page.keyboard.press('Escape');
   await membersGone();
+  check(await level() === 'conv', 'Esc on the members panel should close only the panel.');
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
+  await page.keyboard.press('Escape');
+  await atLevel('list:home');
   await page.waitForFunction(() => !(history.state && history.state.hearthBack));
 
-  // Closed with their own buttons (or a tap beside the drawer), nothing is left behind: the history doesn't grow, and
-  // the page isn't left on a step of Hearth's (the next Back would seem to do nothing).
+  // Closed with their own buttons, nothing is left behind: the history doesn't grow, and the page isn't left on a step
+  // of Hearth's (the next Back would seem to do nothing).
   const cycle = async () => {
-    await openNav();
-    await page.touchscreen.tap(820, 200); // beside the drawer
-    await drawerShut();
+    await page.locator('#tabbar button[data-tab="you"]').tap();
+    await atLevel('list:you');
+    await page.locator('#tabbar button[data-tab="home"]').tap();
+    await atLevel('list:home');
+    await openGeneral();
     await showMembers();
     await page.locator('#members button[aria-label="Close panel"]').tap();
     await membersGone();
@@ -4529,6 +4578,8 @@ async function phoneNavigation(t) {
     await phone.$('.viewer').waitFor();
     await page.locator('.viewer button[aria-label^="Close"]').first().tap();
     await phone.$('.viewer').waitFor({ state: 'detached' });
+    await page.locator('#main-head .head-back').tap();
+    await atLevel('list:home');
     await page.waitForFunction(() => !(history.state && history.state.hearthBack));
   };
   await cycle();
@@ -4537,7 +4588,6 @@ async function phoneNavigation(t) {
   await cycle();
   const after = await hist();
   check(after.length === before.length && !after.step, `Closing with their own buttons should leave no steps behind (history ${before.length} → ${after.length}).`);
-  await page.setViewportSize(PHONE.viewport);
 
   // A desktop adds nothing to the history when the side panel or settings open and close.
   const desk =() => bob.page.evaluate(() => JSON.stringify({ length: history.length, state: history.state }));
@@ -4553,7 +4603,8 @@ async function phoneNavigation(t) {
 // A touch screen has no hover: a long press on a message opens its actions in a sheet from the bottom (the quick
 // reactions, Reply, Copy text, Edit, Delete…), which goes with a tap outside it, a swipe down, Esc and Back. The
 // message box keeps +, the words, emoji and Send, with GIFs, voice messages and Send later in the + menu, and its text
-// is 16px so iOS doesn't zoom in. A desktop with a mouse keeps its hover toolbar and all six buttons.
+// is 16px so iOS doesn't zoom in (Send later's times come up in a sheet). A desktop with a mouse keeps its hover
+// toolbar and all six buttons.
 async function phoneMessageActions(t) {
   const { bob } = t.people;
   // Bob on his phone (one more new account would go over the sign-ups allowed from one network in an hour).
@@ -4561,20 +4612,21 @@ async function phoneMessageActions(t) {
   const { page } = phone;
   await phone.login('bob', t.pw.bob);
   await catchCopies(phone);
-  const openNav = async () => {
-    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
-  };
-  await openNav();
-  await page.locator(`#rail button[aria-label="${SERVER}"]`).tap();
-  await openNav();
+  await phone.phoneServer(SERVER);
   await phone.openChannel('general');
-  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  await page.waitForSelector('body.m-conv');
   const text = 'Held down on a phone: what can I do with this?';
   await phone.send(text);
   const mine = page.locator(`#messages .msg[data-mid="${await phone.message(text).first().getAttribute('data-mid')}"]`);
   const sheet = page.locator('.sheet-backdrop:not(.closing) .sheet');
   const sheetGone = () => page.locator('.sheet-backdrop').waitFor({ state: 'detached' });
   const backStep = () => page.evaluate(() => !!(history.state && history.state.hearthBack));
+  // The conversation itself is a step of the history on a phone (Back takes it to its list), so once a sheet, a reply,
+  // an edit or a recording goes, what's left is that one step: no more entries than with the conversation alone, and
+  // still in the conversation.
+  await page.waitForFunction(() => history.state && history.state.hearthBack);
+  const convHistory = await page.evaluate(() => history.length);
+  const onlyConversation = () => page.waitForFunction((n) => history.length === n && !!(history.state && history.state.hearthBack) && document.body.classList.contains('m-conv'), convHistory);
   // A finger held still on the message's words, as a phone sends it.
   const cdp = await phone.context.newCDPSession(page);
   const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
@@ -4603,11 +4655,11 @@ async function phoneMessageActions(t) {
   check((await row('Reply').boundingBox()).height >= 48, 'The sheet’s rows should be at least 48px tall.');
   check(await page.evaluate(() => String(getSelection()) === ''), 'A long press should not select the message’s words.');
   check(await backStep(), 'An open sheet should have a step in the history for Back to take.');
-  // A reaction from the sheet; the sheet goes, and its history step with it.
+  // A reaction from the sheet; the sheet goes, and its history step with it (the conversation's stays).
   await sheet.locator('button[aria-label="React with 👍"]').tap();
   await sheetGone();
   await mine.locator('.reaction.mine[aria-label="👍 1"]').waitFor();
-  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+  await onlyConversation();
   // A tap on the reaction still does what it did: takes it back.
   await mine.locator('.reaction.mine[aria-label="👍 1"]').tap();
   await mine.locator('.reactions').waitFor({ state: 'detached' });
@@ -4644,6 +4696,7 @@ async function phoneMessageActions(t) {
   await page.goBack();
   await phone.$('.cw-main .reply-bar').waitFor({ state: 'detached' });
   await stayed('from a reply');
+  check(await page.evaluate(() => document.body.classList.contains('m-conv')), 'Back from a reply should leave the conversation open.');
   await hold();
   await row('Edit message').tap();
   await mine.locator('.edit-input').waitFor();
@@ -4652,6 +4705,7 @@ async function phoneMessageActions(t) {
   await page.goBack();
   await mine.locator('.edit-input').waitFor({ state: 'detached' });
   await stayed('from an edit');
+  check(await page.evaluate(() => document.body.classList.contains('m-conv')), 'Back from an edit should leave the conversation open.');
   check((await mine.locator('.msg-text').textContent()).trim() === text, 'Back from an edit should leave the message as it was.');
   await quietly('After Back from an edit');
   const voiceBefore = await phone.$('#messages .vm').count();
@@ -4662,9 +4716,10 @@ async function phoneMessageActions(t) {
   await page.goBack();
   await phone.$('.cw-main .rec-bar').waitFor({ state: 'detached' });
   await stayed('while recording');
+  check(await page.evaluate(() => document.body.classList.contains('m-conv')), 'Back while recording should leave the conversation open.');
   await page.waitForTimeout(800);
   check((await phone.$('#messages .vm').count()) === voiceBefore, 'Back while recording should send nothing.');
-  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+  await onlyConversation();
   // Focus goes back to the message from the sheet without a ring, also after typing in the message box (which the
   // browser would otherwise pass on as keyboard focus).
   await page.locator('#composer-input').tap();
@@ -4694,7 +4749,7 @@ async function phoneMessageActions(t) {
   for (let i = 1; i <= 8; i++) await touch('touchMove', 195, top.y + 10 + i * 50);
   await touch('touchEnd');
   await sheetGone();
-  await page.waitForFunction(() => !(history.state && history.state.hearthBack));
+  await onlyConversation();
 
   // The message box: +, the words, emoji and Send, 44px each; 16px text.
   const shown = await page.evaluate(() => [...document.querySelectorAll('.cw-main .composer button')].filter((b) => b.getClientRects().length && getComputedStyle(b).display !== 'none')
@@ -4710,11 +4765,25 @@ async function phoneMessageActions(t) {
   await page.locator('.popover .gif-picker').waitFor();
   await page.keyboard.press('Escape');
   await page.locator('.popover').waitFor({ state: 'detached' });
+  // Esc on a popup closes only the popup, wherever focus is: the conversation stays (it once went back to its list
+  // too, when focus wasn't in the picker yet).
+  await page.locator('#composer-input').focus();
+  await plus.tap();
+  await phone.menuItem('Upload a file').waitFor();
+  await page.locator('#composer-input').focus();
+  await page.keyboard.press('Escape');
+  await page.locator('.popover').waitFor({ state: 'detached' });
+  await page.waitForTimeout(300);
+  check(await page.evaluate(() => document.body.classList.contains('m-conv')), 'Esc on the + menu should close only the menu, not the conversation.');
   await page.locator('#composer-input').fill('Later, from my phone');
   await plus.tap();
   await phone.menuItem('Send later').tap();
-  await page.locator('.popover .menu-header', { hasText: 'Send later' }).waitFor();
+  // (Its times come up as a sheet from the bottom on a phone, with room for a finger: ui.js menu().)
+  await page.locator('.sheet-backdrop:not(.closing) .sheet .menu-header', { hasText: 'Send later' }).waitFor();
+  check((await page.locator('.sheet-backdrop:not(.closing) .sheet .menu-item').first().boundingBox()).height >= 48, 'On a phone the Send later times should be at least 48px tall.');
   await page.keyboard.press('Escape');
+  await sheetGone();
+  check(await page.evaluate(() => document.body.classList.contains('m-conv')), 'Esc on the Send later sheet should close only the sheet.');
   await page.locator('#composer-input').fill('');
 
   // Delete from the sheet, after the usual question.
@@ -5386,15 +5455,10 @@ async function mediaPanel(t) {
   const phone = await t.open('bob-photos', PHONE);
   const { page } = phone;
   await phone.login('bob', t.pw.bob);
-  const openNav = async () => {
-    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
-  };
-  await openNav();
-  await page.locator('#rail button[aria-label="Direct messages"]').tap();
-  await openNav();
+  // (The conversations are the Messages page on a phone; one opens full screen over it.)
+  await phone.phoneTab('dms');
   await phone.dmRow('Alice Wonder').tap();
-  await page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
-  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  await page.waitForSelector('body.m-conv #composer-input[placeholder="Message Alice Wonder"]');
   check(!(await page.locator('#main-head button[aria-label="Photos & videos"]').isVisible()), 'A phone’s header should have no button for it.');
   await page.locator('#main-head button[aria-label="More"]').tap();
   await phone.menuItem('Photos & videos').tap();
@@ -6012,15 +6076,10 @@ async function sideView(t) {
   const phone = await t.open('bob-side', PHONE);
   const { page } = phone;
   await phone.login('bob', t.pw.bob);
-  const openNav = async () => {
-    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
-  };
-  await openNav();
-  await page.locator('#rail button[aria-label="Direct messages"]').tap();
-  await openNav();
+  // (The conversations are the Messages page on a phone; one opens full screen over it.)
+  await phone.phoneTab('dms');
   await phone.dmRow('Alice Wonder').tap();
-  await page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
-  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  await page.waitForSelector('body.m-conv #composer-input[placeholder="Message Alice Wonder"]');
   const held = phone.message(recipe).first();
   await held.waitFor({ timeout: 30000 });
   const cdp = await phone.context.newCDPSession(page);
@@ -6047,7 +6106,8 @@ async function sideView(t) {
   check(await page.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith('hearth.sideview.'))), 'The list should be kept on the phone.');
   await page.goBack();
   await phone.$('#members .sv-card').first().waitFor({ state: 'detached' });
-  await openNav();
+  check(await page.evaluate(() => document.body.classList.contains('m-conv')), 'Back from the side panel should leave the conversation open.');
+  // (Settings, and Log out, are on the You page: logout goes there.)
   await phone.logout();
   check(await page.evaluate(() => !Object.keys(localStorage).some((k) => k.startsWith('hearth.sideview.'))), 'Signing out should clear the side view from this device.');
   await phone.close();
@@ -6190,15 +6250,10 @@ async function keepYourPlace(t) {
   const phone = await t.open('bob-place', PHONE);
   const { page } = phone;
   await phone.login('bob', t.pw.bob);
-  const openNav = async () => {
-    if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
-  };
-  await openNav();
-  await page.locator('#rail button[aria-label="Direct messages"]').tap();
-  await openNav();
+  // (The conversations are the Messages page on a phone; one opens full screen over it.)
+  await phone.phoneTab('dms');
   await phone.dmRow('Alice Wonder').tap();
-  await page.waitForSelector('#composer-input[placeholder="Message Alice Wonder"]');
-  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  await page.waitForSelector('body.m-conv #composer-input[placeholder="Message Alice Wonder"]');
   await phone.message(newest).first().waitFor({ timeout: 30000 });
   // (The instance owner's announcement, from an earlier flow, sits over the top of a phone's menu: put away first.)
   const announce = page.locator('#announce button[aria-label="Dismiss"]');
@@ -6559,7 +6614,7 @@ export const FLOWS = [
   ['alert channels: add a signed webhook, its secret shown once, Test reaches it, masked address; off and remove need the password; the page stays put', alertChannels],
   ['discord habits: # picks a channel and the link opens it (unknown ones stay plain); headings, lists and >>> quotes; a spoiler picture with a description; Ctrl+/ and Shift+Esc', discordHabits],
   ['staff deletion: the owner deletes an account for someone who can’t sign in, from Admin → Users', staffDelete],
-  ['phones: held sideways it’s still the phone layout; a swipe from the left edge opens the drawer; Back closes the drawer, members, a picture, a menu and settings without leaving; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
+  ['phones: a tab bar (48 px, hidden with the keyboard) over list pages; a conversation pushed full screen, held sideways too; Back closes members, a picture, the More sheet, then the conversation, then the tab, and settings without leaving; an edge swipe and Esc go back; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
   ['phone message actions: a long press opens a sheet (react, reply, copy, edit, delete; closes with Back, Esc, a tap or a swipe); a roomier message box with GIFs and Send later under +; the desktop keeps its hover toolbar and buttons', phoneMessageActions],
   ['a video over the limit: made smaller on the device to fit, sent, and it plays', videoShrink],
   ['the owner sends 12 files in one message; everyone else still stops at 10', ownerManyFiles],

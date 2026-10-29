@@ -161,12 +161,13 @@ export async function brainrot(t) {
   await fakeSocialSites(phone);
   const { page } = phone;
   await phone.login('bob', t.pw.bob);
-  if (!(await page.evaluate(() => document.body.classList.contains('nav-open')))) await page.locator('#main-head button[aria-label="Open navigation"]').tap();
-  await page.locator(`#rail button[aria-label="${SERVER}"]`).tap();
-  await page.waitForSelector('#composer-input[placeholder="Message #general"]');
-  await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+  // (The server's channels on Home's list; #general opens full screen over it.)
+  await phone.phoneServer(SERVER);
+  await phone.openChannel('general');
+  await page.waitForSelector('body.m-conv');
   await page.locator('.conv-tab', { hasText: 'Reels' }).tap();
   await page.locator('.reels-cover button', { hasText: 'Start watching' }).tap();
+  check(!(await page.locator('#tabbar').isVisible()), 'On a phone the tab bar should not show over Reels.');
   await page.waitForFunction(() => !!document.querySelector('.reels-layer .reel-card[data-i="0"] iframe'));
   await page.locator('.reels-bar .br-toggle').tap();
   // (Warned on his desktop, but this is another device: its settings are its own.)

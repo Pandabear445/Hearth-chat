@@ -1,4 +1,4 @@
-// Visual regression check (npm run test:visual): seven core screens at a desktop and a phone size,
+// Visual regression check (npm run test:visual): the core screens at a desktop and a phone size,
 // compared with saved baselines at a tolerance. Not part of `npm test` and not run in CI: screenshots
 // depend on the machine's fonts and graphics, so baselines are made on the machine that checks them.
 //
@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launch, signUp, createServer, sendMessage, settle, closeNav } from '../browser/harness.mjs';
+import { launch, signUp, createServer, sendMessage, settle, toConversation, phoneTab } from '../browser/harness.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = path.join(here, 'baseline');
@@ -88,27 +88,35 @@ try {
     await page.click('#login-form button[type=submit]');
     await page.waitForSelector('#app:not([hidden]):not(.loading)', { timeout: 60000 });
     await shot('home');
-    if (size.isMobile) { await page.click('.nav-toggle'); await settle(page, 300); }
+    // A phone (app.js phoneShell): list pages picked by the tab bar, and a conversation full screen over them.
+    if (size.isMobile) { await phoneTab(page, 'dms'); await shot('messages'); await phoneTab(page, 'home'); }
     await page.click('#rail button[aria-label^="Visual check"]');
     await settle(page, 300);
-    if (await page.locator('body.nav-open').count()) await page.click('#sidebar-body .ch-row >> nth=0');
+    if (size.isMobile) { await shot('channels'); await toConversation(page); }
     await page.waitForSelector('#messages .msg');
     if (await page.locator('#members:not([hidden])').count()) await page.click('#main-head button[aria-label="Hide members"]');
     await page.mouse.move(0, 0);
     await shot('channel');
-    if (size.isMobile) { await page.click('.nav-toggle'); await shot('navigation'); await closeNav(page); }
-    else { await page.click('#main-head button[aria-label="Show members"]'); await shot('members'); await page.click('#main-head button[aria-label="Hide members"]'); }
+    if (size.isMobile) {
+      await page.click('#main-head button[aria-label="More"]');
+      await page.waitForSelector('.sheet-backdrop:not(.closing) .sheet');
+      await shot('more');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
+    } else { await page.click('#main-head button[aria-label="Show members"]'); await shot('members'); await page.click('#main-head button[aria-label="Hide members"]'); }
     await page.keyboard.press('Control+k');
     await shot('search');
     await page.keyboard.press('Escape');
     await settle(page, 300);
-    if (size.isMobile) { await page.click('.nav-toggle'); await settle(page, 300); }
+    if (size.isMobile) { await phoneTab(page, 'you'); await shot('you'); }
     await page.click('#user-panel button[aria-label="Settings"]');
     await shot('settings');
     await page.keyboard.press('Escape');
     await settle(page, 300);
+    if (size.isMobile) await phoneTab(page, 'home');
     await page.click('#sidebar-head .server-head');
-    await page.locator('.popover .menu-item', { hasText: 'Server settings' }).first().click();
+    // (A menu beside it on a computer, a sheet from the bottom on a phone.)
+    await page.locator(':is(.popover, .sheet-backdrop:not(.closing) .sheet) .menu-item', { hasText: 'Server settings' }).first().click();
     await shot('server-settings');
     await page.close();
 

@@ -4,7 +4,7 @@
 import nodeCrypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { launch, signUp, createServer, sendMessage, settle, closeNav, PASSWORD, ROOT } from '../browser/harness.mjs';
+import { launch, signUp, createServer, sendMessage, settle, toConversation, phoneTab, PASSWORD, ROOT } from '../browser/harness.mjs';
 import { auditDom, overflowDom } from './checks.mjs';
 import { checkContrast } from './contrast.mjs';
 
@@ -359,22 +359,49 @@ try {
   await ph.click('#login-form button[type=submit]');
   await ph.waitForSelector('#app:not([hidden]):not(.loading)', { timeout: 60000 });
   await settle(ph, 500);
-  await ph.click('.nav-toggle'); await settle(ph, 400);
   const inView = (sel) => ph.evaluate((s) => { const e = document.querySelector(s); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.left >= -1 && r.right <= innerWidth + 1 && r.top >= -1 && r.bottom <= innerHeight + 1; }, sel);
-  check(await inView('#user-panel button[aria-label="Settings"]'), 'settings button is on screen in the navigation drawer');
+  // The tab bar: every tab on screen and at least 48 px, named, one of them the page showing, and nothing wider than
+  // the screen on any of its pages.
+  const tb = await ph.evaluate(() => [...document.querySelectorAll('#tabbar .tab-btn')].map((b) => { const r = b.getBoundingClientRect(); return { label: b.getAttribute('aria-label'), current: b.getAttribute('aria-current'), w: Math.round(r.width), h: Math.round(r.height), left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }));
+  check(tb.length === 4 && tb.every((b) => b.label && b.w >= 48 && b.h >= 48 && b.left >= 0 && b.right <= 390 && b.top >= 0 && b.bottom <= 844), 'the tab bar’s four tabs are on screen, named, and at least 48 px', tb);
+  check(tb.filter((b) => b.current === 'page').length === 1, 'one tab is marked as the page showing', tb.map((b) => b.current));
+  check(await ph.evaluate(() => document.querySelector('#tabbar').tagName === 'NAV' && !!document.querySelector('#tabbar').getAttribute('aria-label')), 'the tab bar is a named navigation landmark');
+  for (const tab of ['home', 'dms', 'inbox', 'you']) {
+    await phoneTab(ph, tab);
+    const o = await ph.evaluate(overflowDom);
+    check(o.scrollWidth <= o.clientWidth && !o.offenders.length, `the ${tab} page has no sideways scrolling`, o);
+    check(await ph.evaluate(() => { const t = document.querySelector('#sidebar-head .m-page-title, #sidebar-head .server-head'); return !!t && t.getClientRects().length > 0; }), `the ${tab} page has a heading`);
+  }
+  await ph.evaluate(() => document.documentElement.classList.add('kb-open'));
+  check(!(await ph.locator('#tabbar').isVisible()), 'the tab bar is hidden while the on-screen keyboard is up');
+  await ph.evaluate(() => document.documentElement.classList.remove('kb-open'));
+  // You: Settings is on screen; Esc there closes nothing it shouldn't (the page stays).
+  await phoneTab(ph, 'you');
+  check(await inView('#user-panel button[aria-label="Settings"]'), 'settings button is on screen on the You page');
   await ph.keyboard.press('Escape'); await settle(ph, 300);
-  check(!(await ph.locator('body.nav-open').count()), 'Esc closes the navigation drawer');
-  await ph.click('.nav-toggle'); await settle(ph, 300);
+  check(await ph.locator('body.m-list[data-mtab="you"]').count() === 1, 'Esc on the You page leaves it showing');
+  // A server's channels (beside the server bar on Home's page), then its channel full screen.
+  await phoneTab(ph, 'home');
   await ph.click('#rail button[aria-label^="Quality checks"]');
   await settle(ph, 400);
-  await closeNav(ph);
+  await toConversation(ph);
   check(await inView('#composer-input'), 'the message box is on screen');
+  check(await inView('#main-head .head-back'), 'Back to the list is on screen in the header');
+  check(await ph.evaluate(() => /^Back to /.test(document.querySelector('#main-head .head-back').getAttribute('aria-label'))), 'the Back button says where it goes');
+  check(await ph.evaluate(() => document.querySelector('#rail').inert && document.querySelector('#sidebar').inert && !document.querySelector('#main').inert), 'the list under the conversation is out of reach (inert)');
+  check(!(await ph.locator('#tabbar').isVisible()), 'the tab bar is hidden in a conversation');
   check(await inView('#main-head button[aria-label^="Search"]'), 'search is reachable from the header');
   await ph.click('#main-head button[aria-label^="Search"]'); await settle(ph, 400);
   const so = await ph.evaluate(overflowDom);
   check(so.scrollWidth <= so.clientWidth && await inView('.modal-search input'), 'search opens full screen without sideways scrolling', so);
   await ph.click('.search-close'); await settle(ph, 300);
-  await ph.click('.nav-toggle'); await settle(ph, 300);
+  // Esc in the conversation goes back to its list, with focus on the row it was opened from.
+  await ph.evaluate(() => document.activeElement && document.activeElement.blur());
+  await ph.keyboard.press('Escape'); await settle(ph, 400);
+  check(await ph.locator('body.m-list').count() === 1, 'Esc in a conversation goes back to its list');
+  check(await ph.evaluate(() => !!document.activeElement && document.querySelector('#sidebar').contains(document.activeElement)), 'and focus is back on the list', await ph.evaluate(() => document.activeElement && document.activeElement.outerHTML.slice(0, 120)));
+  check(await ph.evaluate(() => document.querySelector('#main').inert && !document.querySelector('#sidebar').inert), 'the conversation behind the list is out of reach (inert)');
+  await phoneTab(ph, 'you');
   await ph.click('#user-panel button[aria-label="Settings"]'); await settle(ph, 500);
   const sto = await ph.evaluate(overflowDom);
   check(sto.scrollWidth <= sto.clientWidth, 'settings fit the screen', sto);
@@ -383,10 +410,9 @@ try {
   check(!/rgba\(0, 0, 0, 0\)|transparent/.test(closeBg) && !/\/ 0\)|, 0\)$/.test(closeBg), 'the close button has a solid background over the scrolling tabs', closeBg);
   await ph.click('.set-close'); await settle(ph, 400);
   // Call controls in a voice channel.
-  if (!(await ph.locator('body.nav-open').count())) await ph.click('.nav-toggle');
-  await settle(ph, 300);
+  await phoneTab(ph, 'home');
   await ph.click('#sidebar-body >> text=Lounge'); await settle(ph, 800);
-  await closeNav(ph);
+  await toConversation(ph);
   const join = ph.locator('.cs-controls .btn.primary');
   if (await join.count()) { await join.click(); await settle(ph, 1500); }
   check(await inView('.cs-controls button[aria-label="Leave call"]') || await inView('.cs-controls .btn.primary'), 'call controls are on screen', await ph.evaluate(() => [...document.querySelectorAll('.cs-controls button')].map((b) => b.getAttribute('aria-label') || b.textContent)));
@@ -410,10 +436,9 @@ try {
   await kb.fill('#login-form [name=password]', PASSWORD);
   await kb.click('#login-form button[type=submit]');
   await kb.waitForSelector('#app:not([hidden]):not(.loading)', { timeout: 60000 });
-  await kb.click('.nav-toggle'); await settle(kb, 300);
   await kb.click('#rail button[aria-label^="Quality checks"]');
   await settle(kb, 300);
-  await closeNav(kb);
+  await toConversation(kb);
   await kb.waitForSelector('#composer-input');
   await kb.focus('#composer-input');
   await kb.evaluate(() => window.__setKeyboard(340));

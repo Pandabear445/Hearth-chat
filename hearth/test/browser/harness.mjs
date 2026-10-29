@@ -96,12 +96,27 @@ export async function createServer(page, name) {
   await settle(page);
 }
 
-// Phones: closes the navigation drawer by tapping the dimmed part of the screen to its right.
-export async function closeNav(page) {
-  if (!(await page.locator('body.nav-open').count())) return;
-  const { width, height } = page.viewportSize();
-  await page.mouse.click(width - 8, Math.round(height / 2));
-  await page.waitForFunction(() => !document.body.classList.contains('nav-open'), null, { timeout: 5000 });
+// Phones (the phone layout, app.js phoneShell): from the list, into a conversation full screen. With a server's
+// channels on the list, its active channel (else its first); anything else on the list, its first row.
+export async function toConversation(page) {
+  if (!(await page.locator('body.m-ui.m-list').count())) return;
+  const active = page.locator('#sidebar-body .ch-main[aria-current="page"]');
+  const row = (await active.count()) ? active.first() : page.locator('#sidebar-body .ch-row .ch-main, #sidebar-body .dm-row, #sidebar-body [data-nav]').first();
+  await row.click();
+  await page.waitForSelector('body.m-ui.m-conv', { timeout: 5000 });
+  await settle(page, 250);
+}
+// (The old name, from when phones had a drawer.)
+export const closeNav = toConversation;
+
+// Phones: a page of the tab bar's (home, dms, inbox, you), from wherever the app is (a conversation goes back first).
+export async function phoneTab(page, tab) {
+  if (await page.locator('body.m-ui.m-conv').count()) {
+    await page.click('#main-head .head-back');
+    await page.waitForSelector('body.m-ui.m-list', { timeout: 5000 });
+  }
+  await page.click(`#tabbar button[data-tab="${tab}"]`);
+  await page.waitForSelector(`body.m-ui.m-list[data-mtab="${tab}"]`, { timeout: 5000 });
   await settle(page, 250);
 }
 

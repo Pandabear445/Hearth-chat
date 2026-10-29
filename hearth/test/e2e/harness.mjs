@@ -221,14 +221,38 @@ export class Person {
     return m;
   }
   async noModals() { await this.page.waitForSelector('.modal-backdrop', { state: 'detached' }); }
-  menuItem(label) { return this.page.locator('.popover .menu-item').filter({ has: this.page.locator('.menu-label', { hasText: exact(label) }) }); }
+  // A menu's item: in a menu beside what opened it, or on a phone in a sheet from the bottom (ui.js menu()).
+  menuItem(label) { return this.page.locator(':is(.popover, .sheet-backdrop:not(.closing) .sheet) .menu-item').filter({ has: this.page.locator('.menu-label', { hasText: exact(label) }) }); }
   async toast(text, timeout = 20000) { await this.page.locator('#toasts .toast').filter({ hasText: text }).first().waitFor({ timeout }); }
-  async railButton(label) { await this.page.locator(`#rail button[aria-label="${label}"]`).click(); }
+  async railButton(label) { await this.phoneHome(); await this.page.locator(`#rail button[aria-label="${label}"]`).click(); }
+  // ---- the phone layout (app.js phoneShell): a list page picked by the tab bar, and a conversation pushed over it
+  async isPhoneUI() { return this.page.evaluate(() => document.body.classList.contains('m-ui')); }
+  // From a conversation back to the list it was opened from, with the header's Back button.
+  async phoneBack() {
+    await this.$('#main-head .head-back').click();
+    await this.page.waitForSelector('body.m-ui.m-list');
+  }
+  // A page of the tab bar's: home, dms (Messages), inbox (Notifications) or you.
+  async phoneTab(tab) {
+    if (await this.page.evaluate(() => document.body.classList.contains('m-conv'))) await this.phoneBack();
+    await this.$(`#tabbar button[data-tab="${tab}"]`).click();
+    await this.page.waitForSelector(`body.m-ui.m-list[data-mtab="${tab}"]`);
+  }
+  // A server's channels in the list beside the server bar (picked without opening one of them).
+  async phoneServer(name) {
+    await this.phoneTab('home');
+    await this.$(`#rail button[aria-label="${name}"]`).click();
+    await this.page.locator('#sidebar-head .server-head-name', { hasText: exact(name) }).waitFor();
+  }
+  // Phones: Home's page, where the server bar is (Add a server, the servers); nothing on a computer.
+  async phoneHome() { if (await this.isPhoneUI()) await this.phoneTab('home'); }
   async serverMenu(item) { await this.$('#sidebar-head .server-head').click(); await this.menuItem(item).click(); }
   // A conversation in the DM sidebar, by its exact name (a group's preview line can mention other names).
   dmRow(name) { return this.page.locator('#sidebar-body .dm-row').filter({ has: this.page.locator('.dm-row-name', { hasText: exact(name) }) }); }
   channelRow(name) { return this.page.locator('#sidebar-body .ch-row').filter({ has: this.page.locator('.ch-name', { hasText: exact(name) }) }); }
   async openChannel(name) {
+    // (On a phone the channels are the list under a conversation: back to it first.)
+    if (await this.page.evaluate(() => document.body.classList.contains('m-conv'))) await this.phoneBack();
     await this.channelRow(name).locator('.ch-main').click();
     await this.page.waitForSelector(`#composer-input[placeholder="Message #${name}"]`);
   }
@@ -254,6 +278,8 @@ export class Person {
     return m;
   }
   async openSettings(tab, sub) {
+    // (A phone has your name and Settings on its You page.)
+    if (await this.isPhoneUI()) await this.phoneTab('you');
     await this.$('#user-panel button[aria-label="Settings"]').click();
     if (tab) await this.page.locator('.set-nav .set-nav-btn', { hasText: exact(tab) }).click();
     if (sub) await this.page.locator('.set-subtabs .set-subtab', { hasText: exact(sub) }).click();
