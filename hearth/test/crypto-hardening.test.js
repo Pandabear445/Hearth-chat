@@ -675,6 +675,66 @@ test('a server that pushes its own key as yours while the app is open never gets
   assert.ok(await E.unwrapGroupKey({ wrapped: mine.wrapped, serverId: s.id, epoch: 2, myId: A.id, myPriv: A.privateKey, wrapperId: A.id, wrapperSignPub: A.signPublicKey }));
 });
 
+test('a server that files someone else’s record (or its own) under a contact’s id never gets a message for that contact', async () => {
+  const A = await person(uname('alice')); const B = await person(uname('bob')); const Z = await person(uname('zed'));
+  await serverWith(A, [B, Z]);
+  const dm = (await as(A, 'POST', '/dms', { userId: B.id })).json;
+  const first = await E.encryptDm({ myPriv: A.privateKey, theirPub: B.publicKey, dmId: dm.id, authorId: A.id, payload: { t: 'hi' } });
+  assert.equal((await as(A, 'POST', `/dms/${dm.id}/messages`, { ciphertext: first })).status, 200);
+  const zRec = (await as(A, 'GET', `/users/${Z.id}`)).json;
+  // 1. A record labelled with another id, filed under Bob's: refused, and nothing is encrypted to its key.
+  let d = await device(A, new Map());
+  await d.sec.encryptDm(dm.id, { t: 'hello bob' }); // Bob's real key: fine (and the DM's other person is remembered)
+  d.S.users[B.id] = { ...zRec };
+  await assert.rejects(d.sec.encryptDm(dm.id, { t: 'for bob only' }), (e) => e.code === 'untrusted');
+  // 2. The same record as an answer to GET /users/<bob>: refused too.
+  d = await device(A, d.pins);
+  delete d.S.users[B.id];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => (String(url).endsWith(`/api/users/${B.id}`) ? new Response(JSON.stringify(zRec), { status: 200, headers: { 'content-type': 'application/json' } }) : real(url, opts));
+  try { await assert.rejects(d.sec.encryptDm(dm.id, { t: 'for bob only' }), (e) => e.code === 'untrusted'); } finally { globalThis.fetch = real; }
+  // 3. The server names Zed as the DM's other person (with Zed's own, correctly labelled record): refused, because
+  // this device remembers who the conversation is with.
+  d = await device(A, d.pins);
+  d.S.dms.find((x) => x.id === dm.id).userId = Z.id;
+  d.S.users[Z.id] = { ...zRec };
+  await assert.rejects(d.sec.encryptDm(dm.id, { t: 'for bob only' }), (e) => e.code === 'untrusted');
+  // 4. A record never turns into another account's when merged.
+  const { mergeUser } = await import(js('secure.js'));
+  const bob = d.S.users[B.id] || (await as(A, 'GET', `/users/${B.id}`)).json;
+  assert.equal(mergeUser(bob, zRec), bob);
+  assert.equal(mergeUser(bob, { ...zRec, id: B.id }).publicKey, zRec.publicKey, 'a real update for the same account still applies');
+});
+
+test('the app checks which account a start-up is for, and pushed records can’t change your own keys', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+  // Bootstrap for another account than the one signed in on this device is refused before anything uses it.
+  assert.match(app, /const signedInAs = localStorage\.getItem\('hearth\.userId'\);\n  if \(!b\.me \|\| \(signedInAs && b\.me\.id !== signedInAs\)\) \{/);
+  // Only records filed under their own id are kept from it.
+  assert.match(app, /S\.users = Object\.fromEntries\(Object\.entries\(b\.users \|\| \{\}\)\.filter\(\(\[id, u\]\) => u && u\.id === id\)\);/);
+  // A record pushed for yourself never carries new public keys into S.me.
+  const setUser = app.slice(app.indexOf('function setUser(u)'), app.indexOf('function getUser(id)'));
+  assert.match(setUser, /delete rest\.publicKey; delete rest\.signPublicKey;/);
+  assert.match(setUser, /S\.me = mergeUser\(S\.me, rest\);/);
+});
+
+test('a key pushed for you while the signing key is being made can’t become the key it’s locked to', async () => {
+  const A = await person(uname('alice'), { signKey: false }); const X = await serverKeys();
+  store = new Map(); curIp = A.ip; API.setToken(A.token);
+  const boot = (await as(A, 'GET', '/bootstrap')).json;
+  const S = { me: boot.me, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: A.privateKey, e2eeSince: boot.e2eeSince };
+  const sec = createSecure({ S });
+  // The server pushes its own public key for you as soon as the app starts making the signing key...
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (String(url).endsWith('/api/me/sign-key/challenge')) S.me = { ...S.me, publicKey: X.publicKey };
+    return real(url, opts);
+  };
+  try { await assert.rejects(sec.ensureSigningKey(boot.encSignPrivateKey), (e) => e.code === 'own_key_mismatch'); } finally { globalThis.fetch = real; }
+  // ...and nothing was stored: the account still has no signing key.
+  assert.equal(srv.sql('SELECT sign_public_key FROM users WHERE id = ?', A.id)[0].sign_public_key, null);
+});
+
 test('refused rotations don’t use up the hour: the owner can still replace the key, and only real keys count', async () => {
   const A = await person(uname('alice')); const B = await person(uname('bob')); const M = await person(uname('mallory'));
   const { s } = await serverWith(A, [B, M]);

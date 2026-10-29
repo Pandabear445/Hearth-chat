@@ -50,6 +50,9 @@ const ONLY_WHILE_SET = ['keysReset', 'deleted', 'bot'];
 // those marks out means it's off now (keysReset: they're verified; deleted: the account isn't), so it mustn't linger
 // from before: a single record that said "deleted" would otherwise refuse that person's calls until a reload.
 export function mergeUser(old, x) {
+  // A record never turns into another account's: pins and trust are looked up by its id, so a server that relabelled
+  // whoever is stored here would get its own keys checked against someone else's pin (or none).
+  if (old && old.id && x && 'id' in x && x.id !== old.id) return old;
   const u = { ...(old || {}), ...x };
   if (x && 'publicKey' in x) for (const k of ONLY_WHILE_SET) if (!(k in x)) delete u[k];
   return u;
@@ -107,8 +110,9 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   // ---------------------------------------------------------------- people + trust
   async function userWithKeys(id) {
     let u = S.users[id];
+    if (u && u.id !== id) throw wrongAccount();
     if (u && (u.publicKey || u.deleted)) return u;
-    if (!fetching.has(id)) fetching.set(id, api('GET', '/users/' + id).then((x) => { S.users[id] = mergeUser(S.users[id], x); return S.users[id]; }).finally(() => fetching.delete(id)));
+    if (!fetching.has(id)) fetching.set(id, api('GET', '/users/' + id).then((x) => { S.users[id] = mergeUser(S.users[id], sameAccount(id, x)); return S.users[id]; }).finally(() => fetching.delete(id)));
     u = await fetching.get(id);
     return u;
   }
@@ -207,24 +211,35 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     return err;
   }
 
+  // A record the server hands over for one account but labelled as another: never used (see mergeUser).
+  function wrongAccount() {
+    const err = new Error('The server answered with a different account than the one asked for, so nothing was encrypted to it. Reload the page; if it keeps happening, tell the server’s owner.');
+    err.code = 'untrusted';
+    return err;
+  }
+  const sameAccount = (id, x) => { if (!x || x.id !== id) throw wrongAccount(); return x; };
+
   // ---------------------------------------------------------------- signing key
   async function ensureSigningKey(encSignPrivateKey) {
-    // Your signing key is locked with your public key: that must really be yours before it's used for that.
-    if (!(await E2EE.ownsPublicKey(S.privateKey, S.me.publicKey))) throw ownKeysMismatch();
+    // Your signing key is locked with your public key: that must really be yours before it's used for that. It's read
+    // once: a record pushed for you while this runs mustn't change which key it's locked to (or signed with).
+    const pub = S.me.publicKey;
+    if (!(await E2EE.ownsPublicKey(S.privateKey, pub))) throw ownKeysMismatch();
     if (S.me.signPublicKey && encSignPrivateKey) {
-      S.signKey = await E2EE.unwrapSigningKey(S.privateKey, S.me.publicKey, encSignPrivateKey);
+      S.signKey = await E2EE.unwrapSigningKey(S.privateKey, pub, encSignPrivateKey);
       if (!(await ownKeysOk())) throw ownKeysMismatch();
       return;
     }
-    const k = await E2EE.createSigningKey(S.privateKey, S.me.publicKey);
+    const k = await E2EE.createSigningKey(S.privateKey, pub);
     try {
       // The server wants proof that this device holds both your identity key and the new signing key.
       const ch = await api('POST', '/me/sign-key/challenge');
       const keyProof = await E2EE.signKeyProof(S.privateKey, ch.serverPublicKey, ch.nonce, S.me.id, k.signPublicKey);
-      const signature = await E2EE.sign(k.signKey, `hearth-sign-key|${S.me.id}|${S.me.publicKey}|${ch.nonce}`);
+      if (S.me.publicKey !== pub) throw ownKeysMismatch();
+      const signature = await E2EE.sign(k.signKey, `hearth-sign-key|${S.me.id}|${pub}|${ch.nonce}`);
       const me = await api('POST', '/me/sign-key', { signPublicKey: k.signPublicKey, encSignPrivateKey: k.encSignPrivateKey, nonce: ch.nonce, keyProof, signature });
-      S.me = { ...S.me, ...me };
-      S.users[S.me.id] = { ...S.users[S.me.id], ...me };
+      S.me = { ...S.me, ...me, id: S.me.id, publicKey: pub };
+      S.users[S.me.id] = { ...S.users[S.me.id], ...me, id: S.me.id, publicKey: pub };
       S.signKey = k.signKey;
     } catch (e) {
       if (e.status === 409) throw new Error('Your signing key changed on another device. Reload the page.');
@@ -414,7 +429,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   }
   // Someone's keys changed under us: fetch them fresh before trying again.
   async function refreshUsers(ids) {
-    await Promise.all(ids.map((id) => api('GET', '/users/' + id).then((x) => { S.users[id] = mergeUser(S.users[id], x); }).catch(() => {})));
+    await Promise.all(ids.map((id) => api('GET', '/users/' + id).then((x) => { S.users[id] = mergeUser(S.users[id], sameAccount(id, x)); }).catch(() => {})));
   }
 
   async function rotate(serverId) {
@@ -575,10 +590,24 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   }
 
   // ---------------------------------------------------------------- DMs
+  // Who each DM is with, as this device first saw it: a server that later names someone else as the other person
+  // (whose key the app would trust on first sight) gets nothing encrypted to them in that conversation.
+  const peersKey = () => `hearth.dmpeers.${S.me.id}`;
+  function boundPeerId(d) {
+    let all = {};
+    try { all = JSON.parse(localStorage.getItem(peersKey()) || '{}') || {}; } catch { all = {}; }
+    if (all[d.id] && all[d.id] !== d.userId) {
+      const err = new Error('The server now names someone else as the other person in this conversation, so nothing was sent. Reload the page; if it keeps happening, tell the server’s owner.');
+      err.code = 'untrusted';
+      throw err;
+    }
+    if (!all[d.id] && d.userId) { all[d.id] = d.userId; try { localStorage.setItem(peersKey(), JSON.stringify(all)); } catch { /* private mode: this session only */ } }
+    return d.userId;
+  }
   async function dmPeer(dmId) {
     const d = S.dms.find((x) => x.id === dmId);
     if (!d) throw new Error('Conversation not found.');
-    const u = await userWithKeys(d.userId);
+    const u = await userWithKeys(boundPeerId(d));
     if (!u || !u.publicKey) throw new Error('Missing key');
     return u;
   }
@@ -604,7 +633,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   async function dmKeys(dmId, at) {
     const d = S.dms.find((x) => x.id === dmId);
     if (!d) throw new Error('Conversation not found.');
-    const peer = await userWithKeys(d.userId);
+    const peer = await userWithKeys(boundPeerId(d));
     if (peer && peer.publicKey) trust(peer);
     return keysOf(peer, 'e', at);
   }

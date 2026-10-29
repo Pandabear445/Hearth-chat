@@ -1223,13 +1223,22 @@ async function loadBootstrap() {
       setTimeout(() => toast(`This device’s clock is off by about ${Math.round(Math.abs(off) / 86400000)} day${Math.round(Math.abs(off) / 86400000) === 1 ? '' : 's'}. Set it right in its settings: until then, other people’s apps may flag the messages you send for their time.`, 'error'), 1500);
     }
   }
+  // The account this device signed in as, never another one the server names: every pin and trust record on this
+  // device is kept under that id, so a different one would quietly start them all from nothing.
+  const signedInAs = localStorage.getItem('hearth.userId');
+  if (!b.me || (signedInAs && b.me.id !== signedInAs)) {
+    const err = new Error('The server answered as a different account than the one signed in on this device, so nothing was decrypted or sent. Sign out and in again; if it keeps happening, tell the server’s owner.');
+    err.code = 'own_key_mismatch';
+    throw err;
+  }
   S.me = b.me;
   drafts = createDrafts(S.me.id);
   S.mediaToken = b.mediaToken;
   bootIce(b.iceServers, askedAt);
   setTimeout(() => rankNearest(), 4000);
   S.e2eeSince = rememberE2eeSince(b.e2eeSince);
-  S.users = b.users;
+  // Only records filed under their own id (see mergeUser: pins are looked up by the record's id).
+  S.users = Object.fromEntries(Object.entries(b.users || {}).filter(([id, u]) => u && u.id === id));
   S.servers = b.servers;
   S.serversLoaded = true;
   S.dms = b.dms;
@@ -1322,9 +1331,17 @@ async function showUpdateNotes() {
 }
 
 function setUser(u) {
-  if (!u) return;
+  if (!u || !u.id) return;
+  // Your own keys only ever come from a start-up the app checked (bootstrap, then sec.ensureSigningKey's proof): a
+  // record pushed for you later can't swap them, or the app would lock what it keeps for itself to the server's key.
+  if (S.me && u.id === S.me.id) {
+    const rest = { ...u };
+    delete rest.publicKey; delete rest.signPublicKey;
+    S.users[u.id] = mergeUser(S.users[u.id], { ...rest, publicKey: S.me.publicKey, signPublicKey: S.me.signPublicKey });
+    S.me = mergeUser(S.me, rest);
+    return;
+  }
   S.users[u.id] = mergeUser(S.users[u.id], u);
-  if (S.me && u.id === S.me.id) S.me = mergeUser(S.me, u);
 }
 function getUser(id) {
   const u = S.users[id];
