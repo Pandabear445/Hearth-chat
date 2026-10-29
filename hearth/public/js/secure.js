@@ -44,6 +44,16 @@ export function cleanLook(p) {
   return { bg: { kind: 'image', url: b.url, k: b.k, w: px(b.w), h: px(b.h), type: b.type }, dim };
 }
 
+// A record's keys as this app takes them: a key not spelled the one way a key is (e2ee.js canonicalKey) counts as none
+// listed at all, so it's never encrypted to, pinned or compared, and for someone pinned it's a key change. Every
+// record of someone goes through this as it comes in (mergeUser, and the start-up's list in app.js loadBootstrap).
+export function cleanKeys(x) {
+  if (!x || typeof x !== 'object') return x;
+  let out = x;
+  for (const f of ['publicKey', 'signPublicKey']) if (x[f] && !E2EE.canonicalKey(x[f])) out = { ...out, [f]: null };
+  return out;
+}
+
 // Marks the server sends only while they're set (server/index.js publicUser: keysReset, deleted, bot).
 const ONLY_WHILE_SET = ['keysReset', 'deleted', 'bot'];
 // A user object from the server on top of what the app had. A whole one (it always has publicKey) that leaves one of
@@ -53,7 +63,7 @@ export function mergeUser(old, x) {
   // A record never turns into another account's: pins and trust are looked up by its id, so a server that relabelled
   // whoever is stored here would get its own keys checked against someone else's pin (or none).
   if (old && old.id && x && 'id' in x && x.id !== old.id) return old;
-  const u = { ...(old || {}), ...x };
+  const u = { ...(old || {}), ...cleanKeys(x) };
   if (x && 'publicKey' in x) for (const k of ONLY_WHILE_SET) if (!(k in x)) delete u[k];
   return u;
 }
@@ -264,13 +274,15 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   async function proveOwnKeys(me, encSignPrivateKey, { account = null } = {}) {
     if (!me || typeof me.id !== 'string' || !me.id || (account && me.id !== account)) throw otherAccount();
     const e = me.publicKey;
-    if (typeof e !== 'string' || !e || !(await E2EE.ownsPublicKey(S.privateKey, e))) throw ownKeysMismatch();
+    // (Only in the one spelling a key has: hearth.accounts is looked up by it, see e2ee.js canonicalKey.)
+    if (!E2EE.canonicalKey(e) || !(await E2EE.ownsPublicKey(S.privateKey, e))) throw ownKeysMismatch();
     const knownAs = provenAccounts()[e];
     if (knownAs && knownAs !== me.id) throw otherAccount('The server named your account by another id than the one this device knows your keys by');
     let s;
     let signKey;
     if (me.signPublicKey && encSignPrivateKey) {
       // Locked with your identity key (proven yours just now): the signing key one of your own devices made.
+      if (!E2EE.canonicalKey(me.signPublicKey)) throw ownKeysMismatch();
       s = me.signPublicKey;
       signKey = await E2EE.unwrapSigningKey(S.privateKey, e, encSignPrivateKey).catch(() => null);
     } else {
@@ -294,7 +306,47 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     proven = { e, s };
     ownCheck = { e, s, signKey, ok: Promise.resolve(true) };
     rememberAccount(e, me.id);
+    rememberName(me.username, me.id, { once: true });
     return { ...me, publicKey: e, signPublicKey: s };
+  }
+
+  // Which account each username this device signed in, reset or started as is: { [lowercased username]: account id },
+  // kept through sign-outs like hearth.accounts. A password reset without the recovery key gives you a new identity
+  // key, which nothing in hearth.accounts knows yet: a server that answered it (or a sign-in) under another id would
+  // start every pin and DM record from nothing again. So a sign-in or reset answered as another account than the one
+  // this device knows that username as is refused before anything of it is stored (signInFor). A record is only ever
+  // added, never moved to another id. A start-up's username is the server's word, so it adds one only for an account
+  // this device has none for yet (one signed in before this version): a server can't push the real records out with
+  // a new username at every start.
+  const NAMES = 'hearth.accountNames';
+  const nameKey = (username) => (typeof username === 'string' ? username.trim().replace(/^@/, '').toLowerCase() : '');
+  function knownNames() {
+    try {
+      const all = JSON.parse(localStorage.getItem(NAMES) || '{}');
+      return all && typeof all === 'object' && !Array.isArray(all) ? all : {};
+    } catch { return {}; }
+  }
+  function rememberName(username, id, { once = false } = {}) {
+    const n = nameKey(username);
+    if (!n || typeof id !== 'string' || !id) return;
+    const all = knownNames();
+    if (all[n] || (once && Object.values(all).includes(id))) return; // kept as it is (see above)
+    all[n] = id;
+    const names = Object.keys(all);
+    names.slice(0, Math.max(0, names.length - 50)).forEach((k) => delete all[k]); // the 50 most recent
+    try { localStorage.setItem(NAMES, JSON.stringify(all)); } catch { /* storage off: nothing is kept (as above) */ }
+  }
+  // Whether the server may sign this device in as `id` for `username` (the one you typed, or the one the reset link
+  // is for): throws unless it's the account this device knows that username as, or one it doesn't know yet.
+  // { record: true } also records it (the sign-in or reset went through as that account).
+  function signInFor(username, id, { record = true } = {}) {
+    const known = knownNames()[nameKey(username)];
+    if (typeof id !== 'string' || !id || (known && known !== id)) {
+      const err = new Error(`The server answered for @${nameKey(username)} as a different account than the one this device knows by that name, so nothing was stored or opened. Tell the server’s owner. (Only if that username really belongs to someone else now, renamed or deleted, sign in from another browser.)`);
+      err.code = 'own_key_mismatch';
+      throw err;
+    }
+    if (record) rememberName(username, id);
   }
 
   // A record the server hands over for one account but labelled as another: never used (see mergeUser).
@@ -931,9 +983,33 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     if (!d) return null;
     try { return boundPeerId(d); } catch { return null; }
   }
+  // A call this device knows: { dm } for 'dm:<id>' of a DM it has, { server, channel } for a voice channel of one of its
+  // servers or groups, or null for any other room the server names (a call there would show the server's word for who
+  // is calling, and connect with whoever it lists).
+  function callRoom(room) {
+    if (typeof room !== 'string' || !room) return null;
+    if (room.startsWith('dm:')) { const dm = S.dms.find((x) => x.id === room.slice(3)); return dm ? { dm } : null; }
+    for (const server of S.servers || []) {
+      const channel = (server.channels || []).find((c) => c.id === room);
+      if (channel) return channel.type === 'voice' ? { server, channel } : null;
+    }
+    return null;
+  }
+  // A ring for a DM this device doesn't have yet (the other person pressed "Message", then called, before anything was
+  // written): the conversation the server answers "Message <from>" with (POST /dms, `d`), only if it's exactly the one
+  // ringing and with exactly that person, remembered as theirs (dmWith). The same trust on first use as a DM first met
+  // through a message.
+  function dmForCall(room, from, d) {
+    if (typeof room !== 'string' || !room.startsWith('dm:') || !d || d.id !== room.slice(3)) {
+      const err = new Error('The server rang for a conversation it then wouldn’t name, so the call wasn’t shown.');
+      err.code = 'untrusted';
+      throw err;
+    }
+    return dmWith(d, from);
+  }
   // Whether this device may connect with that person in that call at all (voice.js asks before it makes any connection,
-  // checkSdp before it takes any handshake): in a 1-to-1 call only with callPeer, in any other call with anyone.
-  const mayCall = (room, userId) => !(typeof room === 'string' && room.startsWith('dm:')) || (!!userId && callPeer(room) === userId);
+  // checkSdp before it takes any handshake): only in a call it knows (callRoom), and in a 1-to-1 call only with callPeer.
+  const mayCall = (room, userId) => !!callRoom(room) && (!room.startsWith('dm:') || (!!userId && callPeer(room) === userId));
   // Whether an offer or answer really comes from that person: { ok: true }, or { ok: false, why } with why one of
   //   'no-key'         the server lists no identity key for them (a bot has none), or no signing key at all
   //   'deleted'        the server says the account was deleted (it can't sign in, so it's never in a call)
@@ -971,7 +1047,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   return {
     proveOwnKeys, ownKeys, applyState, stateOf, currentKey, ready, refresh, forceRotate, maintain, awaitingVerify, heldBack, isHeld,
     encryptChannel, decryptChannelMessage, encryptDm, decryptDmMessage, decryptAttachment, encryptTag, openTag, encryptLook, openLook,
-    dmWith, callPeer, mayCall, signSdp, verifySdp, checkSdp, keyChanged, keysChanged, acceptKeys, trust, userWithKeys, reset,
+    signInFor, dmWith, callPeer, callRoom, dmForCall, mayCall, signSdp, verifySdp, checkSdp, keyChanged, keysChanged, acceptKeys, trust, userWithKeys, reset,
     heldEpochs: (serverId) => [...keysFor(serverId).keys()],
     keysSaved: (serverId) => keeping.get(serverId) || Promise.resolve(), // our own copies are stored back
     signKeysFor,

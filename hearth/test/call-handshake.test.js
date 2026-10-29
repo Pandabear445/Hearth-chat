@@ -49,6 +49,7 @@ const js = (f) => pathToFileURL(path.join(__dirname, '..', 'public', 'js', f)).h
 let E; let SEC; let VM;
 let alice; let bob; let carol; let evil; let alice2;
 const ROOM = 'room-1';
+const SERVER = () => ({ id: 's1', kind: 'server', channels: [{ id: 't1', type: 'text' }, { id: ROOM, type: 'voice' }, { id: 'room-2', type: 'voice' }] });
 
 async function person(id) {
   const wrapKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
@@ -80,7 +81,8 @@ function bobDevice({ reload = false } = {}) {
     for (const k of Object.keys(served)) delete served[k];
   }
   down = false;
-  const S = { me: rec(bob), users: {}, privateKey: bob.privateKey, signKey: bob.signKey, servers: [], dms: [], config: {} };
+  // (A server of Bob's with the voice channels these calls are in: only a call this device knows connects, secure.js callRoom.)
+  const S = { me: rec(bob), users: {}, privateKey: bob.privateKey, signKey: bob.signKey, servers: [SERVER()], dms: [], config: {} };
   const warnings = [];
   const sec = SEC.createSecure({ S, onKeyWarning: (u) => warnings.push(u.id) });
   const update = (sent) => { const u = JSON.parse(JSON.stringify(sent)); S.users[u.id] = SEC.mergeUser(S.users[u.id], u); served[u.id] = S.users[u.id]; sec.trust(u); };
@@ -570,12 +572,89 @@ test('engine: a 1-to-1 call connects only with the person this device has the DM
   assert.equal(b.sec.mayCall(ROOM, zed.id), true, 'a server voice channel is anyone’s the server lets in (checked per handshake)');
   b.voice.cleanup();
   // app.js: the engine is wired to that check; a ring names the remembered person, and a DM call this device doesn't
-  // have isn't joined.
+  // have (and couldn't fetch as the caller's, see the next test) isn't joined.
   const app = require('node:fs').readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
   assert.match(app, /mayConnect: \(room, userId\) => sec\.mayCall\(room, userId\),/);
-  const ring = app.slice(app.indexOf('function onRing({ room, from, video })'), app.indexOf('// Older desktop apps'));
-  assert.match(ring, /const caller = room\.startsWith\('dm:'\) \? sec\.callPeer\(room\) : from;\n  if \(!caller\) return;\n  const u = getUser\(caller\);/);
-  assert.match(ring, /if \(room\.startsWith\('dm:'\) && !sec\.callPeer\(room\)\) return toast\(/);
+  const ring = app.slice(app.indexOf('async function onRing({ room, from, video })'), app.indexOf('// Older desktop apps'));
+  assert.match(ring, /const caller = !known \? null : known\.dm \? sec\.callPeer\(room\) : /);
+  assert.match(ring, /if \(!caller \|\| ringBusy\(room, from\)\) return;\n  const u = getUser\(caller\);/);
+  assert.match(ring, /if \(!sec\.callRoom\(room\) \|\| \(room\.startsWith\('dm:'\) && !sec\.callPeer\(room\)\)\) return toast\(/);
+});
+
+test('the first call in a DM made since this device started rings, as the caller’s own conversation only', async () => {
+  // Alice pressed "Message" on Bob (a new DM, nothing written yet) and then called: Bob's open app has no such DM.
+  // app.js onRing asks for it the way "Message" does (POST /dms { userId: from }) and takes the answer only through
+  // secure.js dmForCall: exactly the conversation ringing, with exactly the caller.
+  const zed = await person('uz');
+  const b = bobDevice();
+  b.update(rec(alice)); b.update(rec(zed, { username: alice.id }));
+  const room = 'dm:fresh1';
+  assert.equal(b.sec.callPeer(room), null, 'not known yet');
+  const refused = [
+    ['another conversation than the one ringing', { id: 'other', userId: alice.id }],
+    ['the ringing one, with someone else', { id: 'fresh1', userId: zed.id }],
+    ['the ringing one, with yourself', { id: 'fresh1', userId: bob.id }],
+    ['nothing', null],
+  ];
+  for (const [label, answer] of refused) {
+    assert.throws(() => b.sec.dmForCall(room, alice.id, answer), (e) => e.code === 'untrusted', label);
+    assert.equal(b.sec.callPeer(room), null, label);
+  }
+  assert.throws(() => b.sec.dmForCall('call-7f3a', alice.id, { id: 'call-7f3a', userId: alice.id }), (e) => e.code === 'untrusted', 'not a DM call');
+  // The honest answer is remembered as Alice's at once; the app lists it, and the ring names her.
+  const d = b.sec.dmForCall(room, alice.id, { id: 'fresh1', userId: alice.id });
+  b.S.dms.unshift(d);
+  assert.equal(b.sec.callPeer(room), alice.id);
+  assert.equal(b.sec.mayCall(room, alice.id), true);
+  assert.equal(b.sec.mayCall(room, zed.id), false);
+  // Named Zed's afterwards, it rings for nobody.
+  d.userId = zed.id;
+  assert.equal(b.sec.callPeer(room), null);
+  // app.js: onRing fetches a DM it doesn't have before it names anyone, and lists it only when dmForCall took it.
+  const app = require('node:fs').readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+  const fetch = app.slice(app.indexOf('async function ringingDm(room, from)'), app.indexOf('async function onRing('));
+  assert.match(fetch, /const d = sec\.dmForCall\(room, from, await api\('POST', '\/dms', \{ userId: from \}\)\);\n    if \(!S\.dms\.find\(\(x\) => x\.id === d\.id\)\) S\.dms\.unshift\(d\);/);
+  const ring = app.slice(app.indexOf('async function onRing({ room, from, video })'), app.indexOf('async function acceptRing('));
+  assert.ok(ring.indexOf("if (room.startsWith('dm:') && !(await ringingDm(room, from))) return;") >= 0);
+  assert.ok(ring.indexOf('await ringingDm(') < ring.indexOf('sec.callPeer(room)'));
+});
+
+test('only a call this device knows rings, is joined or connects: never a room the server makes up', async () => {
+  // The server rings Bob in Alice's name for a room that's no DM or channel of his (or a DM's name spelled another
+  // way), and lists only Zed in it, his record a copy of hers.
+  const zed = await person('uz');
+  const b = bobEngine();
+  b.update(rec(alice)); b.update(rec(zed, { username: alice.id }));
+  b.S.dms.push({ id: 'dm1', userId: alice.id });
+  await b.sec.encryptDm('dm1', { t: 'hi' });
+  b.S.servers.push({ id: 'g1', kind: 'group', memberIds: [bob.id, alice.id], channels: [{ id: 'gt1', type: 'text' }, { id: 'gv1', type: 'voice' }] });
+  for (const room of ['call-7f3a', 'DM:dm1', ' dm:dm1', 'dm:nope', 't1', 'gt1', '', null]) {
+    assert.equal(b.sec.callRoom(room), null, String(room));
+    assert.equal(b.sec.mayCall(room, zed.id), false, String(room));
+    assert.equal(b.sec.mayCall(room, alice.id), false, String(room));
+    if (typeof room !== 'string' || !room) continue;
+    const zOffer = desc('ZE:D0:ZE:D0');
+    const zSig = await signAs(zed, zed.id, bob.id, zOffer, room);
+    assert.equal((await b.sec.checkSdp(room, zed.id, zOffer, zSig)).ok, false, room);
+    b.voice.channelId = room;
+    const n = pcs.length;
+    await quiet(() => b.voice.queueSignal({ from: 'SZ', userId: zed.id, data: { sdp: zOffer, sig: zSig, pc: 'z-' + room } }));
+    await assert.rejects(b.voice.createPeer('SZ', zed.id, true));
+    assert.equal(pcs.length, n, `${room}: no RTCPeerConnection`);
+  }
+  // The calls it does know: the DM, a server's voice channel and a group's.
+  assert.deepEqual(b.sec.callRoom('dm:dm1'), { dm: b.S.dms[0] });
+  assert.equal(b.sec.callRoom(ROOM).channel.id, ROOM);
+  assert.equal(b.sec.callRoom('gv1').server.id, 'g1');
+  assert.equal(b.sec.mayCall('gv1', alice.id), true);
+  b.voice.cleanup();
+  // app.js: a ring for any other room is dropped, a group's names only one of its members, and neither a ring nor a
+  // join goes into a call this device doesn't know.
+  const app = require('node:fs').readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+  const ring = app.slice(app.indexOf('async function onRing({ room, from, video })'), app.indexOf('async function acceptRing('));
+  assert.match(ring, /const known = sec\.callRoom\(room\);\n  const caller = !known \? null : known\.dm \? sec\.callPeer\(room\) : !isGroup\(known\.server\) \|\| \(known\.server\.memberIds \|\| \[\]\)\.includes\(from\) \? from : null;/);
+  const join = app.slice(app.indexOf('async function joinRoom(room'), app.indexOf('async function toggleCamera('));
+  assert.match(join, /^async function joinRoom\(room, \{ video = false \} = \{\}\) \{\n[^\n]*\n  if \(!sec\.callRoom\(room\)\) return toast\(/);
 });
 
 test('engine: connections the server doesn’t list are closed after 20 s even when its list is empty', async () => {

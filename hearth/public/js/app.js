@@ -17,7 +17,7 @@ import { CHUNKED_ABOVE, uploadResumable, uploadSimple, download, makeUrlCache, m
 import { EMOJI, EMOJI_NAMES, CATEGORY_ICONS, QUICK_REACTIONS, recentEmoji, pushRecentEmoji, searchEmoji } from './emoji.js';
 import { Voice } from './voice.js';
 import { openCallDiagnostics } from './call-diagnostics.js';
-import { createSecure, mergeUser, callRefusedText, noSafetyNumbersText } from './secure.js';
+import { createSecure, mergeUser, cleanKeys, callRefusedText, noSafetyNumbersText } from './secure.js';
 import { avatarEl, nameEl, displayName, displayNameIn, nicknameIn, realName, forwardText, nameMatches, setPersonalNames, profileCard, presenceOf, STATUS_LABEL, cropStyle, stopSong, songPlaying } from './profile-ui.js';
 import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
@@ -389,12 +389,17 @@ function showSignIn() {
           if (ex.code === 'need_2fa' || ex.code === 'bad_2fa') { totpField.hidden = false; setTimeout(() => loginForm.totp.focus(), 30); }
           throw ex;
         });
+      // Only as the account this device knows that username as, if it knows it (secure.js signInFor), before
+      // anything of the answer is stored.
+      sec.signInFor(username, res.user && res.user.id);
       saveDeviceNote(username, res.device);
       totpField.hidden = true; loginForm.totp.value = ''; derived = null;
       const priv = await E2EE.unwrapPrivateKey(wrapKey, res.encPrivateKey);
       if (params.kdf !== 'argon2id') {
         // Older account: upgrade password hashing from PBKDF2 to Argon2id. Same password, same keys.
         btn.textContent = 'Upgrading your encryption…';
+        // Named before its token, as finishLogin does: another tab still signed in as someone else never takes it.
+        localStorage.setItem('hearth.userId', res.user.id);
         setToken(res.token);
         const salt = E2EE.newKdfSalt();
         const next = await E2EE.deriveKeys(username, password, { kdf: 'argon2id', salt });
@@ -475,6 +480,9 @@ async function openReset(token) {
     actions: [{ label: 'Cancel' }, { label: 'Reset password', kind: 'primary', action: async () => {
       if (pw.value.length < 8) throw new Error('Use at least 8 characters.');
       if (pw.value !== pw2.value) throw new Error('The passwords do not match.');
+      // A reset for an account this device knows by another id than the username's is refused (secure.js signInFor),
+      // before it's sent, and again for the account the answer is for.
+      sec.signInFor(info.username, info.userId, { record: false });
       const kdfSalt = E2EE.newKdfSalt();
       const next = await E2EE.deriveKeys(info.username, pw.value, { kdf: 'argon2id', salt: kdfSalt });
       const body = { token, authKey: next.authKey, kdfSalt };
@@ -494,6 +502,7 @@ async function openReset(token) {
         privateKey = id.privateKey;
       }
       const res = await api('POST', '/auth/reset', body);
+      sec.signInFor(info.username, res.user && res.user.id);
       history.replaceState(null, '', '/');
       toast(body.keepKeys ? 'Password reset. All your messages are still here.'
         : res.user && res.user.keysReset ? 'Password reset with new keys. Ask a member to verify you so you can read your servers and groups again, and add a recovery key in Settings so this can\u2019t happen again.'
@@ -1258,9 +1267,9 @@ async function loadBootstrap() {
   bootIce(b.iceServers, askedAt);
   setTimeout(() => rankNearest(), 4000);
   S.e2eeSince = rememberE2eeSince(b.e2eeSince);
-  // Only records filed under their own id (see mergeUser: pins are looked up by the record's id). Yours has the keys
-  // just proven, whatever the list says.
-  S.users = Object.fromEntries(Object.entries(b.users || {}).filter(([id, u]) => u && u.id === id));
+  // Only records filed under their own id (see mergeUser: pins are looked up by the record's id), with only keys in
+  // their one spelling (cleanKeys). Yours has the keys just proven, whatever the list says.
+  S.users = Object.fromEntries(Object.entries(b.users || {}).filter(([id, u]) => u && u.id === id).map(([id, u]) => [id, cleanKeys(u)]));
   S.users[me.id] = { ...(S.users[me.id] || {}), ...me };
   S.servers = b.servers;
   S.serversLoaded = true;
@@ -10976,6 +10985,8 @@ function renderCallStages() { $$('.call-stage').forEach(fillStage); }
 const diagCtx = () => ({ voice, name: (id) => nameInServer(voice && voice.channelId ? serverOfChannel(voice.channelId) : null, getUser(id)), relays: (S.iceServers || []).filter((e) => e.region).map((e) => ({ urls: e.urls, region: e.region })), region: () => (voice && voice.channelId ? regionName(callRegion(voice.channelId)) : '') });
 
 async function joinRoom(room, { video = false } = {}) {
+  // Only a call this device knows (secure.js callRoom): a DM it has, or a voice channel of one of its servers or groups.
+  if (!sec.callRoom(room)) return toast('That call isn\u2019t available.', 'error');
   try {
     stopRinging(room);
     await voice.join(room, { video });
@@ -11009,12 +11020,29 @@ function stopRinging(room) {
   clearInterval(r.timer); clearTimeout(r.timeout); r.el.remove();
   ringing.delete(room);
 }
-function onRing({ room, from, video }) {
-  if (!S.me || from === S.me.id || ringing.has(room) || (voice && voice.channelId === room) || S.me.status === 'dnd') return;
-  // A 1-to-1 call names the person this device has the DM as being with (only they can connect in it: secure.js
-  // mayCall), never just whoever the server says is calling. A DM this device doesn't have doesn't ring.
-  const caller = room.startsWith('dm:') ? sec.callPeer(room) : from;
-  if (!caller) return;
+const ringBusy = (room, from) => !S.me || typeof room !== 'string' || from === S.me.id || ringing.has(room) || (voice && voice.channelId === room) || S.me.status === 'dnd';
+// A ring for a DM made since this device started (the caller pressed "Message", then called, before writing anything):
+// the conversation "Message <caller>" opens, only if it's exactly the one ringing (secure.js dmForCall). False if not.
+async function ringingDm(room, from) {
+  if (S.dms.some((x) => x.id === room.slice(3))) return true;
+  if (typeof from !== 'string' || !from) return false;
+  try {
+    const d = sec.dmForCall(room, from, await api('POST', '/dms', { userId: from }));
+    if (!S.dms.find((x) => x.id === d.id)) S.dms.unshift(d);
+    if (d.look !== undefined) LOOK.onEvent('dm:look', { dmId: d.id, look: d.look });
+    if (!S.view.serverId) renderSidebar();
+    return true;
+  } catch { return false; }
+}
+async function onRing({ room, from, video }) {
+  if (ringBusy(room, from)) return;
+  // Only a call this device knows rings (secure.js callRoom), naming only someone who can be in it: in a 1-to-1 call
+  // the person this device has the DM as being with (only they can connect in it: secure.js mayCall), never just
+  // whoever the server says is calling; in a group's call only one of its members. Any other room doesn't ring.
+  if (room.startsWith('dm:') && !(await ringingDm(room, from))) return;
+  const known = sec.callRoom(room);
+  const caller = !known ? null : known.dm ? sec.callPeer(room) : !isGroup(known.server) || (known.server.memberIds || []).includes(from) ? from : null;
+  if (!caller || ringBusy(room, from)) return;
   const u = getUser(caller);
   const where = room.startsWith('dm:') ? '' : ` in ${roomTitle(room)}`;
   const decline = () => { socket.emit('call:decline', { room }, () => {}); stopRinging(room); };
@@ -11034,7 +11062,7 @@ function onRing({ room, from, video }) {
 }
 async function acceptRing(room, video = false) {
   stopRinging(room);
-  if (room.startsWith('dm:') && !sec.callPeer(room)) return toast('That call isn\u2019t available.', 'error');
+  if (!sec.callRoom(room) || (room.startsWith('dm:') && !sec.callPeer(room))) return toast('That call isn\u2019t available.', 'error');
   if (room.startsWith('dm:')) openDm(room.slice(3));
   else { const s = serverOfChannel(room); if (s) { const c = textChannel(s); if (isGroup(s) && c) openChannel(c.id, s.id); } }
   await joinRoom(room, { video });

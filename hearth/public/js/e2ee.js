@@ -51,6 +51,20 @@ const concat = (...parts) => {
   return out;
 };
 
+// A P-256 public key in the one spelling this app takes: SPKI as WebCrypto exports it (an uncompressed point, 91
+// bytes), in standard base64 with its padding. atob reads other strings as the same bytes too (the padding left out,
+// spaces, a last letter that differs only in bits it drops), and WebCrypto also imports a compressed point (other
+// bytes, the same key). So a server could spell one key many ways, and whatever this device looks up by a key's text
+// (which account your key is, a pin) would miss it. Identity and signing keys alike (the same SPKI header).
+const SPKI_P256 = '3059301306072a8648ce3d020106082a8648ce3d03010703420004';
+export function canonicalKey(k) {
+  if (typeof k !== 'string' || !/^[A-Za-z0-9+/]{122}==$/.test(k)) return false;
+  try {
+    const bytes = unb64(k);
+    return bytes.length === 91 && toHex(bytes.subarray(0, 27)) === SPKI_P256 && b64(bytes) === k;
+  } catch { return false; }
+}
+
 async function hkdfKey(ikm) { return subtle().importKey('raw', ikm, 'HKDF', false, ['deriveKey', 'deriveBits']); }
 function hkdfAes(base, salt, info, usages = ['encrypt', 'decrypt']) {
   return subtle().deriveKey({ name: 'HKDF', hash: 'SHA-256', salt, info: enc.encode(info) }, base, { name: 'AES-GCM', length: 256 }, false, usages);
@@ -564,8 +578,8 @@ const validUntil = (t) => typeof t === 'number' && Number.isFinite(t) && t > 0 &
 // only those with a usable date.
 function listedOf(user) {
   return (Array.isArray(user && user.pastKeys) ? user.pastKeys : []).slice(0, 10)
-    .filter((k) => k && typeof k.publicKey === 'string' && k.publicKey)
-    .map((k) => ({ e: k.publicKey, s: typeof k.signPublicKey === 'string' && k.signPublicKey ? k.signPublicKey : null, until: Number(k.retiredAt) }))
+    .filter((k) => k && canonicalKey(k.publicKey))
+    .map((k) => ({ e: k.publicKey, s: canonicalKey(k.signPublicKey) ? k.signPublicKey : null, until: Number(k.retiredAt) }))
     .filter((k) => validUntil(k.until));
 }
 // Server-listed past keys that could have made something written at `at` (ms): none for something undated. Use
@@ -573,8 +587,9 @@ function listedOf(user) {
 export function listedPastKeys(user, at = 0) {
   return at > 0 ? listedOf(user).filter((k) => at <= k.until) : [];
 }
-// A key as the server lists it, or null for none (missing, null or empty).
-const keyIn = (k) => (typeof k === 'string' && k ? k : null);
+// A key as the server lists it, or null for none (missing, null or empty) and for one not spelled the one way a key
+// is (canonicalKey): never pinned, nor taken as the key pinned.
+const keyIn = (k) => (canonicalKey(k) ? k : null);
 // How someone's keys, as the server tells them now, compare with what this device pinned for them (p, or none):
 //   'pin'      first sight: pin these keys
 //   'fill'     pinned before they had a signing key, and they have one now: add it to the pin (trust on first use)

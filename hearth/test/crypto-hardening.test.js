@@ -717,7 +717,7 @@ test('the app checks which account a start-up is for, and pushed records can’t
   assert.match(boot, /const me = await sec\.proveOwnKeys\(b\.me, b\.encSignPrivateKey, \{ account: signedInAs \}\);\n  S\.me = me;/);
   assert.ok(boot.indexOf('sec.proveOwnKeys(') < boot.indexOf('S.me = me;') && !/S\.me = b\.me/.test(boot), 'nothing of the start-up is assigned before the proof');
   // Only records filed under their own id are kept from it, and yours carries the proven keys.
-  assert.match(app, /S\.users = Object\.fromEntries\(Object\.entries\(b\.users \|\| \{\}\)\.filter\(\(\[id, u\]\) => u && u\.id === id\)\);\n  S\.users\[me\.id\] = \{ \.\.\.\(S\.users\[me\.id\] \|\| \{\}\), \.\.\.me \};/);
+  assert.match(app, /S\.users = Object\.fromEntries\(Object\.entries\(b\.users \|\| \{\}\)\.filter\(\(\[id, u\]\) => u && u\.id === id\)\.map\(\(\[id, u\]\) => \[id, cleanKeys\(u\)\]\)\);\n  S\.users\[me\.id\] = \{ \.\.\.\(S\.users\[me\.id\] \|\| \{\}\), \.\.\.me \};/);
   // A record pushed for yourself never carries new public keys into S.me.
   const setUser = app.slice(app.indexOf('function setUser(u)'), app.indexOf('function getUser(id)'));
   assert.match(setUser, /delete rest\.publicKey; delete rest\.signPublicKey;/);
@@ -985,6 +985,137 @@ test('each tab checks a start-up against the account it started as, not the one 
   const fin = app.slice(app.indexOf('async function finishLogin(res, privateKey)'), app.indexOf('let loggingOut = null;'));
   assert.match(fin, /startApp\(res\.user\.id\);/);
   assert.ok(fin.indexOf("localStorage.setItem('hearth.userId', res.user.id);") < fin.indexOf('setToken(res.token);'));
+});
+
+// ------------------------------------------------------------------ fourth review round
+// One key, spelled other ways that atob and WebCrypto read as the same key (e2ee.js canonicalKey).
+function respelled(k) {
+  const pt = Buffer.from(k, 'base64').subarray(26);
+  const compressed = crypto.ECDH.convertKey(pt, 'prime256v1', undefined, undefined, 'compressed');
+  const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const last = k.length - 3; // the letter before '==' carries 4 bits atob drops
+  return {
+    noPadding: k.replace(/=+$/, ''),
+    trailingNewline: k + '\n',
+    spaces: k.slice(0, 40) + ' ' + k.slice(40),
+    discardedBits: k.slice(0, last) + abc[abc.indexOf(k[last]) ^ 1] + k.slice(last + 1),
+    compressedPoint: Buffer.concat([Buffer.from('3039301306072a8648ce3d020106082a8648ce3d030107032200', 'hex'), compressed]).toString('base64'),
+  };
+}
+
+test('a key in any other spelling is no key: never yours under another id, never pinned, never a quiet new pin', async () => {
+  const A = await person(uname('alice')); const B = await person(uname('bob')); const X = await serverKeys();
+  await serverWith(A, [B]);
+  assert.equal(E.canonicalKey(A.publicKey), true);
+  assert.equal(E.canonicalKey(A.signPublicKey), true);
+  const pins = new Map();
+  const d = await device(A, pins);
+  assert.equal(d.sec.acceptKeys(d.S.users[B.id]), true, 'Bob verified on this device');
+  const boot = (await as(A, 'GET', '/bootstrap')).json;
+  // 1. The re-login under a new id again, with Alice's own key spelled another way (each still reads as her key, and
+  // her password still unlocks everything with it): refused, under the new id and under her own.
+  for (const [how, e] of Object.entries(respelled(A.publicKey))) {
+    assert.equal(E.canonicalKey(e), false, how);
+    for (const id of ['x' + H.hex(10), A.id]) {
+      await assert.rejects(d.sec.proveOwnKeys({ ...boot.me, id, publicKey: e }, boot.encSignPrivateKey, { account: id }), (err) => err.code === 'own_key_mismatch', `${how} as ${id}`);
+    }
+  }
+  for (const [how, s] of Object.entries(respelled(A.signPublicKey))) {
+    await assert.rejects(d.sec.proveOwnKeys({ ...boot.me, signPublicKey: s }, boot.encSignPrivateKey, { account: A.id }), (err) => err.code === 'own_key_mismatch', how);
+  }
+  // Nothing of those went into the record of which account a key is: only the one spelling, for Alice.
+  assert.deepEqual(JSON.parse(pins.get('hearth.accounts')), { [A.publicKey]: A.id });
+  // 2. Bob (pinned, verified) listed with his key spelled another way, or with the server's: a key change either way,
+  // never a quiet pin of something new. Someone met for the first time with such a key gets no pin and nothing to
+  // encrypt to (the record counts as listing no key).
+  const { mergeUser, cleanKeys } = await import(js('secure.js'));
+  for (const [how, e] of Object.entries(respelled(B.publicKey))) {
+    const bob = mergeUser(d.S.users[B.id], { ...d.S.users[B.id], publicKey: e });
+    assert.equal(bob.publicKey, null, how);
+    assert.equal(d.sec.keyChanged(bob), true, how);
+    assert.equal(d.sec.keyChanged({ ...d.S.users[B.id], publicKey: e }), true, `${how}, even if it got past mergeUser`);
+    assert.equal(d.sec.acceptKeys({ ...d.S.users[B.id], publicKey: e }), false, `${how}: nothing to verify`);
+  }
+  const zed = { id: 'z' + H.hex(10), username: 'zed', publicKey: respelled(X.publicKey).noPadding, signPublicKey: X.signPublicKey };
+  d.sec.trust(zed);
+  assert.equal(JSON.parse(pins.get(`hearth.pins.${A.id}`))[zed.id], undefined, 'not pinned');
+  assert.equal(cleanKeys(zed).publicKey, null);
+  assert.equal(cleanKeys({ id: 'q', publicKey: X.publicKey, signPublicKey: respelled(X.signPublicKey).discardedBits }).signPublicKey, null);
+  assert.deepEqual(cleanKeys(d.S.users[B.id]), d.S.users[B.id], 'real keys stay as they are');
+  // A past key the server lists in another spelling isn't offered either.
+  assert.deepEqual(E.listedPastKeys({ pastKeys: [{ publicKey: respelled(X.publicKey).spaces, retiredAt: Date.now() - 1 }] }, Date.now() - 1000), []);
+});
+
+test('a sign-in or reset answered as another account than this device knows the username as is refused', async () => {
+  const A = await person(uname('alice')); const B = await person(uname('bob')); const X = await serverKeys();
+  await serverWith(A, [B]);
+  const pins = new Map();
+  const d = await device(A, pins); // a proven start records @alice… as Alice's id
+  assert.equal(d.boot.me.username, A.username);
+  assert.equal(d.sec.acceptKeys(d.S.users[B.id]), true, 'Bob verified on this device');
+  const names = () => JSON.parse(pins.get('hearth.accountNames') || '{}');
+  assert.deepEqual(names(), { [A.username.toLowerCase()]: A.id });
+  // A reset without the recovery key gives Alice a new identity key that nothing on this device knows: the server
+  // answers it (or a sign-in) under a fresh id. Refused, whatever the username's case or a leading @.
+  const fresh = 'x' + H.hex(10);
+  for (const typed of [A.username, A.username.toUpperCase(), '@' + A.username, ` ${A.username} `]) {
+    assert.throws(() => d.sec.signInFor(typed, fresh), (e) => e.code === 'own_key_mismatch' && /different account than the one this device knows by that name/.test(e.message), typed);
+    assert.throws(() => d.sec.signInFor(typed, B.id), (e) => e.code === 'own_key_mismatch', typed);
+  }
+  assert.throws(() => d.sec.signInFor(A.username, undefined), (e) => e.code === 'own_key_mismatch', 'an answer with no account');
+  assert.deepEqual(names(), { [A.username.toLowerCase()]: A.id }, 'nothing recorded for them');
+  // Her own id goes through; so does a username this device doesn't know yet, which is then recorded.
+  d.sec.signInFor(A.username, A.id);
+  d.sec.signInFor(B.username, B.id);
+  assert.equal(names()[B.username.toLowerCase()], B.id);
+  assert.throws(() => d.sec.signInFor(B.username, fresh));
+  // A start-up never moves a username to another id, nor adds one for an account that has one (its username is the
+  // server's word: new ones at every start would push the real records out).
+  await d.sec.proveOwnKeys({ ...d.boot.me, username: B.username }, d.boot.encSignPrivateKey, { account: A.id });
+  assert.equal(names()[B.username.toLowerCase()], B.id);
+  for (let i = 0; i < 60; i++) await d.sec.proveOwnKeys({ ...d.boot.me, username: `flood${i}` }, d.boot.encSignPrivateKey, { account: A.id });
+  assert.deepEqual(names(), { [A.username.toLowerCase()]: A.id, [B.username.toLowerCase()]: B.id });
+  // The real reset (new keys, the same id) goes through, and Bob is still pinned.
+  const A2 = await resetWithoutRecovery(A);
+  d.sec.signInFor(A.username, A2.id);
+  const after = await device(A2, pins);
+  assert.equal(after.sec.keyChanged({ ...after.S.users[B.id], publicKey: X.publicKey, signPublicKey: X.signPublicKey }), true);
+  // app.js: the sign-in is checked before anything of its answer is stored; the reset before it's sent and again for
+  // the account it answered with, before finishLogin.
+  const app = src('app.js');
+  const login = app.slice(app.indexOf('loginForm.onsubmit = async'), app.indexOf('regForm.onsubmit = async'));
+  assert.ok(login.indexOf('sec.signInFor(username, res.user && res.user.id);') > 0);
+  for (const later of ['saveDeviceNote(username, res.device);', 'setToken(res.token);', "localStorage.setItem('hearth.userId'", 'await finishLogin(res, priv);']) {
+    assert.ok(login.indexOf('sec.signInFor(') < login.indexOf(later), later);
+  }
+  const reset = app.slice(app.indexOf('async function openReset(token)'), app.indexOf('async function finishLogin('));
+  assert.ok(reset.indexOf('sec.signInFor(info.username, info.userId, { record: false });') < reset.indexOf("await api('POST', '/auth/reset', body);"));
+  const sent = reset.indexOf("await api('POST', '/auth/reset', body);");
+  assert.ok(sent < reset.indexOf('sec.signInFor(info.username, res.user && res.user.id);'));
+  assert.ok(reset.indexOf('sec.signInFor(info.username, res.user && res.user.id);') < reset.indexOf('await finishLogin(res, privateKey);'));
+});
+
+test('an older account’s sign-in upgrade names its account before its token too, so another tab never takes it', () => {
+  // Tab A is signed in as Alice; in tab B Carl signs in to an account still on PBKDF2, and the upgrade stores his
+  // first token before finishLogin. Tab A takes a stored token only while the shared record names Alice (api.js).
+  const saved = store;
+  store = new Map([['hearth.userId', 'alice'], ['hearth.token', 'alice-token']]);
+  try {
+    API.setToken('alice-token');
+    API.setTokenOwner('alice');
+    // Named first (as the upgrade branch now does): not taken.
+    store.set('hearth.userId', 'carl'); store.set('hearth.token', 'carl-pre-upgrade');
+    assert.equal(API.adoptStoredToken(), false);
+    assert.equal(API.getToken(), 'alice-token');
+    // The old order (token while the record still named Alice) is what made tab A take Carl's token.
+    store.set('hearth.userId', 'alice'); store.set('hearth.token', 'carl-pre-upgrade');
+    assert.equal(API.adoptStoredToken(), true);
+  } finally { API.setTokenOwner(null); store = saved; }
+  const app = src('app.js');
+  const login = app.slice(app.indexOf('loginForm.onsubmit = async'), app.indexOf('regForm.onsubmit = async'));
+  const up = login.slice(login.indexOf("if (params.kdf !== 'argon2id') {"), login.indexOf('await finishLogin(res, priv);'));
+  assert.match(up, /localStorage\.setItem\('hearth\.userId', res\.user\.id\);\n\s*setToken\(res\.token\);/);
+  assert.equal((login.match(/setToken\(/g) || []).length, 1, 'no other token stored before finishLogin');
 });
 
 test('refused rotations don’t use up the hour: the owner can still replace the key, and only real keys count', async () => {
