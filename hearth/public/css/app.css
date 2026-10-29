@@ -594,7 +594,7 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 .seg { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--hover); border: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
 .seg-btn { padding: 5px 10px; border-radius: 7px; font-size: 13px; font-weight: 600; color: var(--text-2); white-space: nowrap; flex: none; transition: background var(--dur-1), color var(--dur-1), box-shadow var(--dur-1); }
 .seg-btn:hover { color: var(--text); }
-.seg-btn.active { background: rgb(var(--elev)); color: var(--text); box-shadow: var(--hl), var(--shadow-sm), 0 0 0 1px var(--line); }
+.seg-btn.active { background: linear-gradient(var(--active), var(--active)) rgb(var(--elev)); color: var(--text); box-shadow: var(--hl), var(--shadow-sm), 0 0 0 1px var(--line); }
 .chip-x { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; margin-left: 4px; }
 .chip-x:hover { background: var(--active); }
 .chip-x .ic, .chip .ic { width: 13px; height: 13px; }
@@ -719,13 +719,13 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 .welcome { padding: 28px 20px 16px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .welcome h2 { font-size: 28px; font-weight: 800; letter-spacing: -.025em; }
 .welcome p { margin: 0; color: var(--text-2); max-width: 60ch; }
-.welcome .welcome-note { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); padding: 4px 12px 4px 9px; border-radius: 999px; background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); }
+.welcome .welcome-note { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); padding: 4px 12px 4px 9px; border-radius: var(--r-lg); background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); }
 .welcome-note .ic { width: 14px; height: 14px; color: var(--ok); }
 .welcome-ic { width: 64px; height: 64px; border-radius: 20px; display: grid; place-items: center; color: var(--text-2); background: linear-gradient(145deg, var(--active), var(--hover)); box-shadow: var(--hl), inset 0 0 0 1px var(--line); }
 .welcome-ic .ic { width: 32px; height: 32px; }
 .day-div { display: flex; align-items: center; gap: 10px; margin: 16px 20px 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
 .day-div::before, .day-div::after { content: ''; flex: 1; height: 1px; background: var(--line); }
-.day-div span { padding: 2px 10px; border-radius: 999px; background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); line-height: 1.4; }
+.day-div span { padding: 0 10px; border-radius: 999px; color: var(--text-2); background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); }
 .new-div { display: flex; align-items: center; margin: 10px 20px 2px; height: 1px; background: var(--danger); position: relative; }
 /* Disappearing messages: "Alice turned on disappearing messages: 1 week", between the messages. */
 .sys-line { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; margin: 10px 20px; color: var(--muted); font-size: 12.5px; text-align: center; }
@@ -767,7 +767,9 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 }
 .msg.grouped { margin-top: 0; }
 .msg:hover, .msg:focus-within { background: var(--hover); }
-.msg:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: 8px; }
+.msg:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: var(--r-md); }
+/* The accent bar on a highlighted message stays straight: the card's left corners square off for it. */
+.msg.mentioned, .msg.replying, .msg.selected { border-radius: 0 var(--r-md) var(--r-md) 0; }
 .msg.mentioned { background: rgb(var(--accent-rgb) / .08); box-shadow: inset 2px 0 0 var(--accent); }
 .msg.replying { background: rgb(var(--accent-rgb) / .1); box-shadow: inset 2px 0 0 var(--accent); }
 .msg.flash { animation: flash 2s ease; }
@@ -1251,7 +1253,7 @@ mark { background: rgb(var(--accent-rgb) / .35); color: inherit; border-radius: 
 .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 18px 16px 4px 22px; }
 .modal-head h2 { font-size: 19px; font-weight: 800; letter-spacing: -.02em; }
 .modal-body { padding: 12px 22px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-.modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 16px; background: rgb(var(--s1) / .5); border-top: 1px solid var(--line); border-radius: 0 0 var(--r-xl) var(--r-xl); }
+.modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 16px; background: var(--hover); border-top: 1px solid var(--line); border-radius: 0 0 var(--r-xl) var(--r-xl); }
 .modal-lightbox { max-width: none; width: auto; background: none; border: 0; box-shadow: none; }
 .choice { display: flex; align-items: center; gap: 14px; text-align: left; padding: 14px 16px; border-radius: var(--r-lg); border: 1px solid var(--line-2); background: var(--hover); transition: border-color var(--dur-1), background var(--dur-1), transform var(--dur-2) var(--ease-out), box-shadow var(--dur-2); }
 .choice > span { display: flex; flex-direction: column; gap: 2px; }
@@ -1635,7 +1637,7 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
 .set-subtabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 56px 22px 0; padding: 4px; width: fit-content; max-width: 100%; border-radius: 12px; background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); }
 .set-subtab { padding: 7px 14px; border-radius: 9px; font-size: 13.5px; font-weight: 600; color: var(--muted); transition: background var(--dur-1), color var(--dur-1), box-shadow var(--dur-1); }
 .set-subtab:hover { color: var(--text); }
-.set-subtab.active { background: rgb(var(--elev)); color: var(--text); box-shadow: var(--hl), var(--shadow-sm), 0 0 0 1px var(--line); }
+.set-subtab.active { background: linear-gradient(var(--active), var(--active)) rgb(var(--elev)); color: var(--text); box-shadow: var(--hl), var(--shadow-sm), 0 0 0 1px var(--line); }
 .set-form { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
 .set-form.narrow { max-width: 680px; }
 .set-section { display: flex; flex-direction: column; gap: 14px; padding-top: 22px; border-top: 1px solid var(--line); }
@@ -1844,7 +1846,8 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   html { overscroll-behavior-x: none; }
   /* Nothing hovers on a touch screen, so a pressed row or button answers the finger instead of the grey tap flash. */
   html { -webkit-tap-highlight-color: transparent; }
-  .ch-row:active, .dm-row:active, .member:active, .nav-row:active, .menu-item:active, .set-nav-btn:active { background: var(--active); }
+  .ch-row:active, .dm-row:active, .member:active, .nav-row:active, .menu-item:active, .set-nav-btn:active,
+  .tab:active, .seg-btn:active, .set-subtab:active, .ss-tab:active, .find-btn:active, .server-head:active, .me-btn:active, .choice:active { background: var(--active); }
   /* A phone held sideways (the short half of the phone layout): a slimmer header leaves more of the short screen to
      the chat, and none while the keyboard is up (the header comes back with the keyboard gone). Android makes the page
      shorter for the keyboard; iOS covers it (html.kb-open, js/viewport.js). */
@@ -2616,6 +2619,7 @@ html.lite #app-bg .bg-layer { animation: none !important; filter: none !importan
 html.lite .av::before, html.lite .uname, html.lite .mys-name.glitter, html.lite .mys-marquee span { animation: none !important; }
 html.lite .pfx { display: none; }
 html.lite .modal-backdrop { background: rgb(6 4 10 / .78); }
+html.lite :is(.menu, .emoji-picker, .gif-picker, .inbox, .toast) { background: rgb(var(--elev)); }
 html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 
 /* GIF library */
