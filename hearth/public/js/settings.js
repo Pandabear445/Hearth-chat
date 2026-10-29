@@ -453,7 +453,7 @@ function accountTab(app, setDirty, go) {
       let enc;
       try { enc = await E2EE.rewrapPrivateKey(oldK.wrapKey, newK.wrapKey, locked.encPrivateKey); } catch { throw new Error('Your current password is not right.'); }
       let r;
-      try { r = await withCode((x) => api('POST', '/me/password', { oldAuthKey: oldK.authKey, newAuthKey: newK.authKey, encPrivateKey: enc, salt, fromEnvelope: await E2EE.envelopeHash(locked.encPrivateKey), ...x }), locked.stepUpTicket); } catch (x) { throw pwCode.error(x) || x; }
+      try { r = await withCode(async (x) => api('POST', '/me/password', { oldAuthKey: oldK.authKey, newAuthKey: newK.authKey, encPrivateKey: enc, salt, fromEnvelope: await E2EE.envelopeHash(locked.encPrivateKey), ...x }), locked.stepUpTicket); } catch (x) { throw pwCode.error(x) || x; }
       // This device stays signed in with a new token (a copy of the old one stops working); every tab of this
       // browser switches to it and reconnects.
       if (r.token) setToken(r.token);
