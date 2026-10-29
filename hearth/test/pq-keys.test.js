@@ -1236,7 +1236,8 @@ test('third review R3-15 and R3-17: reading d3 messages costs no extra requests,
   const { a, b, dm, aD } = await twoWithPq('r3o');
   for (let i = 0; i < 3; i++) assert.match(await sendDm(aD, dm.id, `m${i}`), /^d3:/);
   const bR = await device(b, { ctx: await passwordCtx(b) });
-  const c = countRequests((url) => /\/dms\/[^/]+\/keys$|\/users\/[^/]+\/pq-key$|\/users\/pq-keys$/.test(url));
+  // (Their key is then pinned in one batched request for all of them, a moment later: never one per message or DM.)
+  const c = countRequests((url) => /\/dms\/[^/]+\/keys$|\/users\/[^/]+\/pq-key$/.test(url));
   const f = globalThis.fetch;
   globalThis.fetch = async (url, opts = {}) => (String(url).endsWith(`/users/${a.id}/pq-key`) ? new Response('{"error":"busy"}', { status: 503, headers: { 'content-type': 'application/json' } }) : f(url, opts));
   try {
@@ -1315,4 +1316,146 @@ test('third review R3-20 and R3-21: a locked message has its own "Enter password
   assert.match(locked, /'Enter password'/);
   assert.doesNotMatch(read('selftest.js'), /another of your devices/);
   assert.doesNotMatch(read('secure.js'), /hand it over\)/);
+});
+
+// ======================================================================= the redesign's own review
+test('own review 1: a server listing its own member as owed an old key gets nothing: only members this device left out are', async () => {
+  const owner = await person(uname('o1o'));
+  const m1 = await person(uname('o1m'));
+  const s = (await as(owner, 'POST', '/servers', { name: 'o1' })).json;
+  const code = (await as(owner, 'POST', `/servers/${s.id}/invites`, {})).json.code;
+  assert.equal((await as(m1, 'POST', `/invites/${code}/join`, {})).status, 200);
+  const ch = s.channels.find((c) => c.type === 'text').id;
+  await device(m1, { ctx: await passwordCtx(m1) });
+  const oD = await device(owner, { ctx: await passwordCtx(owner) });
+  use(oD);
+  const e1 = (await oD.sec.encryptChannel(s.id, ch, { t: 'secret from before' })).epoch;
+  srv.sql('UPDATE servers SET needs_rotation = 1 WHERE id = ?', s.id);
+  await refreshServers(oD);
+  const e2 = (await oD.sec.encryptChannel(s.id, ch, { t: 'current' })).epoch;
+  assert.ok(e2 > e1);
+  // The server adds an account it controls, and says it was left out of the old key.
+  const x = await person(uname('o1x'));
+  srv.sql('INSERT INTO members (server_id, user_id, joined_at) VALUES (?, ?, ?)', s.id, x.id, Date.now());
+  srv.sql('INSERT INTO key_owed (server_id, epoch, user_id, created_at) VALUES (?, ?, ?, ?)', s.id, e1, x.id, Date.now() - 86400000);
+  await fresh(oD, x.id);
+  await refreshServers(oD);
+  oD.sec.maintain(s.id);
+  assert.ok(await until(() => srv.sql('SELECT 1 FROM server_keys WHERE server_id = ? AND user_id = ? AND epoch = ?', s.id, x.id, e2).length > 0), 'the current key, as for any member');
+  await sleep(500);
+  assert.equal(srv.sql('SELECT COUNT(*) AS n FROM server_keys WHERE server_id = ? AND user_id = ? AND epoch = ?', s.id, x.id, e1)[0].n, 0, 'never the old one');
+});
+
+test('own review 2: reading a d3 from them pins their post-quantum key, so a server key later never goes to them P-256 alone', async () => {
+  const { a, b, dm, aD, bD } = await twoWithPq('o2');
+  const m = await person(uname('o2m'));
+  const s = (await as(a, 'POST', '/servers', { name: 'o2' })).json;
+  const code = (await as(a, 'POST', `/servers/${s.id}/invites`, {})).json.code;
+  for (const u of [b, m]) assert.equal((await as(u, 'POST', `/invites/${code}/join`, {})).status, 200);
+  const ch = s.channels.find((c) => c.type === 'text').id;
+  await refreshServers(aD);
+  use(aD);
+  await aD.sec.encryptChannel(s.id, ch, { t: 'one' });
+  assert.match(await sendDm(bD, dm.id, 'hybrid from b'), /^d3:/);
+  const aR = await device(a, { ctx: await passwordCtx(a) });
+  await fresh(aR, b.id);
+  assert.deepEqual(texts(await readDms(aR, dm.id)), ['hybrid from b']);
+  assert.ok(await until(() => E.pinnedPq(a.id, aR.S.users[b.id])), 'pinned from reading');
+  srv.sql('UPDATE users SET pq_public_key = NULL, pq_sig = NULL WHERE id = ?', b.id);
+  assert.equal((await as(m, 'POST', `/servers/${s.id}/leave`)).status, 200);
+  await fresh(aR, b.id);
+  await refreshServers(aR);
+  use(aR);
+  const e2 = (await aR.sec.encryptChannel(s.id, ch, { t: 'two' })).epoch;
+  assert.equal(srv.sql('SELECT COUNT(*) AS n FROM server_keys WHERE server_id = ? AND user_id = ? AND epoch = ?', s.id, b.id, e2)[0].n, 0, 'no P-256 copy for b');
+});
+
+test('own review 3 and 4: when this device first saw a key change stays put until accepted, with room for a slow clock', async () => {
+  // (3) The server shows the old record once more, then the new one: the cutoff stays at the first time.
+  {
+    const { a, b, dm, aD } = await twoWithPq('o3');
+    const stolen = thief(b, (await passwordCtx(b)).pqSeed);
+    const oldRec = { ...(await fresh(aD, b.id)) };
+    const bNew = await resetNew(b);
+    await device(bNew, { ctx: await passwordCtx(bNew) });
+    use(aD);
+    const nr0 = await fresh(aD, b.id); delete nr0.pastKeys;
+    assert.equal(aD.sec.keyChanged(nr0), true);
+    const T1 = Date.now();
+    await sleep(300);
+    const forgedAt = T1 + E.PIN_SKEW + 150;
+    aD.S.users[b.id] = { ...oldRec }; aD.sec.trust(aD.S.users[b.id]);
+    await sleep(50);
+    const nr = await fresh(aD, b.id); delete nr.pastKeys;
+    assert.equal(aD.sec.keyChanged(nr), true);
+    const realNow = Date.now;
+    try {
+      Date.now = () => realNow() + E.PIN_SKEW + 1000; // (dated after the clock margin too)
+      assert.equal((await forgedD3(aD, { dmId: dm.id, by: stolen, t: 'forged as b', at: forgedAt })).error, true);
+      assert.equal(aD.sec.acceptKeys(aD.S.users[b.id]), true);
+    } finally { Date.now = realNow; }
+  }
+  // (4) A device whose clock is 8 minutes slow still reads b's last message before the reset, before and after accepting.
+  {
+    const { a, b, dm, aD, bD } = await twoWithPq('o4');
+    assert.match(await sendDm(bD, dm.id, 'b, just before the reset'), /^d3:/);
+    const realNow = Date.now;
+    const onA = async (fn) => { Date.now = () => realNow() - 8 * 60000; try { return await fn(); } finally { Date.now = realNow; } };
+    const bNew = await resetNew(b);
+    await device(bNew, { ctx: await passwordCtx(bNew) });
+    assert.deepEqual(await onA(async () => { use(aD); aD.sec.keyChanged(await fresh(aD, b.id)); return texts(await readDms(aD, dm.id)); }), ['b, just before the reset']);
+    await onA(async () => { use(aD); assert.equal(aD.sec.acceptKeys(aD.S.users[b.id]), true); });
+    assert.deepEqual(await onA(async () => { const d = await device(a, { ctx: await passwordCtx(a), pins: aD.pins }); await fresh(d, b.id); return texts(await readDms(d, dm.id)); }), ['b, just before the reset']);
+  }
+});
+
+test('own review 5 and 6: a key the server only lists doesn’t date the DM going post-quantum; a DM’s first load opens its d3 first', async () => {
+  const { a, b, dm, bD } = await twoWithPq('o5');
+  const T = Date.now();
+  for (const [i, ago] of [[1, 120], [2, 90]]) {
+    const ct = await E.encryptDm({ myPriv: b.privateKey, theirPub: a.publicKey, dmId: dm.id, authorId: b.id, payload: { t: `honest d2 ${i}`, ts: T - ago * 60000 } });
+    srv.sql('INSERT INTO dm_messages (id, dm_id, author_id, ciphertext, created_at) VALUES (?, ?, ?, ?, ?)', `aa${i}${H.hex(6)}`, dm.id, b.id, ct, T - ago * 60000);
+  }
+  assert.match(await sendDm(bD, dm.id, 'first pq'), /^d3:/);
+  const fake = await E.createIdentity(a.wrapKey);
+  srv.sql('INSERT INTO user_key_history (user_id, public_key, sign_public_key, retired_at) VALUES (?, ?, NULL, ?)', b.id, fake.publicKey, T - 86400000 + 60000);
+  const rowOf = (id) => srv.sql('SELECT public_key, pq_public_key FROM users WHERE id = ?', id)[0];
+  const forged = await E.encryptDm3({ dmId: dm.id, authorId: b.id, myPriv: fake.privateKey, myPub: fake.publicKey, myPq: rowOf(b.id).pq_public_key, peerId: a.id, peerPub: rowOf(a.id).public_key, peerPq: rowOf(a.id).pq_public_key, payload: { t: 'planted', ts: T - 86400000 } });
+  srv.sql('INSERT INTO dm_messages (id, dm_id, author_id, ciphertext, created_at) VALUES (?, ?, ?, ?, ?)', `00${H.hex(8)}`, dm.id, b.id, forged, T - 86400000);
+  const aR = await device(a, { ctx: await passwordCtx(a) });
+  await fresh(aR, b.id);
+  const msgs = await readDms(aR, dm.id);
+  assert.deepEqual(msgs.filter((m) => m.dec.noPq).map((m) => m.dec.t), []);
+  assert.equal(msgs.find((m) => m.dec.t === 'planted').dec.keyNote, 'listed');
+  const app = require('node:fs').readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+  const da = app.slice(app.indexOf('async function decryptAll(key)'), app.indexOf('async function decryptAll(key)') + 500);
+  assert.match(da, /store\.list\.filter\(d3\)\.map\(decryptMessage\)/);
+});
+
+test('a 500-message post-quantum DM opens on a new device in reasonable time', async () => {
+  const { a, b, dm } = await twoWithPq('perf');
+  const rowOf = (id) => srv.sql('SELECT public_key, pq_public_key FROM users WHERE id = ?', id)[0];
+  const ra = rowOf(a.id); const rb = rowOf(b.id);
+  const t0 = Date.now();
+  for (let i = 0; i < 500; i++) {
+    const text = await E.encryptDm3({ dmId: dm.id, authorId: a.id, myPriv: a.privateKey, myPub: ra.public_key, myPq: ra.pq_public_key, peerId: b.id, peerPub: rb.public_key, peerPq: rb.pq_public_key, payload: { t: `m${i}`, ts: t0 + i } });
+    srv.sql('INSERT INTO dm_messages (id, dm_id, author_id, ciphertext, created_at) VALUES (?, ?, ?, ?, ?)', `p${String(i).padStart(4, '0')}${H.hex(6)}`, dm.id, a.id, text, t0 + i);
+  }
+  const bR = await device(b, { ctx: await passwordCtx(b) });
+  await fresh(bR, a.id);
+  use(bR); await refreshDms(bR);
+  const msgs = [];
+  for (let before = null; ;) {
+    const page = (await as({ ...bR.user, token: bR.token }, 'GET', `/dms/${dm.id}/messages${before ? `?before=${before}` : ''}`)).json.messages;
+    if (!page.length) break;
+    msgs.push(...page);
+    before = page[0].id;
+    if (msgs.length >= 500) break;
+  }
+  const t1 = Date.now();
+  for (const m of msgs) await bR.sec.decryptDmMessage(m);
+  const ms = Date.now() - t1;
+  console.log(`opened ${msgs.length} d3 messages in ${ms} ms (${(ms / msgs.length).toFixed(1)} ms each)`);
+  assert.ok(msgs.length >= 100 && msgs.every((m) => /^m\d+$/.test(m.dec.t)));
+  assert.ok(ms / msgs.length < 50, 'well under 50 ms a message');
 });

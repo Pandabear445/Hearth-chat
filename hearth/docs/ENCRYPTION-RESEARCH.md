@@ -180,7 +180,8 @@ the user's own device, on ciphertexts the server can't usefully vary (AES-GCM re
 `AES key = HKDF-SHA256(ikm = ss_mlkem ‖ dh₁ [‖ dh₂], salt = SHA-256(label ‖ ctx ‖ framed(eph_pub, kem_ct, recipient_pub, [sender_pub], recipient_pq_pub)), info = label ‖ ctx)`.
 Every element is length-prefixed. `ctx` names the server or DM, the epoch (server keys), recipient and sender. Each
 format has its own label (`hearth-gk2`, `hearth-d3`), so nothing made for one ever opens as another. A d3 wrap's ctx
-also carries a hash of the message's ciphertext, so a message's key can't be put under other words.
+also carries a hash of the message's ciphertext, which holds the message's own id and time (`binding.js`), so a wrap
+can't be moved to another message, another DM or another author, and a message's key can't be put under other words.
 
 **Authentication.** Server-key handoffs stay ECDSA-signed. The signature covers the ML-KEM ciphertext, and its
 label differs from `w1`'s, so neither form's signature verifies for the other. DM messages aren't signed: the
@@ -238,17 +239,19 @@ identity key. It is covered transitively by the existing safety numbers, which c
 - (d) DM messages carry their own keys, so there's nothing about DM keys for a server to list, hold back, roll back
   or re-date. A d3 message is trusted exactly as a d2 one: by which of the author's identity keys made it, at its
   date, from this device's pins. An older key of theirs counts only for what was written before this device first
-  saw their keys change (or before the server says the key was replaced, if that's earlier: the server can only
-  make the cutoff earlier, never later).
+  saw their keys change (kept from that first time until the change is accepted, with ten minutes for this device's
+  clock), or before the server says the key was replaced if that's earlier: the server can only make the cutoff
+  earlier, never later. Reading a d3 from them with their current key also pins their post-quantum key (checked, in
+  one batch a moment later), as writing to them does.
 - (e) A P-256-only DM from someone, dated after the DM's first d3 message, as both messages date themselves (the
-  authenticated time inside each, with ten minutes for clocks; never what the server says), is flagged "Without
-  post-quantum encryption". A DM scheduled as P-256 when both people now have a post-quantum key, or written for a
+  authenticated time inside each, with ten minutes for clocks; never what the server says; and only d3 messages that
+  open with a key this device trusts date it), is flagged "Without post-quantum encryption". A DM scheduled as P-256 when both people now have a post-quantum key, or written for a
   post-quantum key the other person no longer has, is held by the server and re-encrypted by the sender's app.
 - (f) Servers and groups: a member without a PQ key gets a P-256 copy (`w1`), and that copy opens the epoch's key,
   so **a channel's messages are only post-quantum protected while every member's copy is `w2`**. A member this
   device has seen a PQ key for, whose key isn't listed now, gets no copy at all: the rotation goes on without them,
-  the server notes the key as owed to them, and any member's app that holds it shares it with them once theirs is
-  back, even after later rotations. The server allows that only for members with no post-quantum key listed, so a
+  the server notes the key as owed to them, and the app whose rotation left them out (its own local record, never
+  just the server's word) shares it with them once theirs is back, even after later rotations. The server allows that only for members with no post-quantum key listed, so a
   member's app can't keep a new key from the others.
 
 **Why DMs have no epochs (third review).** An earlier version kept DM keys in weekly epochs, stored apart from the
@@ -256,7 +259,8 @@ messages, with each copy carrying when it was made and which keys it was for. Ev
 the rules that came with them: a server listing epochs, hiding them or rolling them back after a restore; open tabs
 writing with keys the server had lost; per-account limits on new epochs; extra requests on every read; and cutoffs
 that depended on what the server said about an epoch. A key per message, inside the message, needs none of that:
-reading a d3 message is judged as reading a d2 one always was. It costs about 3 KB more per message.
+reading a d3 message is judged as reading a d2 one always was. It costs about 3 KB more per message, and opening one
+takes ~2.5 ms (500 in a DM: ~1.3 s, measured in `pq-keys.test.js`; a page of 50, ~0.1 s).
 
 **Races and losses.** The published key's seed must always be in the current envelope. A password change saved
 from an older envelope than the server's (one that raced the upgrade on another device) is refused and retried, and
@@ -303,6 +307,9 @@ What Hearth's per-message DM keys do give:
 - **Fresh keys every message.** Each is fresh randomness, wrapped with a fresh ephemeral ECDH and a fresh ML-KEM
   encapsulation, for both people's keys as they are when it's written: a new key after a reset applies from the next
   message.
+- **No forward secrecy from them.** Per-message keys add nothing against theft of the long-term keys: whoever has
+  your identity key and your post-quantum seed (your password, or an unlocked device) and the stored messages can
+  unwrap every message key and read every message, past and future. They only contain a single leaked message key.
 
 What they **don't** give:
 - **No FS against your long-term secrets.** Someone with your password (or an unlocked device) **and** a copy of the

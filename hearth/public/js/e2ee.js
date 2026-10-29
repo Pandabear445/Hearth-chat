@@ -18,11 +18,11 @@
 //                        get theirs at the next sign-in with the password; a device already signed in asks for the
 //                        password once (the seed only ever comes from the envelope: never handed over between
 //                        devices, which only P-256 keys could authenticate). Signatures stay ECDSA P-256 (classical).
-//   Direct messages     With published post-quantum keys on both sides: a random 256-bit key per DM "epoch", wrapped
-//                        for each of the two with ML-KEM + ECDH(ephemeral, them) + ECDH(you, them) (dk1, deniable: no
-//                        signature, its time and key set authenticated inside), rotated weekly and on key changes by
-//                        what each copy itself says, every epoch kept so every device reads the history (d3). Otherwise, and for older messages: key = HKDF(ECDH(you, them)) (d2). Not
-//                        signed, so DMs stay deniable. Not forward secret: see docs/ENCRYPTION-RESEARCH.md.
+//   Direct messages     With published post-quantum keys on both sides: a random 256-bit key per message, wrapped
+//                        inside it for each of the two with ML-KEM + ECDH(ephemeral, them) + ECDH(author, them) (d3,
+//                        deniable: no signature), so every device reads the history from the messages alone.
+//                        Otherwise, and for older messages: key = HKDF(ECDH(you, them)) (d2). Not signed, so DMs stay
+//                        deniable. Not forward secret: see docs/ENCRYPTION-RESEARCH.md.
 //   Server channels     A random 256-bit group key per server "epoch", sent to each member wrapped with
 //                        ECIES (ephemeral ECDH P-256 + HKDF + AES-GCM, w1), or with the hybrid for members with a
 //                        post-quantum key (w2), and signed by whoever shared it.
@@ -444,9 +444,10 @@ export async function decryptLegacyDmFile(myPriv, theirPub, buf) {
 //   d3:<ephemeral public>:<ML-KEM ct, to the other>:<wrap, to the other>:<ML-KEM ct, to the author>:<wrap, to the author>:<iv>:<ciphertext>
 // Each wrap's AES key comes from hybridKey over ML-KEM-768 to that person's post-quantum key, ECDH(ephemeral, them) and
 // ECDH(author, them) between identity keys. That last one says the message came from one of you two (only you two can
-// work it out), as the d2 key always did, with no signatures, so DMs stay deniable. Both wraps commit to the DM, the
-// author, the recipient and a hash of the ciphertext: a message's key opens that message only, and can't be put
-// under other words, moved to another DM or credited to the other person. Nothing about it is kept anywhere else.
+// work it out), as the d2 key always did, with no signatures, so DMs stay deniable. Both wraps commit to the format
+// (the hearth-d3 label), the DM, the author, the recipient and a hash of the ciphertext, which holds the message's own
+// id and time (binding.js): a message's key opens that message only, and can't be put under other words, moved to
+// another message or DM, or credited to the other person. Nothing about it is kept anywhere else.
 const d3Ctx = (dmId, authorId, recipientId, ctHash) => `hearth-d3|${dmId}|${authorId}|${recipientId}|${ctHash}`;
 const d3Aad = (dmId, authorId) => `hearth-d3|${dmId}|${authorId}`;
 const d3Key = async (raw, dmId, authorId, usage) => hkdfAes(await hkdfKey(raw), enc.encode('hearth-d3-msg'), `hearth-d3-msg|${dmId}|${authorId}`, [usage]);
@@ -474,8 +475,9 @@ export async function encryptDm3({ dmId, authorId, myPriv, myPub, myPq, peerId, 
   return ['d3', eph.pub, ...toPeer, ...toMe, b64(iv), b64(ct)].join(':');
 }
 export const isDm3 = (text) => typeof text === 'string' && text.startsWith('d3:');
-// myPq: your key pair ({ publicKey, secretKey }); authorPub: the identity key the author had then (yours, for your own).
-export async function decryptDm3({ text, dmId, authorId, myId, myPriv, myPub, myPq, authorPub }) {
+// myPq: your key pair ({ publicKey, secretKey }); authorPub: the identity key the author had then (yours, for your own),
+// or authorPubs, the ones they may have had, best first: { payload, index } says which (one decapsulation for all).
+export async function decryptDm3({ text, dmId, authorId, myId, myPriv, myPub, myPq, authorPub, authorPubs = [authorPub] }) {
   const p = String(text).split(':');
   if (p.length !== 8 || p[0] !== 'd3' || !isB64(p[2], PQ_CT_BYTES) || !isB64(p[4], PQ_CT_BYTES) || !isB64(p[3], D3_WRAP_BYTES) || !isB64(p[5], D3_WRAP_BYTES) || !isB64(p[6], 12) || !isB64(p[7])) throw new Error('Unknown format');
   needPq(myPq);
@@ -487,13 +489,23 @@ export async function decryptDm3({ text, dmId, authorId, myId, myPriv, myPub, my
   const ctB = unb64(ct);
   const ctx = d3Ctx(dmId, authorId, myId, b64(await sha256(concat(ivB, ctB))));
   const ss = ml_kem768.decapsulate(kct, myPq.secretKey);
-  const dhs = [await dhBits(myPriv, ephPub), await dhBits(myPriv, authorPub)];
-  const key = await hybridKey({ label: 'hearth-d3', ctx, kemSs: ss, dhs, transcript: [unb64(ephPub), kct, unb64(myPub), unb64(authorPub), unb64(myPq.publicKey)], usage: 'decrypt' });
-  ss.fill(0); dhs.forEach((d) => d.fill(0));
-  const raw = await aesDecrypt(key, w.slice(0, 12), w.slice(12), ctx);
+  const dhEph = await dhBits(myPriv, ephPub);
   try {
-    return { payload: JSON.parse(dec.decode(await aesDecrypt(await d3Key(raw, dmId, authorId, 'decrypt'), ivB, ctB, d3Aad(dmId, authorId)))) };
-  } finally { raw.fill(0); }
+    for (let index = 0; index < authorPubs.length; index++) {
+      const pub = authorPubs[index];
+      let raw;
+      try {
+        const dhs = [dhEph.slice(), await dhBits(myPriv, pub)];
+        const key = await hybridKey({ label: 'hearth-d3', ctx, kemSs: ss.slice(), dhs, transcript: [unb64(ephPub), kct, unb64(myPub), unb64(pub), unb64(myPq.publicKey)], usage: 'decrypt' });
+        dhs.forEach((d) => d.fill(0));
+        raw = await aesDecrypt(key, w.slice(0, 12), w.slice(12), ctx);
+      } catch { continue; /* not this key */ }
+      try {
+        return { payload: JSON.parse(dec.decode(await aesDecrypt(await d3Key(raw, dmId, authorId, 'decrypt'), ivB, ctB, d3Aad(dmId, authorId)))), index };
+      } finally { raw.fill(0); }
+    }
+    throw new Error('Missing key');
+  } finally { ss.fill(0); dhEph.fill(0); }
 }
 
 // ---------------------------------------------------------------- server channel group keys
@@ -845,27 +857,31 @@ export function checkPin(myId, user) {
   const r = judgePin(pins[user.id], user);
   if (r === 'pin') { pins[user.id] = { e: user.publicKey, s: keyIn(user.signPublicKey) }; savePins(myId, pins); return 'ok'; }
   if (r === 'fill') { pins[user.id].s = user.signPublicKey; savePins(myId, pins); return 'ok'; }
-  if (r === 'changed' ? noteChangeSeen(pins, user.id) : unseeChange(pins, user)) savePins(myId, pins);
+  if (r === 'changed') noteChangeSeen(myId, pins[user.id], user.id);
   return r;
 }
-// When this device first saw someone's keys listed as changed (by its own clock), kept in the pin until the change is
-// accepted: the pinned keys count as theirs only for what was written before then.
-function noteChangeSeen(pins, id) {
-  if (!pins[id] || validUntil(pins[id].seen)) return false;
-  pins[id].seen = Date.now();
-  return true;
+// When this device first saw someone's keys listed as changed (by its own clock), kept beside the pin (for the keys it
+// holds, e) until the change is accepted: the pinned keys count as theirs only for what was written before then.
+const seenKey = (myId) => `hearth.pinseen.${myId}`;
+function loadSeen(myId) {
+  try { const x = JSON.parse(localStorage.getItem(seenKey(myId)) || '{}'); return x && typeof x === 'object' && !Array.isArray(x) ? x : {}; } catch { return {}; }
 }
-// …and forgotten when the server lists their pinned keys again.
-function unseeChange(pins, user) {
-  const p = pins[user.id];
-  if (!p || !('seen' in p) || keyIn(user.publicKey) !== p.e) return false;
-  delete p.seen;
-  return true;
+function saveSeen(myId, all) { try { localStorage.setItem(seenKey(myId), JSON.stringify(all)); } catch { /* storage blocked */ } }
+function noteChangeSeen(myId, pin, id) {
+  if (!pin) return;
+  const all = loadSeen(myId);
+  if (all[id] && all[id].e === pin.e && validUntil(all[id].t)) return;
+  all[id] = { e: pin.e, t: Date.now() };
+  saveSeen(myId, all);
 }
-export function changeSeenAt(myId, user) {
-  const p = user && loadPins(myId)[user.id];
-  return p && validUntil(p.seen) ? p.seen : 0;
+function seenFor(myId, pin, id) {
+  const x = pin && loadSeen(myId)[id];
+  return x && x.e === pin.e && validUntil(x.t) ? x.t : 0;
 }
+// (Kept until the change is accepted, even if the server lists their old keys again meanwhile: it could otherwise
+// move it later at will. Compared with the server's dates give or take PIN_SKEW, for this device's clock.)
+export const PIN_SKEW = 10 * 60 * 1000;
+export const changeSeenAt = (myId, user) => (user ? seenFor(myId, loadPins(myId)[user.id], user.id) : 0);
 // checkPin for many people at once (a member list): the same pinning and the same answer for each person, with
 // the store read and saved once instead of once per person. Returns the ids whose keys changed.
 export function checkPins(myId, users) {
@@ -875,8 +891,7 @@ export function checkPins(myId, users) {
   for (const user of users) {
     if (!user || user.id === myId) continue;
     const r = judgePin(pins[user.id], user);
-    if (r === 'changed') { changed.add(user.id); if (noteChangeSeen(pins, user.id)) save = true; }
-    else if (r === 'ok') { if (unseeChange(pins, user)) save = true; }
+    if (r === 'changed') { changed.add(user.id); noteChangeSeen(myId, pins[user.id], user.id); }
     else if (r === 'pin') { pins[user.id] = { e: user.publicKey, s: keyIn(user.signPublicKey) }; save = true; }
     else if (r === 'fill') { pins[user.id].s = user.signPublicKey; save = true; }
   }
@@ -948,10 +963,12 @@ function listedRetiredAt(user, e) {
 }
 // The time a key this device pinned for someone counts until, now that their keys changed and that isn't accepted yet:
 // when this device first saw that, or when the server says it happened if that's earlier.
-export function pinnedUntil(myId, user) {
+// (local: false for something undated, which only the server's date can say anything about, as before.)
+export function pinnedUntil(myId, user, { local: byClock = true } = {}) {
   const p = user && loadPins(myId)[user.id];
   if (!p) return 0;
-  const local = validUntil(p.seen) ? p.seen : 0;
+  const seen = byClock ? seenFor(myId, p, user.id) : 0;
+  const local = seen ? seen + PIN_SKEW : 0;
   const listed = listedRetiredAt(user, p.e);
   return local && listed ? Math.min(local, listed) : local || listed;
 }
@@ -962,10 +979,12 @@ export function acceptPin(myId, user) {
   const cur = { e: user.publicKey, s: keyIn(user.signPublicKey) };
   // When this device first saw the change, or accepted it, by its own clock; or when the server says it happened, if
   // that's earlier (it can only make the old key count for less, never longer).
-  const local = prev && validUntil(prev.seen) ? prev.seen : Date.now();
+  const local = seenFor(myId, prev, user.id) || Date.now();
   const listed = prev ? listedRetiredAt(user, prev.e) : 0;
   const until = listed && listed < local ? listed : local;
-  const old = (prev ? [...(Array.isArray(prev.old) ? prev.old : []), { e: prev.e, s: prev.s || null, until }] : [])
+  // (By this device's clock: the margin for it is added when it's compared, pinnedKeys; an `until` is never in the future.)
+  const byClock = until === local;
+  const old = (prev ? [...(Array.isArray(prev.old) ? prev.old : []), { e: prev.e, s: prev.s || null, until, ...(byClock ? { clock: 1 } : {}) }] : [])
     .filter((k, i, all) => k && typeof k.e === 'string' && k.e && validUntil(k.until) && !(k.e === cur.e && k.s === cur.s)
       && all.findIndex((x) => x && x.e === k.e && x.s === k.s) === i);
   // The post-quantum pin (q, pinPq) stays while the identity key is the same one: comparing numbers for someone whose
@@ -978,6 +997,21 @@ export function acceptPin(myId, user) {
 // The keys this device pinned for someone: { e, s } (the ones it holds as theirs now) and `old` ([{ e, s }],
 // newest first): keys it pinned for them before, only with `at` (when something was written) and only those
 // still theirs then. Without a date, none: an old key that leaked can't vouch for anything undated or newer.
+// This device's local record of whom its own rotations left out (server, epoch -> ids): only those does it ever share an
+// older key with later (secure.js maintain), whatever the server says is owed.
+const deferKey = (myId) => `hearth.deferred.${myId}`;
+function loadDeferred(myId) {
+  try { const x = JSON.parse(localStorage.getItem(deferKey(myId)) || '{}'); return x && typeof x === 'object' && !Array.isArray(x) ? x : {}; } catch { return {}; }
+}
+export function noteDeferred(myId, serverId, epoch, ids) {
+  if (!ids || !ids.length) return;
+  const all = loadDeferred(myId);
+  all[`${serverId}|${epoch}`] = [...new Set([...(all[`${serverId}|${epoch}`] || []), ...ids])];
+  const keys = Object.keys(all);
+  keys.slice(0, Math.max(0, keys.length - 200)).forEach((k) => delete all[k]);
+  try { localStorage.setItem(deferKey(myId), JSON.stringify(all)); } catch { /* storage blocked */ }
+}
+export const deferredHere = (myId, serverId, epoch, id) => (loadDeferred(myId)[`${serverId}|${epoch}`] || []).includes(id);
 // Every key this device once pinned for them and has since replaced, whatever the date ([{ e, s }]).
 export function retiredPins(myId, user) {
   const p = user && loadPins(myId)[user.id];
@@ -987,7 +1021,7 @@ export function pinnedKeys(myId, user, at = 0) {
   const p = user && loadPins(myId)[user.id];
   if (!p) return { e: null, s: null, old: [] };
   const old = at > 0 && Array.isArray(p.old)
-    ? p.old.slice().reverse().filter((k) => k && typeof k === 'object' && typeof k.e === 'string' && validUntil(k.until) && at <= k.until)
+    ? p.old.slice().reverse().filter((k) => k && typeof k === 'object' && typeof k.e === 'string' && validUntil(k.until) && at <= k.until + (k.clock ? PIN_SKEW : 0))
     : [];
   return { e: p.e || null, s: p.s || null, old: old.map((k) => ({ e: k.e, s: k.s || null })) };
 }

@@ -168,7 +168,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       else {
         // Pinned here, but the server now lists other keys for them: theirs for what was written before this device
         // first saw that (its own clock), or before the server says it happened if that's earlier.
-        const gone = E2EE.pinnedUntil(S.me.id, user);
+        const gone = E2EE.pinnedUntil(S.me.id, user, { local: at > 0 });
         if (!gone || (at > 0 && at <= gone)) add(p[which], 'pinned');
       }
     }
@@ -660,9 +660,11 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     // Held back here yourself: the server takes no key from you to pass on (it might be one you made alone).
     const needsShare = !needsRotate && !isHeld(serverId, S.me.id) && shareWith.length > 0 && currentKey(serverId);
     // Older keys owed to members who were left out of them (their post-quantum key wasn't listed then), that we hold.
+    // Only to those this device's own rotation left out (its local record, never just the server's word: a server
+    // could otherwise list a member of its own as owed every old key), and only keys it holds as its own.
     const owed = isHeld(serverId, S.me.id) ? [] : Object.entries(st.owed || {})
-      .map(([e, ids]) => ({ epoch: Number(e), raw: keysFor(serverId).get(Number(e)), ids: (Array.isArray(ids) ? ids : []).filter((id) => id !== S.me.id && !heldBack(serverId, id)) }))
-      .filter((o) => o.raw && o.ids.length);
+      .map(([e, ids]) => ({ epoch: Number(e), raw: keysFor(serverId).get(Number(e)), ids: (Array.isArray(ids) ? ids : []).filter((id) => id !== S.me.id && !heldBack(serverId, id) && E2EE.deferredHere(S.me.id, serverId, Number(e), id)) }))
+      .filter((o) => o.raw && o.ids.length && !unverified.has(`${serverId}|${o.epoch}`));
     if (!needsRotate && !needsShare && !owed.length) return;
     busy.add(serverId);
     // Runs right away (no timers: background tabs throttle them). If several members do this at once,
@@ -745,6 +747,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       throw e;
     });
     keysFor(serverId).set(epoch, raw);
+    E2EE.noteDeferred(S.me.id, serverId, epoch, deferred);
     await applyState(next);
   }
 
@@ -949,14 +952,29 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     if (!mine) return { pending: true };
     if (!(await ownKeysOk())) throw ownKeysMismatch();
     const keys = authorId === S.me.id ? [{ key: proven.e, trust: 'now' }] : await dmKeys(dmId, at);
-    for (const { key, trust: how } of keys) {
-      try {
-        const { payload } = await E2EE.decryptDm3({ text, dmId, authorId, myId: S.me.id, myPriv: S.privateKey, myPub: proven.e, myPq: mine, authorPub: key });
-        E2EE.noteDmFirst(S.me.id, dmId, tsOf(payload));
-        return { payload, how };
-      } catch { /* not this key */ }
-    }
-    throw new Error('Missing key');
+    if (!keys.length) throw new Error('Missing key');
+    const { payload, index } = await E2EE.decryptDm3({ text, dmId, authorId, myId: S.me.id, myPriv: S.privateKey, myPub: proven.e, myPq: mine, authorPubs: keys.map((k) => k.key) });
+    const how = keys[index].trust;
+    // Only a key this device trusts dates the DM going post-quantum (not one the server merely lists).
+    if (how === 'now' || how === 'pinned') E2EE.noteDmFirst(S.me.id, dmId, tsOf(payload));
+    // Written by them with their current key: they have a post-quantum key, so it's checked and pinned now (in a batch,
+    // a moment later: no request per message), and a server that hides it later gets nothing P-256 alone for them.
+    if (how === 'now' && authorId !== S.me.id) pinSoon(S.dms.find((x) => x.id === dmId));
+    return { payload, how };
+  }
+  const toPin = new Set();
+  let pinTimer = null;
+  function pinSoon(d) {
+    const u = d && S.users[d.userId];
+    if (!u || typeof u.pq !== 'string' || !u.pq || E2EE.pinnedPq(S.me.id, u)) return;
+    toPin.add(u.id);
+    pinTimer ||= setTimeout(async () => {
+      pinTimer = null;
+      const users = [...toPin].map((id) => S.users[id]).filter(Boolean);
+      toPin.clear();
+      await prefetchPq(users).catch(() => {});
+      for (const u2 of users) await pqKeyOf(u2).catch(() => {});
+    }, 50);
   }
   // A d2 message from them written after this DM went post-quantum, as both messages say it themselves (their
   // authenticated times, never the server's, give or take clocks): their app wouldn't write that, so it's flagged.

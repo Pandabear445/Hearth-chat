@@ -4340,7 +4340,11 @@ function bindingFlag(m, st) {
 }
 async function decryptAll(key) {
   const store = S.msgs[key];
-  if (store) await Promise.all(store.list.map(decryptMessage));
+  if (!store) return;
+  // In a DM the post-quantum ones first: the others are judged by when the first of those was written.
+  const d3 = (m) => typeof m.ciphertext === 'string' && m.ciphertext.startsWith('d3:');
+  if (key.startsWith('d:')) await Promise.all(store.list.filter(d3).map(decryptMessage));
+  await Promise.all(store.list.map(decryptMessage));
 }
 const textOf = (m) => (m.dec && m.dec.t) || '';
 // A message's words for a snippet (the inbox): the word filter's note instead, when it hides or blurs the message.

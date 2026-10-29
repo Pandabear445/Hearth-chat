@@ -221,7 +221,7 @@ test('downgrade pins: once seen, a missing post-quantum key is noticed; only a n
   assert.equal(E.pinnedPq('me', { ...bob, publicKey: 'E2' }), false, 'a new identity key starts over');
 });
 
-test('your own post-quantum pin and a DM having gone post-quantum are kept per account; when a key change was first seen is local', () => {
+test('your own post-quantum pin and a DM having gone post-quantum are kept per account; when a key change was first seen is local', async () => {
   store.clear();
   assert.equal(E.ownPqPinned('me'), false);
   E.pinOwnPq('me', 'fp');
@@ -243,8 +243,20 @@ test('your own post-quantum pin and a DM having gone post-quantum are kept per a
   assert.ok(seen >= t0 && seen <= Date.now());
   assert.equal(E.checkPin('me', { ...bob, publicKey: 'E2', signPublicKey: 'S2' }), 'changed');
   assert.equal(E.changeSeenAt('me', bob), seen, 'the first time');
-  E.acceptPin('me', { ...bob, publicKey: 'E2', signPublicKey: 'S2', pastKeys: [{ publicKey: 'E1', signPublicKey: 'S1', retiredAt: 1 }] });
-  const old = E.pinnedKeys('me', { ...bob, publicKey: 'E2' }, seen).old;
-  assert.deepEqual(old.map((k) => k.e), ['E1'], 'the old key, for what was written before then (not the server’s date)');
-  assert.deepEqual(E.pinnedKeys('me', { ...bob, publicKey: 'E2' }, seen + 1).old, []);
+  assert.equal(E.checkPin('me', bob), 'ok');
+  assert.equal(E.checkPin('me', { ...bob, publicKey: 'E2', signPublicKey: 'S2' }), 'changed');
+  assert.equal(E.changeSeenAt('me', bob), seen, 'not moved by the old record shown again meanwhile');
+  assert.deepEqual(JSON.parse(store.get('hearth.pins.me')).bob, { e: 'E1', s: 'S1' }, 'kept beside the pin, not in it');
+  await new Promise((r) => setTimeout(r, 30));
+  // A date the server gives that's later than that changes nothing (it can only make it earlier)…
+  E.acceptPin('me', { ...bob, publicKey: 'E2', signPublicKey: 'S2', pastKeys: [{ publicKey: 'E1', signPublicKey: 'S1', retiredAt: Date.now() }] });
+  const at = (t) => E.pinnedKeys('me', { ...bob, publicKey: 'E2' }, t).old.map((k) => k.e);
+  assert.deepEqual(at(seen + E.PIN_SKEW), ['E1'], 'the old key, for what was written before then (and the clock margin)');
+  assert.deepEqual(at(seen + E.PIN_SKEW + 1), []);
+  // …and an earlier one counts.
+  const carl = { id: 'carl', publicKey: 'C1', signPublicKey: 'T1' };
+  E.checkPin('me', carl);
+  E.checkPin('me', { ...carl, publicKey: 'C2', signPublicKey: 'T2' });
+  E.acceptPin('me', { ...carl, publicKey: 'C2', signPublicKey: 'T2', pastKeys: [{ publicKey: 'C1', signPublicKey: 'T1', retiredAt: 1000 }] });
+  assert.deepEqual(E.pinnedKeys('me', { ...carl, publicKey: 'C2' }, 1001).old, []);
 });
