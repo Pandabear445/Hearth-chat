@@ -1231,7 +1231,8 @@ async function reelsTab(t) {
   await bob.page.waitForFunction(() => !!document.querySelector('.reels-layer .reel-card[data-i="1"] iframe'));
   for (let n = 0; n < 60 && !(await reelCommands(bob)).includes('seekTo'); n++) await bob.page.waitForTimeout(100);
   check((await reelCommands(bob)).includes('seekTo'), 'Bob’s TikTok is put where everyone is.');
-  // Bob moves everyone too ("Everyone controls", the default).
+  // Bob moves everyone too ("Everyone controls", the default), once the 0.7 s between moves has passed.
+  await bob.page.waitForTimeout(800);
   await bob.$('.reels-feed').focus();
   await bob.page.keyboard.press('ArrowDown');
   await waitOnScreen(alice, 2, 'Bob moves everyone to the reel');
@@ -1297,6 +1298,126 @@ async function reelsTab(t) {
   await page.locator('#composer-input').waitFor();
   await phone.close();
   for (const p of [alice, bob]) { await p.$('.conv-tab', { hasText: 'Chat' }).click(); await p.$('.reels-layer').waitFor({ state: 'hidden' }); }
+  for (const p of [alice, bob]) await p.context.unroute(/^https:\/\/www\.(tiktok|instagram)\.com\//);
+}
+
+// ------------------------------------------------------------------ getting videos in: shared to Hearth, imported, pasted, dropped
+const TT_ID3 = '7444444444444444444';
+// Modelled on TikTok's user_data_tiktok.json and Instagram's liked_posts.json (trimmed).
+const EXPORT_TIKTOK = JSON.stringify({ Activity: { 'Like List': { ItemFavoriteList: [
+  { date: '2026-03-01 10:00:00', link: 'https://www.tiktokv.com/share/video/7555555555555555555/' },
+  { date: '2026-02-01 10:00:00', link: 'https://www.tiktokv.com/share/video/7555555555555555556/' },
+  { date: '2026-01-01 10:00:00', link: 'https://www.tiktokv.com/share/video/7555555555555555555/' }] },
+'Favorite Videos': { FavoriteVideoList: [{ Date: '2026-01-05', Link: 'https://www.tiktokv.com/share/video/7555555555555555557/' }, { Date: 'x', Link: 'javascript:alert(1)' }] } } });
+const EXPORT_IG = JSON.stringify({ likes_media_likes: [{ title: 'someone', string_list_data: [{ href: 'https://www.instagram.com/reel/IMPORTreel1/', value: '👍', timestamp: 1767225600 }] }] });
+const exportFiles = () => [
+  { name: 'user_data_tiktok.json', mimeType: 'application/json', buffer: Buffer.from(EXPORT_TIKTOK) },
+  { name: 'liked_posts.json', mimeType: 'application/json', buffer: Buffer.from(EXPORT_IG) },
+];
+async function videosIn(t) {
+  const { alice, bob } = t.people;
+  for (const p of [alice, bob]) await fakeSocialSites(p);
+  await bob.openChannel('general');
+  const base = t.server.base;
+  // ---- a link shared to Hearth (an installed web app's share sheet, or the bookmarklet): the picker, then sent
+  await alice.page.goto(`${base}/share?title=TikTok&text=${encodeURIComponent(`Look at this https://www.tiktok.com/@hearth/video/${TT_ID3}?is_from_webapp=1`)}`);
+  await alice.waitApp();
+  const picker = await alice.dialog('Share to Hearth');
+  check(new URL(alice.page.url()).pathname === '/', 'The address bar goes back to / (the link isn’t kept in it).');
+  await picker.locator('.share-what', { hasText: 'TikTok video' }).waitFor();
+  await picker.locator('input[type=search]').fill('genera');
+  await picker.locator('.share-row', { hasText: '#general' }).click();
+  await alice.toast('Shared to #general.');
+  await alice.$('.conv-tab.active', { hasText: 'Reels' }).waitFor();
+  await bob.message(`video/${TT_ID3}`).waitFor();
+  // Something that isn't a TikTok or Instagram link: nothing to pick, nothing sent.
+  await alice.page.goto(`${base}/share?text=${encodeURIComponent('hello https://evil.example/@a/video/7444444444444444444')}`);
+  await alice.waitApp();
+  await alice.toast('Nothing to share');
+  check(!(await alice.$('.modal', { hasText: 'Share to Hearth' }).count()), 'No picker for junk.');
+  // To My Reels: private, sealed in the vault, so the server never sees it.
+  await alice.page.goto(`${base}/share?url=${encodeURIComponent('https://www.instagram.com/reel/PRIVATEreel1/')}`);
+  await alice.waitApp();
+  await (await alice.dialog('Share to Hearth')).locator('.share-row', { hasText: 'My Reels' }).click();
+  await alice.toast('Added to My Reels.');
+  await alice.$('.reels-layer:not([hidden]) .reels-bar .reels-sub', { hasText: 'Sealed in your vault' }).waitFor();
+  await alice.page.waitForFunction(() => document.querySelectorAll('.reels-layer .reel-card').length === 1);
+  const stored = await alice.page.evaluate(async () => (await fetch('/api/me/reels', { headers: { Authorization: `Bearer ${localStorage.getItem('hearth.token')}` } })).json());
+  check(/^x1:/.test(stored.data || '') && !stored.data.includes('PRIVATEreel1'), 'My Reels reaches the server sealed.');
+
+  // ---- importing liked videos from TikTok's and Instagram's data download, read on the device
+  const uploads = [];
+  const onReq = (r) => { if (r.method() === 'POST' && r.postDataBuffer() && r.postDataBuffer().length > 1000 && !r.url().includes('/socket.io/')) uploads.push(r.url()); };
+  alice.page.on('request', onReq);
+  await alice.$('.reels-bar button', { hasText: 'Import' }).click();
+  let imp = await alice.dialog('Import liked & saved videos');
+  await imp.locator('input[type=file]').setInputFiles(exportFiles());
+  await imp.locator('.import-found strong', { hasText: '4 videos' }).waitFor();
+  await imp.locator('.import-found', { hasText: '3 TikTok · 1 Instagram · 1 duplicate left out' }).waitFor();
+  await alice.page.waitForTimeout(400); // (the dialog's fade-in)
+  await shot(alice, 'desktop-import');
+  await imp.locator('button', { hasText: 'Add 4 videos' }).click();
+  await alice.toast('4 new videos in My Reels.');
+  await alice.page.waitForFunction(() => document.querySelectorAll('.reels-layer .reel-card').length === 5);
+  // Into a conversation: 4 links to a message.
+  await alice.$('.reels-bar button', { hasText: 'Import' }).click();
+  imp = await alice.dialog('Import liked & saved videos');
+  await imp.locator('input[type=file]').setInputFiles(exportFiles());
+  await imp.locator('select[aria-label="Add them to"]').selectOption({ label: '#general · E2E Hall' });
+  await imp.locator('.field-hint', { hasText: 'Shared as 1 message of up to 4 links' }).waitFor();
+  await imp.locator('button', { hasText: 'Add 4 videos' }).click();
+  await alice.toast('Shared.');
+  await bob.message('7555555555555555557').waitFor();
+  alice.page.off('request', onReq);
+  check(!uploads.some((u) => !/\/messages$|\/me\/reels$/.test(u)), `The export file is never uploaded (big requests: ${uploads.join(', ')}).`);
+
+  // ---- paste and drop on the Reels tab: added after a moment, with Undo
+  await alice.openChannel('general');
+  await alice.$('.conv-tab', { hasText: 'Reels' }).click();
+  await alice.$('.reels-layer:not([hidden]) .reel-card').first().waitFor();
+  const paste = (text) => alice.page.evaluate((x) => { const d = new DataTransfer(); d.setData('text/plain', x); document.body.dispatchEvent(new ClipboardEvent('paste', { clipboardData: d, bubbles: true })); }, text);
+  await paste('https://www.instagram.com/reel/PASTEDreel1/');
+  await alice.$('.reels-undo:not([hidden])', { hasText: 'Sharing 1 video here' }).waitFor();
+  await alice.$('.reels-undo button', { hasText: 'Undo' }).click();
+  await alice.toast('Not added.');
+  await paste('no links here');
+  await alice.toast('There’s no TikTok or Instagram link in what you pasted.');
+  await paste('https://www.instagram.com/reel/PASTEDreel1/');
+  await bob.message('PASTEDreel1').waitFor({ timeout: 15000 });
+  await alice.page.evaluate(() => {
+    const d = new DataTransfer(); d.setData('text/uri-list', 'https://www.instagram.com/reel/DROPPEDreel/');
+    const L = document.querySelector('.reels-layer');
+    L.dispatchEvent(new DragEvent('dragover', { dataTransfer: d, bubbles: true, cancelable: true }));
+    L.dispatchEvent(new DragEvent('drop', { dataTransfer: d, bubbles: true, cancelable: true }));
+  });
+  await alice.$('.reels-undo:not([hidden])', { hasText: 'Sharing 1 video here' }).waitFor();
+  await bob.message('DROPPEDreel').waitFor({ timeout: 15000 });
+  check(!(await bob.message('PASTEDreel1').count() > 1), 'Undo meant the first paste was never sent.');
+
+  // ---- a phone: the share picker and the import screen
+  const phone = await t.open('bob-share', PHONE);
+  await fakeSocialSites(phone);
+  const { page } = phone;
+  await phone.login('bob', t.pw.bob);
+  await page.goto(`${base}/share?url=${encodeURIComponent('https://vm.tiktok.com/ZMphone01/')}`);
+  await phone.waitApp();
+  const pp = await phone.dialog('Share to Hearth');
+  await pp.locator('.share-row', { hasText: 'My Reels' }).waitFor();
+  await page.waitForTimeout(400);
+  await shot(phone, 'phone-share');
+  await pp.locator('.modal-foot button', { hasText: 'Cancel' }).tap();
+  await phone.noModals();
+  await page.locator('.home-myreels').tap();
+  await page.locator('.reels-layer .reels-title', { hasText: 'My Reels' }).waitFor();
+  await page.locator('.reels-top button[aria-label="Add a link"]').tap();
+  await page.locator('.reels-side.open button', { hasText: 'Import liked & saved videos' }).tap();
+  const pi = await phone.dialog('Import liked & saved videos');
+  await pi.locator('input[type=file]').setInputFiles(exportFiles());
+  await pi.locator('.import-found strong', { hasText: '4 videos' }).waitFor();
+  await page.waitForTimeout(400);
+  await shot(phone, 'phone-import');
+  await phone.close();
+  await alice.$('.conv-tab', { hasText: 'Chat' }).click();
   for (const p of [alice, bob]) await p.context.unroute(/^https:\/\/www\.(tiktok|instagram)\.com\//);
 }
 
@@ -6264,6 +6385,7 @@ export const FLOWS = [
   ['watch together: start, pause for everyone, stop; a video file from another site says so before it loads; leave the call', watchTogether],
   ['tiktok and instagram: tap to load in place (nothing before), sandboxed, side by side, Always; watch together keeps a TikTok in step, a reel starts together after a ready check, a mixed queue, side by side', socialVideos],
   ['reels tab: the conversation’s TikToks and reels newest first, nothing before a tap, muted until sound, react, add a link; scroll together follows who swipes, a reel’s ready check and countdown, Only I control, leave and rejoin; a phone full screen', reelsTab],
+  ['getting videos in: shared to Hearth (/share) picks a conversation or My Reels, junk refused, My Reels sealed; liked videos imported from exports into My Reels and a conversation, never uploaded; paste with Undo, drop; a phone’s picker and import', videosIn],
   ['audit log and reports: moderation as sentences, filters, live entries; a report reaches the server’s moderators', auditAndReports],
   ['dm call: ring, accept, hang up, decline', dmCall],
   ['group chat: create, talk both ways, call rings', groupChat],

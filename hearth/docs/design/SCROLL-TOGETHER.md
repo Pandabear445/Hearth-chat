@@ -108,6 +108,71 @@ a channel made private) stops hearing and is let go. Someone for whom the shared
 history starts isn't sent the session at all. One tab per connection, 200 viewers per conversation, updates
 merged to at most 4 a second, and every event counts against the realtime flood limits. Nothing is stored.
 
+## Getting videos in
+
+Copying links by hand is the slow way. Faster ones, all ending in an ordinary encrypted message (or My Reels):
+
+| From | How | Where it lands |
+|---|---|---|
+| **The Android app** | Share → Hearth on a TikTok or Instagram video (an `ACTION_SEND text/plain` intent filter) | the share picker |
+| **Chrome on Android**, Hearth installed as a web app | Share → Hearth (the manifest's `share_target`: `GET /share?url=&text=&title=`) | the share picker |
+| **A computer** | the **Send to Hearth** bookmarklet (Settings → Reels): opens `/share?url=<the page you're on>` | the share picker |
+| **Any Reels tab** | Ctrl/⌘+V anywhere (not in a text box), or drop a link on it | added after 4 s, with **Undo** |
+| **The desktop app** | when the tab opens, a TikTok/Instagram link you copied is *offered* ("Add the TikTok video you copied?") | the tab |
+| **Your TikTok/Instagram data download** | Settings → Reels → Import (or Import on a Reels tab / My Reels) | My Reels, or a conversation |
+
+**iPhone and iPad can't do either share target:** iOS doesn't let a web page (or an installed web app) receive
+shares, and there's no native iOS app. Copy the link and paste it on a Reels tab instead.
+
+### The share picker
+
+`/share` is the app's own page; it takes the link out of `url`, `text` or `title` (share sheets use any of them),
+keeps only a TikTok or Instagram link (`share.js`, social.js's rules) in social.js's own form, puts the address bar
+back to `/`, and (after sign-in, if needed) shows **Share to Hearth**: My Reels first, then the conversations you used
+recently, then your DMs, group chats and the channels you may post in, with search. Nothing is sent until you pick
+one; then the link goes as an ordinary encrypted message (with a preview card if "When I send a link" is Always) and
+that conversation's Reels tab opens. Anything else that arrives (another app's junk, a link to another site, a
+broken address) shows "Nothing to share" and sends nothing.
+
+The Android app (`mobile/native/ShareLinks.java`) takes only an https link on TikTok's or Instagram's own names
+(no user name, password or other port, a plain path) from the shared text, and hands only that, quoted, to the
+server's page (`hearth-share`, or `/share?url=` for an older page), which checks it again. Any app can send Hearth
+anything; the worst it can do is open the picker with a TikTok or Instagram link in it.
+
+The bookmarklet is `javascript:void(window.open("https://<server>/share?url="+encodeURIComponent(location.href),'_blank','noopener'))`:
+it reads the page's address and opens a Hearth tab. It adds nothing to the page and reads nothing else.
+
+### Importing liked and saved videos
+
+From TikTok's **Download your data** (JSON: `user_data_tiktok.json`, Activity → Like List / Favorite Videos; or
+the TXT files) and Instagram's **Download your information** (`likes/liked_posts.json`, `saved/saved_posts.json`,
+or the HTML version), as the .zip or the files in it (`reels-import.js`).
+
+- **Read on the device; never uploaded.** The e2e test checks that no request carries the file.
+- **Untrusted input:** 200 MB at most in all, 64 MB per file unpacked (a .zip entry that unpacks further is
+  stopped and skipped), 5,000 .zip entries, 3,000,000 JSON values, depth 64, 10,000 videos. JSON goes through
+  `JSON.parse` and is walked without recursion; the structure isn't relied on (every string is searched for
+  links), so a format change doesn't break it. Text and HTML are only searched. Only `.json`, `.txt` and `.html`
+  inside a .zip are read; Zip64, encrypted entries and other compression methods are skipped. Short links are left
+  out (they can't be checked without asking TikTok). TikTok's `tiktokv.com/share/video/<id>` links become TikTok's
+  own form.
+- It shows how many videos (TikTok, Instagram, duplicates left out), then adds them to:
+  - **My Reels** (all of them), or
+  - **a conversation**: the newest 100, 4 links to a message (what the feed shows from one message), one message
+    every 1.5 s (well within the server's 30-per-10-s limit), stopping with the reason if posting there isn't
+    allowed (slowmode, a timeout, a block).
+
+### My Reels
+
+A private feed (Home → My Reels, Settings → Reels, or "My Reels" in the picker): videos you share to yourself or
+import. It's kept in your **vault** (`my-reels.js`, `server/myreels.js`): sealed on your device with your personal
+vault key (only your identity key makes it), numbered and padded to 16 KB steps, stored as ciphertext
+(`GET/PUT /me/reels`, at most 512 KB sealed, 5,000 videos), and synced to your devices (`myreels:changed`). The
+server can't tell which videos are in it, or how many beyond the padded size. Each device keeps the newest sealed
+copy it opened, so a server handing back an older one can't bring back what you removed; a save that races another
+device's is refused as stale and made again on top of it. Each card has **Share to…** (the picker) and **Remove**.
+No scroll together there (it's yours alone).
+
 ## Limits
 
 - The feed is only what's been shared; videos from long ago appear as you scroll back (each page is decrypted on

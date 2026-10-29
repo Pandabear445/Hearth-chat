@@ -85,6 +85,8 @@ public class MainActivity extends BridgeActivity {
     // ({ origin or "", code }). pageApi: what the page's android.js understands (1 = from before these existed).
     private String pendingOpen;
     private String[] pendingInvite;
+    // A TikTok or Instagram link shared to the app (ShareLinks), for the page's share picker.
+    private String pendingShare;
     private boolean pageReady;
     private int pageApi = 1;
 
@@ -323,6 +325,7 @@ public class MainActivity extends BridgeActivity {
                     pageReady = server;
                     pageApi = Math.max(1, m.optInt("v", 1));
                     reply.postMessage(info(server).toString());
+                    if (server && pendingShare != null) deliverShare(); // (an older page: /share instead)
                     break;
                 }
                 case "setServer": {
@@ -377,6 +380,7 @@ public class MainActivity extends BridgeActivity {
             if (pendingOpen != null) { o.put("open", pendingOpen); pendingOpen = null; }
             String code = takeInvite();
             if (code != null) o.put("invite", code);
+            if (pendingShare != null && pageApi >= 3) { o.put("share", pendingShare); pendingShare = null; }
         }
         return o;
     }
@@ -452,6 +456,19 @@ public class MainActivity extends BridgeActivity {
             openPath(open);
             return;
         }
+        // Share → Hearth: a link from another app. Only a TikTok or Instagram link goes on, to the page's picker.
+        if (Intent.ACTION_SEND.equals(intent.getAction()) && "text/plain".equals(intent.getType())) {
+            String link = ShareLinks.extract(intent.getStringExtra(Intent.EXTRA_TEXT), intent.getStringExtra(Intent.EXTRA_SUBJECT));
+            intent.setAction(Intent.ACTION_MAIN);
+            intent.removeExtra(Intent.EXTRA_TEXT);
+            if (link == null) {
+                Toast.makeText(this, "Hearth takes links to TikTok videos and Instagram reels and posts.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            pendingShare = link;
+            if (pageReady) deliverShare();
+            return;
+        }
         // An invite link.
         if (Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
             String[] invite = InviteLinks.parse(intent.getData().toString());
@@ -487,6 +504,17 @@ public class MainActivity extends BridgeActivity {
         String code = pendingInvite[1];
         pendingInvite = null;
         return code;
+    }
+
+    // The page is open: a current page opens its share picker in place; an older one loads /share with the link.
+    private void deliverShare() {
+        String link = pendingShare;
+        if (link == null || serverOrigin().isEmpty()) return;
+        pendingShare = null;
+        if (pageApi >= 3) toServerPage("hearth-share", JSONObject.quote(link));
+        else {
+            try { getBridge().getWebView().loadUrl(InviteLinks.normalOrigin(serverOrigin()) + "/share?url=" + java.net.URLEncoder.encode(link, "UTF-8")); } catch (Exception ignored) { }
+        }
     }
 
     // The page is already open: a current page shows the "Join a server" box in place (a call keeps going); an

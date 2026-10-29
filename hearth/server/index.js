@@ -1458,6 +1458,8 @@ app.get('/manifest.webmanifest', (req, res) => {
       { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
       { src: '/icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
+    // Chrome on Android, with Hearth installed: Hearth in the share sheet. The link opens the share picker (share.js).
+    share_target: { action: '/share', method: 'GET', params: { title: 'title', text: 'text', url: 'url' } },
     shortcuts: [
       { name: 'Direct messages', url: '/?open=messages', icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }] },
       { name: 'Friends', url: '/?open=friends', icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }] },
@@ -1484,7 +1486,8 @@ app.get('/sw.js', (req, res) => {
 // The app's page carries the instance's name and tagline for link previews (server/invitepreview.js, set up below
 // with the other routes); it's answered here, before the static files.
 let appPage = null;
-app.get(['/', '/index.html'], (req, res, next) => (appPage ? appPage(req, res) : next()));
+// (/share: a link shared to Hearth, from an installed web app's share sheet or the bookmarklet; the app reads it.)
+app.get(['/', '/index.html', '/share'], (req, res, next) => (appPage ? appPage(req, res) : next()));
 app.get('/download', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'download.html')));
 app.get('/terms', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'terms.html')));
 // This server's privacy policy, a page the operator publishes somewhere (https only). The app links to it at sign-up
@@ -2475,7 +2478,7 @@ function eraseAccount(row) {
     // Their settings and bookmarks (saved messages with their notes, read positions, mention counts, notification
     // choices, folders and other preferences), and which servers they were in (former_members only matters to
     // someone who could come back).
-    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'soundboard_items', 'event_rsvps', 'word_filters', 'personal_nicknames',
+    for (const t of ['push_subs', 'user_ips', 'auth_tokens', 'server_keys', 'user_feeds', 'study_items', 'soundboard_items', 'event_rsvps', 'word_filters', 'personal_nicknames', 'my_reels',
       'saved_messages', 'read_states', 'mention_marks', 'notify_prefs', 'user_prefs', 'former_members']) db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(row.id);
     db.prepare('DELETE FROM profile_comments WHERE profile_id = ?').run(row.id); // the comments on their profile page go with it
     // Call relays they offered (Settings → Help host) leave everyone's calls and backups (everyone's apps are told to
@@ -6883,6 +6886,8 @@ WFILTER = require('./wordfilter')({ api, auth, db, fail, rateLimit, limitNet, re
   emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
 // Personal nicknames (server/personalnames.js): names you give people that only you see, sealed by your app.
 require('./personalnames')({ api, auth, db, fail, rateLimit, limitNet, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
+// My Reels (server/myreels.js): your private feed of TikToks and reels, sealed by your app.
+require('./myreels')({ api, auth, db, fail, rateLimit, limitNet, emitTo: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
 function fundingTotals() {
   const f = funding();
   const auto = MONEY.raisedThisMonth();

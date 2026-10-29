@@ -11,6 +11,8 @@ const html = `<!doctype html><html><body style="margin:0;background:#0d0c13;colo
 <h2 style="margin:0 0 4px">Hearth · Reels tab and scroll together</h2><p style="margin:0 0 18px;color:#b9b2c9">Stand-in players (the e2e test's fake TikTok and Instagram pages); desktop 1400×900 and a 390×844 phone.</p>
 <div class="row">${fig('desktop-cover', 'Desktop: before the first tap ("Load when I tap")', 'd')}${fig('desktop-together', 'Desktop: scrolling together, who swiped', 'd')}</div>
 <div class="row">${fig('desktop-reel', 'Desktop: an Instagram reel, ready check and countdown', 'd')}
-${fig('phone-cover', 'Phone: full screen, before the tap', 'p')}${fig('phone-video', 'Phone: a TikTok, muted until a tap', 'p')}${fig('phone-add', 'Phone: + Add a link', 'p')}</div></body></html>`;
+${fig('phone-cover', 'Phone: full screen, before the tap', 'p')}${fig('phone-video', 'Phone: a TikTok, muted until a tap', 'p')}${fig('phone-add', 'Phone: + Add a link', 'p')}</div>
+<h3 style="margin:8px 0 12px">Getting videos in</h3>
+<div class="row">${fig('phone-share', 'Phone: Share → Hearth picker', 'p')}${fig('phone-import', 'Phone: importing liked videos', 'p')}${fig('desktop-import', 'Desktop: the import screen (read on the device)', 'd')}</div></body></html>`;
 const b = await chromium.launch(); const p = await b.newPage({ viewport: { width: 1452, height: 900 } });
 await p.setContent(html); await p.screenshot({ path: out, fullPage: true }); await b.close();

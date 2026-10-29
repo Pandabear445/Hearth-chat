@@ -13,6 +13,9 @@ What the app adds on top of the web page (in `native/MainActivity.java`):
   away** through a push app (see below).
 * **Calls keep going** with the screen locked or the app in the background, with an "In a call" notification
   that has *Hang up*.
+* **Share → Hearth:** a TikTok or Instagram link shared from another app opens Hearth's share picker (pick a
+  conversation or My Reels; nothing is sent before that). Only an https link on TikTok's or Instagram's own names is
+  taken from what's shared (`native/ShareLinks.java`), and the page checks it again.
 * **Invite links open in the app:** `hearth://invite/CODE`, and `https://your-server/invite/CODE` for an app
   built for your server (see *Invite links* below).
 * **Saving files** (attachments, exports) to *Downloads/Hearth*.

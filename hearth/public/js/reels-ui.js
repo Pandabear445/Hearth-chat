@@ -17,17 +17,23 @@ import { h, clear, icon, toast } from './util.js';
 import { tiktokAdapter, instagramAdapter } from './watch.js';
 import { resolveSocial } from './social-embed.js';
 import { parseSocialUrl, KIND_NAME, itemLabel } from './social.js';
+import { socialLinksIn } from './share.js';
+import { linkOf } from './my-reels.js';
 import { feedItems, indexOf, isItem, step, liveRange, playersAllowed, cleanSession, withLine, swipedText, sharedPosition, COUNTDOWN_MS } from './reels.js';
 
 const MORE_WITHIN = 4; // items from the end at which an older page is asked for
 const PAGES_PER_ASK = 4; // pages read in a row looking for more videos before waiting to be asked again
 const FIND_PAGES = 12; // pages read looking for the video everyone moved to
 const DRIFT = 1.6;
+const PASTE_MAX = 20; // links added from one paste or drop
+const UNDO_MS = 4000;
+export const MY_REELS = 'me'; // the private feed's key (My Reels, my-reels.js)
 // append(), leaving out what isn't there (DOM append would write "null").
 const add = (el, ...kids) => { el.append(...kids.flat().filter((k) => k != null && k !== false)); return el; };
 
 // The tap that lets players load ("Load when I tap"), for as long as the app is open.
 let consented = false;
+const offered = new Set(); // copied links already offered (the desktop app): each once
 
 export function createReels(deps) {
   let st = null;
@@ -80,20 +86,38 @@ export function createReels(deps) {
       session: null, viewers: [], offset: 0, following: false, lastSeq: 0, unmuted: false, quietUntil: 0,
       timer: null, countTimer: null, startTimer: null, observer: null, addOpen: false, followTo: null, followUntil: 0,
       gen: 0, searched: null, myGo: null, left: false, swipeToastAt: 0,
+      mine: key === MY_REELS, pending: null, offered: null, off: [],
     };
-    for (const m of deps.loaded(key)) st.msgs.set(m.id, m);
-    st.oldest = oldestId();
     build();
-    rebuild();
-    if (st.items.length < 3) more();
-    deps.socket().emit('reels:join', { key }, (r) => { if (st && st.key === key && r && r.state) onState(r.state); });
+    if (st.mine) {
+      // My Reels: your private feed, from your vault. No scroll together, reactions or messages here.
+      st.hasMore = false;
+      const fill = (list) => { if (!st || !st.mine) return; st.msgs = new Map(list.map((e) => [myId(e), myMessage(e)])); rebuild(); };
+      st.off.push(deps.myReels.onChange(fill));
+      fill(deps.myReels.list());
+      deps.myReels.ready().catch((e) => toast(e.message, 'error'));
+    } else {
+      for (const m of deps.loaded(key)) st.msgs.set(m.id, m);
+      st.oldest = oldestId();
+      rebuild();
+      if (st.items.length < 3) more();
+      deps.socket().emit('reels:join', { key }, (r) => { if (st && st.key === key && r && r.state) onState(r.state); });
+    }
+    document.addEventListener('paste', onPaste);
     watchPlace();
     place();
+    offerClipboard();
   }
+  // My Reels' videos as messages of yours, so the feed treats them like any other.
+  const myId = (e) => `mr${e.k}${e.id}`;
+  const myMessage = (e) => ({ id: myId(e), createdAt: e.at, authorId: deps.me(), dec: { t: linkOf(e) }, reactions: [], myEntry: `${e.k}:${e.id}` });
   function hide() {
     if (!st) return;
     const key = st.key;
-    deps.socket().emit('reels:leave', { key }, () => {});
+    if (!st.mine) deps.socket().emit('reels:leave', { key }, () => {});
+    document.removeEventListener('paste', onPaste);
+    st.off.forEach((f) => f());
+    if (st.pending) { clearTimeout(st.pending.timer); st.pending.commit(); } // an undo bar left showing: it goes ahead
     for (const pl of st.players.values()) pl.destroy();
     if (st.observer) st.observer.disconnect();
     clearInterval(st.timer); clearInterval(st.countTimer); clearTimeout(st.startTimer);
@@ -104,7 +128,7 @@ export function createReels(deps) {
 
   // ---- the feed
   const oldestId = () => { let o = null; for (const id of st.msgs.keys()) if (!o || id < o) o = id; return o; };
-  const ok = (m) => deps.ok(m);
+  const ok = (m) => (st && st.mine ? true : deps.ok(m));
   function rebuild() {
     const was = st.items[st.index];
     st.items = feedItems([...st.msgs.values()], { ok, text: deps.text });
@@ -172,11 +196,22 @@ export function createReels(deps) {
     st.side = h('aside', { class: 'reels-side' });
     st.cover = h('div', { class: 'reels-cover', hidden: true });
     st.count = h('div', { class: 'reels-count', hidden: true, 'aria-live': 'assertive' });
+    st.undo = h('div', { class: 'reels-undo', hidden: true, role: 'status', 'aria-live': 'polite' });
+    st.offer = h('div', { class: 'reels-offer', hidden: true, role: 'status' });
     const top = h('div', { class: 'reels-top' },
       h('button', { class: 'icon-btn reels-back', 'aria-label': 'Back to the chat', 'data-tip': 'Back to the chat', onclick: () => deps.setTab('chat') }, icon('chevronLeft')),
-      h('div', { class: 'reels-title' }, h('strong', null, 'Reels'), h('span', null, deps.title(st.key))),
+      h('div', { class: 'reels-title' }, h('strong', null, st.mine ? 'My Reels' : 'Reels'), h('span', null, st.mine ? 'Private: only you see these' : deps.title(st.key))),
       h('button', { class: 'icon-btn reels-add-btn', 'aria-label': 'Add a link', 'data-tip': 'Add a link', onclick: () => { st.addOpen = !st.addOpen; drawSide(); } }, icon('plus')));
-    L.append(top, st.bar, h('div', { class: 'reels-body' }, h('div', { class: 'reels-main' }, st.feed, st.empty, st.cover, st.count), st.side));
+    L.append(top, st.bar, h('div', { class: 'reels-body' }, h('div', { class: 'reels-main' }, st.feed, st.empty, st.cover, st.count, st.offer, st.undo), st.side));
+    // A link dropped anywhere on the tab is added (like pasting it).
+    L.ondragover = (e) => { if (!st || !e.dataTransfer || ![...e.dataTransfer.types].some((t) => t === 'text/uri-list' || t === 'text/plain')) return; e.preventDefault(); L.classList.add('dropping'); };
+    L.ondragleave = (e) => { if (e.target === L || !L.contains(e.relatedTarget)) L.classList.remove('dropping'); };
+    L.ondrop = (e) => {
+      L.classList.remove('dropping');
+      if (!st || !e.dataTransfer) return;
+      e.preventDefault();
+      addLinks(e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain'), 'drop');
+    };
     st.observer = new IntersectionObserver((entries) => {
       for (const e of entries) if (e.isIntersecting && e.intersectionRatio >= 0.6) onSettle(+e.target.dataset.i);
     }, { root: st.feed, threshold: [0.6] });
@@ -246,6 +281,13 @@ export function createReels(deps) {
   function drawActions(card) {
     const it = card._it; const m = it.m;
     const me = deps.me();
+    if (st && st.mine) {
+      add(clear(card._actions),
+        h('button', { class: 'reel-act', 'aria-label': 'Share to a conversation', 'data-tip': 'Share to…', onclick: () => deps.shareTo(it.p.link || it.p.url) }, icon('forward')),
+        h('button', { class: 'reel-act', 'aria-label': 'Remove from My Reels', 'data-tip': 'Remove from My Reels', onclick: () => deps.myReels.remove([m.myEntry]).catch((x) => toast(x.message, 'error')) }, icon('trash')),
+        h('a', { class: 'reel-act', href: it.p.url, target: '_blank', rel: 'noopener noreferrer nofollow', 'aria-label': `Open on ${KIND_NAME[it.p.kind]}`, 'data-tip': `Open on ${KIND_NAME[it.p.kind]}` }, icon('external')));
+      return;
+    }
     add(clear(card._actions), 
       ...(m.reactions || []).slice(0, 6).map((r) => {
         const mine = r.userIds.includes(me);
@@ -501,6 +543,12 @@ export function createReels(deps) {
     const s = st.session;
     const me = deps.me();
     clear(st.bar);
+    if (st.mine) {
+      add(st.bar, h('span', { class: 'reels-with' }, `${st.items.length} video${st.items.length === 1 ? '' : 's'}`),
+        h('span', { class: 'reels-sub' }, 'Sealed in your vault: the server can’t see them.'),
+        h('button', { class: 'btn ghost sm', onclick: () => deps.openImport() }, icon('download'), 'Import'));
+      return;
+    }
     if (!s) {
       const others = st.viewers.filter((u) => u !== me);
       add(st.bar, 
@@ -537,7 +585,7 @@ export function createReels(deps) {
     if (!st) return;
     clear(st.side);
     st.side.classList.toggle('open', st.addOpen);
-    const why = deps.canSend(st.key);
+    const why = st.mine ? null : deps.canSend(st.key);
     const input = h('input', { class: 'input', placeholder: 'Paste a TikTok or Instagram link', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'TikTok or Instagram link' });
     const pv = deps.previewChoice();
     const box = h('input', { type: 'checkbox', checked: pv === 'always', disabled: pv === 'off' });
@@ -545,7 +593,10 @@ export function createReels(deps) {
       e.preventDefault();
       const url = input.value.trim();
       if (!parseSocialUrl(url)) return toast('That isn’t a link to one TikTok video or Instagram reel or post.', 'error');
-      try { await deps.send(st.key, url, { preview: box.checked }); input.value = ''; st.addOpen = false; drawSide(); toast('Shared in the chat.'); } catch (x) { if (x && x.message) toast(x.message, 'error'); }
+      try {
+        if (st.mine) { await deps.myReels.add([parseSocialUrl(url)]); toast('Added to My Reels.'); } else { await deps.send(st.key, url, { preview: box.checked }); toast('Shared in the chat.'); }
+        input.value = ''; st.addOpen = false; drawSide();
+      } catch (x) { if (x && x.message) toast(x.message, 'error'); }
     };
     add(st.side, 
       h('div', { class: 'reels-nav' },
@@ -555,16 +606,76 @@ export function createReels(deps) {
       why ? h('p', { class: 'field-hint' }, why) : h('form', { class: 'reels-add', onsubmit: submit },
         h('span', { class: 'field-label' }, 'Add a link'),
         input,
-        pv === 'off' ? null : h('label', { class: 'row gap tight field-hint' }, box, 'With a preview card (your Hearth server fetches the link)'),
-        h('button', { class: 'btn primary sm', type: 'submit' }, 'Share'),
-        h('span', { class: 'field-hint' }, 'It’s sent as a message here, encrypted like any other, so it shows in the chat too.')),
+        pv === 'off' || st.mine ? null : h('label', { class: 'row gap tight field-hint' }, box, 'With a preview card (your Hearth server fetches the link)'),
+        h('button', { class: 'btn primary sm', type: 'submit' }, st.mine ? 'Add' : 'Share'),
+        h('span', { class: 'field-hint' }, st.mine ? 'Kept in your vault, sealed: only you see My Reels.' : 'It’s sent as a message here, encrypted like any other, so it shows in the chat too. You can also paste a link anywhere on this tab, or drop one on it.')),
+      h('button', { class: 'btn ghost sm', onclick: () => deps.openImport(st.mine ? null : st.key) }, icon('download'), 'Import liked & saved videos'),
       st.loading ? h('p', { class: 'field-hint' }, 'Looking further back…') : null,
-      h('p', { class: 'field-hint reels-limits' }, 'This feed is the videos shared in this conversation. TikTok’s For You and Instagram’s Reels feeds can’t be shown in other apps.'));
+      h('p', { class: 'field-hint reels-limits' }, st.mine ? 'Your private feed. TikTok’s For You and Instagram’s Reels feeds can’t be shown in other apps.' : 'This feed is the videos shared in this conversation. TikTok’s For You and Instagram’s Reels feeds can’t be shown in other apps.'));
+  }
+
+  // ---- paste, drop, and a link you copied (the desktop app)
+  // Ctrl/⌘+V anywhere on the tab (not in a text box) adds the TikTok and Instagram links in what was pasted.
+  function onPaste(e) {
+    if (!st || !layer || layer.hidden || !e.clipboardData) return;
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable]')) return;
+    if (document.querySelector('.modal-backdrop')) return;
+    const text = e.clipboardData.getData('text/plain') || e.clipboardData.getData('text/uri-list');
+    if (!text) return;
+    e.preventDefault();
+    addLinks(text, 'paste');
+  }
+  // Adds the links found in text, after a few seconds with Undo (nothing is sent before that).
+  function addLinks(text, how) {
+    if (!st) return;
+    const known = new Set(st.items.map((x) => x.vid));
+    const found = socialLinksIn(String(text || ''), PASTE_MAX);
+    const links = found.filter((p) => !known.has(`${p.kind}:${p.id || p.short}`));
+    if (!found.length) return toast(how === 'drop' ? 'Drop a TikTok or Instagram link here.' : 'There’s no TikTok or Instagram link in what you pasted.');
+    if (!links.length) return toast(found.length === 1 ? 'That video is already here.' : 'Those videos are already here.');
+    if (!st.mine && deps.canSend(st.key)) return toast(deps.canSend(st.key), 'error');
+    if (st.pending) { clearTimeout(st.pending.timer); st.pending.commit(); }
+    const key = st.key; const mine = st.mine;
+    const n = links.length;
+    const what = `${n} video${n === 1 ? '' : 's'}`;
+    const pending = {
+      timer: 0,
+      commit: () => {
+        if (st && st.pending === pending) { st.pending = null; st.undo.hidden = true; }
+        const done = mine ? deps.myReels.add(links) : deps.sendLinks(key, links.map((p) => p.url));
+        Promise.resolve(done).catch((x) => toast((x && x.message) || 'Couldn’t add that.', 'error'));
+      },
+    };
+    pending.timer = setTimeout(pending.commit, UNDO_MS);
+    st.pending = pending;
+    clear(st.undo).append(h('span', null, mine ? `Adding ${what} to My Reels` : `Sharing ${what} here`),
+      h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { clearTimeout(pending.timer); if (st && st.pending === pending) { st.pending = null; st.undo.hidden = true; } toast('Not added.'); } }, 'Undo'));
+    st.undo.hidden = false;
+  }
+  // In the desktop app only, and only if this server may already read the clipboard (asked once before, and allowed):
+  // a TikTok or Instagram link you copied is offered, never added by itself. A browser never reads the clipboard here.
+  async function offerClipboard() {
+    const D = window.hearthDesktop;
+    if (!D || !navigator.permissions || !navigator.clipboard || !navigator.clipboard.readText) return;
+    const key = st.key;
+    try {
+      const p = await navigator.permissions.query({ name: 'clipboard-read' });
+      if (p.state !== 'granted' || !st || st.key !== key) return;
+      const text = await navigator.clipboard.readText();
+      const link = socialLinksIn(text, 1)[0];
+      if (!link || !st || st.key !== key || st.items.some((x) => x.vid === `${link.kind}:${link.id || link.short}`) || offered.has(link.url)) return;
+      offered.add(link.url);
+      clear(st.offer).append(h('span', null, `Add the ${itemLabel(link)} you copied?`),
+        h('button', { class: 'btn primary sm', type: 'button', onclick: () => { st.offer.hidden = true; addLinks(link.url, 'paste'); } }, 'Add'),
+        h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { st.offer.hidden = true; } }, 'Not now'));
+      st.offer.hidden = false;
+    } catch { /* no permission API, or not allowed */ }
   }
 
   // ---- the app tells it what changed
   function onNew(key, m) {
-    if (!st || st.key !== key || !m || m.threadId) return;
+    if (!st || st.mine || st.key !== key || !m || m.threadId) return;
     st.msgs.set(m.id, m);
     const mine = m.authorId === deps.me();
     rebuild();
@@ -573,7 +684,7 @@ export function createReels(deps) {
   }
   // An edit: the feed changes only if its videos did (a fixed typo doesn't reload the one playing).
   function onUpdate(key, m) {
-    if (!st || st.key !== key || !st.msgs.has(m.id)) return;
+    if (!st || st.mine || st.key !== key || !st.msgs.has(m.id)) return;
     const old = st.msgs.get(m.id);
     st.msgs.set(m.id, m);
     const vids = (x) => feedItems([x], { ok, text: deps.text }).map((it) => it.vid).join(' ');
@@ -581,7 +692,7 @@ export function createReels(deps) {
     rebuild();
   }
   function onDelete(key, ids) {
-    if (!st || (key && st.key !== key)) return;
+    if (!st || st.mine || (key && st.key !== key)) return;
     let changed = false;
     for (const id of ids) if (st.msgs.delete(id)) changed = true;
     if (changed) rebuild();
@@ -594,7 +705,7 @@ export function createReels(deps) {
     for (const c of st.cards.values()) if (c._it.mid === mid) drawActions(c);
   }
   // After a reconnect: back in the room, still following or not as this person chose.
-  function rejoin() { if (st) deps.socket().emit('reels:join', { key: st.key, follow: !st.left }, (r) => { if (st && r && r.state) onState(r.state); }); }
+  function rejoin() { if (st && !st.mine) deps.socket().emit('reels:join', { key: st.key, follow: !st.left }, (r) => { if (st && r && r.state) onState(r.state); }); }
   function setMode() { if (!st) return; drawCover(); for (const k of [...st.players.keys()]) dropPlayer(k); for (const c of st.cards.values()) drawPlaceholder(c); players(); }
 
   return {

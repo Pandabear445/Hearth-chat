@@ -1581,6 +1581,16 @@ CREATE TABLE IF NOT EXISTS personal_nicknames (
 );
 `);
 
+// My Reels (server/myreels.js): someone's private feed of TikToks and reels, sealed by their app with their personal
+// vault key (ciphertext only). A new table only, so the schema version stays.
+db.exec(`
+CREATE TABLE IF NOT EXISTS my_reels (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  data TEXT,
+  updated_at INTEGER NOT NULL
+);
+`);
+
 // v19 (join history): "New members can't read messages from before they joined", a server setting (off by default;
 // server/joinhistory.js). hide_history: the setting. join_rotate_at: when a join that's waiting for the next key may
 // have it (joins close together share one new key; NULL when nobody is waiting). members.key_from: for someone who

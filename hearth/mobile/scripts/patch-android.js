@@ -65,6 +65,12 @@ function inviteFilters(server) {
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="hearth" android:host="invite" />
+            </intent-filter>
+            <!-- Share → Hearth: a TikTok or Instagram link from another app (ShareLinks.java) -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>`];
   const link = appLinkHost(server);
   if (link) {

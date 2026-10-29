@@ -4,7 +4,7 @@ Generated from the code by enumerating every `api.*`/`app.*` route and `socket.o
 then annotated during the security audit (which middleware and checks actually run, limits, tests). "Gaps" lists
 what the audit found missing at the time; items fixed since are tracked in [ENGINEERING-REPORT.md](ENGINEERING-REPORT.md).
 
-Routes: 390 HTTP, 26 socket events.
+Routes: 393 HTTP, 26 socket events.
 
 ## HTTP routes
 
@@ -288,6 +288,9 @@ Routes: 390 HTTP, 26 socket events.
 | GET | `/api/invites/:code/preview` | server/invitepreview.js:141 |  |  |  |  |  |  |
 | POST | `/api/link-previews` | server/linkpreview.js:642 | session |  |  |  |  |  |
 | POST | `/api/social/resolve` | server/linkpreview.js | session | none (any signed-in account) | server/social.js parseSocial (TikTok/Instagram video links only) | 20/min per account, 60/min per network | social-embeds.test.js |  |
+| GET | `/api/me/reels` | server/myreels.js | session | own row only | none | 120/min | reels-intake.test.js |  |
+| PUT | `/api/me/reels` | server/myreels.js | session | own row only | sealed 'x1:' shape, 512 KB, base (409 stale) | 30/min, 600/h per account; 120/min per network | reels-intake.test.js |  |
+| GET | `/share` | server/index.js | none (the app's page) | | the app reads it | | reels-intake.test.js |  |
 | POST | `/api/pay/memberships` | server/memberships.js:168 | none (webhook; Stripe-Signature HMAC) | HMAC-SHA256 v1, 300 s tolerance; metadata tier must belong to metadata server; user must exist; role only if member | event type switch; subscription re-fetched from Stripe for invoice.paid | memberships-hook:<ip> 600/min | memberships.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | none beyond admin-10 (tier role perms not re-checked at grant time) |
 | GET | `/api/servers/:id/memberships` | server/memberships.js:196 | session | member of server (requireServer); owner view if owner_id; yes | none | none | memberships.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | none |
 | POST | `/api/servers/:id/memberships/tiers/:tid/checkout` | server/memberships.js:221 | session | member of server; not the server owner; tier belongs to server and active; not already live | price/currency/fee/destination from DB | membership-checkout:<uid> 20/h | memberships.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | success_url uses Host header when PUBLIC_URL unset (self-only effect). |

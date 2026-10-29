@@ -638,7 +638,7 @@ test('android-push-18: the page subscribes what the app hands it, replaces the o
   // android.js: a page that finds a registration but no sign-in (signed out while the app was closed) removes it.
   const bridgeJs = read('public', 'js', 'android.js');
   assert.match(bridgeJs, /m\.push\.state === 'registered' && !localStorage\.getItem\('hearth\.token'\)\) androidApp\.push\.unregister\(\)/);
-  assert.match(bridgeJs, /send\(\{ type: 'hello', v: 2 \}\)/);
+  assert.match(bridgeJs, /send\(\{ type: 'hello', v: 3 \}\)/, 'v: 3 takes shared links too (share.js)');
   // The call notification follows the call (started and stopped from the voice engine's changes).
   assert.match(js, /androidApp\.callState\(\{ inCall: !!voice\.channelId/);
   assert.match(js, /androidApp\.onHangUp = \(\) => \{ if \(voice && voice\.channelId\) \{ voice\.leave\(\)/);

@@ -9,6 +9,7 @@ import { openCropper } from './cropper.js';
 import { modal, confirmDialog, field } from './ui.js';
 import { runExport, EXPORT_LIMITS, quietNow } from './usability.js';
 import { androidApp } from './android.js';
+import { bookmarklet } from './share.js';
 import { reasonText } from './android-push.js';
 import { desktopSettingsSection } from './desktop-settings.js';
 import { englishHere } from './spelling.js';
@@ -84,7 +85,7 @@ function privacyLink(cfg) {
 // Closely related pages share one entry and switch with tabs at the top (SUBTABS), which keeps the list short.
 const TAB_GROUPS = [
   ['Account', [['profile', 'Profile', 'user'], ['account', 'Security', 'lock'], ['privacy', 'Privacy & safety', 'shield'], ['study', 'Study tools', 'graduation']]],
-  ['App', [['appearance', 'Appearance', 'palette'], ['chat', 'Chat', 'message'], ['notifications', 'Notifications', 'bell'], ['voice', 'Voice & video', 'mic'], ['soundboard', 'Soundboard', 'music'], ['keybinds', 'Keybinds', 'monitor'], ['apps', 'Apps & devices', 'download']]],
+  ['App', [['appearance', 'Appearance', 'palette'], ['chat', 'Chat', 'message'], ['notifications', 'Notifications', 'bell'], ['voice', 'Voice & video', 'mic'], ['soundboard', 'Soundboard', 'music'], ['reels', 'Reels', 'play'], ['keybinds', 'Keybinds', 'monitor'], ['apps', 'Apps & devices', 'download']]],
   ['Servers', [['servers', 'Server settings', 'gear'], ['host', 'Help host', 'globe'], ['instance', 'Instance', 'monitor', 'admin']]],
 ];
 const SUBTABS = {
@@ -154,7 +155,7 @@ export function openSettings(app, tab = 'profile') {
         class: `set-subtab${k === current ? ' active' : ''}`, role: 'tab', 'aria-selected': String(k === current), onclick: () => go(k),
       }, label))));
     }
-    const views = { soundboard: (a) => a.soundboard.editor(), study: studyTab, keybinds: keybindsTab, activity: activityTab, page: pageEditorTab, instance: instanceTab, apps: appsTab, layout: layoutTab, profile: profileTab, account: accountTab, storage: storageTab, sessions: sessionsTab, voice: voiceTab, appearance: appearanceTab, chat: chatTab, notifications: notificationsTab, privacy: privacyTab, servers: serversTab, host: hostTab };
+    const views = { soundboard: (a) => a.soundboard.editor(), study: studyTab, keybinds: keybindsTab, activity: activityTab, page: pageEditorTab, instance: instanceTab, apps: appsTab, layout: layoutTab, profile: profileTab, account: accountTab, storage: storageTab, sessions: sessionsTab, voice: voiceTab, appearance: appearanceTab, chat: chatTab, reels: reelsTab, notifications: notificationsTab, privacy: privacyTab, servers: serversTab, host: hostTab };
     content.append(views[current](app, (d) => { dirty = d; }, go));
     content.scrollTop = 0;
   };
@@ -1528,6 +1529,28 @@ function socialPlayersSection(c, set) {
       h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Play videos in the chat'),
         h('span', { class: 'field-hint' }, 'TikTok videos and Instagram reels play right in the message. The player loads from TikTok or Instagram, which then see your IP address (and may set their own cookies in the player), so by default it waits for a tap. “Always load” loads them as messages show, except short TikTok links, which your Hearth server has to look up first.')),
       mode));
+}
+
+// Reels (docs/design/SCROLL-TOGETHER.md › Getting videos in): how TikToks and reels get into Hearth without copying
+// links by hand. The players' own setting stays in Chat (TikTok and Instagram).
+function reelsTab(app) {
+  let mark = '';
+  try { mark = bookmarklet(location.origin); } catch { /* an origin the bookmarklet can't name */ }
+  const link = mark ? h('a', { class: 'bookmarklet', href: mark, draggable: 'true', onclick: (e) => { e.preventDefault(); toast('Drag it to your bookmarks bar, then press it on a TikTok or Instagram video.'); } }, icon('play'), 'Send to Hearth') : null;
+  const phoneShare = window.HearthAndroid ? 'In the Hearth app, Share → Hearth on a TikTok or Instagram video picks where it goes.'
+    : 'On Android, install Hearth (the app, or Chrome’s Install app / Add to Home screen for this page) and Share → Hearth on a TikTok or Instagram video picks where it goes. An iPhone can’t share to a web page: copy the link and paste it on a Reels tab instead.';
+  return h('div', { class: 'set-form narrow' },
+    h('h2', { class: 'set-title' }, 'Reels'),
+    section('Share from TikTok and Instagram', h('p', { class: 'set-sub' }, phoneShare)),
+    section('On a computer',
+      h('p', { class: 'set-sub' }, 'Drag this to your bookmarks bar. On a TikTok or Instagram video, press it: Hearth opens with that video, and you pick where it goes. It only reads the address of the page you’re on.'),
+      link || h('p', { class: 'field-hint' }, 'Not available for this server’s address.'),
+      h('p', { class: 'set-sub' }, 'On any Reels tab you can also paste a link (Ctrl/⌘+V) or drop one on it.')),
+    section('Liked and saved videos',
+      h('p', { class: 'set-sub' }, 'Import the videos you liked or saved from TikTok’s or Instagram’s “Download your data” file. It’s read on this device and never uploaded.'),
+      h('div', { class: 'row gap' },
+        h('button', { class: 'btn', onclick: () => app.openReelsImport() }, icon('download'), 'Import'),
+        h('button', { class: 'btn ghost', onclick: () => { document.querySelector('.set-close')?.click(); app.openMyReels(); } }, icon('play'), 'Open My Reels'))));
 }
 
 // Spelling (spelling.js): everything happens on this device; nothing typed is looked up anywhere. In the desktop app,

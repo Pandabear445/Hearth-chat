@@ -23,7 +23,10 @@ import { renderPage } from './page.js';
 import { watchPlayer, dropWatchPlayer } from './watch.js';
 import { socialLinks, parseSocialUrl, playerMode } from './social.js';
 import { socialEmbedEl, resolveSocial } from './social-embed.js';
-import { createReels } from './reels-ui.js';
+import { createReels, MY_REELS } from './reels-ui.js';
+import { shareFromLocation, sharedLink, socialLinksIn, rankConversations, pushRecent, batches } from './share.js';
+import { createMyReels } from './my-reels.js';
+import { readExport } from './reels-import.js';
 import { initFeatures, pollEl, onPollUpdate, openPollCreator, voiceButton, voiceEl, openEvents, onEventsUpdate, eventsFor, loadEvents, repeatLabel, upcomingSection, onEventStarting, remindItems, startReminders, purgeReminders, reminderDeadlines, stopVoice, voicePlaying } from './features.js';
 import { rankRelays, chooseIce, relayTime, iceStale, usableIce, memberRelayHosts, avoidsMemberRelays, isMemberRelay, isRelay } from './relays.js';
 import { watchConnection } from './conn.js';
@@ -208,6 +211,9 @@ export const app = {
   P,
   get voice() { return voice; },
   soundboard: board,
+  // Settings → Reels (settings.js).
+  openReelsImport: () => openReelsImport(),
+  openMyReels: () => setView({ type: 'myreels' }),
   onMe(u) { setUser(u); renderUserPanel(); },
   checkAway: () => away && away.check(), // after "Away after" changes
   logout,
@@ -262,6 +268,10 @@ async function init() {
   if (resetToken) { history.replaceState(null, '', '/'); sessionStorage.setItem('hearth.resetToken', resetToken); } // keep it out of the address bar
   const m = location.pathname.match(/^\/invite\/([A-Za-z0-9]+)/);
   if (m) { sessionStorage.setItem('hearth.pendingInvite', m[1]); history.replaceState(null, '', '/'); }
+  // A TikTok or Instagram link shared to Hearth (/share?url=… from a share sheet or the bookmarklet): kept until
+  // signed in, then the share picker opens (share.js). The address bar goes back to / at once.
+  const shared = shareFromLocation(location);
+  if (shared.found) { sessionStorage.setItem('hearth.pendingShare', shared.link ? shared.link.url : ''); history.replaceState(null, '', '/'); }
   try { S.config = await api('GET', '/config'); } catch { S.config = { name: 'Hearth', iceServers: [] }; }
   // A disappearing timer inside a message counts only if it's one this server offers (disappear.js).
   setTimerChoices((S.config.disappearing || {}).choices);
@@ -1002,6 +1012,7 @@ function startApp() {
   });
   // Scroll together (reels-ui.js, server/reels.js).
   socket.on('reels:state', (x) => REELS.onState(x));
+  socket.on('myreels:changed', (x) => { if (x) MY.onRemote(x.updatedAt); }); // (its own saves it already has)
   socket.on('reels:invite', (x) => {
     if (!x || typeof x.key !== 'string' || REELS.key() === x.key) return;
     toast(`${nameInServer(currentServer(), getUser(x.by))} started scrolling together in ${convTitle(x.key)}: open its Reels tab to join.`);
@@ -1282,6 +1293,8 @@ async function loadBootstrap() {
   if (localStorage.getItem('hearth.push') === 'on') enablePush({ quiet: true }).catch(() => {});
   if (androidApp.on) androidPushAtStart(); else applePushAtStart();
   const invite = sessionStorage.getItem('hearth.pendingInvite');
+  const share = sessionStorage.getItem('hearth.pendingShare');
+  if (share !== null) { sessionStorage.removeItem('hearth.pendingShare'); openSharePicker(share); }
   if (invite) { sessionStorage.removeItem('hearth.pendingInvite'); openJoinModal(invite); }
   else {
     showUpdateNotes(); // (every start and reconnect: a note published while this app was asleep or offline shows too)
@@ -2011,6 +2024,7 @@ const textChannel = (server) => server.channels.find((c) => c.type === 'text');
 function setView(v) {
   const from = currentKey();
   S.view = v;
+  rememberRecent(currentKey());
   S.editing = null;
   if (S.panel === 'thread' && (!S.thread || S.thread.channelId !== v.channelId)) { S.panel = null; S.thread = null; }
   if (S.panel === 'pins' || (S.panel === 'threads' && (!S.threadsPanel || S.threadsPanel.channelId !== v.channelId))) S.panel = null;
@@ -3239,6 +3253,7 @@ function renderMain() {
   if (v.type === 'home') main.append(homeView());
   else if (v.type === 'friends') main.append(friendsView());
   else if (v.type === 'saved') main.append(savedView());
+  else if (v.type === 'myreels') main.append(reelsHost(MY_REELS));
   else if (v.type === 'people') main.append(peopleView());
   else if (v.type === 'updates') main.append(updates.view());
   else if (v.type === 'study') main.append(study.view());
@@ -3309,14 +3324,183 @@ async function sendReelLink(key, url, { preview }) {
   const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join('');
   await underWay(sendTo(key, null, { t: url, f: [], ...(l ? { l } : {}) }, null, nonce));
 }
+// ---- getting videos in (share.js): the share picker, links sent in messages, My Reels, importing
+const recentKey = () => `hearth.shareRecent.${S.me ? S.me.id : ''}`;
+const recentConvs = () => { try { const r = JSON.parse(localStorage.getItem(recentKey()) || '[]'); return Array.isArray(r) ? r.filter((k) => typeof k === 'string') : []; } catch { return []; } };
+function rememberRecent(key) {
+  if (!key || !S.me) return;
+  try { localStorage.setItem(recentKey(), JSON.stringify(pushRecent(recentConvs(), key))); } catch { /* private mode */ }
+}
+// Where a link can go: My Reels, then your DMs, group chats and the channels you may post in.
+function shareTargets() {
+  const out = [{ key: MY_REELS, name: 'My Reels', where: 'Private: only you see it', icon: 'lock' }];
+  for (const d of S.dms) {
+    if (S.blocked.has(d.userId)) continue;
+    out.push({ key: 'd:' + d.id, name: displayName(getUser(d.userId)), where: 'Direct message', icon: 'user', at: d.lastMessageAt || 0 });
+  }
+  for (const s of S.servers) {
+    if (isGroup(s)) { const c = textChannel(s); if (c && !photoPostBlock('c:' + c.id, null)) out.push({ key: 'c:' + c.id, name: groupName(s), where: 'Group chat', icon: 'people', at: s.lastMessageAt || 0 }); continue; }
+    for (const c of s.channels) if (hasChat(c) && !photoPostBlock('c:' + c.id, null)) out.push({ key: 'c:' + c.id, name: `#${c.name}`, where: s.name, icon: c.type === 'voice' ? 'speaker' : 'hash' });
+  }
+  // DMs and group chats by their last message, then channels as the servers list them.
+  return [out[0], ...out.slice(1).filter((x) => x.at !== undefined).sort((a, b) => b.at - a.at), ...out.slice(1).filter((x) => x.at === undefined)];
+}
+// Opens a conversation (or My Reels) on its Reels tab.
+function openReels(key) {
+  if (key === MY_REELS) return setView({ type: 'myreels' });
+  if (key.startsWith('d:')) return setView({ type: 'dm', dmId: key.slice(2), tab: 'reels' });
+  const s = serverOfChannel(key.slice(2));
+  if (s) setView(channelView(key.slice(2), s.id, { tab: 'reels' }));
+}
+// Links sent in a conversation: at most 4 to a message (what the feed shows from one), a message every 1.5 s.
+async function sendLinksTo(key, urls, onProgress) {
+  const groups = batches(urls, 4);
+  for (const [i, g] of groups.entries()) {
+    if (i) await new Promise((r) => setTimeout(r, 1500));
+    const why = photoPostBlock(key, null);
+    if (why) throw new Error(why);
+    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join('');
+    await sendTo(key, null, { t: g.join('\n'), f: [] }, null, nonce);
+    if (onProgress) onProgress(i + 1, groups.length);
+  }
+}
+// "Share to Hearth": pick where a TikTok or Instagram link goes (it came from a share sheet, the bookmarklet, the
+// Android app or My Reels). Nothing is sent until a place is picked; then the link goes as an ordinary encrypted
+// message (or into My Reels) and that place's Reels tab opens.
+function openSharePicker(raw) {
+  const p = typeof raw === 'string' ? sharedLink({ url: raw }) : null;
+  if (!p) return toast('Nothing to share: that wasn’t a link to one TikTok video or Instagram reel or post.', 'error');
+  const search = h('input', { class: 'input', type: 'search', placeholder: 'Search conversations', autocomplete: 'off', 'aria-label': 'Search conversations' });
+  const list = h('div', { class: 'share-list', role: 'list' });
+  const all = shareTargets();
+  let m;
+  const pick = async (t, btn) => {
+    [...list.querySelectorAll('button')].forEach((b) => { b.disabled = true; });
+    btn.querySelector('.share-name span').textContent = 'Sending…';
+    try {
+      if (t.key === MY_REELS) { const n = await MY.add([p]); toast(n ? 'Added to My Reels.' : 'That video is already in My Reels.'); }
+      else { await sendReelLink(t.key, p.url, { preview: (S.config.features || {}).linkPreviews !== false && P.chat.linkPreviews === 'always' }); toast(`Shared to ${t.name}.`); }
+      rememberRecent(t.key);
+      m.close();
+      openReels(t.key);
+    } catch (e) {
+      toast(e.message, 'error');
+      [...list.querySelectorAll('button')].forEach((b) => { b.disabled = false; });
+      btn.querySelector('.share-name span').textContent = t.where;
+    }
+  };
+  const draw = () => {
+    const shown = rankConversations(all, [MY_REELS, ...recentConvs()], search.value).slice(0, 60);
+    clear(list).append(...(shown.length ? shown.map((t) => {
+      const b = h('button', { class: 'share-row', type: 'button', role: 'listitem', onclick: () => pick(t, b) },
+        h('span', { class: 'share-ic' }, icon(t.icon)), h('span', { class: 'share-name' }, h('strong', null, t.name), h('span', null, t.where)));
+      return b;
+    }) : [h('p', { class: 'muted-p' }, 'No conversation matches.')]));
+  };
+  search.addEventListener('input', draw);
+  draw();
+  m = modal({
+    title: 'Share to Hearth', size: 'sm', className: 'share-pick',
+    body: h('div', { class: 'stack share-pick' },
+      h('div', { class: 'share-what' }, icon('play'), h('span', null, `${p.kind === 'tiktok' ? 'TikTok video' : p.type === 'p' ? 'Instagram post' : 'Instagram reel'} · ${p.url.replace(/^https:\/\/(www\.)?/, '')}`)),
+      search, list,
+      h('p', { class: 'field-hint' }, 'It’s sent as a message there, encrypted like any other, and opens in that conversation’s Reels tab. My Reels is private.')),
+    actions: [{ label: 'Cancel' }],
+  });
+  if (!isTouchUI()) setTimeout(() => search.focus(), 60);
+}
+// Importing your liked and saved videos from TikTok's or Instagram's data download (reels-import.js): read on this
+// device only, then added to My Reels (all of them) or shared in a conversation (up to IMPORT_SHARE_MAX, 4 to a message).
+const IMPORT_SHARE_MAX = 100;
+function openReelsImport(toKey = null) {
+  const input = h('input', { type: 'file', accept: '.zip,.json,.txt,.html,.htm,application/zip,application/json,text/plain,text/html', multiple: true, hidden: true });
+  const drop = h('label', { class: 'import-drop', tabindex: '0' }, icon('download'), h('strong', null, 'Choose your export (.zip, .json or .txt)'), h('span', { class: 'field-hint' }, 'or drop it here. It’s read on this device and never uploaded.'), input);
+  const out = h('div', { class: 'stack' });
+  let found = null; let busy = false;
+  const read = async (files) => {
+    if (!files.length || busy) return;
+    busy = true;
+    clear(out).append(h('p', { class: 'field-hint' }, 'Reading…'));
+    try {
+      const parts = [];
+      for (const f of files) parts.push({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
+      found = await readExport(parts);
+      drawFound();
+    } catch (e) { clear(out).append(h('p', { class: 'field-hint error' }, e.message || 'That file couldn’t be read.')); } finally { busy = false; }
+  };
+  input.addEventListener('change', () => read([...input.files]));
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); read([...e.dataTransfer.files]); });
+  const targets = shareTargets();
+  function drawFound() {
+    const n = found.items.length;
+    clear(out);
+    if (!n) { out.append(h('p', { class: 'field-hint error' }, `No TikTok or Instagram videos found in ${found.files} file${found.files === 1 ? '' : 's'}. Pick the JSON or TXT export, or the whole .zip.`)); return; }
+    const where = h('select', { class: 'input', 'aria-label': 'Add them to' }, targets.map((t) => h('option', { value: t.key }, t.key === MY_REELS ? 'My Reels (private)' : `${t.name} · ${t.where}`)));
+    where.value = toKey && targets.some((t) => t.key === toKey) ? toKey : MY_REELS;
+    const bar = h('div', { class: 'import-progress', hidden: true }, h('div'));
+    const note = h('p', { class: 'field-hint' });
+    const go = h('button', { class: 'btn primary', type: 'button' });
+    const say = () => {
+      const mine = where.value === MY_REELS;
+      const k = mine ? n : Math.min(n, IMPORT_SHARE_MAX);
+      go.textContent = `Add ${k} video${k === 1 ? '' : 's'}`;
+      note.textContent = mine ? 'Sealed in your vault: only you see My Reels, and the server can’t tell what’s in it.'
+        : `Shared as ${Math.ceil(k / 4)} message${k > 4 ? 's' : ''} of up to 4 links, one every 1.5 s, encrypted like any other. Everyone there will see them.${n > k ? ` The newest ${k} only: put the rest in My Reels.` : ''}`;
+    };
+    where.addEventListener('change', say);
+    go.onclick = async () => {
+      const key = where.value;
+      go.disabled = true; where.disabled = true; busy = true;
+      try {
+        if (key === MY_REELS) { const added = await MY.add(found.items); toast(`${added} new video${added === 1 ? '' : 's'} in My Reels.`); }
+        else {
+          bar.hidden = false;
+          await sendLinksTo(key, found.items.slice(0, IMPORT_SHARE_MAX).map((x) => x.link), (i, of) => { bar.firstChild.style.width = `${Math.round((i / of) * 100)}%`; });
+          toast('Shared.');
+        }
+        m.close();
+        openReels(key);
+      } catch (e) { toast(e.message, 'error'); go.disabled = false; where.disabled = false; } finally { busy = false; }
+    };
+    say();
+    out.append(h('div', { class: 'import-found' }, h('strong', null, `${n} video${n === 1 ? '' : 's'}`),
+      h('span', { class: 'field-hint' }, `${found.tiktok} TikTok · ${found.instagram} Instagram · ${found.duplicates} duplicate${found.duplicates === 1 ? '' : 's'} left out${found.capped ? ' · stopped at 10,000' : ''}`)),
+    h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Add them to'), where), note, bar, go);
+  }
+  let m = null;
+  m = modal({
+    title: 'Import liked & saved videos', size: 'sm',
+    body: h('div', { class: 'stack import-reels' },
+      h('p', { class: 'muted-p' }, 'Bring the videos you liked or saved on TikTok and Instagram into Hearth, from the copy of your data each site gives you.'),
+      h('details', null, h('summary', null, 'How to get it'),
+        h('p', { class: 'field-hint' }, 'TikTok: Settings and privacy → Account → Download your data → JSON → Request, then download it when it’s ready. Instagram: Accounts Center → Your information and permissions → Download your information → JSON (Likes and Saved are enough). Both take a while to be ready.')),
+      drop, out),
+    actions: [{ label: 'Close' }],
+  });
+}
+const MY = createMyReels({
+  api: (method, path, body) => api(method, path, body),
+  vaultKey: () => myVaultKey(),
+  me: () => S.me.id,
+  store: {
+    get: () => { try { const v = JSON.parse(localStorage.getItem(`hearth.myreels.${S.me.id}`) || 'null'); return v && Number.isSafeInteger(v.n) && typeof v.data === 'string' ? v : null; } catch { return null; } },
+    set: (v) => { try { localStorage.setItem(`hearth.myreels.${S.me.id}`, JSON.stringify(v)); } catch { /* full or private */ } },
+  },
+});
 const REELS = createReels({
+  myReels: MY,
+  shareTo: (link) => openSharePicker(link),
+  openImport: (key) => openReelsImport(key),
+  sendLinks: (key, urls) => sendLinksTo(key, urls),
   socket: () => socket,
   me: () => S.me && S.me.id,
   isPhone: () => isPhoneLayout(),
   mode: () => playerMode(P.chat),
   title: (key) => convTitle(key),
   inCall: (key) => !!voice && !!voice.channelId && voice.channelId === (key.startsWith('d:') ? 'dm:' + key.slice(2) : key.slice(2)),
-  setTab: (tab) => setConvTab(tab),
+  setTab: (tab) => (S.view.type === 'myreels' ? goHome() : setConvTab(tab)),
   loaded: (key) => ((S.msgs[key] && S.msgs[key].list) || []).filter((m) => m.dec),
   page: (key, before) => api('GET', msgUrl(key) + (before ? `?before=${encodeURIComponent(before)}` : '')),
   decrypt: (m) => decryptMessage(m),
@@ -3667,6 +3851,9 @@ function drawHeader(head) {
   } else if (v.type === 'updates') {
     head.append(h('div', { class: 'head-title' }, icon('rss', 'ic head-ic'), h('h1', null, 'Updates'), h('span', { class: 'head-topic' }, 'Topics, channels and projects you track')),
       headTools(h('button', { class: 'btn ghost sm', onclick: () => updates.trackDialog(() => renderMain()) }, icon('plus'), 'Track something')));
+  } else if (v.type === 'myreels') {
+    head.append(h('div', { class: 'head-title' }, icon('play', 'ic head-ic'), h('h1', null, 'My Reels'), h('span', { class: 'head-topic' }, 'Your private feed, sealed in your vault')),
+      headTools(h('button', { class: 'btn ghost sm', onclick: () => openReelsImport() }, icon('download'), 'Import')));
   } else if (v.type === 'saved') {
     head.append(h('div', { class: 'head-title' }, icon('bookmark', 'ic head-ic'), h('h1', null, 'Saved messages')),
       headTools(h('span', { class: 'head-note' }, 'Synced to your devices. Only you can see them. Saved messages from disappearing conversations disappear with them.')));
@@ -3754,6 +3941,7 @@ function homeView() {
   wrap.append(upcomingSlot);
   upcomingSection().then((sec) => { if (sec) upcomingSlot.replaceWith(sec); });
   if (pinned.length) wrap.append(section('Pinned conversations', null, h('div', { class: 'conv-cards' }, pinned.map(convCard))));
+  wrap.append(h('button', { class: 'btn ghost sm home-myreels', onclick: () => setView({ type: 'myreels' }) }, icon('play'), 'My Reels'));
   wrap.append(section('Recent conversations', h('button', { class: 'link-btn', onclick: () => openNewConversation() }, 'New message'),
     convs.length ? h('div', { class: 'conv-cards' }, convs.filter((c) => !favs.includes(c.fav)).slice(0, 6).map(convCard))
       : h('p', { class: 'muted-p' }, 'No conversations yet.')));
@@ -5459,7 +5647,9 @@ function openLinkFromHash() {
   m = hsh.match(/^#call\/((?:dm:)?[a-z0-9]{1,64})$/i);
   if (m) return openCallFromLink(m[1]);
   m = hsh.match(/^#invite\/([A-Za-z0-9]{2,64})$/);
-  if (m) openJoinModal(m[1]);
+  if (m) return openJoinModal(m[1]);
+  // A link shared to the Android app (android.js), or any #share= address: the share picker, nothing sent yet.
+  if (hsh.startsWith('#share=')) { const sh = shareFromLocation({ pathname: '/', search: '', hash: hsh }); openSharePicker(sh.link ? sh.link.url : ''); }
 }
 // A call notification was tapped: open the conversation, and ring again if the call is still going (onRing
 // skips calls you're already in, Do Not Disturb and rings already showing). Only calls the server rings ring here

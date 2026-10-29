@@ -5,6 +5,7 @@
 // Does nothing in browsers or the desktop app.
 import { createAndroidPush, safeOpenHash, safeInviteHash } from './android-push.js';
 import { underWay } from './auto-update.js';
+import { sharedLink, shareHash } from './share.js';
 
 const A = window.HearthAndroid;
 // push: null until the app says it can (an older app can't). ready: settles once the app answered (or didn't
@@ -14,6 +15,9 @@ export const androidApp = { on: !!A, version: '', notify: 'default', push: null,
 // Play doesn't allow an app to send people to pay outside Play's own billing. The web and the desktop app are
 // unchanged. The app's user agent (HearthAndroid, mobile/capacitor.config.json) counts too, for a web view too
 // old to have window.HearthAndroid.
+// A link shared to the app (mobile/native/ShareLinks.java): checked again here, and only a TikTok or Instagram link
+// becomes #share=…, which opens the share picker (nothing is sent until a conversation is picked).
+const safeShareHash = (link) => { const p = typeof link === 'string' ? sharedLink({ url: link }) : null; return p ? shareHash(p.url) : ''; };
 export const noPayments = androidApp.on || /\bHearthAndroid\b/.test((typeof navigator !== 'undefined' && navigator.userAgent) || '');
 
 if (A) {
@@ -36,16 +40,19 @@ if (A) {
       }
       go(safeOpenHash(m.open));
       go(safeInviteHash(m.invite));
+      go(safeShareHash(m.share));
       ready();
     } else if (m.type === 'pushState' && androidApp.push) androidApp.push._reply(m);
   };
-  // v: 2 tells the app this page takes notification taps and invites in place (older pages get reloaded).
-  send({ type: 'hello', v: 2 });
+  // v: 2 tells the app this page takes notification taps and invites in place (older pages get reloaded); v: 3, links
+  // shared to the app too (Share → Hearth: the share picker, share.js).
+  send({ type: 'hello', v: 3 });
   androidApp.switchServer = () => send({ type: 'changeServer' });
   androidApp.cancel = (tag) => send({ type: 'cancel', tag: String(tag) });
   window.addEventListener('hearth-push', (e) => { if (androidApp.push) androidApp.push._event(e.detail); });
   window.addEventListener('hearth-open', (e) => go(safeOpenHash(e.detail)));
   window.addEventListener('hearth-invite', (e) => go(safeInviteHash(e.detail)));
+  window.addEventListener('hearth-share', (e) => go(safeShareHash(e.detail)));
   window.addEventListener('hearth-hangup', () => { if (typeof androidApp.onHangUp === 'function') androidApp.onHangUp(); });
 
   // ---- calls: while one is on, the app runs a foreground service (a notification with Hang up) so Android
