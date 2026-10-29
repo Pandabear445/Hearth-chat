@@ -144,7 +144,7 @@ Found a problem? Please tell the server owner privately (not in a public channel
 | 87 | Secrets end up in the server log | Session tokens, `authKey`s, passwords, recovery keys, cookies, Authorization headers, ciphertext and request bodies are redacted centrally; the access log records route templates (never URLs) and a keyed hash of the user id; IPs are cut to /24 or /48 unless `LOG_FULL_IP=true` | `observability.test.js` |
 | 88 | Health checks leak internals, or a background job takes the server down | `/api/health/live` and `/ready` say only ok/degraded/fail and short codes; `/api/admin/health` is for instance admins. Job errors are caught, recorded and alerted, never fatal; a client hanging up mid-request can't crash the access log | `observability.test.js` |
 | 89 | Someone takes over a dropped call place | Rejoining a call after a dropped connection only works from the same session, within the grace window, re-checks permissions, and ends as soon as that session is signed out | `voice-reliability.test.js` |
-| 90 | The server slips an unlisted listener into a call | The app warns when it has a live call connection to someone the server never listed (after 3 s), and closes any connection to someone it doesn't list after 20 s, whatever the list holds (an empty list included). Not detected (§4): a server that lists the extra participant openly, or lists them again for a moment at least every 20 s, which restarts the 20 s (and someone listed once gets no warning) | `voice-reliability.test.js`, `call-handshake.test.js` › closed after 20 s even when its list is empty, `npm run test:voice` › hidden listener |
+| 90 | The server slips an unlisted listener into a call | The app warns when it has a live call connection to someone the server never listed (after 3 s), and closes any connection to someone it doesn't list after 20 s, whatever the list holds (an empty list included). A 1-to-1 call connects only with the person this device has the DM as being with (recorded when it first saw the DM): anyone else the server lists or has offer is refused with a warning before any connection is made, and the ring names that person, not whoever the server says is calling. Only a call this device knows rings, can be joined or connects: a DM it has (or, for a DM made since it started, the one "Message" opens with the caller, only if it's the one ringing), or a voice channel of one of its servers or groups, where a group's ring names only one of its members. Not detected (§4): in a server's or group's call, a server that lists the extra participant openly, or lists them again for a moment at least every 20 s, which restarts the 20 s (and someone listed once gets no warning) | `voice-reliability.test.js`, `call-handshake.test.js` › closed after 20 s even when its list is empty, › a 1-to-1 call connects only with the person this device has the DM as being with, › only a call this device knows rings, is joined or connects, › the first call in a DM made since this device started rings, `npm run test:voice` › hidden listener |
 | 91 | One account floods the server with ordinary requests | Every signed-in request counts toward a per-account ceiling (1200 a minute by default, `API_RATE_LIMIT`), on top of the tighter limits on sign-in, uploads, messages and the other sensitive routes. Bots have their own ceiling, and the routes that work without signing in limit themselves. Logging out is never refused | `scan-hardening.test.js` › per-account ceiling |
 | 92 | Someone guesses, probes or leaks a channel webhook address | The address carries a 256-bit secret, stored only as a SHA-256 hash and compared in constant time; a wrong id and a wrong secret get the same 404; 30 wrong addresses a minute per network (IPv6 per /64); the secret is shown once, and **New address** revokes the old one at once; create, change, re-key and delete are audit-logged by webhook id, never the secret | `webhooks.test.js`, `release-audit-server.test.js` › abuse-2: wrong webhook addresses are limited per IPv6 /64, not per address |
 | 93 | A webhook mass-pings, or passes as a member or as end-to-end encrypted | Pings are off by default and defused on the server before storage (no client pings, no mention marks, no pushes); only someone with Mention Everyone can turn them on. Posts come from a per-webhook bot account that can't sign in or use the bot API, are sealed at rest and labelled **Webhook · not end-to-end encrypted** | `webhooks.test.js`, e2e › webhooks |
@@ -232,12 +232,30 @@ Found a problem? Please tell the server owner privately (not in a public channel
   - **run the server on a machine you trust, keep it updated, and use `scripts/harden-vps.sh`** (firewall,
     SSH keys only, automatic security updates, Hearth as an unprivileged sandboxed user, see §5).
 - **A malicious server can also:**
+  - answer a password reset without the recovery key (which makes a new identity key) under another account id, so
+    that device's pins and DM records for you start from nothing and contacts are trusted again on first sight.
+    Usernames aren't recorded against account ids on the device to catch this, because a name can honestly pass to a
+    new account (deleted and registered again, a reinstalled server at the same address). After such a reset,
+    compare safety numbers with the people who matter;
+  - even without changing the app's code (above), give a fresh DM a contact's look: the app remembers who each DM
+    is with, and pins each person's keys, by the account id the server gives them, not by @username, and the server
+    doesn't have to keep usernames unique. So it can list a new DM (or push a message in one) with an account of its
+    own that copies a contact's exact @username, display name and picture; the first time the app sees that DM it
+    takes it as being with that account and pins its keys with no warning (trust on first use), so what you write
+    there, and a call in it, goes to the server. "Message" on the real person still opens only a conversation with them. Compare
+    safety numbers in the DM you use (their profile → Verify encryption): a stand-in's never match;
+  - show a real message in the wrong conversation in a few places: the pins panel, Photos & videos, the data export
+    and the file names in Settings → Storage (fetched "around" a file's message) open each message as one of the
+    conversation the server labels it with, then show it where it was asked for. So a real message from another of
+    your DMs or channels can turn up, unflagged, in a conversation's pins, media or export, or name a file there. Its
+    words and author stay real; the conversation itself and new messages open each one only as a message of the
+    conversation it's shown in;
   - add a hidden member to a server, who is then given the key, or hold back a key change after someone leaves,
     or roll the key back across a page reload. Apps refuse keys from non-members and older keys within a session,
     but nothing binds the member list into the key. Compare safety numbers when it matters;
   - add a listener to a call: apps warn about a connection to someone the server never listed and close one to
     someone it doesn't list after 20 s (row 90), but not a listener it lists openly, or lists again for a moment at
-    least every 20 s;
+    least every 20 s (a 1-to-1 call connects only with the person the device has the DM as being with);
   - replay a message, move it under another reply or into or out of a thread, change its time, or serve a version
     from before an edit. Since 1.29.0 apps flag this on new messages (row 139), so it's detected, not prevented, and
     only within limits: messages from older apps, bots, webhooks and the news bot carry nothing to check; a second
@@ -431,7 +449,8 @@ Found a problem? Please tell the server owner privately (not in a public channel
 - **Uploaded files are served without sign-in, by design.** Blob names are random and the contents are ciphertext
   whose key is only inside the message. Profile pictures and server images are not encrypted.
 - **Calls:** ICE candidates are not signed, so a malicious server can reroute or disrupt a call (not decrypt it).
-  The server decides who is in a call; an extra participant it lists openly is not detected. Media is DTLS-SRTP
+  The server decides who is in a server's or group's call; an extra participant it lists openly there is not
+  detected (a 1-to-1 call connects only with the person the device has the DM as being with). Media is DTLS-SRTP
   between participants, with no extra media end-to-end layer yet (see `docs/VOICE.md` for the staged design).
   Handshakes are checked against signing keys pinned on first use (row 152), so on a first call between devices that
   haven't pinned each other the server could sit in the middle (safety numbers catch it). Old signed offers can be

@@ -581,15 +581,17 @@ test('app.js: a binding issue found later draws the side view’s card anew (ano
   const originals = BD.createOriginals(async (id) => {
     try { await p.deps.get(`/messages/${encodeURIComponent(id)}/locate`); return true; } catch (e) { if (e.status === 404) return false; throw e; }
   });
-  const app = new Function('noteMessage', 'bindingState', 'keyOfMessage', 'versions', 'copies', 'originals', 'loadedMessage', 'loadedAlive', 'replaceMessageEl', 'later', 'S', 'SIDE',
-    `${side[0]}${fnSrc('noteBinding')}${fnSrc('redrawRepliesTo')}${fnSrc('bindingOfMessage')}${fnSrc('forgetBindings')}\nreturn { noteBinding, redrawRepliesTo, bindingOfMessage, forgetBindings, redrawSide };`)(
+  const app = new Function('noteMessage', 'bindingState', 'keyOfMessage', 'versions', 'copies', 'originals', 'loadedMessage', 'loadedAlive', 'replaceMessageEl', 'later', 'S', 'SIDE', 'findThreadMessage',
+    `${side[0]}const redrawIds = new Set();${fnSrc('drawQueued')}${fnSrc('redrawLater')}${fnSrc('noteBinding')}${fnSrc('redrawRepliesTo')}${fnSrc('bindingOfMessage')}${fnSrc('forgetBindings')}\nreturn { noteBinding, redrawRepliesTo, bindingOfMessage, forgetBindings, redrawSide };`)(
     BD.noteMessage, BD.bindingState, keyOf, versions, copies, originals,
     (id) => p.chat.get(id) || null,
     (key, id) => p.chat.has(id) && keyOf(p.chat.get(id)) === key,
     (m) => replaced.push(m.id),
     (fn) => queued.add(fn),
-    { msgs: {}, threads: {} },
-    p.S);
+    // The chat's list: what it has loaded so far (drawQueued looks the queued ids up in it).
+    { get msgs() { return { 'c:ch1': { list: [...p.chat.values()] } }; }, threads: {} },
+    p.S,
+    () => null);
   const asked = () => queued.has(app.redrawSide);
   // As app.js decryptMessage (every message decrypted is noted) and messageTrust (the binding flag).
   const open = p.deps.decrypt;

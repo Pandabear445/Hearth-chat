@@ -1,6 +1,7 @@
 // Accessibility and responsive-layout checks in a real browser (npm run test:a11y). Separate from
 // `npm test`: it needs Chromium and Playwright (see test/browser/harness.mjs). Each check below guards a
 // fix described in docs/ACCESSIBILITY.md, so it doesn't quietly come back.
+import nodeCrypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { launch, signUp, createServer, sendMessage, settle, closeNav, PASSWORD, ROOT } from '../browser/harness.mjs';
@@ -16,6 +17,8 @@ function check(cond, what, detail = '') {
 const section = (name) => { current = name; console.log(`\n${name}`); };
 
 // The audit must find nothing on this screen.
+// A public key in the one spelling the app accepts (e2ee.js canonicalKey): an uncompressed P-256 SPKI, 91 bytes.
+const fakeKey = () => Buffer.concat([Buffer.from('3059301306072a8648ce3d020106082a8648ce3d03010703420004', 'hex'), nodeCrypto.randomBytes(64)]).toString('base64');
 async function audit(page, label) {
   const issues = await page.evaluate(auditDom);
   check(!issues.length, `no audit issues: ${label}`, issues.slice(0, 8).map((i) => `${i.rule} ${i.el}: ${i.detail}`).join('\n         '));
@@ -450,7 +453,7 @@ try {
     for (let i = 0; i < 300; i++) {
       const id = (Date.now() + i).toString(36).padStart(9, '0') + randomBytes(5).toString('hex');
       memberIds.push(id);
-      uins.run(...ucols.map((c) => (c === 'id' ? id : c === 'username' ? `crowd${i}` : c === 'email' ? null : c === 'profile' ? '{}' : c === 'public_key' ? randomBytes(65).toString('base64') : me[c])));
+      uins.run(...ucols.map((c) => (c === 'id' ? id : c === 'username' ? `crowd${i}` : c === 'email' ? null : c === 'profile' ? '{}' : c === 'public_key' ? fakeKey() : me[c])));
       mins.run(sid, id, Date.now());
     }
   })();
@@ -459,6 +462,9 @@ try {
   await lp.reload(); await lp.waitForSelector('#app:not([hidden]):not(.loading)');
   await lp.click('#rail button[aria-label^="Quality checks"]');
   await lp.waitForSelector('#messages .msg[data-mid]'); await settle(lp, 500);
+  // How long the page stops answering at a time while reading back (a message the server repeats redraws its other
+  // copies: one by one, each page took longer than the last, until the connection timed out).
+  await lp.evaluate(() => { window.__longest = 0; new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__longest = Math.max(window.__longest, e.duration); }).observe({ type: 'longtask' }); });
   const domIds = () => lp.evaluate(() => [...document.querySelectorAll('#messages > .msg[data-mid]')].map((m) => m.dataset.mid));
   const ordered = (ids) => ids.every((id, i) => !i || ids[i - 1] < id);
   for (let i = 0; i < 15; i++) {
@@ -472,6 +478,23 @@ try {
   check(ordered(far) && new Set(far).size === far.length, 'what stays is in order, without repeats');
   check(!(await lp.locator('#jump-latest[hidden]').count()), '"Jump to latest" shows once the newest messages were let go');
   check(await lp.evaluate(() => document.querySelectorAll('#messages > .msg[tabindex="0"]').length) === 1, 'keyboard navigation still has exactly one current message');
+  const longest = Math.round(await lp.evaluate(() => window.__longest));
+  check(longest < 3000, 'reading back never freezes the page for seconds', `${longest} ms`);
+  // The connection drops and comes back (here: the server restarts) while you're far back: you stay where you were.
+  const topVisible = () => lp.evaluate(() => {
+    const sc = document.querySelector('#messages'); const top = sc.getBoundingClientRect().top;
+    const el = [...sc.querySelectorAll(':scope > .msg[data-mid]')].find((m) => m.getBoundingClientRect().bottom > top + 8);
+    return el ? el.dataset.mid : null;
+  });
+  const reading = await topVisible();
+  const boots = [];
+  lp.on('response', (r) => { if (r.url().endsWith('/api/bootstrap')) boots.push(r.status()); });
+  await H.srv.restart();
+  for (let t = 0; t < 120 && !boots.length; t++) await lp.waitForTimeout(250);
+  await settle(lp, 1500);
+  const after = await topVisible();
+  check(boots.length > 0 && !!(await lp.locator('#messages > .msg[data-mid="' + reading + '"]').count()) && !!(await lp.locator('#jump-latest:not([hidden])').count()),
+    'a dropped connection coming back leaves you where you were reading', { reading, after, boots });
   // Scrolling back down brings the newer ones back, page by page, still bounded.
   for (let i = 0; i < 40 && await lp.locator('#jump-latest:not([hidden])').count(); i++) {
     const last = (await domIds()).at(-1);
@@ -491,7 +514,7 @@ try {
   // A member whose key changes after this device pinned it still gets the warning (the batch check).
   const victim = memberIds[7];
   const db3 = H.srv.db();
-  db3.prepare('UPDATE users SET public_key = ? WHERE id = ?').run(randomBytes(65).toString('base64'), victim);
+  db3.prepare('UPDATE users SET public_key = ? WHERE id = ?').run(fakeKey(), victim);
   db3.close();
   await lp.reload(); await lp.waitForSelector('#app:not([hidden]):not(.loading)');
   await lp.click('#rail button[aria-label^="Quality checks"]'); await settle(lp, 400);

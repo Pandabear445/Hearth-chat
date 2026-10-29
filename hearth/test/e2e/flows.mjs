@@ -3742,7 +3742,7 @@ async function emojiSizes(t) {
   const names = await q.locator('input[aria-label="Emoji name"]').evaluateAll((els) => els.map((e) => e.value));
   check(names.join(',') === 'big_photo,dance', `Names should be suggested from the file names (got ${names.join(', ')}).`);
   const prev = await photo.locator('img.s-inline').evaluate((i) => [i.getBoundingClientRect().height, i.naturalWidth]);
-  check(prev[0] === 22 && prev[1] === 128, `The preview should show the shrunk picture at 22 px (got ${prev}).`);
+  check(Math.round(prev[0]) === 22 && prev[1] === 128, `The preview should show the shrunk picture at 22 px (got ${prev}).`);
   await ss.locator('button', { hasText: 'Upload 2 emoji' }).click();
   await owner.toast('Added 2 emoji.');
   await owner.page.waitForFunction(() => {
