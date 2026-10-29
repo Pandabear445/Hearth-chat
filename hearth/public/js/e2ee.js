@@ -915,15 +915,17 @@ export function checkPins(myId, users) {
   const pins = loadPins(myId);
   const changed = new Set();
   let save = false;
+  let noted = false;
   for (const user of users) {
     if (!user || user.id === myId) continue;
     const r = judgePin(pins[user.id], user);
     if (r === 'changed') { changed.add(user.id); noteChangeSeen(myId, pins[user.id], user.id); continue; }
     if (r === 'pin') { pins[user.id] = { e: user.publicKey, s: keyIn(user.signPublicKey) }; save = true; }
     else if (r === 'fill') { pins[user.id].s = user.signPublicKey; save = true; }
-    if (listPq(pins[user.id], user)) save = true;
+    if (listPq(pins[user.id], user)) noted = true;
   }
   if (save) savePins(myId, pins);
+  else if (noted) notePins(myId, pins);
   return changed;
 }
 // Downgrade protection: once this device has checked a post-quantum key for someone (next to the identity key it pinned
@@ -944,8 +946,11 @@ function listPq(p, user) {
 export function notePqListed(myId, user) {
   if (!user || user.id === myId || typeof user.pq !== 'string' || !user.pq) return;
   const pins = loadPins(myId);
-  if (listPq(pins[user.id], user)) savePins(myId, pins);
+  if (listPq(pins[user.id], user)) notePins(myId, pins);
 }
+// Only a note that strengthens a pin: storage that's full (or blocked) must never stop a DM opening or a key being
+// shared, so it's kept if it can be and otherwise looked at again next time.
+function notePins(myId, pins) { try { savePins(myId, pins); } catch { /* storage full or blocked */ } }
 export function pinPq(myId, user, fp) {
   if (!user || user.id === myId || typeof fp !== 'string' || !fp) return;
   const pins = loadPins(myId);

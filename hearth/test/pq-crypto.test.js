@@ -224,6 +224,27 @@ test('downgrade pins: once seen, a missing post-quantum key is noticed; only a n
   assert.equal(E.pinnedPq('me', { ...bob, publicKey: K.E2 }), false, 'a new identity key starts over');
 });
 
+test('fourth review: a post-quantum key listed for someone is noted at first sight; storage that is full never makes that throw', () => {
+  store.clear();
+  const fp = `${'A'.repeat(22)}==`;
+  const bob = { id: 'bob', publicKey: K.E1, signPublicKey: K.S1, pq: fp };
+  assert.equal(E.checkPin('me', bob), 'ok');
+  E.notePqListed('me', bob);
+  assert.equal(E.pinnedPq('me', bob), true, 'noted from the listing');
+  assert.equal(E.pinnedPq('me', { ...bob, publicKey: K.E2 }), false, 'only next to the identity key it was listed with');
+  const carol = { id: 'carol', publicKey: K.E2, signPublicKey: K.S2, pq: fp };
+  assert.equal(E.checkPin('me', carol), 'ok');
+  const set = localStorage.setItem;
+  localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
+  try {
+    assert.doesNotThrow(() => E.notePqListed('me', carol));
+    assert.doesNotThrow(() => E.checkPins('me', [carol]));
+  } finally { localStorage.setItem = set; }
+  assert.equal(E.pinnedPq('me', carol), false, 'not kept while storage was full');
+  E.checkPins('me', [carol]);
+  assert.equal(E.pinnedPq('me', carol), true, '…and noted the next time it can be (the member list)');
+});
+
 test('your own post-quantum pin and a DM having gone post-quantum are kept per account; when a key change was first seen is local', async () => {
   store.clear();
   assert.equal(E.ownPqPinned('me'), false);
