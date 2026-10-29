@@ -275,7 +275,10 @@ async function init() {
   trackViewport();
   // "Skip to conversation": the first Tab stop, so keyboard users don't have to go through the server
   // list and channels first.
-  $('#skip-main').onclick = () => { const c = $('#composer-input') || $('#messages') || $('#main'); if (c) c.focus(); };
+  $('#skip-main').onclick = () => {
+    if (isPhoneUI() && M.level === 'list') { M.level = 'conv'; phoneShell(); } // (the conversation is out of reach behind its list)
+    const c = $('#composer-input') || $('#messages') || $('#main'); if (c) c.focus();
+  };
   const resetToken = (location.hash.match(/^#reset=([A-Za-z0-9_-]{20,100})$/) || [])[1];
   if (resetToken) { history.replaceState(null, '', '/'); sessionStorage.setItem('hearth.resetToken', resetToken); } // keep it out of the address bar
   const m = location.pathname.match(/^\/invite\/([A-Za-z0-9]+)/);
@@ -1175,6 +1178,11 @@ function startApp(account) {
   // A window narrowed past the phone layout (or a phone turned): the message boxes' + follows (createComposer).
   onDeviceChange(() => Object.values(composers).forEach((c) => c && c.fitAttach()));
   document.querySelector('.nav-scrim').addEventListener('click', () => document.body.classList.remove('nav-open'));
+  // The phone layout: its tab bar, and the row a conversation was opened from (Back returns to it).
+  $('#tabbar').addEventListener('click', (e) => { const b = e.target.closest('.tab-btn'); if (b) phoneTab(b.dataset.tab); });
+  $('#sidebar').addEventListener('click', (e) => { const r = e.target.closest('[data-nav-key]'); if (r && window.CSS && CSS.escape) M.returnSel = `[data-nav-key="${CSS.escape(r.dataset.navKey)}"]`; }, true);
+  document.addEventListener('keydown', () => { M.keys = true; }, true);
+  document.addEventListener('pointerdown', () => { M.keys = false; }, true);
   $('#sidebar').append(resizeHandle('sidebar'));
   phoneNav();
 }
@@ -2137,6 +2145,7 @@ function setView(v) {
   if (S.panel === 'members' && (v.type === 'dm' ? !P.showDmProfile : v.type === 'channel' && !P.showMembers)) S.panel = null;
   if (S.panel === null && (v.type === 'channel' || v.type === 'dm')) S.panel = restingPanel(v);
   document.body.classList.remove('nav-open');
+  if (isPhoneUI()) phoneEnter(v);
   // Going somewhere draws the side panel afresh (a voice chat panel otherwise stays as it is through redraws).
   const panelEl = $('#members');
   if (panelEl) delete panelEl.dataset.key;
@@ -2412,16 +2421,30 @@ function markUnread(key, msgId) {
   updateTitle(); renderRail(); renderSidebar();
   if (currentKey() === key) renderMessages(false);
 }
+// The numbers on the navigation (the server bar's tiles, the phone's tab bar), worked out in one place so they agree:
+// friend requests waiting, unread Updates, pings in servers (and whether any server has something unread), pings in
+// DMs and group chats, and unread notifications.
+function navCounts() {
+  const pending = Object.values(S.relationships).filter((r) => r.direction === 'incoming').length;
+  const updates = (S.me && S.me.updatesUnread) || 0;
+  let servers = 0;
+  let serverDot = false;
+  for (const s of realServers()) { const u = serverUnread(s); servers += u.mentions; serverDot = serverDot || !!u.unread; }
+  const dms = S.dms.reduce((n, d) => n + (S.mentions.get('d:' + d.id) || 0), 0) + groups().reduce((n, g) => n + serverUnread(g).mentions, 0);
+  const inbox = P.inbox.filter((x) => !x.read).length;
+  return { pending, updates, servers, serverDot, dms, inbox, home: pending + updates + servers };
+}
 function updateTitle() {
   let n = 0;
   S.mentions.forEach((c) => { n += c; });
   S.threadMentions.forEach((c, k) => { n += threadPings(k); });
-  const inbox = P.inbox.filter((x) => !x.read).length;
+  const { inbox } = navCounts();
   document.title = (n ? `(${n}) ` : '') + (S.config.name || 'Hearth');
   if (window.hearthDesktop) window.hearthDesktop.setBadge(n);
   if (navigator.setAppBadge && isStandalone()) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
   const b = $('#rail .inbox-badge');
   if (b) { b.textContent = inbox > 99 ? '99+' : inbox; b.hidden = !inbox; }
+  renderTabbarBadges();
 }
 
 // ======================================================================= notification center (kept on this device)
@@ -2431,6 +2454,8 @@ function addInbox(entry) {
   list.unshift({ id: Math.random().toString(36).slice(2), at: Date.now(), read: false, ...entry });
   P.inbox = list;
   updateTitle();
+  const pageEl = isPhoneUI() && M.tab === 'inbox' && $('#sidebar-body .inbox-page');
+  if (pageEl) pageEl._draw();
   if (entry.exp) armClientExpiry();
 }
 // Inbox entries keep a copy of a message's words on this device: one for a disappearing message goes with it (exp,
@@ -2443,6 +2468,13 @@ function purgeInbox(gone = new Set()) {
   if (keep.length !== list.length) { P.inbox = keep; updateTitle(); }
 }
 function openInbox(anchor) {
+  // The phone layout has a page for them (its tab bar's Notifications), not a popup.
+  if (isPhoneUI()) { phoneTab('inbox'); return; }
+  popover(anchor, inboxEl(), { side: anchor.closest('#rail') ? railSide() : 'bottom', className: 'pop-inbox' });
+}
+// The notifications: their tabs and list, with Mark all read and Clear all, in the popup or (page) the phone's page,
+// where the page's own header has the title and those two (inboxEl's _tools).
+function inboxEl({ page = false } = {}) {
   let tab = 'all';
   const body = h('div', { class: 'inbox-list' });
   const tabs = h('div', { class: 'seg' });
@@ -2461,8 +2493,9 @@ function openInbox(anchor) {
       body.append(h('button', {
         class: `inbox-item${it.read ? '' : ' unread'}`,
         onclick: () => {
-          closePopover();
+          if (!page) closePopover();
           const list = P.inbox; const x = list.find((y) => y.id === it.id); if (x) x.read = true; P.inbox = list; updateTitle();
+          if (page) draw();
           if (it.msgId) jumpToMessageId(it.msgId); else if (it.type === 'friend') goFriends(it.title.includes('accepted') ? 'all' : 'pending');
         },
       }, u ? avatarEl(u, 32) : h('span', { class: 'inbox-ic' }, icon('bell')),
@@ -2471,12 +2504,14 @@ function openInbox(anchor) {
     }
   };
   draw();
-  const el = h('div', { class: 'inbox' },
-    h('div', { class: 'inbox-head' }, h('h3', null, 'Notifications'),
-      h('button', { class: 'link-btn', onclick: () => { P.inbox = P.inbox.map((x) => ({ ...x, read: true })); updateTitle(); draw(); } }, 'Mark all read'),
-      ibtn('trash', 'Clear all', () => { P.inbox = []; updateTitle(); draw(); }, { cls: 'sm' })),
+  const tools = [h('button', { class: 'link-btn', onclick: () => { P.inbox = P.inbox.map((x) => ({ ...x, read: true })); updateTitle(); draw(); } }, 'Mark all read'),
+    ibtn('trash', 'Clear all', () => { P.inbox = []; updateTitle(); draw(); }, { cls: page ? 'm-head-btn' : 'sm' })];
+  const el = h('div', { class: `inbox${page ? ' inbox-page' : ''}` },
+    page ? null : h('div', { class: 'inbox-head' }, h('h3', null, 'Notifications'), tools),
     tabs, body);
-  popover(anchor, el, { side: anchor.closest('#rail') ? railSide() : 'bottom', className: 'pop-inbox' });
+  el._tools = tools;
+  el._draw = draw;
+  return el;
 }
 function dayGroup(ts) {
   const d = new Date(ts); const now = new Date();
@@ -2514,7 +2549,7 @@ function globalKeys(e) {
     // Phones: the navigation drawer closes first, and focus goes back to the button that opened it.
     // Whatever one Esc closes, it's handled (preventDefault): nothing else takes the same press too (brainrot.js turns
     // itself off on an Esc nothing else used, and an edit hidden behind the Reels tab mustn't go with it).
-    if (document.body.classList.contains('nav-open')) { e.preventDefault(); document.body.classList.remove('nav-open'); const t = $('.nav-toggle'); if (t) t.focus(); }
+    if (navOpen()) { e.preventDefault(); document.body.classList.remove('nav-open'); const t = $('.nav-toggle'); if (t) t.focus(); }
     // Phones: the side panel covers the conversation, so it closes next (beside the chat on wider screens, it stays).
     else if (isPhoneLayout() && panelMode()) { e.preventDefault(); closePanel(); }
     // Picking messages to delete ends first (wherever focus is: often the bar's own buttons), and only that.
@@ -2522,6 +2557,9 @@ function globalKeys(e) {
     else if (S.editing) { e.preventDefault(); S.editing = null; renderMessages(false); }
     else if (composers.main && composers.main.state.replyTo) { e.preventDefault(); composers.main.setReply(null); }
     else if (S.panel === 'thread') { e.preventDefault(); closeThread(); }
+    // Phones: nothing else to close, so the conversation goes back to its list (not from Reels or Brainrot full
+    // screen, whose own Esc turns them off: brainrot.js).
+    else if (isPhoneUI() && M.level === 'conv' && !$('.reels-layer.full:not([hidden])')) { e.preventDefault(); phoneBack(); }
   }
 }
 // Ctrl+/ (⌘+/ on a Mac), Settings → Keybinds or the user menu: every shortcut, with this person's own call keys.
@@ -2568,6 +2606,7 @@ function renderAll() {
   renderUserPanel();
   renderVoicePanel();
   updateTitle();
+  renderTabbar();
 }
 // What the right panel should show for the current view (or null).
 function panelMode() {
@@ -2645,8 +2684,9 @@ const folders = createFolders({
 function renderRail() {
   const rail = clear($('#rail'));
   if (!S.me) return;
-  const dmUnread = S.dms.reduce((n, d) => n + (S.mentions.get('d:' + d.id) || 0), 0) + groups().reduce((n, g) => n + serverUnread(g).mentions, 0);
-  const pending = Object.values(S.relationships).filter((r) => r.direction === 'incoming').length;
+  const counts = navCounts();
+  // The phone layout: the bar picks what the list beside it shows (a server's channels), without opening anything.
+  const phone = isPhoneUI();
   const homeActive = !S.view.serverId || isGroup(currentServer());
   const tile = (opts) => h('div', { class: `rail-item${opts.active ? ' active' : ''}${opts.unread ? ' unread' : ''}` },
     h('span', { class: 'pill', 'aria-hidden': 'true' }),
@@ -2657,9 +2697,9 @@ function renderRail() {
     }, opts.content, opts.badge ? h('span', { class: 'badge', 'aria-label': `${opts.badge} unread` }, opts.badge > 99 ? '99+' : opts.badge) : null));
 
   rail.append(
-    tile({ label: 'Home', cls: 'home', active: homeActive && S.view.type !== 'dm' && !isGroup(currentServer()), onclick: goHome, content: icon('flame'), badge: pending + (S.me.updatesUnread || 0) }),
-    tile({ label: 'Direct messages', cls: 'nav', active: S.view.type === 'dm' || isGroup(currentServer()), onclick: openMessages, content: icon('message'), badge: dmUnread }),
-    h('div', { class: 'rail-item' }, h('button', {
+    tile({ label: 'Home', cls: 'home', active: phone ? !M.server : homeActive && S.view.type !== 'dm' && !isGroup(currentServer()), onclick: phone ? () => phonePickServer(null) : goHome, content: icon('flame'), badge: counts.pending + counts.updates }),
+    tile({ label: 'Direct messages', cls: 'nav rail-dms', active: S.view.type === 'dm' || isGroup(currentServer()), onclick: openMessages, content: icon('message'), badge: counts.dms }),
+    h('div', { class: 'rail-item rail-inbox' }, h('button', {
       class: 'rail-btn nav', 'aria-label': 'Notifications', 'data-tip': 'Notifications', 'data-tip-side': railSide(), 'data-pop-anchor': '',
       onclick: (e) => openInbox(e.currentTarget),
     }, icon('bell'), h('span', { class: 'badge inbox-badge', hidden: true }))),
@@ -2672,8 +2712,8 @@ function renderRail() {
     const { unread, mentions } = serverUnread(s);
     return tile({
       label: s.name + (favs.includes('s:' + s.id) ? ' (favorite)' : ''),
-      active: S.view.serverId === s.id, unread,
-      onclick: () => openServer(s.id),
+      active: phone ? M.server === s.id : S.view.serverId === s.id, unread,
+      onclick: () => (phone ? phonePickServer(s.id) : openServer(s.id)),
       oncontext: (e) => contextMenu(e, serverMenuItems(s)),
       cls: `shape-${(s.theme && s.theme.iconShape) || 'rounded'}`,
       content: serverIconEl(s),
@@ -2709,18 +2749,47 @@ function renderSidebar() {
   head.classList.remove('has-banner');
   const body = clear($('#sidebar-body'));
   if (!S.me) return;
-  const server = currentServer();
-  if (server && !isGroup(server)) {
-    renderServerSidebar(server, head, body);
+  const mode = sidebarMode();
+  if (mode === 'server') {
+    renderServerSidebar(sidebarServer(), head, body);
     // Back on the same channel or category, now drawn anew.
     const el = focused && body.querySelector(focused);
     if (el) el.focus({ preventScroll: true });
     return;
   }
-  // Home / messages sidebar
-  head.append(h('button', { class: 'find-btn', onclick: () => openSearch(), 'aria-label': 'Search (Ctrl+K)' }, icon('search'), h('span', null, 'Search or jump to\u2026'), h('kbd', null, 'Ctrl K')));
-  const pending = Object.values(S.relationships).filter((r) => r.direction === 'incoming').length;
-  const nav = (label, ic, active, onclick, badge) => h('button', { class: `nav-row${active ? ' active' : ''}`, 'data-nav': '', onclick }, icon(ic), h('span', null, label), badge ? h('span', { class: 'badge inline' }, badge) : null);
+  // The phone layout's other pages (its tab bar): your notifications, and you.
+  if (mode === 'inbox') { renderInboxPage(head, body); return; }
+  if (mode === 'you') { renderYouPage(head, body); return; }
+  // Home / messages sidebar (on a phone, two pages: Home's, and Messages, which has the conversations)
+  const phone = mode !== 'home+dms';
+  const findBtn = h('button', { class: 'find-btn', onclick: () => openSearch(), 'aria-label': 'Search (Ctrl+K)' }, icon('search'), h('span', null, 'Search or jump to\u2026'), h('kbd', null, 'Ctrl K'));
+  const newConv = (cls) => ibtn('plus', 'New message or group chat', (e) => menu(e.currentTarget, [
+    { label: 'New message', icon: 'message', action: () => openNewConversation() },
+    { label: 'New group chat', icon: 'people', action: () => openNewConversation(null, { group: true }) },
+  ], { align: 'end' }), { cls, attrs: { 'data-pop-anchor': '' } });
+  if (!phone) head.append(findBtn);
+  else if (mode === 'dms') head.append(phonePageHead('Messages', newConv('m-head-btn')), findBtn);
+  else head.append(phonePageHead('Home', ibtn('search', 'Search (Ctrl+K)', () => openSearch(), { cls: 'm-head-btn' })));
+  const pending = navCounts().pending;
+  const nav = (label, ic, active, onclick, badge) => h('button', { class: `nav-row${active ? ' active' : ''}`, 'data-nav': '', dataset: { navKey: 'n:' + label }, onclick }, icon(ic), h('span', null, label), badge ? h('span', { class: 'badge inline' }, badge) : null);
+  if (mode === 'dms') {
+    body.append(nav('Friends', 'people', S.view.type === 'friends', () => goFriends(pending ? 'pending' : 'online'), pending));
+    sidebarConversations(body, newConv('sm'), { phone });
+    return;
+  }
+  if (mode === 'home') {
+    // Room on a phone for all of them, so nothing hides behind a "More".
+    body.append(...[
+      nav('Home', 'home', S.view.type === 'home', goHome),
+      nav('Friends', 'people', S.view.type === 'friends', () => goFriends(pending ? 'pending' : 'online'), pending),
+      nav('Updates', 'rss', S.view.type === 'updates', () => setView({ type: 'updates' }), S.me.updatesUnread || 0),
+      S.me.studyEnabled ? nav('Study', 'graduation', S.view.type === 'study', () => setView({ type: 'study' })) : null,
+      nav('People', 'user', S.view.type === 'people', () => setView({ type: 'people' })),
+      nav('Saved messages', 'bookmark', S.view.type === 'saved', () => setView({ type: 'saved' })),
+      nav('My Reels', 'play', S.view.type === 'myreels', () => setView({ type: 'myreels' })),
+    ].filter(Boolean));
+    return;
+  }
   body.append(
     nav('Home', 'home', S.view.type === 'home', goHome),
     nav('Friends', 'people', S.view.type === 'friends', () => goFriends(pending ? 'pending' : 'online'), pending),
@@ -2747,6 +2816,10 @@ function renderSidebar() {
     },
   }, icon('chevronRight'), h('span', null, 'More'),
   !moreOpen && S.me.updatesUnread ? h('span', { class: 'badge inline' }, S.me.updatesUnread) : null), moreBox);
+  sidebarConversations(body, newConv('sm'));
+}
+// Pinned conversations, then the rest, newest first (with the + for a new one beside their heading).
+function sidebarConversations(body, plus, { phone = false } = {}) {
   const convs = conversations();
   const favs = P.favorites;
   const pinned = convs.filter((c) => favs.includes(c.fav));
@@ -2754,11 +2827,7 @@ function renderSidebar() {
     body.append(h('div', { class: 'group-label' }, h('span', null, 'Pinned')));
     pinned.forEach((c) => body.append(convRow(c)));
   }
-  body.append(h('div', { class: 'group-label' }, h('span', null, 'Direct messages'),
-    ibtn('plus', 'New message or group chat', (e) => menu(e.currentTarget, [
-      { label: 'New message', icon: 'message', action: () => openNewConversation() },
-      { label: 'New group chat', icon: 'people', action: () => openNewConversation(null, { group: true }) },
-    ], { align: 'end' }), { cls: 'sm', attrs: { 'data-pop-anchor': '' } })));
+  body.append(h('div', { class: 'group-label' }, h('span', null, phone ? 'Conversations' : 'Direct messages'), phone ? null : plus));
   const rest = convs.filter((c) => !favs.includes(c.fav));
   if (!rest.length && !pinned.length) body.append(h('p', { class: 'sidebar-empty' }, 'No conversations yet. Start one with a friend or someone from a server.'));
   rest.forEach((c) => body.append(convRow(c)));
@@ -2828,7 +2897,7 @@ function convRow(c) {
   const mentions = c.unreadKey ? mentionsOf(c.unreadKey) : 0;
   return h('button', {
     class: `dm-row${c.active ? ' active' : ''}${unread || mentions ? ' unread' : ''}${c.unreadKey && isMuted(c.unreadKey) ? ' muted' : ''}`,
-    'data-nav': '', onclick: c.open, oncontextmenu: (e) => contextMenu(e, c.menu),
+    'data-nav': '', dataset: { navKey: c.key }, onclick: c.open, oncontextmenu: (e) => contextMenu(e, c.menu),
   }, c.avatar,
   h('span', { class: 'dm-row-text' },
     h('span', { class: 'dm-row-top' }, h('span', { class: 'dm-row-name' }, c.title), c.at ? h('span', { class: 'dm-row-time' }, shortTime(c.at)) : null),
@@ -2983,7 +3052,7 @@ function channelRow(c, server) {
     oncontextmenu: (e) => contextMenu(e, channelMenuItems(c, server)),
   },
   h('button', {
-    class: 'ch-main', 'data-nav': '', 'aria-current': active ? 'page' : null, draggable: canMoveChannel(server, c) ? 'true' : null,
+    class: 'ch-main', 'data-nav': '', dataset: { navKey: 'c:' + c.id }, 'aria-current': active ? 'page' : null, draggable: canMoveChannel(server, c) ? 'true' : null,
     'aria-label': `${c.type === 'voice' ? 'Voice channel' : 'Channel'} ${c.name}${mentions ? `, ${mentions} mentions` : unread ? ', unread' : ''}${muted ? ', muted' : ''}`,
     onclick: () => (c.type === 'voice' ? (connected ? openVoiceRoom(c.id, server.id) : joinVoice(c, server)) : openChannel(c.id, server.id)),
   }, icon(mentions ? 'at' : channelIcon(c), 'ic ch-ic'), h('span', { class: 'ch-name' }, c.name),
@@ -3070,7 +3139,7 @@ const channelDrag = dragDrop({
     return d.kind === 'category' && t.kind === 'category' ? ['before', 'after'] : [];
   },
   onDrop: (d, t, z) => {
-    const server = currentServer();
+    const server = sidebarServer();
     if (!server) return;
     if (d.kind === 'category') {
       const i = orderedCategories(server).filter((k) => k !== d.id).indexOf(t.id);
@@ -3245,6 +3314,7 @@ function toggleDeafen() { if (!voice || !voice.channelId) return; voice.setDeafe
 // Compact call bar docked above your profile while you're in voice.
 function renderVoicePanel() {
   const el = clear($('#voice-panel'));
+  renderCallBar();
   if (!voice || !voice.channelId) { el.hidden = true; return; }
   el.hidden = false;
   const room = voice.channelId;
@@ -3633,7 +3703,7 @@ const REELS = createReels({
   mode: () => playerMode(P.chat),
   title: (key) => convTitle(key),
   inCall: (key) => !!voice && !!voice.channelId && voice.channelId === (key.startsWith('d:') ? 'dm:' + key.slice(2) : key.slice(2)),
-  setTab: (tab) => (S.view.type === 'myreels' ? goHome() : setConvTab(tab)),
+  setTab: (tab) => (S.view.type === 'myreels' ? (isPhoneUI() ? phoneBack() : goHome()) : setConvTab(tab)),
   loaded: (key) => ((S.msgs[key] && S.msgs[key].list) || []).filter((m) => m.dec),
   page: (key, before) => api('GET', msgUrl(key) + (before ? `?before=${encodeURIComponent(before)}` : '')),
   decrypt: (m) => decryptMessage(m),
@@ -3663,6 +3733,329 @@ function closeNav() {
   // Focus doesn't stay behind in the hidden drawer: it goes back to the button that opens it.
   const t = inside && $('.nav-toggle');
   if (t) t.focus({ preventScroll: true });
+}
+// ======================================================================= the phone layout: lists, and a conversation over them
+// On a phone Hearth isn't the computer's three columns squeezed into a drawer. It's two levels: a list page (the tab bar
+// at the bottom picks Home, Messages, Notifications or You; Home has the server bar beside its list), and the
+// conversation, pushed over the list full screen, with a Back button (and Back, Esc and a swipe from the left edge)
+// to return to it. The list is drawn in #rail and #sidebar, the conversation in #main, as on a computer; the level
+// that's out of sight is inert. Nothing here runs on a computer's screen (isPhoneUI is the phone layout: device.js).
+const M_UI = true; // (false: the phone layout keeps the old drawer)
+const M = { tab: 'home', level: 'list', server: null, pending: null, returnSel: null, inerted: false, keys: false };
+const isPhoneUI = () => M_UI && isPhoneLayout();
+const TABS = [['home', 'home', 'Home'], ['dms', 'message', 'Messages'], ['inbox', 'bell', 'Notifications'], ['you', 'user', 'You']];
+const TAB_LABEL = Object.fromEntries(TABS.map(([t, , l]) => [t, l]));
+// The tab a view belongs to: conversations with people under Messages, servers' channels under Home; anything else
+// stays where it was opened from (Friends from Messages stays there, Saved messages from You).
+function tabFor(v, cur) {
+  if (v.type === 'dm') return 'dms';
+  const s = v.serverId && S.servers.find((x) => x.id === v.serverId);
+  if (s) return isGroup(s) ? 'dms' : 'home';
+  return cur;
+}
+// setView, on a phone: what it opens is pushed over the list (M.pending: 'list' keeps the list showing), in its tab.
+function phoneEnter(v) {
+  M.level = M.pending || 'conv';
+  M.pending = null;
+  M.tab = tabFor(v, M.tab);
+  const s = v.serverId && S.servers.find((x) => x.id === v.serverId);
+  if (s && !isGroup(s)) M.server = s.id;
+}
+// What the sidebar draws: on a computer, a server's channels or Home with the conversations; on a phone, the list
+// page of the tab that's showing.
+function sidebarMode() {
+  if (!isPhoneUI()) { const s = currentServer(); return s && !isGroup(s) ? 'server' : 'home+dms'; }
+  if (M.tab !== 'home') return M.tab;
+  return sidebarServer() ? 'server' : 'home';
+}
+function sidebarServer() {
+  if (!isPhoneUI()) return currentServer();
+  const s = M.server && S.servers.find((x) => x.id === M.server && !isGroup(x));
+  if (!s) M.server = null; // (left, or gone)
+  return s || null;
+}
+// A list page's title, with its buttons beside it.
+function phonePageHead(title, ...tools) {
+  return h('div', { class: 'm-page-head' }, h('h2', { class: 'm-page-title', tabindex: '-1' }, title), h('div', { class: 'm-page-tools' }, tools.filter(Boolean)));
+}
+function renderInboxPage(head, body) {
+  const el = inboxEl({ page: true });
+  head.append(phonePageHead('Notifications', ...el._tools));
+  body.append(el);
+}
+// You: your name and status (the user panel, styled as a card above this page: app.css), then what's yours.
+function renderYouPage(head, body) {
+  head.append(phonePageHead('You'));
+  const row = (label, ic, onclick, sub) => h('button', { class: 'nav-row m-you-row', 'data-nav': '', dataset: { navKey: 'y:' + label }, onclick }, icon(ic),
+    h('span', { class: 'm-row-text' }, h('span', null, label), sub ? h('small', null, sub) : null), icon('chevronRight', 'ic m-row-chev'));
+  body.append(
+    row('Set your status', 'smile', (e) => statusMenu(e.currentTarget), STATUS_LABEL[S.me.status] || 'Online'),
+    row('Edit profile', 'edit', () => openSettings(app, 'profile')),
+    row('Theme and appearance', 'palette', () => openSettings(app, 'appearance')),
+    h('div', { class: 'm-sep', role: 'separator' }),
+    row('Saved messages', 'bookmark', () => setView({ type: 'saved' })),
+    row('My Reels', 'play', () => setView({ type: 'myreels' })),
+    row('Friends', 'people', () => goFriends()),
+    h('div', { class: 'm-sep', role: 'separator' }),
+    row('Settings', 'gear', () => openSettings(app)),
+  );
+}
+// Body classes (app.css draws the levels from them, and phoneNav's Back watches them), what's out of reach, and
+// focus following the level that's showing.
+function phoneShell() {
+  const on = isPhoneUI();
+  const b = document.body;
+  const conv = on && M.level === 'conv';
+  const was = b.classList.contains('m-conv');
+  b.classList.toggle('m-ui', on);
+  b.classList.toggle('m-list', on && !conv);
+  b.classList.toggle('m-conv', conv);
+  if (on) b.dataset.mtab = M.tab; else delete b.dataset.mtab;
+  const bar = $('#tabbar');
+  if (bar) bar.hidden = !on || conv || !S.me;
+  if (on || M.inerted) {
+    const list = [$('#rail'), $('#sidebar'), bar];
+    const main = [$('#main'), $('#members')];
+    // (Focus left in a part about to be out of reach moves first, or it would be lost.)
+    const a = document.activeElement;
+    const leaving = on && a && a !== document.body && (conv ? list : main).some((el) => el && el.contains(a));
+    for (const el of list) if (el) el.inert = conv;
+    for (const el of main) if (el) el.inert = on && !conv;
+    M.inerted = on;
+    if (on && conv && (!was || leaving)) requestAnimationFrame(phoneFocusConversation);
+    else if (on && leaving) requestAnimationFrame(() => phoneFocusList());
+  }
+  if (bar && on) bar.querySelectorAll('.tab-btn').forEach((t) => t.setAttribute('aria-current', t.dataset.tab === M.tab ? 'page' : 'false'));
+}
+// Just pushed: from the keyboard, the message box; otherwise its name, for a screen reader (no ring: quietFocus).
+// Unless something already took focus there, or a dialog is open.
+function phoneFocusConversation() {
+  if (M.level !== 'conv' || document.querySelector('#layer > .modal-backdrop:not(.closing), #layer > .sheet-backdrop:not(.closing)')) return;
+  const a = document.activeElement;
+  if (a && a !== document.body && ($('#main').contains(a) || $('#members').contains(a) || $('#layer').contains(a))) return;
+  const box = M.keys && $('#composer-input');
+  if (box) { box.focus({ preventScroll: true }); return; }
+  const t = $('#main-head h1');
+  if (t) quietFocus(t);
+}
+// Back on the list: on the row it was opened from, else the page's title.
+function phoneFocusList(sel = M.returnSel) {
+  if (M.level !== 'list') return;
+  const row = sel && $(`#sidebar ${sel}, #rail ${sel}`);
+  const t = row && row.getClientRects().length ? row : $('#sidebar-head .m-page-title') || $('#sidebar-head .server-head') || $('#sidebar-body [data-nav]');
+  if (!t) return;
+  if (M.keys) t.focus({ preventScroll: true }); else quietFocus(t);
+}
+function phoneTab(tab) {
+  const same = M.tab === tab && M.level === 'list';
+  M.tab = tab;
+  M.level = 'list';
+  M.returnSel = null;
+  renderRail();
+  renderSidebar();
+  renderVoicePanel();
+  renderTabbar();
+  phoneShell();
+  const body = $('#sidebar-body');
+  if (same && body) body.scrollTo({ top: 0, behavior: 'smooth' });
+  else phoneFocusList(null);
+}
+// The conversation goes, the list it came from is back (nothing is closed or marked: setView isn't called).
+function phoneBack() {
+  if (!isPhoneUI() || M.level === 'list') return;
+  M.level = 'list';
+  // Nothing goes on playing out of sight: Reels stop (a conversation is back on its chat), and videos pause.
+  if ($('#main .reels-host')) { if (S.view.type === 'myreels') REELS.hide(); else if (S.view.tab === 'reels') { S.view = { ...S.view, tab: 'chat' }; renderMain(); } }
+  $$('#main video, #main audio').filter((m) => !m.closest('.call-stage, .voice-room, .wt')).forEach((m) => { try { m.pause(); } catch { /* not ours to stop */ } });
+  renderSidebar();
+  renderVoicePanel();
+  renderTabbar();
+  phoneShell();
+  phoneFocusList();
+}
+// A server tile on the bar beside Home's list: that server's channels, without opening one (null: Home's own list).
+function phonePickServer(id) {
+  M.server = id;
+  M.tab = 'home';
+  M.level = 'list';
+  M.returnSel = null;
+  renderRail();
+  renderSidebar();
+  renderTabbar();
+  phoneShell();
+  const t = $('#sidebar-head .server-head') || $('#sidebar-head .m-page-title');
+  if (t && !t.contains(document.activeElement)) { if (M.keys) t.focus({ preventScroll: true }); else quietFocus(t); }
+}
+function renderTabbar() {
+  const bar = $('#tabbar');
+  if (!bar) return;
+  if (!isPhoneUI() || !S.me) { bar.hidden = true; clear(bar); return; }
+  if (!bar.children.length) {
+    for (const [tab, ic, label] of TABS) {
+      bar.append(h('button', { class: 'tab-btn', type: 'button', dataset: { tab }, 'aria-label': label },
+        h('span', { class: 'tab-ic' }, icon(ic), h('span', { class: 'tab-badge', hidden: true, 'aria-hidden': 'true' })), h('span', { class: 'tab-label', 'aria-hidden': 'true' }, label)));
+    }
+  }
+  renderTabbarBadges();
+  phoneShell();
+}
+// The tab bar's numbers (navCounts), in place: from updateTitle, which runs whenever one may have changed.
+function renderTabbarBadges() {
+  const bar = $('#tabbar');
+  if (!bar || !bar.children.length || !S.me) return;
+  const n = navCounts();
+  const count = { home: n.home, dms: n.dms, inbox: n.inbox, you: 0 };
+  for (const b of bar.querySelectorAll('.tab-btn')) {
+    const t = b.dataset.tab;
+    const c = count[t] || 0;
+    const dot = t === 'home' && !c && n.serverDot;
+    const badge = b.querySelector('.tab-badge');
+    badge.hidden = !c && !dot;
+    badge.classList.toggle('dot', !!dot);
+    badge.textContent = c ? (c > 99 ? '99+' : String(c)) : '';
+    b.setAttribute('aria-label', TAB_LABEL[t] + (c ? `, ${c} ${t === 'inbox' ? 'new' : 'unread'}` : dot ? ', unread' : ''));
+  }
+}
+// The call you're in, wherever you are on a phone (the computer has it at the bottom of the sidebar): where it is
+// (to go back to it), mute and leave. Not on the call itself, nor on You, which has the whole call panel.
+function renderCallBar() {
+  const bar = $('#m-callbar');
+  if (!bar) return;
+  const room = voice && voice.channelId;
+  const v = S.view;
+  const here = room && M.level === 'conv' && ((v.type === 'voice' && v.channelId === room) || (v.type === 'dm' && dmRoom(v.dmId) === room)
+    || (v.type === 'channel' && isGroup(currentServer()) && callRoomFor(currentServer()) === room));
+  const show = isPhoneUI() && !!room && !!S.me && !here && !(M.level === 'list' && M.tab === 'you');
+  document.body.classList.toggle('m-call', show);
+  bar.hidden = !show;
+  clear(bar);
+  if (!show) return;
+  const ch = !room.startsWith('dm:') && channelById(room);
+  const srv = ch && serverOfChannel(ch.id);
+  const where = room.startsWith('dm:') ? roomTitle(room) : srv ? (isGroup(srv) ? groupName(srv) : ch.name) : 'Call';
+  const st = voice.status();
+  bar.append(
+    h('button', { class: 'cb-where', onclick: () => goToCall(room), 'aria-label': `In call: ${where}. Go to the call` },
+      h('span', { class: `cb-dot q-${({ ok: 'connected', bad: 'failed', warn: 'warn' })[st.tone] || 'connecting'}`, 'aria-hidden': 'true' }),
+      h('span', { class: 'cb-text' }, h('small', null, st.tone === 'ok' ? 'In call' : st.label), h('strong', null, where))),
+    ibtn(voice.muted ? 'micOff' : 'mic', voice.muted ? 'Unmute' : 'Mute', toggleMute, { cls: voice.muted ? 'off' : '', active: voice.muted }),
+    ibtn('phoneOff', 'Leave call', () => { voice.leave(); playSound('selfLeave'); }, { cls: 'hang' }));
+}
+// The conversation's header on a phone: Back, its name (and a line under it), at most two buttons, and More with
+// the rest (phoneOverflowItems).
+function drawPhoneHeader(head, items) {
+  const v = S.view;
+  const key = currentKey();
+  const server = currentServer();
+  head.classList.toggle('has-tabs', v.type === 'friends');
+  const backTo = M.tab === 'home' && M.server ? (sidebarServer() || {}).name || 'Home' : TAB_LABEL[M.tab];
+  head.append(ibtn('chevronLeft', `Back to ${backTo}`, () => phoneBack(), { cls: 'head-back' }));
+  const title = (lead, name, sub, { warn = false, onName = null, expanded } = {}) => h('div', { class: 'head-title' }, lead,
+    h('div', { class: 'head-names' },
+      h('h1', { tabindex: '-1' }, onName ? h('button', { class: 'head-name-btn', onclick: onName, 'aria-expanded': String(!!expanded), 'aria-controls': 'members' }, name) : name),
+      sub ? h('span', { class: `head-sub${warn ? ' warn' : ''}` }, sub) : null));
+  const more = (list) => ibtn('more', 'More', (e) => menu(e.currentTarget, list, { align: 'end', label: 'More' }), { attrs: { 'data-pop-anchor': '' }, active: ['pins', 'media', 'side'].includes(S.panel) });
+  const timer = key && convSecs(key) ? `Disappearing · ${disLabel(convSecs(key)).toLowerCase()}` : '';
+  const tools = (...b) => headTools(...b);
+  if (v.type === 'channel' && server && !isGroup(server)) {
+    const c = server.channels.find((x) => x.id === v.channelId);
+    if (!c) return;
+    head.append(title(icon(channelIcon(c), 'ic head-ic'), c.name, timer || c.topic || server.name),
+      tools(ibtn('search', 'Search this channel (Ctrl+K)', () => openSearch({ scope: key })),
+        ibtn('people', S.panel === 'members' ? 'Hide members' : 'Show members', () => togglePanel('members'), { active: S.panel === 'members' }),
+        more(phoneOverflowItems(v, items))));
+  } else if (v.type === 'channel' && isGroup(server)) {
+    const call = server.channels.find((c) => c.type === 'voice');
+    const inCall = voice && call && voice.channelId === call.id;
+    const callers = call ? (S.voice[call.id] || []).length : 0;
+    const callBtn = call ? ibtn(inCall ? 'phoneOff' : 'phone', inCall ? 'Leave call' : callers ? `Join call (${callers})` : 'Call', () => (inCall ? voice.leave() : joinRoom(call.id)), { cls: `with-badge${inCall ? ' hang' : callers ? ' live' : ''}` }) : null;
+    if (callBtn && callers && !inCall) callBtn.append(h('span', { class: 'badge', 'aria-hidden': 'true' }, String(callers)));
+    head.append(title(groupAvatar(server, 32), groupName(server), timer || (callers ? `In call (${callers})` : `${server.memberIds.length} members`)),
+      tools(callBtn, ibtn('people', 'Members', () => togglePanel('members'), { active: S.panel === 'members' }), more(phoneOverflowItems(v, items))));
+  } else if (v.type === 'dm') {
+    const d = S.dms.find((x) => x.id === v.dmId);
+    if (!d) return;
+    const u = getUser(d.userId);
+    const warn = sec.keyChanged(u) ? 'Security key changed · verify in More' : resetUnverified(u) ? 'Not verified · compare safety numbers in More' : '';
+    const room = dmRoom(d.id);
+    const inCall = voice && voice.channelId === room;
+    const live = (S.voice[room] || []).length;
+    const calls = S.blocked.has(u.id) ? [] : inCall ? [ibtn('phoneOff', 'Leave call', () => { voice.leave(); playSound('selfLeave'); }, { cls: 'hang' })]
+      : [ibtn('phone', live ? 'Join the call' : 'Start a voice call', () => startDmCall(d.id), { cls: live ? 'live' : '' }), ibtn('video', live ? 'Join with video' : 'Start a video call', () => startDmCall(d.id, true))];
+    const sub = h('span', { 'data-presence-of': warn ? null : u.id }, warn || timer || STATUS_LABEL[presenceOf(u, S.me.id)] || '');
+    head.append(title(avatarEl(u, 32, { status: true, meId: S.me.id }), displayName(u), sub, { warn: !!warn, onName: () => togglePanel('members'), expanded: S.panel === 'members' }),
+      tools(...calls, more(phoneOverflowItems(v, items))));
+  } else if (v.type === 'voice' && server) {
+    const c = server.channels.find((x) => x.id === v.channelId);
+    const n = (S.voice[v.channelId] || []).length;
+    head.append(title(icon('speaker', 'ic head-ic'), c ? c.name : 'Voice', n ? `In call (${n})` : server.name),
+      tools(hasChat(c) ? voiceChatButton(c) : null, c ? more(phoneOverflowItems(v, items)) : null));
+  } else if (v.type === 'friends') {
+    const pending = navCounts().pending;
+    const tab = (k, label, extra) => h('button', { class: `tab${v.tab === k ? ' active' : ''}${k === 'add' ? ' tab-add' : ''}`, role: 'tab', 'aria-selected': String(v.tab === k), onclick: () => goFriends(k) }, label, extra);
+    head.append(title(icon('people', 'ic head-ic'), 'Friends'),
+      h('div', { class: 'tabs m-head-tabs', role: 'tablist' }, tab('online', 'Online'), tab('all', 'All'), tab('pending', 'Pending', pending ? h('span', { class: 'badge inline' }, pending) : null), tab('add', 'Add friend')));
+  } else if (v.type === 'home') {
+    head.append(title(icon('home', 'ic head-ic'), 'Home'), tools(ibtn('search', 'Search (Ctrl+K)', () => openSearch())));
+  } else if (v.type === 'admin') {
+    head.append(title(icon('shield', 'ic head-ic'), 'Admin', 'Only staff can see this'));
+  } else if (v.type === 'people') {
+    head.append(title(icon('user', 'ic head-ic'), 'People', 'People you share a server with'), tools(ibtn('user', 'My page', () => openProfileModal(S.me.id))));
+  } else if (v.type === 'study') {
+    head.append(title(icon('graduation', 'ic head-ic'), 'Study', 'Recall flashcards · end-to-end encrypted'));
+  } else if (v.type === 'updates') {
+    head.append(title(icon('rss', 'ic head-ic'), 'Updates', 'What you track'), tools(ibtn('plus', 'Track something', () => updates.trackDialog(() => renderMain()))));
+  } else if (v.type === 'myreels') {
+    head.append(title(icon('play', 'ic head-ic'), 'My Reels', 'Your private feed'), tools(ibtn('download', 'Import', () => openReelsImport())));
+  } else if (v.type === 'saved') {
+    head.append(title(icon('bookmark', 'ic head-ic'), 'Saved messages', 'Only you can see them'),
+      tools(ibtn('info', 'About saved messages', () => toast('Saved messages are synced to your devices, and only you can see them. Saved messages from disappearing conversations disappear with them.'))));
+  } else if (server) {
+    head.append(title(null, server.name));
+  }
+}
+// The header's More on a phone: first whether it's encrypted (and a warning when a key changed, which on a computer
+// is a badge in the header), then everything the computer's header has as buttons, then its ⋯ menu.
+function phoneOverflowItems(v, { PIN_ITEM, MEDIA_ITEM, SCHED_ITEM, SIDE_ITEM }) {
+  const key = currentKey();
+  const server = currentServer();
+  const notif = (k) => (isMuted(k) ? { label: 'Notifications (muted)', icon: 'bellOff', hint: muteLeft(k), action: () => menu($('#main-head [aria-label="More"]'), notifyMenu(k), { label: 'Notifications' }) } : null);
+  const threads = (cid) => {
+    const n = threadPings('c:' + cid);
+    return { label: S.panel === 'threads' ? 'Hide threads' : 'Threads', icon: 'thread', hint: n ? String(n) : null, action: () => { if (S.panel !== 'threads') S.threadsPanel = null; togglePanel('threads'); } };
+  };
+  if (v.type === 'channel' && server && !isGroup(server)) {
+    const c = server.channels.find((x) => x.id === v.channelId);
+    return [{ label: 'End-to-end encrypted', icon: 'lock', hint: 'Details', action: () => openServerSecurity(server) }, '-',
+      threads(c.id), PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), SIDE_ITEM, notif(key), ...channelMenuItems(c, server)];
+  }
+  if (v.type === 'channel' && isGroup(server)) {
+    const call = server.channels.find((c) => c.type === 'voice');
+    const inCall = voice && call && voice.channelId === call.id;
+    return [{ label: 'End-to-end encrypted', icon: 'lock', hint: 'Details', action: () => openServerSecurity(server) }, '-',
+      { label: 'Search (Ctrl+K)', icon: 'search', action: () => openSearch({ scope: key }) },
+      call && !inCall ? { label: 'Start a video call', icon: 'video', action: () => joinRoom(call.id, { video: true }) } : null,
+      threads(v.channelId), PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), SIDE_ITEM, notif(key), '-', ...groupMenuItems(server)];
+  }
+  if (v.type === 'dm') {
+    const d = S.dms.find((x) => x.id === v.dmId);
+    const u = getUser(d.userId);
+    const safety = sec.keyChanged(u) ? { label: 'Key changed — verify', icon: 'shield', danger: true, action: () => openSafetyNumber(u) }
+      : resetUnverified(u) ? { label: 'Not verified — compare safety numbers', icon: 'shield', danger: true, action: () => openSafetyNumber(u) }
+        : { label: 'End-to-end encrypted', icon: 'lock', hint: 'Verify', action: () => openSafetyNumber(u) };
+    return [safety, '-', { label: 'Search (Ctrl+K)', icon: 'search', action: () => openSearch({ scope: key }) },
+      { label: S.panel === 'members' ? 'Hide profile' : 'Show profile', icon: 'user', action: () => togglePanel('members') },
+      PIN_ITEM, MEDIA_ITEM, SCHED_ITEM(), SIDE_ITEM, notif(key), ...dmMenuItems(d), '-', blockItem(u)];
+  }
+  if (v.type === 'voice' && server) {
+    const c = server.channels.find((x) => x.id === v.channelId);
+    const ck = 'c:' + v.channelId;
+    const chatOpen = !!v.chat && hasChat(c);
+    return [chatOpen ? { label: 'End-to-end encrypted', icon: 'lock', hint: 'Details', action: () => openServerSecurity(server) } : { header: 'Encrypted end to end' },
+      chatOpen ? { label: 'Search this chat (Ctrl+K)', icon: 'search', action: () => openSearch({ scope: ck }) } : null,
+      chatOpen ? PIN_ITEM : null, chatOpen ? SCHED_ITEM() : null, chatOpen ? notif(ck) : null, '-', ...channelMenuItems(c, server)];
+  }
+  return [];
 }
 // What the side panel's close button does (a thread opened from the Threads list goes back to the list, as with Esc).
 function closePanel() {
@@ -3695,6 +4088,7 @@ function phoneNav() {
     return null;
   };
   const enabled = () => isPhoneLayout() || isTouchUI();
+  const reelsFull = () => document.querySelector('.reels-layer.full:not([hidden])');
   const back = backStack({
     // The phone layout, and touch screens (a tablet's back gesture). A desktop with a mouse adds nothing.
     enabled,
@@ -3706,15 +4100,20 @@ function phoneNav() {
       { open: () => !!underWay(true), close: () => underWay(true)._cancel() },
       // Beside the chat on a wider screen, the side panel is part of the page rather than something on top of it.
       { open: () => isPhoneLayout() && !!panelMode(), close: closePanel },
-      { open: navOpen, close: closeNav },
       { open: () => !!underWay(false), close: () => underWay(false)._cancel() },
+      // The phone layout: Reels full screen goes back to its chat, a conversation to its list, and a list other than
+      // Home's to Home's (from there Back leaves the app).
+      { open: () => isPhoneUI() && !!reelsFull(), close: () => (S.view.type === 'myreels' ? phoneBack() : setConvTab('chat')) },
+      { open: () => isPhoneUI() && M.level === 'conv', close: phoneBack },
+      { open: () => isPhoneUI() && M.level === 'list' && M.tab !== 'home', close: () => phoneTab('home') },
+      { open: navOpen, close: closeNav },
     ],
   });
   // Whatever opens or closes them: the drawer and panel are classes on the body; pictures, menus, sheets and dialogs
   // are added and removed. Recording, editing and replying come and go inside the chat and the side panel, which are
   // watched only while Back is Hearth's (they change with every message).
   const watch = new MutationObserver(() => back.sync());
-  watch.observe(document.body, { attributes: true, attributeFilter: ['class'], childList: true });
+  watch.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-mtab'], childList: true }); // (data-mtab: the phone's tab)
   watch.observe($('#layer'), { childList: true });
   const inside = new MutationObserver(() => back.sync());
   const watchInside = () => {
@@ -3725,10 +4124,23 @@ function phoneNav() {
   const swipes = edgeSwipes({
     enabled: () => isPhoneLayout() && isTouchUI(),
     blocked: () => !!(viewer() || popup() || actions() || dialog()),
-    drawer: { isOpen: navOpen, parts: () => [$('#rail'), $('#sidebar')], scrim: () => $('.nav-scrim'), setOpen: (on) => (on ? document.body.classList.add('nav-open') : closeNav()) },
-    panel: { isOpen: () => !!panelMode(), el: () => $('#members'), close: closePanel },
+    // The phone layout has no drawer: a swipe from the left edge takes the panel away, or else the conversation (back
+    // to its list, which shows underneath as it goes: app.css).
+    drawer: M_UI ? null : { isOpen: navOpen, parts: () => [$('#rail'), $('#sidebar')], scrim: () => $('.nav-scrim'), setOpen: (on) => (on ? document.body.classList.add('nav-open') : closeNav()) },
+    panel: {
+      isOpen: () => !!panelMode() || (isPhoneUI() && M.level === 'conv' && !reelsFull()),
+      el: () => (panelMode() ? $('#members') : $('#main')),
+      close: () => (panelMode() ? closePanel() : phoneBack()),
+    },
   });
-  onDeviceChange(() => { swipes.update(); watchInside(); back.sync(); });
+  onDeviceChange(() => {
+    // Turned or resized into the phone layout: what was showing stays, pushed over its list; and out of it, the usual
+    // columns. (A different layout needs a new swipe handler: the drawer comes or goes.)
+    if (isPhoneUI() && !document.body.classList.contains('m-ui')) { M.level = ['home'].includes(S.view.type) ? 'list' : 'conv'; M.tab = tabFor(S.view, 'home'); }
+    phoneShell();
+    renderAll();
+    swipes.update(); watchInside(); back.sync();
+  });
 }
 function headTools(...items) { return h('div', { class: 'head-tools', role: 'toolbar', 'aria-label': 'Conversation tools' }, items.filter(Boolean)); }
 // The channel's Threads panel. Its badge counts pings in the channel's threads; a dot means new replies in a thread
@@ -3876,7 +4288,6 @@ function renderHeader() {
   if (at >= 0 && buttons()[at]) buttons()[at].focus({ preventScroll: true });
 }
 function drawHeader(head) {
-  head.append(navToggle());
   const v = S.view;
   const key = currentKey();
   const server = currentServer();
@@ -3891,6 +4302,9 @@ function drawHeader(head) {
   // wider screens).
   const sideCount = SIDE.count();
   const SIDE_ITEM = { label: S.panel === 'side' ? 'Hide pinned to side' : 'Pinned to side', icon: 'sidebar', hint: sideCount ? String(sideCount) : null, action: () => togglePanel('side') };
+  head.classList.remove('has-tabs');
+  if (isPhoneUI()) return drawPhoneHeader(head, { PIN_ITEM, MEDIA_ITEM, SCHED_ITEM, SIDE_ITEM });
+  head.append(navToggle());
   if (v.type === 'channel' && server && !isGroup(server)) {
     const c = server.channels.find((x) => x.id === v.channelId);
     if (!c) return;
@@ -5768,6 +6182,8 @@ function flashRow(el) {
   setTimeout(() => el.classList.remove('flash'), 2000);
 }
 async function jumpToMessage(key, id) {
+  // On a phone, the conversation comes over its list (opening another one does that by itself, through setView).
+  if (isPhoneUI() && M.level === 'list') { M.level = 'conv'; phoneShell(); }
   // A voice channel's chat whose pinned messages are showing in its place: back to the chat, at the message.
   if (currentKey() !== key || (S.view.type === 'voice' && !$('#messages'))) {
     if (key.startsWith('d:')) setView({ type: 'dm', dmId: key.slice(2), jumpTo: id });

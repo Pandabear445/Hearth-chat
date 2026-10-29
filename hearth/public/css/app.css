@@ -1842,6 +1842,222 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   .reply-spine { left: 23px; width: 21px; }
   .sending-note { padding-left: 50px; }
 }
+/* ===== Phone shell (stack + tabs)
+   app.js phoneShell: a list page (body.m-list, the tab bar at the bottom, and on Home the server bar beside the list)
+   and the conversation pushed over it (body.m-conv), full screen with a Back button. The level out of sight is inert.
+   Every rule is under body.m-ui, which only the phone layout has, so a computer's screen never changes. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  body.m-ui { --tab-h: 60px; --m-ease: cubic-bezier(.25, .8, .25, 1); }
+  body.m-ui #app { overflow: clip; }
+  body.m-ui .nav-scrim, body.m-ui .nav-toggle, body.m-ui #rail .rail-inbox, body.m-ui #rail .rail-item:has(> .rail-dms) { display: none !important; }
+  /* The list level: the server bar and the list, under the conversation's level. */
+  body.m-ui #rail, body.m-ui #sidebar {
+    position: fixed; top: 0; bottom: 0; z-index: 5; transform: none; visibility: visible;
+    transition: transform .26s var(--m-ease), visibility 0s;
+  }
+  body.m-ui #rail {
+    left: 0; width: calc(var(--rail-w) + env(safe-area-inset-left)); gap: 8px; background: rgb(var(--bg));
+    padding: calc(12px + env(safe-area-inset-top)) 0 calc(var(--tab-h) + env(safe-area-inset-bottom) + 12px) env(safe-area-inset-left);
+  }
+  body.m-ui #rail .rail-btn { width: 48px; height: 48px; border-radius: 16px; }
+  body.m-ui #sidebar {
+    left: calc(var(--rail-w) + env(safe-area-inset-left)); right: 0; width: auto; border: 0; border-left: 1px solid var(--line);
+    border-radius: 18px 0 0 0; background: rgb(var(--s1));
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) calc(var(--tab-h) + env(safe-area-inset-bottom)) 0;
+  }
+  body.m-ui:not([data-mtab='home']) #rail { transform: translateX(-100%); visibility: hidden; transition: transform .26s var(--m-ease), visibility 0s .26s; }
+  body.m-ui:not([data-mtab='home']) #sidebar { left: 0; border: 0; border-radius: 0; padding-left: env(safe-area-inset-left); }
+  body.m-ui.m-conv #rail, body.m-ui.m-conv #sidebar { transform: translateX(-28%); visibility: hidden; transition: transform .26s var(--m-ease), visibility 0s .26s; }
+  body.m-ui.m-conv #rail { transform: translateX(-100%); }
+  /* A swipe from the edge takes the conversation away under the finger, with the list showing underneath. */
+  body.m-ui.m-conv.panel-swiping:not(.panel-open) #sidebar, body.m-ui.m-conv.panel-swiping:not(.panel-open)[data-mtab='home'] #rail { visibility: visible; transform: none; transition: none; }
+  body.m-ui.panel-swiping #main { transition: none; }
+  /* The conversation level. */
+  body.m-ui #main { position: relative; z-index: 6; background-color: rgb(var(--s2)); transition: transform .26s var(--m-ease), visibility 0s; box-shadow: -10px 0 30px rgb(0 0 0 / .25); }
+  body.m-ui.m-list #main { transform: translateX(100%); visibility: hidden; transition: transform .26s var(--m-ease), visibility 0s .26s; }
+  body.m-ui #members { animation: m-push .22s var(--m-ease); }
+  @keyframes m-push { from { opacity: 0; transform: translateX(28px); } }
+
+  /* The tab bar (app.js renderTabbar): only on the list level, and not over the keyboard. */
+  #tabbar { display: none; }
+  body.m-ui.m-list #tabbar:not([hidden]) {
+    display: grid; grid-template-columns: repeat(4, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 26;
+    height: calc(var(--tab-h) + env(safe-area-inset-bottom)); padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background: rgb(var(--s1) / .96); border-top: 1px solid var(--line); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  }
+  html.kb-open #tabbar { display: none !important; }
+  body.m-ui .tab-btn { min-height: 48px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--muted); font-size: 12px; font-weight: 600; }
+  body.m-ui .tab-ic { position: relative; display: grid; place-items: center; width: 58px; height: 32px; border-radius: 16px; transition: background var(--dur-2), color var(--dur-2); }
+  body.m-ui .tab-ic > .ic { width: 23px; height: 23px; }
+  body.m-ui .tab-btn[aria-current='page'] { color: var(--text); }
+  body.m-ui .tab-btn[aria-current='page'] .tab-ic { background: rgb(var(--accent-rgb) / .2); color: var(--accent-ink, var(--accent)); }
+  body.m-ui .tab-btn:active .tab-ic { background: var(--active); }
+  body.m-ui .tab-badge {
+    position: absolute; top: -3px; left: 34px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+    background: var(--danger-fill); color: #fff; font: 700 11px/18px var(--font); text-align: center; box-shadow: 0 0 0 2px rgb(var(--s1));
+  }
+  body.m-ui .tab-badge.dot { min-width: 10px; width: 10px; height: 10px; padding: 0; top: 2px; left: 38px; background: var(--text); }
+  body.m-ui .tab-badge[hidden] { display: none; }
+
+  /* A list page's header: a big title with its buttons, then (Messages) search. */
+  body.m-ui #sidebar { display: flex; flex-direction: column; }
+  body.m-ui #sidebar-head { order: 0; height: auto; min-height: 60px; flex-direction: column; align-items: stretch; justify-content: center; gap: 10px; padding: 10px 14px 8px 16px; border-bottom: 0; }
+  body.m-ui #sidebar-head.has-banner { padding: 0 0 8px; }
+  body.m-ui #user-panel { order: 1; }
+  body.m-ui #sidebar-body { order: 2; padding: 4px 8px 20px; gap: 2px; }
+  body.m-ui #voice-panel { order: 3; }
+  body.m-ui .m-page-head { display: flex; align-items: center; gap: 6px; min-height: 44px; }
+  body.m-ui .m-page-title { flex: 1; min-width: 0; font: 800 27px/1.15 var(--font-display); letter-spacing: -.025em; color: var(--text); outline: none; }
+  body.m-ui .m-page-tools { display: flex; align-items: center; gap: 6px; }
+  body.m-ui .m-page-tools .icon-btn { width: 44px; height: 44px; border-radius: 50%; background: var(--hover); }
+  body.m-ui .m-page-tools .link-btn { min-height: 44px; padding: 0 10px; font-size: 14.5px; }
+  body.m-ui #sidebar-head .find-btn { height: 44px; border-radius: 12px; font-size: 15px; padding: 0 14px; gap: 10px; }
+  body.m-ui #sidebar-head .find-btn .ic { width: 18px; height: 18px; }
+  body.m-ui #sidebar-head .find-btn kbd { display: none; }
+  body.m-ui .server-head { height: 52px; font-size: 19px; padding: 0 10px; border-radius: 12px; }
+  body.m-ui .has-banner .server-head { margin: 0 6px; width: auto; }
+
+  /* Rows a finger's size apart. */
+  body.m-ui .nav-row { height: 52px; gap: 14px; padding: 0 14px; border-radius: 14px; font-size: 16px; }
+  body.m-ui .nav-row .ic { width: 22px; height: 22px; }
+  body.m-ui .nav-row.active, body.m-ui .dm-row.active, body.m-ui .ch-row.active { box-shadow: none; }
+  body.m-ui .dm-row { min-height: 68px; gap: 14px; padding: 8px 12px; border-radius: 16px; }
+  body.m-ui .dm-row > .av { --size: 46px !important; }
+  body.m-ui .dm-row > .group-av { --size: 46px !important; }
+  body.m-ui .dm-row > .group-av > .av { --size: 32px !important; }
+  body.m-ui .dm-row-text { gap: 2px; }
+  body.m-ui .dm-row-name { font-size: 16.5px; }
+  body.m-ui .dm-row-time { font-size: 12.5px; }
+  body.m-ui .dm-row-status { font-size: 14.5px; }
+  body.m-ui .dm-row .badge { height: 22px; min-width: 22px; border-radius: 11px; font-size: 12px; line-height: 22px; }
+  body.m-ui .group-label, body.m-ui .cat-head { padding: 18px 6px 6px 14px; font-size: 13px; }
+  body.m-ui .cat-toggle { font-size: 13px; gap: 6px; min-height: 40px; }
+  body.m-ui .cat-head .icon-btn.sm, body.m-ui .group-label .icon-btn.sm { width: 40px; height: 40px; }
+  body.m-ui .ch-row { border-radius: 12px; }
+  body.m-ui .ch-main { height: 48px; gap: 12px; padding: 0 14px; font-size: 16.5px; }
+  body.m-ui .ch-ic { width: 21px !important; height: 21px !important; }
+  body.m-ui .ch-gear { opacity: .75; width: 44px; height: 44px; margin-right: 2px; }
+  body.m-ui .ch-row.unread:not(.active)::before { right: 16px; width: 8px; height: 8px; }
+  body.m-ui .ch-row.active::after { top: 12px; bottom: 12px; }
+  body.m-ui .ev-row { min-height: 52px; font-size: 15.5px; border-radius: 14px; }
+  body.m-ui .vc-users { padding-left: 44px; }
+  body.m-ui .vc-user { min-height: 40px; font-size: 15px; }
+  body.m-ui .sidebar-empty { font-size: 15px; padding: 10px 14px; }
+  body.m-ui .icon-btn { min-width: 40px; min-height: 40px; }
+
+  /* Side panels (members, threads, pins…) cover the conversation: their rows and header roomier too. */
+  body.m-ui #members > .panel-head { height: calc(var(--head-h) + 4px); padding: 0 4px 0 16px; }
+  body.m-ui #members > .panel-head h2 { font-size: 17px; }
+  body.m-ui #members .member { min-height: 54px; gap: 12px; padding: 6px 12px; border-radius: 14px; font-size: 15.5px; }
+  body.m-ui #members .member .av { --size: 40px !important; }
+
+  /* Notifications, as a page. */
+  body.m-ui .inbox-page { width: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; overflow: visible; }
+  body.m-ui .inbox-page .seg { margin: 2px 4px 10px; }
+  body.m-ui .inbox-page .seg-btn { flex: 1 1 0; min-height: 40px; font-size: 14.5px; }
+  body.m-ui .inbox-page .inbox-list { padding: 0; overflow: visible; }
+  body.m-ui .inbox-page .inbox-day { padding: 14px 12px 6px; font-size: 13px; }
+  body.m-ui .inbox-page .inbox-item { min-height: 64px; padding: 12px; gap: 12px; border-radius: 14px; }
+  body.m-ui .inbox-page .inbox-text strong { font-size: 15.5px; }
+  body.m-ui .inbox-page .inbox-snippet { font-size: 14.5px; }
+  body.m-ui .inbox-page .inbox-time { font-size: 12.5px; }
+  body.m-ui .inbox-page .inbox-item.unread::after { top: 20px; right: 14px; width: 9px; height: 9px; }
+  body.m-ui .inbox-page .panel-empty { padding: 60px 20px; }
+
+  /* You: your card, then what's yours. */
+  body.m-ui #user-panel { display: none; }
+  body.m-ui.m-list[data-mtab='you'] #user-panel { display: flex; min-height: 84px; margin: 2px 16px 14px; padding: 10px 8px 10px 10px; border-radius: 20px; gap: 6px; }
+  body.m-ui[data-mtab='you'] #user-panel .me-btn { gap: 14px; padding: 4px 6px; border-radius: 14px; }
+  body.m-ui[data-mtab='you'] #user-panel .me-btn > .av { --size: 58px !important; }
+  body.m-ui[data-mtab='you'] #user-panel .me-btn > .av .av-initials { font-size: 22px !important; }
+  body.m-ui[data-mtab='you'] #user-panel .me-text .uname { font-size: 19px; font-weight: 800; }
+  body.m-ui[data-mtab='you'] #user-panel .me-sub { font-size: 14.5px; }
+  body.m-ui #user-panel .me-actions .icon-btn { width: 48px; height: 48px; border-radius: 50%; }
+  body.m-ui:not([data-mtab='you']) #voice-panel, body.m-ui.m-conv #voice-panel { display: none !important; }
+  body.m-ui #voice-panel { margin: 0 16px 12px; padding: 12px 12px 12px 16px; border-radius: 18px; }
+  body.m-ui .vp-controls { gap: 6px; }
+  body.m-ui .vp-controls .icon-btn { height: 48px; border-radius: 14px; }
+  body.m-ui .m-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+  body.m-ui .m-row-text small { font-size: 13.5px; font-weight: 500; color: var(--muted); }
+  body.m-ui .m-you-row { height: auto; min-height: 56px; padding: 6px 10px 6px 14px; }
+  body.m-ui .m-row-chev { width: 18px !important; height: 18px !important; color: var(--muted); }
+  body.m-ui .m-sep { height: 1px; flex: none; margin: 8px 14px; background: var(--line); }
+
+  /* The call you're in: floating over the lists, a bar across the top of a conversation. */
+  #m-callbar { display: none; }
+  body.m-ui #m-callbar:not([hidden]) {
+    display: flex; align-items: center; gap: 4px; position: fixed; z-index: 27; left: 10px; right: 10px;
+    bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 10px); min-height: 60px; padding: 6px 8px 6px 14px; border-radius: 18px;
+    background: rgb(var(--elev)); border: 1px solid rgb(63 207 131 / .4); box-shadow: var(--pop-shadow); animation: m-call-in .22s var(--m-ease);
+  }
+  @keyframes m-call-in { from { opacity: 0; transform: translateY(12px); } }
+  body.m-ui.m-list.m-call #sidebar { padding-bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 76px); }
+  body.m-ui #m-callbar .cb-where { flex: 1; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 12px; text-align: left; }
+  body.m-ui .cb-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--ok); box-shadow: 0 0 0 4px rgb(63 207 131 / .18); }
+  body.m-ui .cb-dot.q-connecting, body.m-ui .cb-dot.q-warn { background: var(--idle); box-shadow: 0 0 0 4px rgb(240 194 75 / .18); }
+  body.m-ui .cb-dot.q-failed { background: var(--danger); box-shadow: none; }
+  body.m-ui .cb-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+  body.m-ui .cb-text small { font-size: 12.5px; font-weight: 700; color: var(--ok); }
+  body.m-ui .cb-text strong { font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  body.m-ui #m-callbar .icon-btn { width: 44px; height: 44px; border-radius: 50%; background: var(--hover); flex: none; }
+  body.m-ui #m-callbar .icon-btn.off { color: var(--danger); }
+  body.m-ui #m-callbar .icon-btn.hang { background: var(--danger-fill); color: #fff; }
+  body.m-ui.m-conv #m-callbar:not([hidden]) {
+    top: 0; bottom: auto; left: 0; right: 0; min-height: 0; height: calc(env(safe-area-inset-top) + 50px); border-radius: 0; border: 0; box-shadow: none;
+    padding: env(safe-area-inset-top) calc(4px + env(safe-area-inset-right)) 0 calc(14px + env(safe-area-inset-left));
+    background: color-mix(in oklab, var(--ok) 26%, rgb(var(--s1))); animation: none;
+  }
+  body.m-ui.m-conv #m-callbar .icon-btn:not(.hang) { background: transparent; }
+  body.m-ui.m-conv.m-call #main { padding-top: calc(env(safe-area-inset-top) + 50px); }
+  html.kb-open body.m-ui.m-conv #m-callbar { display: none; }
+  html.kb-open body.m-ui.m-conv.m-call #main { padding-top: env(safe-area-inset-top); }
+  body.m-ui:has(.reels-layer.full:not([hidden])) #m-callbar { display: none !important; }
+
+  /* The conversation's header: Back, the name with a line under it, two buttons and More. */
+  body.m-ui #main-head { height: calc(var(--head-h) + 4px); gap: 2px; padding: 0 4px 0 2px; }
+  body.m-ui #main-head.has-tabs { height: auto; flex-wrap: wrap; padding-bottom: 8px; row-gap: 4px; }
+  body.m-ui #main-head.has-tabs > .head-title { min-height: calc(var(--head-h) + 4px); }
+  body.m-ui #main-head .icon-btn { width: 44px; height: 44px; border-radius: 50%; }
+  body.m-ui #main-head .head-back .ic { width: 26px; height: 26px; }
+  body.m-ui #main-head .head-title { gap: 10px; }
+  body.m-ui .head-names { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.2; }
+  body.m-ui .head-title h1 { max-width: 100%; font-size: 17px; outline: none; }
+  body.m-ui .head-name-btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; color: inherit; text-align: left; }
+  body.m-ui .head-sub { display: block; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.m-ui .head-sub.warn { color: var(--danger); font-weight: 600; }
+  body.m-ui #main-head .head-tools { gap: 0; }
+  body.m-ui #main-head .head-tools .icon-btn.live { color: var(--ok); }
+  body.m-ui #main-head .head-tools .icon-btn.hang { color: #fff; background: var(--danger-fill); }
+  body.m-ui #main-head .m-head-tabs { order: 3; flex-basis: 100%; gap: 6px; padding: 0 10px; }
+  body.m-ui .m-head-tabs .tab { min-height: 40px; padding: 0 16px; border-radius: 20px; background: var(--hover); font-size: 14.5px; }
+  body.m-ui .m-head-tabs .tab.active { background: rgb(var(--accent-rgb) / .2); color: var(--text); }
+  body.m-ui .conv-tabs { padding-left: 10px; padding-right: 10px; }
+
+  /* The chat: a little more room at the edges. */
+  body.m-ui .composer-wrap { padding: 0 10px 8px; }
+  html.kb-open body.m-ui .composer-wrap { padding-bottom: 6px; }
+  body.m-ui .composer { border-radius: 22px; }
+  body.m-ui .msg { margin-inline: 6px; }
+
+  /* Sideways (a short screen): a slimmer tab bar, its labels beside the icons, and a smaller call bar. */
+  @media (max-height: 500px) {
+    body.m-ui { --tab-h: 48px; }
+    body.m-ui .tab-btn { flex-direction: row; gap: 6px; }
+    body.m-ui .tab-ic { width: 44px; height: 30px; }
+    body.m-ui #m-callbar:not([hidden]) { left: auto; width: min(420px, calc(100% - 20px)); min-height: 52px; padding-block: 4px; }
+    body.m-ui.m-conv #m-callbar:not([hidden]) { width: auto; left: 0; height: calc(env(safe-area-inset-top) + 44px); }
+    body.m-ui.m-conv.m-call #main { padding-top: calc(env(safe-area-inset-top) + 44px); }
+    body.m-ui.m-list.m-call #sidebar { padding-bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 66px); }
+  }
+
+  /* Reduce motion (Hearth's own setting, or the device's): the levels swap without sliding. */
+  html.reduce-motion body.m-ui #main, html.reduce-motion body.m-ui #sidebar, html.reduce-motion body.m-ui #rail, html.reduce-motion body.m-ui #members,
+  html.reduce-motion body.m-ui #m-callbar, html.reduce-motion body.m-ui .modal { transition: none !important; animation: none !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body.m-ui #main, body.m-ui #sidebar, body.m-ui #rail { transition: none !important; }
+  body.m-ui #members, body.m-ui #m-callbar { animation: none; }
+}
 /* Touch screens: a sideways swipe in the chat doesn't take the browser back out of Hearth (Back still works, and
    closes what's open first: js/phone-nav.js). */
 @media (pointer: coarse) {
