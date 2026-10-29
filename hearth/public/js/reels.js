@@ -71,6 +71,8 @@ export function cleanSession(s) {
     by: typeof s.by === 'string' ? s.by : '', hostOnly: !!s.hostOnly, mid: s.mid, i: Number.isInteger(s.i) && s.i >= 0 && s.i <= 3 ? s.i : 0,
     playing: !!s.playing, position: Math.max(0, num(s.position)), updatedAt: num(s.updatedAt), startAt: num(s.startAt),
     seq: num(s.seq), lastBy: typeof s.lastBy === 'string' ? s.lastBy : '', lastAction: typeof s.lastAction === 'string' ? s.lastAction : '', dir: s.dir === -1 ? -1 : 1,
+    brainrot: s.brainrot === true, // Brainrot mode on for everyone (brainrot.js): a yes or no, and who turned it on
+    brainrotBy: s.brainrot === true && typeof s.brainrotBy === 'string' && MID.test(s.brainrotBy) ? s.brainrotBy : '',
     following: ids(s.following), ready: ids(s.ready),
   };
 }

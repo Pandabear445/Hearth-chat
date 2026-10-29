@@ -20,6 +20,7 @@ import { parseSocialUrl, KIND_NAME, itemLabel } from './social.js';
 import { socialLinksIn } from './share.js';
 import { linkOf } from './my-reels.js';
 import { feedItems, indexOf, isItem, step, liveRange, playersAllowed, cleanSession, withLine, swipedText, sharedPosition, COUNTDOWN_MS } from './reels.js';
+import { createBrainrot } from './brainrot.js';
 
 const MORE_WITHIN = 4; // items from the end at which an older page is asked for
 const PAGES_PER_ASK = 4; // pages read in a row looking for more videos before waiting to be asked again
@@ -121,6 +122,7 @@ export function createReels(deps) {
     // An undo bar left showing: nothing was sent, and nothing will be (you left before it went).
     if (st.pending) { clearTimeout(st.pending.timer); st.pending = null; toast('Not added: you left the Reels tab before it went.'); }
     for (const pl of st.players.values()) pl.destroy();
+    if (st.br) st.br.destroy();
     if (st.observer) st.observer.disconnect();
     clearInterval(st.timer); clearInterval(st.countTimer); clearTimeout(st.startTimer);
     st = null;
@@ -204,7 +206,9 @@ export function createReels(deps) {
       h('button', { class: 'icon-btn reels-back', 'aria-label': 'Back to the chat', 'data-tip': 'Back to the chat', onclick: () => deps.setTab('chat') }, icon('chevronLeft')),
       h('div', { class: 'reels-title' }, h('strong', null, st.mine ? 'My Reels' : 'Reels'), h('span', null, st.mine ? 'Private: only you see these' : deps.title(st.key))),
       h('button', { class: 'icon-btn reels-add-btn', 'aria-label': 'Add a link', 'data-tip': 'Add a link', onclick: () => { st.addOpen = !st.addOpen; drawSide(); } }, icon('plus')));
-    L.append(top, st.bar, h('div', { class: 'reels-body' }, h('div', { class: 'reels-main' }, st.feed, st.empty, st.cover, st.count, st.offer, st.undo), st.side));
+    const main = h('div', { class: 'reels-main' }, st.feed, st.empty, st.cover, st.count, st.offer, st.undo);
+    L.append(top, st.bar, h('div', { class: 'reels-body' }, main, st.side));
+    brainrot(main);
     // A link dropped anywhere on the tab is added (like pasting it).
     L.ondragover = (e) => { if (!st || !e.dataTransfer || ![...e.dataTransfer.types].some((t) => t === 'text/uri-list' || t === 'text/plain')) return; e.preventDefault(); L.classList.add('dropping'); };
     L.ondragleave = (e) => { if (e.target === L || !L.contains(e.relatedTarget)) L.classList.remove('dropping'); };
@@ -218,6 +222,31 @@ export function createReels(deps) {
       for (const e of entries) if (e.isIntersecting && e.intersectionRatio >= 0.6) onSettle(+e.target.dataset.i);
     }, { root: st.feed, threshold: [0.6] });
     drawCover();
+  }
+  // Brainrot mode (brainrot.js): gameplay under (or beside) the feed. The captions are the preview title of the video
+  // on screen, from the message here (decrypted on this device); nothing about it goes to the server.
+  function brainrot(main) {
+    const me0 = st;
+    st.br = createBrainrot({
+      kind: 'reels', frame: main, me: deps.me, nameOf: deps.nameOf,
+      // Beside the feed once half the width still fits an upright video (and never on a phone's full screen).
+      row: (w, hgt) => !deps.isPhone() && w >= 640 && w >= hgt * 0.95,
+      caption: () => { const it = current(); const prev = it && deps.card(it.m, it.p.url); return (prev && prev.title) || ''; },
+      progress: () => {
+        const it = current(); const pl = it && st.players.get(it.vid);
+        const d = pl && !pl.pending && pl.duration ? pl.duration() : 0;
+        return d ? pl.time() / d : null;
+      },
+      share: { can: () => inSession() && mayControl(), set: (on) => deps.socket().emit('reels:brainrot', { key: st.key, on }, (r) => { if (r && r.error) toast(r.error, 'error'); }) },
+      // The feed got shorter or narrower: back to the start of the video on screen.
+      onLayout: () => requestAnimationFrame(() => {
+        if (st !== me0) return;
+        const c = current() && st.cards.get(current().vid);
+        if (c) { st.followTo = st.index; st.followUntil = Date.now() + 600; st.feed.scrollTop = c.offsetTop; }
+      }),
+      onChange: () => { if (st === me0 && st.br) drawBar(); },
+    });
+    main.append(st.br.el);
   }
   function emptyEl() {
     return h('div', { class: 'reels-empty-in' },
@@ -458,6 +487,8 @@ export function createReels(deps) {
     const was = st.session;
     st.session = s;
     st.following = !!s && s.following.includes(me);
+    // Brainrot mode for everyone: only for the people following (and each can still turn it off).
+    if (st.br) st.br.setSession({ live: !!s, on: !!(s && s.brainrot && st.following), by: (s && s.brainrotBy) || '' });
     if (s && s.seq !== st.lastSeq) {
       if (st.lastSeq && s.lastBy && s.lastBy !== me && st.following) {
         const name = deps.nameOf(s.lastBy);
@@ -555,7 +586,8 @@ export function createReels(deps) {
       const others = st.viewers.filter((u) => u !== me);
       add(st.bar, 
         h('button', { class: 'btn primary sm reels-start', disabled: !st.items.length, onclick: () => start(false) }, icon('people'), 'Scroll together'),
-        h('span', { class: 'reels-sub' }, others.length ? `${others.length === 1 ? deps.nameOf(others[0]) : `${others.length} others`} here now` : deps.inCall(st.key) ? 'Everyone in the call can join' : 'Starts for everyone viewing this tab'));
+        h('span', { class: 'reels-sub' }, others.length ? `${others.length === 1 ? deps.nameOf(others[0]) : `${others.length} others`} here now` : deps.inCall(st.key) ? 'Everyone in the call can join' : 'Starts for everyone viewing this tab'),
+        st.br ? st.br.barItems() : null);
       return;
     }
     const people = s.following.filter((u) => u !== me);
@@ -572,7 +604,8 @@ export function createReels(deps) {
       })() : null,
       st.following ? h('button', { class: 'btn ghost sm', onclick: () => follow_(false) }, 'Leave')
         : h('button', { class: 'btn primary sm', onclick: () => follow_(true) }, 'Rejoin'),
-      host || !s.hostOnly ? h('button', { class: 'btn ghost sm danger-text', onclick: () => deps.socket().emit('reels:stop', { key: st.key }, (r) => r && r.error && toast(r.error, 'error')) }, 'Stop') : null);
+      host || !s.hostOnly ? h('button', { class: 'btn ghost sm danger-text', onclick: () => deps.socket().emit('reels:stop', { key: st.key }, (r) => r && r.error && toast(r.error, 'error')) }, 'Stop') : null,
+      st.br ? st.br.barItems() : null);
     // Instagram on screen: no player to move, so a ready check and "start together".
     const cur = current();
     if (inSession() && cur && cur.p.kind === 'instagram' && isItem(cur, s.mid, s.i)) {
@@ -708,6 +741,7 @@ export function createReels(deps) {
     if (!m) return;
     m.reactions = reactions;
     for (const c of st.cards.values()) if (c._it.mid === mid) drawActions(c);
+    if (st.br && current() && current().mid === mid) st.br.react(); // Brainrot mode: a little shake
   }
   // After a reconnect: back in the room, still following or not as this person chose.
   function rejoin() { if (st && !st.mine) deps.socket().emit('reels:join', { key: st.key, follow: !st.left }, (r) => { if (st && r && r.state) onState(r.state); }); }

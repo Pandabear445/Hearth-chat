@@ -3,9 +3,10 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { exact, makeGif, makePng, totp, newPassword, Person, PHONE } from './harness.mjs';
+import { brainrot } from './brainrot.mjs';
 
 export function check(ok, message) { if (!ok) throw new Error(message); }
-const SERVER = 'E2E Hall';
+export const SERVER = 'E2E Hall';
 
 // ------------------------------------------------------------------ 1. accounts
 async function accounts(t) {
@@ -1049,7 +1050,7 @@ const FAKE_TIKTOK = `<!doctype html><html><body style="margin:0;height:100vh;bac
   post('onPlayerReady');
   setInterval(() => post('onCurrentTime', { currentTime: now(), duration: 60 }), 250);
 </script></body></html>`;
-async function fakeSocialSites(p) {
+export async function fakeSocialSites(p) {
   const asked = [];
   await p.context.route(/^https:\/\/www\.(tiktok|instagram)\.com\//, (route) => {
     const u = route.request().url();
@@ -6397,6 +6398,7 @@ export const FLOWS = [
   ['tiktok and instagram: tap to load in place (nothing before), sandboxed, side by side, Always; watch together keeps a TikTok in step, a reel starts together after a ready check, a mixed queue, side by side', socialVideos],
   ['reels tab: the conversation’s TikToks and reels newest first, nothing before a tap, muted until sound, react, add a link; scroll together follows who swipes, a reel’s ready check and countdown, Only I control, leave and rejoin; a phone full screen', reelsTab],
   ['getting videos in: shared to Hearth (/share) picks a conversation or My Reels, junk refused, My Reels sealed; liked videos imported from exports into My Reels and a conversation, never uploaded; paste with Undo, drop; a phone’s picker and import', videosIn],
+  ['brainrot mode: off by default, a warning the first time, gameplay running beside or below the feed, the slider, Rail Runner, a YouTube background only after a tap, Esc, reduced motion; on for everyone scrolling together (asked first, off for yourself), a phone 50/50, a call and watch together', brainrot],
   ['audit log and reports: moderation as sentences, filters, live entries; a report reaches the server’s moderators', auditAndReports],
   ['dm call: ring, accept, hang up, decline', dmCall],
   ['group chat: create, talk both ways, call rings', groupChat],

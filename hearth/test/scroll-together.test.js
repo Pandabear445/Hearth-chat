@@ -111,10 +111,10 @@ test('scroll together: only people who can read the conversation join; it names 
   const s = gb.state.session;
   assert.deepEqual([s.by, s.mid, s.i, s.hostOnly, s.following.sort()], [boss.id, m1, 0, false, [boss.id, guest.id].sort()]);
   assert.ok((await ack(sb, 'reels:start', { key, mid: m1 })).error, 'one session at a time');
-  // Nothing but ids, numbers and user ids goes out: never a link or any text.
+  // Nothing but ids, numbers, user ids and yes/no (brainrot, docs/design/BRAINROT.md) goes out: never a link or any text.
   const sent = JSON.stringify(gb.all);
   assert.doesNotMatch(sent, /https?:|tiktok|instagram/i);
-  assert.deepEqual(Object.keys(s).sort(), ['by', 'dir', 'following', 'hostOnly', 'i', 'lastAction', 'lastBy', 'mid', 'playing', 'position', 'ready', 'seq', 'startAt', 'updatedAt'].sort());
+  assert.deepEqual(Object.keys(s).sort(), ['brainrot', 'brainrotBy', 'by', 'dir', 'following', 'hostOnly', 'i', 'lastAction', 'lastBy', 'mid', 'playing', 'position', 'ready', 'seq', 'startAt', 'updatedAt'].sort());
   // Cleaning up for the next test.
   assert.equal((await ack(sb, 'reels:stop', { key })).ok, true);
   for (const x of [sb, sg]) assert.equal((await ack(x, 'reels:leave', {})).ok, true);

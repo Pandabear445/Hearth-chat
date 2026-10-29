@@ -99,10 +99,11 @@ but not what it links to (watch together, by contrast, sends the link itself).
 | `reels:ready` `{ key, mid, i, ready }` | someone following | |
 | `reels:follow` `{ key, on }` | someone viewing | leave / rejoin |
 | `reels:mode` `{ key, hostOnly }` | the starter (or staff) | |
+| `reels:brainrot` `{ key, on }` | the same | a boolean: Brainrot mode for everyone following ([BRAINROT.md](BRAINROT.md)) |
 | `reels:stop` `{ key }` | the starter, staff, or anyone following when everyone controls | |
 
 The server answers with `reels:state` to the viewers: `{ key, viewers: [user ids], session: { by, hostOnly, mid, i,
-playing, position, updatedAt, startAt, seq, lastBy, lastAction, dir, following, ready }, serverNow }`. Access is
+playing, position, updatedAt, startAt, seq, lastBy, lastAction, dir, brainrot, brainrotBy, following, ready }, serverNow }`. Access is
 checked on every event, and again for every viewer before each update goes out: someone who loses access (removed,
 a channel made private) stops hearing and is let go. Someone for whom the shared message is from before their
 history starts isn't sent the session at all. One tab per connection, 200 viewers per conversation, updates

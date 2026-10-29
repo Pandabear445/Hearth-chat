@@ -147,6 +147,10 @@ Each item is checked by `npm run test:a11y` unless marked otherwise.
 - `prefers-reduced-motion: reduce`, or Settings → Appearance → Reduce motion (`html.reduce-motion`), turns off
   animations and transitions (spinners excepted) and the profile effects layer (`.pfx`).
 - Falling emoji on profile pages (`page.js`) and smooth scrolling also respect the setting.
+- Brainrot mode (`brainrot.js`, docs/design/BRAINROT.md) is off by default and warns the first time; with the
+  setting its gameplay and emoji run at half speed, captions don't bounce, there's no shake or flash, and the
+  stimulation slider stops at 1. In any case no more than 3 flashes a second (WCAG 2.3.1, `flashLimiter`), Esc or ✕
+  turns it off, and its sounds only play after being turned on.
 - The suite checks that a toast's animation is ~0 s with the preference and non-zero without it.
 
 ### Colour contrast
