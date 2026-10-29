@@ -4788,7 +4788,9 @@ async function postQuantum(t) {
   const pqOf = () => t.server.rows('SELECT pq_public_key, enc_private_key FROM users WHERE id = ?', olgaId)[0];
   const newest = () => t.server.rows('SELECT ciphertext FROM dm_messages WHERE author_id IN (?, ?) ORDER BY created_at DESC, rowid DESC LIMIT 1', aliceId, olgaId)[0].ciphertext;
 
-  // alice writes first, to an account with no post-quantum key: P-256, as before.
+  // alice writes first, to an account with no post-quantum key: P-256, as before. (Her page may still be starting
+  // from the flow before: a reload in the middle of that can leave it blank.)
+  await alice.waitApp();
   await alice.page.reload();
   await alice.waitApp();
   await alice.railButton('Home');
