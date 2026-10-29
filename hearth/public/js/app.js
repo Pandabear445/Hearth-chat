@@ -154,7 +154,11 @@ const LS = {
   set(k, v) { lsCache.set(k, v); try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* full or blocked */ } },
 };
 // Another tab changed something: forget our copy so the next read picks it up.
-window.addEventListener('storage', (e) => { if (e.key) lsCache.delete(e.key); else lsCache.clear(); });
+window.addEventListener('storage', (e) => {
+  if (e.key) lsCache.delete(e.key); else lsCache.clear();
+  // Another tab of this browser took up the account's post-quantum seed (secure.js adoptPq): this one loads it too.
+  if (S.me && e.key === `hearth.pqseed.${S.me.id}`) sec.ensurePqKey();
+});
 
 // Several things asking to redraw the same part in one go (a burst of messages, people coming
 // online) redraw it once, on the next frame.
@@ -797,18 +801,10 @@ function startApp() {
     const keysNow = () => { const x = S.users[u.id]; return x ? `${x.publicKey || ''}|${x.signPublicKey || ''}` : ''; };
     const keysBefore = keysNow();
     const pqBefore = S.me.pqPublicKey || null;
-    // Your own public keys change only by a reset, which signs this device out: a record listing others for you is
-    // the server's, and this app keeps the ones it proved yours.
-    if (u.id === S.me.id) {
-      const k = sec.provenKeys();
-      if (k && ((u.publicKey && u.publicKey !== k.e) || (u.signPublicKey && u.signPublicKey !== k.s))) {
-        console.warn('The server listed other public keys for your account; keeping the ones this device proved.');
-        u = { ...u }; delete u.publicKey; delete u.signPublicKey;
-      }
-    }
+    const pqNow = u.id === S.me.id && 'pqPublicKey' in u ? u.pqPublicKey || null : pqBefore;
     setUser(u); sec.trust(u); refreshUserBits(u.id);
-    // Your account got a (new) post-quantum key on another device: this one asks it for the seed.
-    if (u.id === S.me.id && (S.me.pqPublicKey || null) !== pqBefore) sec.ensurePqKey();
+    // Your account's post-quantum key changed on another device: fetched and checked (a record never sets it, setUser).
+    if (u.id === S.me.id && pqNow !== pqBefore) sec.ownPqChanged();
     if (keysNow() !== keysBefore) { NOTES.onTrust(u.id); LOOK.onTrust(u.id); } // photo tags and backgrounds that didn't open with the keys known before
     // Outside images changed on another device: the image links on screen follow the new choice.
     if (u.id === S.me.id && outsideMode(S.me.privacy) !== outsideBefore) later(redrawImageLinks);
@@ -841,7 +837,6 @@ function startApp() {
     playSound('mention');
   });
   socket.on('keys:state', (st) => { if (S.me) sec.applyState(st); });
-  socket.on('dm:keys', ({ dmId } = {}) => { if (S.me && typeof dmId === 'string') sec.dmKeysChanged(dmId); });
   socket.on('call:ring', (p) => onRing(p));
   socket.on('call:end', ({ room }) => stopRinging(room));
   socket.on('call:declined', ({ room, userId }) => {
@@ -1376,10 +1371,19 @@ async function showUpdateNotes() {
   }
 }
 
+// Your own keys are never taken from a record the server pushes (a socket event, a member list, a profile): they change
+// only by a reset, which signs this device out, and the post-quantum one is fetched and checked (secure.js).
+const OWN_KEYS = ['publicKey', 'signPublicKey', 'pqPublicKey', 'pqSig'];
 function setUser(u) {
   if (!u) return;
+  if (S.me && u.id === S.me.id) {
+    const mine = { ...u };
+    OWN_KEYS.forEach((k) => { delete mine[k]; });
+    S.users[u.id] = mergeUser(S.users[u.id], mine);
+    S.me = mergeUser(S.me, mine);
+    return;
+  }
   S.users[u.id] = mergeUser(S.users[u.id], u);
-  if (S.me && u.id === S.me.id) S.me = mergeUser(S.me, u);
 }
 function getUser(id) {
   const u = S.users[id];
@@ -4942,7 +4946,8 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
   else if (m.dec && m.dec.error) body.append(h('div', { class: 'msg-text undecryptable' }, icon('lock'), 'This message could not be decrypted on this device.'));
   else if (m.dec && m.dec.pending) {
     body.append(h('div', { class: 'msg-text undecryptable' }, icon('lock'), m.dec.pq
-      ? 'Locked to your account\u2019s post-quantum key: enter your password once on this device (the bar above the message box) to read it.'
+      ? h('span', null, 'Locked to your account\u2019s post-quantum key: enter your password once on this device to read it. ',
+        h('button', { class: 'link-btn', type: 'button', onclick: () => unlockPq().catch((e) => { if (!e.cancelled) toast(e.message, 'error'); }) }, 'Enter password'))
       : m.dec.before
         ? 'Sent before you joined. Only members who had the key then can read it.'
         : 'Waiting for the encryption key from another member\u2026'));
@@ -8098,7 +8103,6 @@ function createComposer({ id, key, threadId, placeholder }) {
       const wait = /in (\d+)s/.exec(e.message || '');
       if (e.code === 'slowmode' && wait) startSlow(+wait[1]);
       if (e.cancelled) toast('Upload cancelled. Your message and files are back in the box.');
-      else if (e.code === 'rollback' && e.dmId) confirmDmRollback(e.dmId, e.message);
       else toast(e.message, 'error');
       // The password bar comes back if it was put off: this message needs it.
       if (e.code === 'need_password') { pqLater.clear(); if (composers.main) composers.main.renderExtras(); }
@@ -11267,17 +11271,6 @@ function pqNotice({ always = false } = {}) {
     h('span', { class: 'pq-bar-actions' },
       always ? null : h('button', { class: 'btn sm ghost', onclick: () => { pqLater.set(); if (composers.main) composers.main.renderExtras(); } }, 'Later'),
       h('button', { class: 'btn sm primary', onclick: go }, 'Enter password')));
-}
-// A DM whose server lists fewer encryption epochs than this device has seen (secure.js dmSendKey 'rollback'): after a
-// restore from a backup that's expected, and only you can tell. Confirmed, this device writes from what's listed now.
-function confirmDmRollback(dmId, why) {
-  modal({ title: 'This conversation’s encryption went back in time', size: 'sm', dismissable: true,
-    body: h('div', { class: 'stack' }, h('p', null, why),
-      h('p', { class: 'field-hint' }, 'If the server’s owner restored it from a backup, that’s expected: continue, and this device starts a new key for the conversation from what the server has now. If not, the server may be hiding newer keys; ask its owner first.')),
-    actions: [{ label: 'Cancel' }, { label: 'It was restored: continue', kind: 'primary', action: async () => {
-      await sec.acceptDmRollback(dmId);
-      toast('Done. Send your message again.');
-    } }] });
 }
 async function unlockPq() {
   const keys = await askPassword(app, { title: 'Unlock your encryption keys', text: 'Your post-quantum key is locked with your password, like the rest of your keys. Nothing else changes.', button: 'Unlock' });

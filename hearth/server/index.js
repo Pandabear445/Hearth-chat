@@ -326,7 +326,10 @@ function serverKeyInfo(serverId) {
   const waiting = s.key_epoch ? HIST.waitingFor(serverId, s.key_epoch) : [];
   // Who made the current key, so members (and moderators) can see who replaced it.
   const cur = s.key_epoch ? db.prepare('SELECT creator_id, created_at FROM server_epochs WHERE server_id = ? AND epoch = ?').get(serverId, s.key_epoch) : null;
-  return { keyEpoch: s.key_epoch, needsRotation: !!s.needs_rotation, missing, held, waiting, keyCreatorId: cur ? cur.creator_id : null, keyCreatedAt: cur ? cur.created_at : null };
+  // Older keys owed to members left out of them (key_owed), for the apps that hold them: { epoch: [userId] }.
+  const owed = {};
+  for (const r of db.prepare('SELECT o.epoch, o.user_id FROM key_owed o JOIN members m ON m.server_id = o.server_id AND m.user_id = o.user_id WHERE o.server_id = ? ORDER BY o.epoch DESC LIMIT 500').all(serverId)) (owed[r.epoch] ||= []).push(r.user_id);
+  return { keyEpoch: s.key_epoch, needsRotation: !!s.needs_rotation, missing, held, waiting, owed, keyCreatorId: cur ? cur.creator_id : null, keyCreatedAt: cur ? cur.created_at : null };
 }
 // createdAt: when the key was handed out, so an app only checks it against keys the sharer had back then.
 const keyOut = (k) => ({ epoch: k.epoch, wrapped: k.wrapped, wrapperId: k.wrapper_id, check: k.key_check, createdAt: k.created_at });
@@ -334,7 +337,7 @@ const keyOut = (k) => ({ epoch: k.epoch, wrapped: k.wrapped, wrapperId: k.wrappe
 // (server/joinhistory.js): their history starts then, with keys from that epoch (their app says it's waiting for
 // that key while the current one is older). Absent for everyone else.
 const keyStateFrom = (serverId, info, keys, since = null) => ({ serverId, keyEpoch: info.keyEpoch, needsRotation: info.needsRotation, keys, missing: info.missing, held: info.held, keyCreatorId: info.keyCreatorId, keyCreatedAt: info.keyCreatedAt,
-  ...(info.waiting.length ? { waiting: info.waiting } : {}), ...(since ? { since } : {}) });
+  ...(info.waiting.length ? { waiting: info.waiting } : {}), ...(Object.keys(info.owed || {}).length ? { owed: info.owed } : {}), ...(since ? { since } : {}) });
 // Your own wrapped keys, from the first epoch you may hold: someone who joined with that setting on never gets older
 // rows back, even ones of their own from an earlier membership.
 function keyState(serverId, userId, info = serverKeyInfo(serverId)) {
@@ -2616,6 +2619,10 @@ api.post('/me/pq-key', auth, wrap(async (req, res) => {
   if (!done) fail(409, 'Your keys changed on another device. Reload the page.', 'pq_exists');
   auditLog(req, !was ? 'pq_key_created' : was !== b.pqPublicKey ? 'pq_key_replaced' : 'pq_key_resaved', req.userId, row.username);
   broadcastUser(req.userId);
+  // Servers whose key they're missing, or owed an older one of (key_owed): the members' apps hear of it now and share it.
+  for (const r of db.prepare(`SELECT s.id FROM servers s JOIN members m ON m.server_id = s.id AND m.user_id = ?
+      WHERE (s.key_epoch > 0 AND NOT EXISTS (SELECT 1 FROM server_keys k WHERE k.server_id = s.id AND k.epoch = s.key_epoch AND k.user_id = m.user_id))
+         OR EXISTS (SELECT 1 FROM key_owed o WHERE o.server_id = s.id AND o.user_id = m.user_id)`).all(req.userId)) emitKeyState(r.id);
   res.json(selfUser(getUserRow(req.userId)));
 }));
 
@@ -3471,6 +3478,9 @@ api.post('/servers/:id/keys/rotate', auth, (req, res) => {
     db.prepare('INSERT INTO server_epochs (server_id, epoch, key_check, creator_id, created_at) VALUES (?, ?, ?, ?, ?)').run(s.id, cur.key_epoch + 1, check, req.userId, t);
     const ins = db.prepare('INSERT INTO server_keys (server_id, epoch, user_id, wrapped, wrapper_id, created_at) VALUES (?, ?, ?, ?, ?, ?)');
     given.forEach((m) => ins.run(s.id, cur.key_epoch + 1, m, wraps[m], req.userId, t));
+    // Left out (deferred): owed this key, so a member's app shares it with them once their post-quantum key is back.
+    const owe = db.prepare('INSERT OR IGNORE INTO key_owed (server_id, epoch, user_id, created_at) VALUES (?, ?, ?, ?)');
+    members.filter((m) => deferred.has(m) && !Object.hasOwn(wraps, m) && !held.includes(m)).forEach((m) => owe.run(s.id, cur.key_epoch + 1, m, t));
     // Everyone in the server now has this key (but whoever is held back, who gets it once verified), so anyone who
     // joined waiting for a new one (server/joinhistory.js) isn't any more.
     db.prepare('UPDATE servers SET key_epoch = ?, needs_rotation = 0, join_rotate_at = NULL WHERE id = ?').run(cur.key_epoch + 1, s.id);
@@ -3488,8 +3498,11 @@ api.post('/servers/:id/keys/share', auth, (req, res) => {
   rateLimit('share:' + req.userId, 60, 60 * 1000);
   const { epoch, wraps, pubs, pqs } = req.body || {};
   const st = db.prepare('SELECT key_epoch, needs_rotation FROM servers WHERE id = ?').get(s.id);
-  const cur = st.key_epoch;
-  if (!cur || Number(epoch) !== cur || st.needs_rotation) fail(409, 'That key is out of date.', 'epoch');
+  // The current key, or an older one only to members it's owed to (left out of it: key_owed).
+  const owedTo = new Set(db.prepare('SELECT user_id FROM key_owed WHERE server_id = ? AND epoch = ?').all(s.id, Number(epoch) || 0).map((r) => r.user_id));
+  const isCur = !!st.key_epoch && Number(epoch) === st.key_epoch && !st.needs_rotation;
+  if (!isCur && !owedTo.size) fail(409, 'That key is out of date.', 'epoch');
+  const cur = Number(epoch);
   if (!db.prepare('SELECT 1 FROM server_keys WHERE server_id = ? AND epoch = ? AND user_id = ?').get(s.id, cur, req.userId)) fail(403, 'You do not have this key.');
   const held = heldIn(s.id); // crypto-2: not until someone verifies them
   // Nor from them: the only key they can hold here is one they made alone after the reset (keys/rotate), and a
@@ -3500,9 +3513,10 @@ api.post('/servers/:id/keys/share', auth, (req, res) => {
   const stale = staleWraps(pubs, Object.keys(wraps || {}), pqs, wraps);
   const waiting = new Set(HIST.waitingFor(s.id, cur));
   for (const [uid, w] of Object.entries(wraps || {}).slice(0, 200)) {
-    if (stale.includes(uid) || held.includes(uid) || waiting.has(uid)) continue;
+    if (stale.includes(uid) || held.includes(uid) || waiting.has(uid) || (!isCur && !owedTo.has(uid))) continue;
     if (isMember(s.id, uid) && isWrapped(w)) n += ins.run(s.id, cur, uid, w, req.userId, now()).changes;
   }
+  db.prepare('DELETE FROM key_owed WHERE server_id = ? AND user_id IN (SELECT user_id FROM server_keys WHERE server_id = key_owed.server_id AND epoch = key_owed.epoch)').run(s.id);
   if (n) emitKeyState(s.id);
   res.json({ shared: n, stale, held: held.filter((uid) => wraps && Object.hasOwn(wraps, uid)) });
 });
@@ -4386,55 +4400,6 @@ api.post('/dms/:id/messages', auth, (req, res) => {
   DIS.checkTtl(req.body, d.disappear_secs);
   const replyTo = dmReplyIn(d, (req.body || {}).replyTo);
   res.json(postDmMessage(d, req.userId, { ciphertext, files, replyTo, replyFile: replyFileIn('dm_messages', replyTo, fileAsked) }, req.body));
-});
-// A DM's post-quantum epoch keys (e2ee.js wrapDmKey). Each epoch has one copy for each of the two, wrapped dk1:
-// <made at>:<keys tag>:<ephemeral P-256>:<ML-KEM-768 ciphertext>:<iv>:<key + tag> for the identity and post-quantum keys named with it
-// (checked against the account now, as for server keys, so a copy is never made for keys someone no longer has).
-// Either of the two may start the next epoch, one at a time and only as the next number; the server keeps them all,
-// so every device either of them signs in on can read the whole conversation.
-// (Since the review: dk1:<made at, ms>:<keys tag, 18 bytes>:<…>, the first two authenticated inside the wrap.)
-const isDmWrapped = (w) => {
-  if (typeof w !== 'string' || w.length > 2100) return false;
-  const p = w.split(':');
-  if (p.length !== 7) return false;
-  const e = b64Len(p[3]);
-  return p[0] === 'dk1' && /^[1-9][0-9]{12,13}$/.test(p[1]) && b64Len(p[2]) === 18 && e >= 60 && e <= 120 && b64Len(p[4]) === 1088 && b64Len(p[5]) === 12 && b64Len(p[6]) === 48;
-};
-function dmKeysFor(d, userId) {
-  const rows = db.prepare('SELECT epoch, user_id, wrapped, wrapper_id, public_key, pq_public_key, created_at FROM dm_keys WHERE dm_id = ? ORDER BY epoch').all(d.id);
-  const by = new Map();
-  for (const r of rows) {
-    if (!by.has(r.epoch)) by.set(r.epoch, { epoch: r.epoch, wrapperId: r.wrapper_id, createdAt: r.created_at, wrapped: null, keys: {} });
-    const e = by.get(r.epoch);
-    if (r.user_id === userId) e.wrapped = r.wrapped;
-    e.keys[r.user_id] = { publicKey: r.public_key, pq: pqFp(r.pq_public_key) };
-  }
-  return { epochs: [...by.values()] };
-}
-api.get('/dms/:id/keys', auth, (req, res) => {
-  const d = requireDm(req.params.id, req.userId);
-  res.json(dmKeysFor(d, req.userId));
-});
-api.post('/dms/:id/keys', auth, (req, res) => {
-  const d = requireDm(req.params.id, req.userId);
-  rateLimit('dmkeys:' + req.userId, 30, 60 * 60 * 1000);
-  if (isBlocked(d.user_a, d.user_b)) fail(403, 'You can\u2019t message this person.');
-  const { epoch, wraps, pubs } = req.body || {};
-  const both = [d.user_a, d.user_b];
-  if (!wraps || typeof wraps !== 'object' || Object.keys(wraps).length !== 2 || !both.every((u) => isDmWrapped(wraps[u]))) fail(400, 'Those wrapped keys aren\u2019t in the right format.', 'bad_wraps');
-  if (!pubs || typeof pubs !== 'object') fail(400, 'Missing keys.');
-  const rows = both.map((u) => getUserRow(u));
-  if (rows.some((r) => !r || r.deleted_at || !r.pq_public_key)) fail(409, 'Their keys changed. Try again.', 'stale_keys');
-  if (rows.some((r) => !pubs[r.id] || pubs[r.id].publicKey !== r.public_key || pubs[r.id].pq !== pqFp(r.pq_public_key))) fail(409, 'Their keys changed. Try again.', 'stale_keys');
-  const t = now();
-  db.transaction(() => {
-    const cur = db.prepare('SELECT MAX(epoch) AS e FROM dm_keys WHERE dm_id = ?').get(d.id).e || 0;
-    if (Number(epoch) !== cur + 1) fail(409, 'A new key was just made. Try again.', 'epoch');
-    const ins = db.prepare('INSERT INTO dm_keys (dm_id, epoch, user_id, wrapped, wrapper_id, public_key, pq_public_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-    rows.forEach((r) => ins.run(d.id, cur + 1, r.id, wraps[r.id], req.userId, r.public_key, r.pq_public_key, t));
-  })();
-  io.to(both.map((u) => `user:${u}`)).emit('dm:keys', { dmId: d.id });
-  res.json(dmKeysFor(d, req.userId));
 });
 // The DM a new one replies to, if it's really in this DM and hasn't disappeared.
 const dmReplyIn = (d, replyTo, t = now()) => (replyTo && alive(db.prepare('SELECT expires_at FROM dm_messages WHERE id = ? AND dm_id = ?').get(String(replyTo), d.id), t) ? String(replyTo) : null);

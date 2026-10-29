@@ -945,6 +945,7 @@ function securitySections(app) {
         // Joined a server that hides older messages from new members: their key is the next one, not shared.
         const fresh = st && st.since && st.since.epoch > st.keyEpoch;
         return { name: sv.name || 'group chat', ok, why: ok ? '' : fresh ? 'your key is on its way: this server gives new members a fresh key, which can take a few minutes'
+          : app.sec.waitingForPq(sv.id) ? 'locked to your account’s post-quantum key: enter your password once on this device'
           : 'waiting for another member to share it (happens automatically when one is online)' };
       });
       const mine = await runAccountChecks({ me: S.me, privateKey: S.privateKey, signKey: S.signKey, serverKeys, pqSeed: S.pqSeed });

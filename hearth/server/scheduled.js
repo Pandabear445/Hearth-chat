@@ -89,7 +89,7 @@ const UPLOAD = /^\/uploads\/[a-z0-9]+\.bin$/;
 const WHY = {
   key: 'This conversation’s encryption key changed after you scheduled it. Your app re-encrypts it the next time it’s open.',
   peer_key: 'Their security key changed after you scheduled it. Check their safety number; your app then re-encrypts it.',
-  pq: 'This conversation’s post-quantum encryption changed after you scheduled it. Your app re-encrypts it the next time it’s open.',
+  pq: 'Their post-quantum key changed after you scheduled it (or one of you got one). Your app re-encrypts it the next time it’s open.',
   keys_changed: 'Your own encryption keys changed after you scheduled it (a password reset without your recovery key), so it can’t be sent. Write it again.',
   no_access: 'You can no longer post in that conversation: it was deleted, or you left or lost access to it.',
   no_permission: 'You no longer have permission to post there (or to attach files or reply in threads there).',
@@ -124,6 +124,8 @@ module.exports = function setupScheduled(ctx) {
   const fp = (...keys) => crypto.createHash('sha256').update(keys.map((k) => String(k || '')).join('|')).digest('base64').slice(0, 24);
   const ownKey = (u, channel) => (channel ? fp('c', u.public_key, u.sign_public_key) : fp('d', u.public_key));
   const peerKey = (u) => fp('p', u.public_key);
+  // …and their post-quantum key (its fingerprint, as /bootstrap lists it), or null.
+  const peerPq = (u) => (u.pq_public_key ? crypto.createHash('sha256').update(Buffer.from(u.pq_public_key, 'base64')).digest().subarray(0, 16).toString('base64') : null);
   const peerOf = (d, uid) => (d.user_a === uid ? d.user_b : d.user_a);
   // A key change since it was written: { fail } (the sender's own keys) or { hold } (needs re-encrypting), or null.
   function keyProblem(r, u = getUserRow(r.user_id)) {
@@ -138,13 +140,13 @@ module.exports = function setupScheduled(ctx) {
     if (peer && !peer.deleted_at && peerKey(peer) !== r.peer_key) return { hold: 'peer_key' };
     // Written P-256 alone (d2:, v1:) before the DM went post-quantum: sent like that, it would be flagged as a
     // fallback on the other side. The sender's app re-encrypts it, as for a key change.
+    // Post-quantum: written P-256 alone (d2, v1) when both have a post-quantum key now, or written (d3) for a post-quantum
+    // key of theirs they no longer have (replaced, or dropped by a reset), which they couldn't open.
     const ct = String(r.ciphertext || '');
-    if (/^(d2|v1):/.test(ct) && db.prepare('SELECT 1 FROM dm_keys WHERE dm_id = ? LIMIT 1').get(r.dm_id)) return { hold: 'pq' };
-    // Written in an epoch made for a post-quantum key of theirs they no longer have (replaced, or dropped by a reset):
-    // they couldn't open it.
-    const ep = /^d3:(\d+):/.exec(ct);
-    const made = ep && peer && db.prepare('SELECT pq_public_key FROM dm_keys WHERE dm_id = ? AND epoch = ? AND user_id = ?').get(r.dm_id, Number(ep[1]), peer.id);
-    if (made && made.pq_public_key !== (peer.pq_public_key || null)) return { hold: 'pq' };
+    if (peer && !peer.deleted_at) {
+      if (/^(d2|v1):/.test(ct) && peer.pq_public_key && u.pq_public_key) return { hold: 'pq' };
+      if (ct.startsWith('d3:') && (r.peer_pq || null) !== peerPq(peer)) return { hold: 'pq' };
+    }
     return null;
   }
 
@@ -368,10 +370,10 @@ module.exports = function setupScheduled(ctx) {
     const t = now();
     db.transaction(() => {
       // file_count: every upload it lists (v21; files below holds only the blobs it got, which leaves out a forward's).
-      db.prepare(`INSERT INTO scheduled_messages (id, user_id, server_id, channel_id, dm_id, thread_id, reply_to, reply_file, ciphertext, epoch, ref, draft, session_id, own_key, peer_key, ttl, mentions, everyone, send_at, created_at, updated_at, file_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, row.user_id, row.server_id || null, row.channel_id || null, row.dm_id || null, row.thread_id || null, row.reply_to || null,
+      db.prepare(`INSERT INTO scheduled_messages (id, user_id, server_id, channel_id, dm_id, thread_id, reply_to, reply_file, ciphertext, epoch, ref, draft, session_id, own_key, peer_key, peer_pq, ttl, mentions, everyone, send_at, created_at, updated_at, file_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, row.user_id, row.server_id || null, row.channel_id || null, row.dm_id || null, row.thread_id || null, row.reply_to || null,
         row.reply_to && row.reply_file != null ? row.reply_file : null,
-        row.ciphertext, row.epoch == null ? null : row.epoch, row.ref, row.draft, row.session_id || null, row.own_key, row.peer_key || null, row.ttl == null ? null : row.ttl, JSON.stringify(row.mentions || []), row.everyone ? 1 : 0, row.send_at, t, t,
+        row.ciphertext, row.epoch == null ? null : row.epoch, row.ref, row.draft, row.session_id || null, row.own_key, row.peer_key || null, row.peer_pq || null, row.ttl == null ? null : row.ttl, JSON.stringify(row.mentions || []), row.everyone ? 1 : 0, row.send_at, t, t,
         files.length);
       attachBlobs(files, row.user_id, id);
       const kept = db.prepare('SELECT name FROM blobs WHERE message_id = ?').all(id).map((b) => '/uploads/' + b.name);
@@ -450,7 +452,7 @@ module.exports = function setupScheduled(ctx) {
     const replyTo = dmReplyIn(d, b.replyTo);
     const r = create({
       user_id: req.userId, dm_id: d.id, reply_to: replyTo, reply_file: replyFileIn('dm_messages', replyTo, fileAsked), ciphertext: b.ciphertext, ref, draft, session_id: req.session.id,
-      own_key: ownKey(getUserRow(req.userId), false), peer_key: peerKey(peer), ttl: ttlOf(b), send_at: sendAt,
+      own_key: ownKey(getUserRow(req.userId), false), peer_key: peerKey(peer), peer_pq: peerPq(peer), ttl: ttlOf(b), send_at: sendAt,
     }, cleanFiles(b.files, req.userId));
     res.json(serialize(r));
   });
@@ -469,6 +471,7 @@ module.exports = function setupScheduled(ctx) {
       const peer = getUserRow(peerOf(d, req.userId));
       if (!peer || peer.deleted_at) fail(403, 'This account was deleted.', 'deleted');
       set.peer_key = peerKey(peer);
+      set.peer_pq = peerPq(peer);
     }
     // New ciphertext is checked against the conversation's disappearing timer as it is now, and keeps the stricter
     // of that and the one it was written for (the app puts the same one inside it, x).

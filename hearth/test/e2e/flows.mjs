@@ -4819,12 +4819,11 @@ async function postQuantum(t) {
   await olga.message('Before your upgrade: quince').waitFor();
   await olga.send('After my upgrade: persimmon');
   await alice.message('After my upgrade: persimmon').waitFor();
-  check(/^d3:1:/.test(newest()), 'Once both have post-quantum keys, DMs should be hybrid (d3).');
+  check(/^d3:/.test(newest()), 'Once both have post-quantum keys, DMs should be hybrid (d3).');
   await alice.send('Hybrid both ways: medlar');
   await olga.message('Hybrid both ways: medlar').waitFor();
-  check(/^d3:1:/.test(newest()), 'alice’s reply should be hybrid too, in the same epoch.');
-  const keys = t.server.rows('SELECT user_id, wrapped FROM dm_keys WHERE dm_id = (SELECT dm_id FROM dm_messages WHERE author_id = ? LIMIT 1)', olgaId);
-  check(keys.length === 2 && keys.every((k) => /^dk1:/.test(k.wrapped)), 'The epoch key should be kept wrapped for each of them.');
+  check(/^d3:/.test(newest()), 'alice’s reply should be hybrid too.');
+  check(newest().split(':').length === 8, 'Each message carries its own key, wrapped for each of them.');
 
   // A device of olga's that doesn't have the seed (as one signed in before her account got it): a bar asks for her
   // password once; then it reads the hybrid DMs. (Here: a second browser that signs in, then forgets the seed.)

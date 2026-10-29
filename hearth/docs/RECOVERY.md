@@ -283,17 +283,14 @@ error, never a partial restore.
   - Someone who changed their password after the backup signs in with the **old** one.
   - Someone who reset their password **without** a recovery key after the backup gets their old keys back with
     the old password.
-- **Direct messages that changed encryption key after the backup.** Each browser remembers the newest key epoch it
-  has seen in each post-quantum DM, so a server can't quietly send it back to an older one. After a restore, a
-  browser that saw newer epochs than the backup has says so when someone sends in that DM ("This conversation's
-  encryption went back in time") and sends nothing. They choose **It was restored: continue** once for that DM,
-  and their app starts a new epoch from what the server has now. Tell your members to expect that question after a
-  restore, and that they should only say yes when you've told them you restored. Nothing is lost by it: the new
-  epoch is made for both people's current keys.
-- **Post-quantum keys published after the backup** are gone from the server. Their owner's next sign-in with the
-  password (or the bar that asks for it) publishes the key again from their password envelope. Until then, DMs to
-  them that are already post-quantum aren't sent (the error says their key isn't listed), and a server's new key
-  goes out without them and is shared with them once their key is back.
+- **Direct messages** carry their own keys, so a restore changes nothing about how they're encrypted: apps left
+  open keep writing, and what they write reads everywhere.
+- **Post-quantum keys published after the backup** are gone from the server, along with the seed in that
+  account's password envelope. Their owner's next sign-in with the password (or the bar that asks for it) puts the
+  seed their device holds back into the envelope and publishes the same key again, so their other devices keep
+  theirs. Until then, DMs to them that are already post-quantum aren't sent (the error says their key isn't
+  listed), and a server's new key goes out without them, is noted as owed to them, and is shared with them once
+  their key is back.
 
 ### Upgrades and rolling back
 
@@ -328,9 +325,8 @@ To **roll back** an upgrade:
 
 Whatever was written after the upgrade (messages, sign-ups, settings) is not in the old copy. Rolling back past the
 post-quantum change (1.40, database version 26) and upgrading again later works like a restore (above): post-quantum
-keys published in between come back at each person's next password sign-in, and DMs that went post-quantum in
-between ask once per browser before writing again. Browsers that used the newer version keep expecting those keys
-meanwhile and show the password bar instead of writing P-256 alone. If the old version
+keys published in between come back at each person's next password sign-in. Browsers that used the newer version
+keep expecting those keys meanwhile and show the password bar instead of writing P-256 alone. If the old version
 has the keyed audit log (version 17 or newer), its tamper check notices that the log is shorter than its anchor
 file remembers. The next audit entry records that "an older copy of the database was put back", and the log
 verifies again with that gap listed. That's the truth, and it stays in the log.

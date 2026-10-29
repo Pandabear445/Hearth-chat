@@ -141,7 +141,7 @@ Routes: 390 HTTP, 17 socket events.
 | POST | `/api/admin/main-server/add-everyone` | server/mainserver.js:143 | session | instance owner (ownerOnly); main server on; once per server (kept per server id) | confirm === true | mainserverall:<uid> 5/h | community.test.js | none |
 | GET | `/api/servers/:id/keys` | server/index.js:3032 | session | member; yes (own wrapped keys only) | none | none | access.test.js, attack.test.js (generic: unauth/fuzz/outsider ids) | none |
 | POST | `/api/servers/:id/keys/rotate` | server/index.js:3097 | session | member (any member may rotate); yes | check regex, epoch==cur+1, wraps for exactly current members, staleWraps | rotate:<uid> 30/min | attack.test.js (generic: unauth/fuzz/outsider ids) | by design any member rotates; wraps content not verifiable server-side |
-| POST | `/api/servers/:id/keys/share` | server/index.js:3132 | session | member holding current epoch key; yes; recipients must be members | isWrapped length; ≤200 | share:<uid> 60/min | access.test.js, attack.test.js (generic: unauth/fuzz/outsider ids) | none |
+| POST | `/api/servers/:id/keys/share` | server/index.js:3132 | session | member holding the key (the current epoch, or an older one owed to its recipients: key_owed); yes; recipients must be members | isWrapped length; ≤200 | share:<uid> 60/min | access.test.js, attack.test.js (generic: unauth/fuzz/outsider ids) | none |
 | POST | `/api/servers/:id/keys/bad` | server/index.js:3159 | session | member; yes (own key row only) | epoch number | badkey:<uid> 20/h | attack.test.js (generic: unauth/fuzz/outsider ids) | none |
 | POST | `/api/servers/:id/keys/self` | server/index.js:3192 | session |  |  |  |  |  |
 | POST | `/api/users/:id/keys/verify` | server/index.js:3247 | session |  |  |  |  |  |

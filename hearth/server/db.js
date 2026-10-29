@@ -1785,27 +1785,26 @@ if (hasData && fromVersion < 25) db.prepare('UPDATE roles SET permissions = perm
 // inside enc_private_key, locked with the password like the identity key.
 //   users.pq_public_key   ML-KEM-768 public key (base64, 1184 bytes), or NULL until the account's next sign-in
 //   users.pq_sig          its signature: ECDSA over hearth-pq-key-v1|<id>|<public_key>|<pq_public_key>
-// dm_keys: a DM's epoch keys once both people have post-quantum keys, each wrapped (dk1:, hybrid ML-KEM + ECDH) for one of
-//   the two, with the public keys it was wrapped for (so apps know when it's time for a new one). Kept as long as the DM:
-//   that's what lets every device you sign in on read the whole history.
+// key_owed: a server key a member was left out of because the post-quantum key their sharer's app knew for them wasn't
+//   listed then (secure.js wrapFor); any member holding that key may share it with them once it is (keys/share), and
+//   the row goes when they have it.
+// scheduled_messages.peer_pq: the fingerprint of the other person's post-quantum key a scheduled DM was written for
+//   (NULL: none), so one written for a key they no longer have waits to be re-encrypted (server/scheduled.js).
 addColumn('users', 'pq_public_key', 'TEXT');
 addColumn('users', 'pq_sig', 'TEXT');
 // users.recovery_pq: 1 when the recovery key was made while the account had its post-quantum key (so it holds the seed);
 // 0 for ones from before, which Settings asks to replace.
 addColumn('users', 'recovery_pq', 'INTEGER NOT NULL DEFAULT 0');
 db.exec(`
-CREATE TABLE IF NOT EXISTS dm_keys (
-  dm_id TEXT NOT NULL REFERENCES dm_channels(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS key_owed (
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   epoch INTEGER NOT NULL,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  wrapped TEXT NOT NULL,
-  wrapper_id TEXT NOT NULL,
-  public_key TEXT NOT NULL,
-  pq_public_key TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  PRIMARY KEY (dm_id, epoch, user_id)
+  PRIMARY KEY (server_id, epoch, user_id)
 );
 `);
+addColumn('scheduled_messages', 'peer_pq', 'TEXT');
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
 db.exec('COMMIT');

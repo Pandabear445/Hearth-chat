@@ -21,8 +21,8 @@ linked inline and listed at the end.
   way Signal's PQXDH and X-Wing do. To read anything, an attacker must now break both ML-KEM and P-256.
 - **Forward secrecy is the harder question.** Hearth promises that a new device reads your whole history after you
   sign in. True forward secrecy means old keys are destroyed, so a stolen key can't read old messages. The two
-  conflict. Hearth now rotates DM keys in epochs and keeps the old epoch keys wrapped for your account. This
-  contains a leaked epoch key, but it is **not** forward secrecy against someone who has your password and the
+  conflict. Hearth now gives every DM its own key, wrapped inside the message for both people, so a leaked message
+  key exposes that one message. That is **not** forward secrecy against someone who has your password and the
   server's database. The section on forward secrecy below explains why, and what it would cost to go further.
 
 ## 1. What others do
@@ -169,7 +169,7 @@ the user's own device, on ciphertexts the server can't usefully vary (AES-GCM re
 | Where | Before | Now (when both sides have a PQ key) | Format |
 |---|---|---|---|
 | Account keys | P-256 ECDH identity + ECDSA signing | + an **ML-KEM-768 key pair** from a 64-byte seed | seed inside the password envelope; public key published, ECDSA-signed |
-| DMs | `K = HKDF(ECDH(a, b))`, one static key forever | **Epoch keys**: random 256-bit per DM and epoch, wrapped for each of the two with **ML-KEM-768 + ECDH(eph, them) + ECDH(me, them)**, the time made and the key set it's for authenticated inside, rotated weekly and on key changes by what each copy says | `dk1:` wraps, `d3:<epoch>:` messages |
+| DMs | `K = HKDF(ECDH(a, b))`, one static key forever | **A key per message**: random 256-bit, wrapped inside the message for each of the two with **ML-KEM-768 + ECDH(eph, them) + ECDH(author, them)**, both wraps bound to the DM, the author, the recipient and a hash of the ciphertext | `d3:` messages, self-contained |
 | Server/group key handoffs | ECIES: ephemeral ECDH P-256 → HKDF → AES-GCM, ECDSA-signed | **ML-KEM-768 + ephemeral ECDH**, ECDSA-signed under its own label | `w2:` |
 | Your own stored copies of server keys | `w1` | re-stored as `w2` by a device that holds your seed, once your recovery key (if any) holds it too | `w2:` |
 | Channel messages, files | AES-256-GCM from the group key / per-file key | unchanged (symmetric: already quantum-safe) | `c2:` |
@@ -178,14 +178,15 @@ the user's own device, on ciphertexts the server can't usefully vary (AES-GCM re
 
 **The combiner** (`e2ee.js hybridKey`):
 `AES key = HKDF-SHA256(ikm = ss_mlkem ‖ dh₁ [‖ dh₂], salt = SHA-256(label ‖ ctx ‖ framed(eph_pub, kem_ct, recipient_pub, [sender_pub], recipient_pq_pub)), info = label ‖ ctx)`.
-Every element is length-prefixed. `ctx` names the server, DM, epoch, recipient and sender. Each format has its own
-label (`hearth-gk2`, `hearth-dmk1`), so nothing made for one ever opens as another. A DM epoch's ctx also carries
-when it was made and a tag of the four public keys it's for (`dmKeysTag`), so neither can be changed by the server.
+Every element is length-prefixed. `ctx` names the server or DM, the epoch (server keys), recipient and sender. Each
+format has its own label (`hearth-gk2`, `hearth-d3`), so nothing made for one ever opens as another. A d3 wrap's ctx
+also carries a hash of the message's ciphertext, so a message's key can't be put under other words.
 
 **Authentication.** Server-key handoffs stay ECDSA-signed. The signature covers the ML-KEM ciphertext, and its
-label differs from `w1`'s, so neither form's signature verifies for the other. DM epoch keys aren't signed: the
-static `ECDH(sender, recipient)` inside the KDF proves the key came from one of the two, so DMs stay **deniable**,
-as before. Each account's PQ public key is signed with its ECDSA key over
+label differs from `w1`'s, so neither form's signature verifies for the other. DM messages aren't signed: the
+static `ECDH(author, recipient)` inside the KDF proves the message came from one of the two, so DMs stay
+**deniable**, as before. Your own copy is wrapped with `ECDH(you, you)`, which only you can work out, so nobody but
+you can write a message that opens as yours on your devices. Each account's PQ public key is signed with its ECDSA key over
 `hearth-pq-key-v1|<account>|<identity key>|<pq key>`. A server can't swap it, or move it to another account or
 identity key. It is covered transitively by the existing safety numbers, which cover the signing key.
 
@@ -200,10 +201,10 @@ identity key. It is covered transitively by the existing safety numbers, which c
 - **Devices already signed in** (they don't keep the password) show a bar asking for the password once: it opens
   the envelope and gives them the seed (it sits above the message box and can be put off for the session). Until
   then they show "enter your password once" on what's locked to the new key and are **read-only for anything
-  post-quantum**: they make no DM epoch and no server key, and write no P-256 DM into a conversation that went
+  post-quantum**: they write no d3 DM and make no server key, and write no P-256 DM into a conversation that went
   post-quantum. That's simpler and safer than writing to public keys: a second review found that every rule letting a
-  seedless device write had a way for the server to steer it into P-256 (hide your own key from it, or the peer's)
-  or into minting epochs it couldn't reuse after a reload. An earlier version of this change handed the seed
+  seedless device write had a way for the server to steer it into P-256 (hide your own key from it, or the peer's).
+  It reads the seed from this browser's storage first, so a password entered in another tab counts here too. An earlier version of this change handed the seed
   between devices automatically; a review showed why that's wrong. The only thing that could authenticate such a
   request is your P-256 signing key, so whoever can forge P-256 (a future quantum computer, recomputing your keys
   from your public ones) could have asked your devices for the seed and then decrypted everything recorded. The
@@ -218,7 +219,7 @@ identity key. It is covered transitively by the existing safety numbers, which c
   device says otherwise (an account from before that hasn't signed in with the password yet). Never because the
   server stops listing a key a device has already seen (below), never for your own account once anything on the
   device says it has a key (the seed, your key seen published, its fingerprint in your record, copies made for it),
-  and never in a DM this device has seen go post-quantum (any listed epoch, even one it couldn't open), not even
+  and never in a DM this device has seen go post-quantum (any d3 message there, even one it couldn't open), not even
   after accepting someone's new keys. A seed that was never published writes P-256 only to people without a key: the
   device can't tell "never published" from "hidden by the server".
 
@@ -234,24 +235,28 @@ identity key. It is covered transitively by the existing safety numbers, which c
   for you without the seed, whatever the listing says. If the keys the server lists as yours don't match what this device's password
   unlocked, it sends nothing at all; your own copy of a new server key goes to your keys *as this device proved
   them*, never to the listed ones.
-- (d) DM epochs: whether to keep writing in one is decided from your own copy's authenticated time and key set
-  (younger than a week by the maker's clock against this device's own, never the server's time; made for the keys you
-  both have now), and a local high-water mark means a device never writes in a lower epoch than one it has seen,
-  whatever the server lists (fewer listed stops sending until you confirm a restore). Reading, trust is worked out
-  every time, never cached: an epoch vouched for only by someone's older key opens only messages dated while that
-  key was theirs, and one made for keys either of you no longer has, even one you made, only messages dated before
-  the first change of their identity key this device saw after the epoch was made (an earlier change, or a
-  post-quantum key replaced on its own, refuses nothing). (Not refused merely for being dated past the epoch's week: a scheduled message
-  is posted as it was encrypted, up to 30 days later.)
-- (e) A P-256-only DM from someone whose PQ key you've seen, dated after the DM's first epoch (as the first epoch
-  this device opened dates it, kept on the device; never what the server lists), is flagged "Without post-quantum
-  encryption". A DM scheduled as P-256 before the conversation went post-quantum, or in an epoch made for a
+- (d) DM messages carry their own keys, so there's nothing about DM keys for a server to list, hold back, roll back
+  or re-date. A d3 message is trusted exactly as a d2 one: by which of the author's identity keys made it, at its
+  date, from this device's pins. An older key of theirs counts only for what was written before this device first
+  saw their keys change (or before the server says the key was replaced, if that's earlier: the server can only
+  make the cutoff earlier, never later).
+- (e) A P-256-only DM from someone, dated after the DM's first d3 message, as both messages date themselves (the
+  authenticated time inside each, with ten minutes for clocks; never what the server says), is flagged "Without
+  post-quantum encryption". A DM scheduled as P-256 when both people now have a post-quantum key, or written for a
   post-quantum key the other person no longer has, is held by the server and re-encrypted by the sender's app.
 - (f) Servers and groups: a member without a PQ key gets a P-256 copy (`w1`), and that copy opens the epoch's key,
   so **a channel's messages are only post-quantum protected while every member's copy is `w2`**. A member this
-  device has seen a PQ key for, whose key isn't listed now, gets no copy at all (the rotation goes on without them
-  and the key is shared with them once theirs is back; the server allows that only for members with no
-  post-quantum key listed, so a member's app can't keep a new key from the others).
+  device has seen a PQ key for, whose key isn't listed now, gets no copy at all: the rotation goes on without them,
+  the server notes the key as owed to them, and any member's app that holds it shares it with them once theirs is
+  back, even after later rotations. The server allows that only for members with no post-quantum key listed, so a
+  member's app can't keep a new key from the others.
+
+**Why DMs have no epochs (third review).** An earlier version kept DM keys in weekly epochs, stored apart from the
+messages, with each copy carrying when it was made and which keys it was for. Every review found new ways around
+the rules that came with them: a server listing epochs, hiding them or rolling them back after a restore; open tabs
+writing with keys the server had lost; per-account limits on new epochs; extra requests on every read; and cutoffs
+that depended on what the server said about an epoch. A key per message, inside the message, needs none of that:
+reading a d3 message is judged as reading a d2 one always was. It costs about 3 KB more per message.
 
 **Races and losses.** The published key's seed must always be in the current envelope. A password change saved
 from an older envelope than the server's (one that raced the upgrade on another device) is refused and retried, and
@@ -267,10 +272,14 @@ upgrade doesn't hold the seed, which is the one real loss:
   next start if that first start was interrupted).
 - The app says exactly this after such a reset, asks for a new recovery key right after the upgrade, and Settings
   keeps saying so until there is one.
+- A server restored from before the key was published lists none, and its envelope has no seed. The password then
+  puts the seed a device already holds back into the envelope and publishes that same key, so the other devices
+  keep theirs. A seed taken from the envelope is kept even if publishing it is refused, so the device stays
+  read-only rather than P-256-only.
 
-**Cost.** A `w2` wrap is ~1.75 KB (a `w1` is ~0.3 KB). A DM epoch is two ~1.66 KB wraps a week per active DM.
-Messages themselves don't grow. An ML-KEM-768 decapsulation plus the HKDF/AES work is ~1.7 ms in Node, and
-epoch keys are cached per session. A rotation for a 1,000-member server now sends ~1.8 MB, so key routes accept
+**Cost.** A `w2` wrap is ~1.75 KB (a `w1` is ~0.3 KB). A d3 message is ~3.3 KB larger than a d2 one (two ML-KEM
+ciphertexts and the wraps). Reading one is an ML-KEM-768 decapsulation plus the HKDF/AES work, ~1.7 ms in Node, and
+no requests. A rotation for a 1,000-member server now sends ~1.8 MB, so key routes accept
 up to 8 MB.
 
 ## 6. Forward secrecy vs. multi-device history: the honest version
@@ -287,20 +296,17 @@ The two are in direct tension:
    holds the wrapped keys and the ciphertext). Matrix's key backup and iCloud-backed iMessage history make the same
    trade.
 
-What Hearth's DM epochs do give:
-- **A leaked epoch key exposes one epoch** (a week at most, by the time authenticated inside it, which its maker
-  sets: one of the two people could keep an epoch longer, the server can't), not the whole conversation, past and
-  future. Before, one leaked `ECDH(a, b)` value exposed every DM between two people forever.
-- **Post-compromise healing for epoch keys.** The next epoch is fresh randomness, wrapped with fresh ephemeral ECDH
-  and a fresh ML-KEM encapsulation. Someone who learned an old epoch key (but not your long-term keys) loses access
-  at the next rotation.
-- **Rotation on key changes.** A password reset with new keys, or a new PQ key, starts a new epoch at the next message,
-  because the epoch's authenticated key set no longer matches (the server can't relabel an old epoch as made for the
-  new keys).
+What Hearth's per-message DM keys do give:
+- **A leaked message key exposes one message**, not the conversation, past or future, and writes nothing: the wraps
+  commit to that message's ciphertext. Before, one leaked `ECDH(a, b)` value exposed every DM between two people
+  forever.
+- **Fresh keys every message.** Each is fresh randomness, wrapped with a fresh ephemeral ECDH and a fresh ML-KEM
+  encapsulation, for both people's keys as they are when it's written: a new key after a reset applies from the next
+  message.
 
 What they **don't** give:
 - **No FS against your long-term secrets.** Someone with your password (or an unlocked device) **and** a copy of the
-  database can unwrap every epoch key you ever had and read everything. The same holds for server channels: every
+  database can unwrap every message key you ever had and read everything. The same holds for server channels: every
   member keeps every epoch key they're given. This was true before and is still true. The difference now is that
   "a copy of the database" is no longer enough *with a future quantum computer*: it also needs the ML-KEM secret,
   which only your password or your devices hold.
@@ -314,17 +320,18 @@ What it would take to go further (not built; listed for the record):
 - **MLS for servers**, with history for new devices sent by an existing member's device (MLS "history sharing" is
   still being designed). Same trade: real FS for the group means newcomers and new devices depend on someone
   online to share history.
-- **Deleting old epochs after a retention window** (say a year). This is real FS for anything older, at the
+- **Deleting old messages after a retention window** (say a year; disappearing messages already do this per
+  conversation). This is real FS for anything older, at the
   cost of history older than that. That's a product decision, not a crypto one.
 
 ## 7. Recommendation (and what was done)
 
 1. **Do now (done):** hybrid ML-KEM-768 + P-256 for every identity-to-identity key agreement that protects stored
-   or recorded data: DM keys (as epoch keys), server key handoffs and your own stored key copies. The only visible
+   or recorded data: DM keys (one per message), server key handoffs and your own stored key copies. The only visible
    change is a one-time password prompt on devices that were signed in before the upgrade, and a request for a new
    recovery key. Old messages keep opening, and there is downgrade protection as described.
-2. **Do now (done):** rotating DM epoch keys, which contains a leaked key and heals after compromise, with history
-   kept. Don't claim forward secrecy.
+2. **Do now (done):** a key per DM message, which contains a leaked key to one message, with history kept. Don't
+   claim forward secrecy.
 3. **Next:**
    - (a) Move the personal vault (`x1:`) and DM tags/backgrounds (`td1:`, `lkd1:`) to keys derived with the PQ
      seed. This was held back because a device still waiting for its seed would then fail to read study decks or
@@ -332,10 +339,7 @@ What it would take to go further (not built; listed for the record):
      state first.
    - (b) Switch to native WebCrypto ML-KEM where present (Chromium 156+), keeping the vendored one as fallback.
    - (c) Get the vendored library, or a formally verified one such as libcrux via WASM, independently reviewed.
-   - (d) Back off DM epoch creation: a server that keeps answering a device's epoch checks wrongly can make it start
-     a new epoch on every send until the rate limit (30 an hour) stops it sending. Availability only. (A database
-     restored from an old backup asks once per DM before writing again: RECOVERY.md.)
-   - (e) Show which servers still have a member with a P-256-only copy of the key (5(f)).
+   - (d) Show which servers still have a member with a P-256-only copy of the key (5(f)).
 4. **Later, only if wanted:**
    - an opt-in ratcheted "secret chat" mode for real forward secrecy;
    - MLS for large servers;

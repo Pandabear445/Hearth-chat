@@ -167,58 +167,38 @@ test('server key handoff, hybrid (w2): round trip; tampering, other contexts and
   assert.ok(await fails(() => open(`w1:${p[1]}:${p[3]}:${p[4]}:${p[5]}`)), 'w2 signature on a w1');
 });
 
-test('DM epoch keys (dk1): round trip both ways; only the two of them can make one; its time and key set are authenticated', async () => {
+test('DM messages (d3): each with its own key, wrapped in it for both; only the two of them can make one; nothing in it can be moved or reused', async () => {
   const a = await person('a'); const b = await person('b'); const eve = await person('eve');
-  const raw = E.newDmKey();
-  const keys = { a: { publicKey: a.publicKey, pq: a.pq.publicKey }, b: { publicKey: b.publicKey, pq: b.pq.publicKey } };
-  const tag = await E.dmKeysTag(keys);
-  const madeAt = Date.now();
-  const mk = (o) => E.wrapDmKey({ raw, dmId: 'dm1', epoch: 1, madeAt, tag, recipientId: 'b', recipientPub: b.publicKey, recipientPq: b.pq.publicKey, senderId: 'a', myPriv: a.privateKey, myPub: a.publicKey, ...o });
-  const w = await mk();
-  const self = await mk({ recipientId: 'a', recipientPub: a.publicKey, recipientPq: a.pq.publicKey });
-  const open = (x, o = {}) => E.unwrapDmKey({ wrapped: x, dmId: 'dm1', epoch: 1, myId: 'b', myPriv: b.privateKey, myPub: b.publicKey, myPq: b.pq, senderId: 'a', senderPub: a.publicKey, ...o });
-  const got = await open(w);
-  assert.deepEqual(Buffer.from(got.raw), Buffer.from(raw));
-  assert.equal(got.madeAt, madeAt);
-  assert.equal(got.tag, tag);
-  assert.deepEqual(Buffer.from((await open(self, { myId: 'a', myPriv: a.privateKey, myPub: a.publicKey, myPq: a.pq })).raw), Buffer.from(raw), 'the sender’s own copy');
-  for (const f of [3, 4, 5, 6]) assert.ok(await fails(() => open(tamper(w, f))), `field ${f}`);
-  // The time and the key set can't be changed: they're inside the authenticated context.
-  const p = w.split(':');
-  assert.ok(await fails(() => open([p[0], String(madeAt + 86400000 * 30), ...p.slice(2)].join(':'))), 'made-at moved');
-  const otherTag = await E.dmKeysTag({ ...keys, b: { publicKey: eve.publicKey, pq: eve.pq.publicKey } });
-  assert.notEqual(otherTag, tag);
-  assert.ok(await fails(() => open([p[0], p[1], otherTag, ...p.slice(3)].join(':'))), 'key set swapped');
-  assert.ok(await fails(() => open(w, { dmId: 'dm2' })), 'another DM');
-  assert.ok(await fails(() => open(w, { epoch: 2 })), 'another epoch');
-  assert.ok(await fails(() => open(w, { senderId: 'eve' })), 'another sender named');
-  assert.ok(await fails(() => open(w, { myPq: eve.pq })), 'P-256 alone');
-  assert.ok(await fails(() => open(w, { myPriv: eve.privateKey })), 'ML-KEM alone');
-  await assert.rejects(() => open(w, { myPq: null }), (e) => e.code === 'no_pq');
-  // The server (or eve) wrapping a key "from a": it can't compute ECDH(a, b), so it doesn't open as a's.
-  const forged = await mk({ raw: E.newDmKey(), myPriv: eve.privateKey, myPub: eve.publicKey });
-  assert.ok(await fails(() => open(forged)), 'not from a');
-  // The key set tag depends on every key, and on nothing else.
-  assert.equal(await E.dmKeysTag({ b: keys.b, a: keys.a }), tag, 'order doesn’t matter');
-  await assert.rejects(() => E.dmKeysTag({ a: keys.a }));
-});
-
-test('DM messages in an epoch (d3): round trip; tampering, another DM, epoch or author fail; d2 and v1 still open', async () => {
-  const a = await person('a'); const b = await person('b');
-  const raw = E.newDmKey();
-  const text = await E.encryptDm3({ raw, epoch: 2, dmId: 'dm1', authorId: 'a', payload: { t: 'post-quantum hello' } });
-  assert.equal(E.dmEpoch(text), 2);
-  assert.equal(E.dmEpoch('d2:x:y:z'), null);
-  const open = (t, o = {}) => E.decryptDm3({ raw, dmId: 'dm1', authorId: 'a', text: t, ...o });
-  assert.equal((await open(text)).payload.t, 'post-quantum hello');
-  for (const f of [2, 3, 4]) assert.ok(await fails(() => open(tamper(text, f))), `field ${f}`);
-  assert.ok(await fails(() => open(tamper(text, 4, { tag: true }))), 'tag');
-  assert.ok(await fails(() => open(text.replace(/^d3:2:/, 'd3:3:'))), 'relabelled epoch');
-  assert.ok(await fails(() => open(text, { dmId: 'dm2' })), 'another DM');
-  assert.ok(await fails(() => open(text, { authorId: 'b' })), 'another author');
-  assert.ok(await fails(() => open(text, { raw: E.newDmKey() })), 'another epoch key');
+  const mk = (o = {}) => E.encryptDm3({ dmId: 'dm1', authorId: 'a', myPriv: a.privateKey, myPub: a.publicKey, myPq: a.pq.publicKey, peerId: 'b', peerPub: b.publicKey, peerPq: b.pq.publicKey, payload: { t: 'post-quantum hello' }, ...o });
+  const text = await mk();
+  assert.equal(E.isDm3(text), true);
+  assert.equal(E.isDm3('d2:x:y:z'), false);
+  const asB = (t, o = {}) => E.decryptDm3({ text: t, dmId: 'dm1', authorId: 'a', myId: 'b', myPriv: b.privateKey, myPub: b.publicKey, myPq: b.pq, authorPub: a.publicKey, ...o });
+  const asA = (t, o = {}) => E.decryptDm3({ text: t, dmId: 'dm1', authorId: 'a', myId: 'a', myPriv: a.privateKey, myPub: a.publicKey, myPq: a.pq, authorPub: a.publicKey, ...o });
+  assert.equal((await asB(text)).payload.t, 'post-quantum hello');
+  assert.equal((await asA(text)).payload.t, 'post-quantum hello', 'the author’s own copy');
+  assert.notEqual(await mk(), text, 'a fresh key every time');
+  for (const f of [1, 2, 3, 6, 7]) assert.ok(await fails(() => asB(tamper(text, f))), `field ${f}`);
+  for (const f of [4, 5]) assert.ok(await fails(() => asA(tamper(text, f))), `field ${f} (own copy)`);
+  assert.ok(await fails(() => asB(tamper(text, 7, { tag: true }))), 'tag');
+  assert.ok(await fails(() => asB(text, { dmId: 'dm2' })), 'another DM');
+  assert.ok(await fails(() => asB(text, { authorId: 'b', authorPub: b.publicKey })), 'credited to the other person');
+  assert.ok(await fails(() => asB(text, { myPq: eve.pq })), 'P-256 alone');
+  assert.ok(await fails(() => asB(text, { myPriv: eve.privateKey })), 'ML-KEM alone');
+  await assert.rejects(() => asB(text, { myPq: null }), (e) => e.code === 'no_pq');
+  // The two wraps can't be swapped: each is for one of them.
+  const p = text.split(':');
+  assert.ok(await fails(() => asB([p[0], p[1], p[4], p[5], p[2], p[3], p[6], p[7]].join(':'))), 'wraps swapped');
+  // The server (or eve) writing one "from a": it can't compute ECDH(a, b), so it doesn't open as a's.
+  const forged = await mk({ myPriv: eve.privateKey, myPub: eve.publicKey });
+  assert.ok(await fails(() => asB(forged)), 'not from a');
+  // Third review, R3-4: a message's own key, leaked, opens that message and writes no other. Its wraps commit to its
+  // ciphertext, so new words under the same wraps don't open (here with the real key, to put new words under them).
+  const other = await mk({ payload: { t: 'forged words' } });
+  const q = other.split(':');
+  assert.ok(await fails(() => asB([p[0], p[1], p[2], p[3], p[4], p[5], q[6], q[7]].join(':'))), 'another ciphertext under these wraps');
   // Same length padding as d2.
-  assert.equal(unb64(text.split(':')[4]).length, 256 + 16);
+  assert.equal(unb64(p[7]).length, 256 + 16);
   // Older DMs keep opening as they did.
   const d2 = await E.encryptDm({ myPriv: a.privateKey, theirPub: b.publicKey, dmId: 'dm1', authorId: 'a', payload: { t: 'classic' } });
   assert.equal((await E.decryptDm({ myPriv: b.privateKey, theirPub: a.publicKey, dmId: 'dm1', authorId: 'a', text: d2 })).payload.t, 'classic');
@@ -241,15 +221,30 @@ test('downgrade pins: once seen, a missing post-quantum key is noticed; only a n
   assert.equal(E.pinnedPq('me', { ...bob, publicKey: 'E2' }), false, 'a new identity key starts over');
 });
 
-test('your own post-quantum pin and the DM epoch high-water mark are kept per account', () => {
+test('your own post-quantum pin and a DM having gone post-quantum are kept per account; when a key change was first seen is local', () => {
   store.clear();
   assert.equal(E.ownPqPinned('me'), false);
   E.pinOwnPq('me', 'fp');
   assert.equal(E.ownPqPinned('me'), true);
   assert.equal(E.ownPqPinned('other'), false);
-  assert.equal(E.dmHighWater('me', 'dm1'), 0);
-  E.noteDmEpoch('me', 'dm1', 3);
-  E.noteDmEpoch('me', 'dm1', 2);
-  assert.equal(E.dmHighWater('me', 'dm1'), 3, 'never goes down');
-  assert.equal(E.dmHighWater('other', 'dm1'), 0);
+  assert.equal(E.dmPqSeen('me', 'dm1'), false);
+  E.noteDmFirst('me', 'dm1', 2000);
+  E.noteDmFirst('me', 'dm1', 3000);
+  assert.equal(E.dmPqSeen('me', 'dm1'), true);
+  assert.equal(E.dmFirstAt('me', 'dm1'), 2000, 'the earliest');
+  assert.equal(E.anyDmPq('me'), true);
+  assert.equal(E.anyDmPq('other'), false);
+  // A change of someone's keys is dated by when this device first saw it, and that's what it's cut off at once accepted.
+  const bob = { id: 'bob', publicKey: 'E1', signPublicKey: 'S1' };
+  assert.equal(E.checkPin('me', bob), 'ok');
+  const t0 = Date.now();
+  assert.equal(E.checkPin('me', { ...bob, publicKey: 'E2', signPublicKey: 'S2' }), 'changed');
+  const seen = E.changeSeenAt('me', bob);
+  assert.ok(seen >= t0 && seen <= Date.now());
+  assert.equal(E.checkPin('me', { ...bob, publicKey: 'E2', signPublicKey: 'S2' }), 'changed');
+  assert.equal(E.changeSeenAt('me', bob), seen, 'the first time');
+  E.acceptPin('me', { ...bob, publicKey: 'E2', signPublicKey: 'S2', pastKeys: [{ publicKey: 'E1', signPublicKey: 'S1', retiredAt: 1 }] });
+  const old = E.pinnedKeys('me', { ...bob, publicKey: 'E2' }, seen).old;
+  assert.deepEqual(old.map((k) => k.e), ['E1'], 'the old key, for what was written before then (not the server’s date)');
+  assert.deepEqual(E.pinnedKeys('me', { ...bob, publicKey: 'E2' }, seen + 1).old, []);
 });
