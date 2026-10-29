@@ -4840,7 +4840,7 @@ async function postQuantum(t) {
   await olgaOld.railButton('Direct messages');
   await olgaOld.dmRow(aliceShown).click();
   // The bar sits above the message box (in the page, covering nothing), and fits a phone's width.
-  const bar = olgaOld.$('.composer #pq-unlock');
+  const bar = olgaOld.$('#main #pq-unlock');
   await bar.waitFor();
   await olgaOld.$('#messages .undecryptable', { hasText: 'enter your password once' }).first().waitFor();
   await olgaOld.page.setViewportSize({ width: 390, height: 844 });
