@@ -2081,10 +2081,6 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   html.reduce-motion body.m-ui #main, html.reduce-motion body.m-ui #sidebar, html.reduce-motion body.m-ui #rail, html.reduce-motion body.m-ui #members,
   html.reduce-motion body.m-ui #m-callbar, html.reduce-motion body.m-ui .modal { transition: none !important; animation: none !important; }
 }
-@media (prefers-reduced-motion: reduce) {
-  body.m-ui #main, body.m-ui #sidebar, body.m-ui #rail { transition: none !important; }
-  body.m-ui #members, body.m-ui #m-callbar { animation: none; }
-}
 /* Touch screens: a sideways swipe in the chat doesn't take the browser back out of Hearth (Back still works, and
    closes what's open first: js/phone-nav.js). */
 @media (pointer: coarse) {

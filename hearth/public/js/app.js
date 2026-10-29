@@ -2454,8 +2454,6 @@ function addInbox(entry) {
   list.unshift({ id: Math.random().toString(36).slice(2), at: Date.now(), read: false, ...entry });
   P.inbox = list;
   updateTitle();
-  const pageEl = isPhoneUI() && M.tab === 'inbox' && $('#sidebar-body .inbox-page');
-  if (pageEl) pageEl._draw();
   if (entry.exp) armClientExpiry();
 }
 // Inbox entries keep a copy of a message's words on this device: one for a disappearing message goes with it (exp,
@@ -3741,7 +3739,7 @@ function closeNav() {
 // to return to it. The list is drawn in #rail and #sidebar, the conversation in #main, as on a computer; the level
 // that's out of sight is inert. Nothing here runs on a computer's screen (isPhoneUI is the phone layout: device.js).
 const M_UI = true; // (false: the phone layout keeps the old drawer)
-const M = { tab: 'home', level: 'list', server: null, pending: null, returnSel: null, inerted: false, keys: false };
+const M = { tab: 'home', level: 'list', server: null, pending: null, returnSel: null, inerted: false, keys: false, inboxSeen: 0 };
 const isPhoneUI = () => M_UI && isPhoneLayout();
 const TABS = [['home', 'home', 'Home'], ['dms', 'message', 'Messages'], ['inbox', 'bell', 'Notifications'], ['you', 'user', 'You']];
 const TAB_LABEL = Object.fromEntries(TABS.map(([t, , l]) => [t, l]));
@@ -3904,6 +3902,10 @@ function renderTabbarBadges() {
   const bar = $('#tabbar');
   if (!bar || !bar.children.length || !S.me) return;
   const n = navCounts();
+  // A notification came in (or went) while their page is showing: it's drawn again.
+  const page = n.inbox !== M.inboxSeen && M.tab === 'inbox' && $('#sidebar-body .inbox-page');
+  M.inboxSeen = n.inbox;
+  if (page) page._draw();
   const count = { home: n.home, dms: n.dms, inbox: n.inbox, you: 0 };
   for (const b of bar.querySelectorAll('.tab-btn')) {
     const t = b.dataset.tab;
