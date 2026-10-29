@@ -90,14 +90,25 @@ Each item is checked by `npm run test:a11y` unless marked otherwise.
   collapsed category opens it, so the channel is still there to focus (and to move again). If a live update
   redrew the sidebar while the menu was open, the focus goes to the moved channel rather than the page. Items that
   would be refused (Manage Channels denied in that channel, or in one of a category's channels) aren't offered.
-- On phones, Esc closes the navigation drawer and returns focus to its button, then the side panel (members, a
-  thread, pins), which covers the chat on a phone; focus goes back to the conversation. On wider screens Esc leaves
-  the panel open beside the chat, as before.
-- On phones, Back (the gesture, or Android's back button) closes the menu, picture, message actions, dialog, side
-  panel or drawer on top, like Esc, and cancels a voice message being recorded, an edit or a reply, instead of
-  leaving Hearth (`public/js/phone-nav.js`; on touch tablets the same,
-  except the side panel, which sits beside the chat there). The swipes from the screen's left edge that
-  open and close the drawer, or close the side panel, only add a way: every one has a button that does the same.
+- Phones have their own layout: a list page picked by a tab bar at the bottom (Home, Messages, Notifications,
+  You), and a conversation pushed over it full screen with a Back button. The tab bar is a `nav` landmark named
+  "Main"; each tab is a button at least 48 px, its unread count in its name ("Messages, 3 unread"), and the page
+  showing has `aria-current="page"`. Back says where it goes ("Back to Messages"). Whichever level is out of sight
+  is `inert`, so Tab and a screen reader only find what's on screen. Opening a conversation moves focus to its name
+  (with the keyboard, to the message box); going back puts it on the row it was opened from; switching tabs puts it
+  on the page's title. "Skip to conversation" brings the conversation forward first.
+- On phones, Esc closes the side panel (members, a thread, pins), which covers the chat on a phone, then a
+  selection, an edit, a reply or a thread, and then takes the conversation back to its list (not while Reels or
+  Brainrot is full screen: there Esc turns them off). On wider screens Esc leaves the panel open beside the chat, as
+  before.
+- On phones, Back (the gesture, or Android's back button) closes the menu or sheet, picture, message actions,
+  dialog or side panel on top, like Esc, cancels a voice message being recorded, an edit or a reply, then takes the
+  conversation back to its list and another tab's page back to Home's, instead of leaving Hearth
+  (`public/js/phone-nav.js`; on touch tablets the same, except the side panel, which sits beside the chat there, and
+  the levels, which only phones have). The swipe from the screen's left edge that goes back to the list, or closes
+  the side panel, only adds a way: each has a button that does the same.
+- On phones, menus open as bottom sheets with 48 px rows, keeping the menu's roles and arrow-key handling; a sheet
+  is a labelled modal dialog that takes focus and returns it when it closes.
 
 ### Announcements
 - `#toasts` is a polite live region (`role="status"`), so each toast is read once. Error toasts are `role="alert"`
@@ -189,7 +200,12 @@ At every size there's no horizontal page scroll (`overflowDom` in `checks.mjs` a
 out of the viewport). Message text, names and attachments stay inside the screen.
 
 On a 390×844 touch phone:
-- the settings button is reachable in the drawer;
+- the tab bar's four tabs are on screen, named, at least 48 px, one marked as the page showing, in a named `nav`;
+  it hides while the on-screen keyboard is up and in a conversation;
+- every tab's page has a heading and no sideways scrolling;
+- the settings button is on screen on the You page, and Esc there leaves the page as it is;
+- in a conversation, Back is on screen and says where it goes, and the list under it is inert; Esc goes back to the
+  list, with focus on the list and the conversation inert;
 - the message box and search are on screen;
 - search opens full screen;
 - settings fit and can be closed. The close button now has a solid background; before, it sat transparently on top

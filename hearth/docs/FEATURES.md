@@ -1745,59 +1745,108 @@ as seen on all their devices. Notes are drawn as text, never HTML or Markdown. A
 app ("Show it in the Android app too" off), for notes about paying, which Google Play doesn't allow there; switched on
 later, it shows there too.
 
-## Phones: held sideways, swipes and Back
+## Phones: a layout of their own (tabs, lists, a conversation over them), swipes and Back
 
 Phone-only: a desktop with a mouse looks and behaves as before. Two definitions decide, kept in one place
 (`public/js/device.js`, and the same media queries in `public/css/app.css`):
-- **Phone layout**: `(max-width: 760px), (pointer: coarse) and (max-height: 500px)`. A narrow window, as before, and
-  now also a phone held sideways (about 844×390), which used to get the desktop's server rail, channel list, chat and
-  member list side by side, leaving the chat a sliver. Sideways it gets the one-column layout with the drawer, a
-  slimmer header (44 px), and no header while the keyboard is up (the page is then only about 170 px tall). Rules for
-  wider screens use the opposite query.
-- **Touch UI**: `(pointer: coarse)`, phones and tablets: the swipes below, and a sideways swipe in the chat no longer
-  takes the browser back out of Hearth (`overscroll-behavior-x`).
+- **Phone layout**: `(max-width: 760px), (pointer: coarse) and (max-height: 500px)`. A narrow window, and a phone
+  held sideways (about 844×390), which used to get the desktop's server rail, channel list, chat and member list side
+  by side, leaving the chat a sliver. Sideways it gets the same phone layout, a slimmer header (44 px), and no header
+  while the keyboard is up (the page is then only about 170 px tall). Rules for wider screens use the opposite query.
+- **Touch UI**: `(pointer: coarse)`, phones and tablets: the swipes below, long-press menus as sheets, and a sideways
+  swipe in the chat no longer takes the browser back out of Hearth (`overscroll-behavior-x`).
+
+**Two levels, not a squeezed desktop** (app.js `phoneShell`, `phoneTab`, `phoneBack`; every rule in app.css under
+`body.m-ui`, which only the phone layout sets). The phone used to be the desktop with its server rail and channels
+in a drawer behind a ☰ button. Now it's built like a phone app:
+- **The list** (`body.m-list`): a full-screen page, picked by the **tab bar** at the bottom (`#tabbar`, a `nav`
+  named "Main"; 56 px plus the home bar, each tab at least 48 px, its badge in its name, `aria-current="page"` on
+  the one showing; hidden while the on-screen keyboard is up):
+  - **Home**: the server bar (72 px) beside a list. Its Home tile shows Home, Friends, Updates, Study, People, Saved
+    messages and My Reels; a server's tile shows that server's channels, without opening one (and without marking
+    anything read). Add a server and Organize servers are on the bar as on a computer.
+  - **Messages**: a big title, search, New message or group chat, Friends (with requests waiting), then pinned and
+    the rest of the conversations, with bigger rows (64 px, 40 px avatars).
+  - **Notifications**: the notification list as a page (the computer's popup), with Mark all read and Clear all.
+  - **You**: your name and status as a card, then Set your status (a sheet), Edit profile, Theme and appearance,
+    Saved messages, My Reels, Friends and Settings. The whole call panel is here too while you're in a call.
+  The badges come from one place (`navCounts`), so the tab bar, the server bar and the page title agree.
+- **The conversation** (`body.m-conv`): whatever a row opens (a channel, a DM, a group, a voice room, Home,
+  Friends…) slides in over the list, full screen, with the tab bar out of the way. Its header is Back ("Back to
+  Messages", "Back to *server*"…), the name with a line under it (topic, presence, "In call (2)", a red "Security key
+  changed" or "Not verified" warning), at most two buttons (search and members in a channel, voice and video in a
+  DM, the call and members in a group) and **More**: a sheet that starts with whether it's end-to-end encrypted (and
+  the key-changed warning a computer shows as a header badge), then threads, pins, photos and videos, scheduled
+  messages, the side view, notifications and the rest of the computer's ⋯ menu. Friends keeps its tabs under the
+  header. The side panel (members, a profile, threads, pins, photos, the side view) covers the conversation, as
+  before.
+- **The call bar** (`#m-callbar`): while you're in a call and not looking at it, a bar floats over the list (above the
+  tab bar), or runs along the top of another conversation: where the call is (a tap goes back to it), Mute and Leave.
+- The level out of sight is `inert`, so Tab and a screen reader only find what's on screen. Going into a
+  conversation puts focus on its name (from the keyboard, the message box); coming back puts it on the row it was
+  opened from; a new tab puts it on the page's title. "Skip to conversation" brings the conversation forward first.
+- **Menus are sheets** (`ui.js` `menu`, `contextMenu`, `sheetMenu`): in the phone layout every ⋯ menu comes up from
+  the bottom with 48 px rows, and on any touch screen so do long-press menus (a server, a conversation, a member).
+  The picture viewer's More and the message box's + stay small menus beside their button (Send later's times,
+  from the +, come up as a sheet). Esc on a menu, picker, sheet or dialog closes only that, never the conversation
+  under it. Dialogs come up from the
+  bottom too (rounded top corners, full-width 48 px buttons), above the keyboard; settings, search and other
+  full-screen dialogs stay full screen. A dialog opened from a sheet replaces it.
 
 **Back closes what's open** (`backStack` in `public/js/phone-nav.js`, wired up by `phoneNav` in app.js; the one
-place Hearth adds history steps of its own). In the phone layout the drawer, the side panel (members, threads, pins,
-a voice channel's chat), a picture, a menu, a message's long-press actions and every dialog (settings too) cover the
+place Hearth adds history steps of its own). In the phone layout the side panel (members, threads, pins, a voice
+channel's chat), a picture, a menu or sheet, a message's long-press actions and every dialog (settings too) cover the
 screen; on a touch tablet, pictures, menus, message actions and dialogs do (its side panel sits beside the chat, and
 Back leaves it). A voice message being recorded, a message being edited and a reply being written take the screen
 too, and Back cancels them as Esc or their own Cancel does (the recording is never sent; the edit leaves the message
-as it was). The top-most goes first: a menu, then the picture viewer (its More menu sits on it), the message
-actions, a dialog, whatever is under way in the side panel (a thread's), the side panel, the drawer, then whatever is
-under way in the chat: a recording, an edit, a reply. They come and go inside the chat, so `phoneNav` watches it (and
-the side panel) only while Back is Hearth's. While one is open, the page's history has one extra step at the same
-address; Back (the gesture, or the Android app's back button, which calls `WebView.goBack()`) lands on the page's own
-entry, and the one on top closes, as with its own close button (a thread opened from the Threads list goes back to
-the list; a dialog that can't be dismissed stays). While more stay open, the step comes back. Closing one with its own
-button, Esc or a tap beside it takes the step back out (`history.back()`), so the history never grows and the next
-Back after that leaves Hearth as before. Nothing is added on a desktop, before the page has been tapped (browsers
-skip such steps), or while a `#c/…` link waits for app.js to follow it (it rewrites that entry's address). A link
+as it was). The top-most goes first: a menu, then the picture viewer (its More menu sits on it), a sheet, a dialog,
+whatever is under way in the side panel (a thread's), the side panel, whatever is under way in the chat (a
+recording, an edit, a reply), then Reels or Brainrot full screen (back to the chat), then **the conversation (back
+to its list)**, then **another tab's page (back to Home's)**; from Home's list Back leaves Hearth. Recording,
+editing and replying come and go inside the chat, so `phoneNav` watches it (and the side panel) only while Back is
+Hearth's. While one is open, the page's history has one extra step at the same address; Back (the gesture, or the
+Android app's back button, which calls `WebView.goBack()`) lands on the page's own entry, and the one on top closes,
+as with its own close button (a thread opened from the Threads list goes back to the list; a dialog that can't be
+dismissed stays). While more stay open, the step comes back. Closing one with its own button, Esc or a tap beside it
+takes the step back out (`history.back()`), so the history never grows and the next Back after that leaves Hearth as
+before. Nothing is added on a desktop, before the page has been tapped (browsers skip such steps: so an app opened
+straight onto a conversation from a notification leaves on its first Back until it's been touched; the header's
+Back always works), or while a `#c/…` link waits for app.js to follow it (it rewrites that entry's address). A link
 followed while something is open isn't taken for Back. A step left over from before a reload is turned into an
-ordinary entry. Esc on a phone also closes the side panel (after the drawer); on a desktop it doesn't, as before.
+ordinary entry. Esc on a phone closes the side panel, then a selection, an edit, a reply or a thread, then takes
+the conversation back to its list (not while Reels or Brainrot is full screen: Esc turns those off); on a desktop it
+doesn't close the panel, as before. Going back stops a Reels feed and pauses the chat's videos (a call's keep
+playing).
 
-**Swipes** (`edgeSwipes`). Only in the phone layout on a touch screen, and only for swipes that start where they
-mean something: from the left 28 px of the screen, the drawer slides out under the finger; on the open drawer (or the
-dimmed chat beside it), a swipe left puts it away; with the side panel open, the swipe from the left edge closes the
-panel instead, like Back. Let go past halfway, or flick, and it finishes; otherwise it springs back. Swipes that go up
-and down, start a long press (selecting text), or begin anywhere else are left to the page. Every swipe has a button
+**Swipes** (`edgeSwipes`, with no drawer). Only in the phone layout on a touch screen, and only for swipes that start
+where they mean something: from the left 28 px of the screen, the conversation follows the finger to the right with
+its list showing under it, and goes back to the list; with the side panel open, the same swipe closes the panel
+instead, like Back. Let go past halfway, or flick, and it finishes; otherwise it springs back. Swipes that go up and
+down, start a long press (selecting text), or begin anywhere else are left to the page. Every swipe has a button
 doing the same. Where Android's own back gesture takes the screen's edge, a touch that starts there never reaches the
-page, and Back closes things the same way.
+page, and Back does the same thing.
 
 **Room for the text**: the phone layout's messages have a 40 px avatar column (32 px avatars) instead of 56 px, so a
 line of text gets about 22 px more; follow-up messages, replies and "Uploading…" notes line up with it. When the list
 gets shorter (the keyboard coming up, the phone turning) while you're at the newest messages, they stay in view.
 
-**Notches and the home bar**: with `viewport-fit=cover`, the header, drawer, side panel, settings, full-screen search,
-toasts and the message box keep `env(safe-area-inset-*)` away from the screen's edges (not the bottom one while the
+**Notches and the home bar**: with `viewport-fit=cover`, the header, the list pages, the tab bar, side panel, settings,
+full-screen search, toasts and the message box keep `env(safe-area-inset-*)` away from the screen's edges (not the bottom one while the
 keyboard is up).
 
-**Tests**: `test/phone-nav-client.test.js` (the history and swipe logic, against stand-ins for the browser), and the
-e2e flow "phones" on an Android-sized touch phone: sideways it's the phone layout, an edge swipe opens the drawer,
-Back closes the drawer, the members panel, a picture, a menu and settings (then the drawer under it) and stays in Hearth,
-swipes and Esc close them, closing by their own buttons leaves `history.length` unchanged, and on a desktop opening
-members and settings adds nothing to the history; the flow "phone message actions": Back cancels a reply, an edit and
-a recording and stays in Hearth, and focus goes back to the message without a ring.
+**Tests**: `test/phone-nav-client.test.js` (the history and swipe logic, against stand-ins for the browser, with and
+without a drawer), and the e2e flow "phones" on an Android-sized touch phone: the tab bar is on screen, at the bottom,
+four tabs of at least 48 px with one marked as showing, and hidden with the keyboard up and in a conversation; held
+sideways a conversation has the whole screen with Back in its header; Back closes the members panel, a picture and the
+More sheet (each leaving the conversation), then takes the conversation back to its list and the Messages page back to
+Home's, and closes settings opened from You leaving the You page, all without leaving Hearth; a swipe from the left
+edge goes back to the list (or closes the members panel first), and so does Esc; closing by their own buttons
+(including the header's Back and switching tabs) leaves `history.length` unchanged; on a desktop opening members and
+settings adds nothing to the history. The flow "phone message actions": Back cancels a reply, an edit and a
+recording and stays in Hearth, and focus goes back to the message without a ring. The Reels and Brainrot flows check
+that neither the tab bar nor the call bar shows over Reels full screen. The accessibility suite
+(`npm run test:a11y`) checks the tab bar's size, names and landmark, every tab's page for sideways scrolling and a
+heading, that the hidden level is inert, and that Esc goes back to the list with focus on it.
 
 ## Photos & videos, comments on one photo, and tags
 

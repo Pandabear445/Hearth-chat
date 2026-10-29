@@ -2123,7 +2123,7 @@ function layoutTab(app) {
 
     clear(root).append(
       h('h2', { class: 'set-title' }, 'Layout'),
-      h('p', { class: 'muted-p' }, 'Arrange the app the way you like. Saved on this device. On phones the app always uses its mobile layout.'),
+      h('p', { class: 'muted-p' }, 'Arrange the app the way you like. Saved on this device. On phones the app always uses its phone layout: lists with a tab bar, and a conversation full screen over them.'),
       section('Presets', h('div', { class: 'layout-presets' }, LAYOUT_PRESETS.map((p) => h('button', {
         class: `layout-card${same(p) ? ' active' : ''}`, 'aria-pressed': String(same(p)),
         onclick: () => save({ order: [...p.layout.order], rail: p.layout.rail }),
