@@ -6265,7 +6265,7 @@ export const FLOWS = [
   ['watch together: start, pause for everyone, stop; a video file from another site says so before it loads; leave the call', watchTogether],
   ['tiktok and instagram: tap to load in place (nothing before), sandboxed, side by side, Always; watch together keeps a TikTok in step, a reel starts together after a ready check, a mixed queue, side by side', socialVideos],
   ['reels tab: the conversation’s TikToks and reels newest first, nothing before a tap, muted until sound, react, add a link; scroll together follows who swipes, a reel’s ready check and countdown, Only I control, leave and rejoin; a phone full screen', reelsTab],
-  ['brainrot mode: off by default, a warning the first time, gameplay running beside the feed, the slider, Rail Runner, a YouTube background only after a tap, Esc, reduced motion; on for everyone scrolling together (asked first, off for yourself), a phone 50/50, a call and watch together', brainrot],
+  ['brainrot mode: off by default, a warning the first time, gameplay running beside or below the feed, the slider, Rail Runner, a YouTube background only after a tap, Esc, reduced motion; on for everyone scrolling together (asked first, off for yourself), a phone 50/50, a call and watch together', brainrot],
   ['audit log and reports: moderation as sentences, filters, live entries; a report reaches the server’s moderators', auditAndReports],
   ['dm call: ring, accept, hang up, decline', dmCall],
   ['group chat: create, talk both ways, call rings', groupChat],

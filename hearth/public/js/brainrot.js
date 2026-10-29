@@ -39,7 +39,10 @@ function save(uid, patch) {
 let sounds = false; // this visit only
 let ytConsented = false; // "Load background": for as long as Hearth is open
 
-export const reducedMotion = () => document.documentElement.classList.contains('reduce-motion') || matchMedia('(prefers-reduced-motion: reduce)').matches;
+const readMotion = () => document.documentElement.classList.contains('reduce-motion') || matchMedia('(prefers-reduced-motion: reduce)').matches;
+// Read once and kept up to date by wire() (it's asked several times a frame).
+let motionNow = null;
+export const reducedMotion = () => (motionNow === null ? (motionNow = readMotion()) : motionNow);
 const lowPower = () => (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4 || !!(navigator.connection && navigator.connection.saveData);
 
 // ---- every surface, for Esc and for settings changed elsewhere
@@ -48,19 +51,29 @@ let wired = false;
 function wire() {
   if (wired) return;
   wired = true;
-  // Esc turns off the one on screen (its settings first, if they're open). Dialogs, menus and the phone's
-  // navigation drawer close first, on their own.
+  // Esc turns off the one on screen (its settings first, if they're open), but only when it's free: nothing else
+  // was open for it to close (a dialog, menu, sheet, the phone's navigation drawer) and focus isn't in a text field
+  // or elsewhere in the app. That's judged before anyone handles the key (capture), as those close straight away.
+  let free = false;
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const a = document.activeElement;
+    free = !e.shiftKey && !document.querySelector('.modal-backdrop, .popover, .sheet-backdrop') && !document.body.classList.contains('nav-open')
+      && !(a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && !a.closest('.br-panel')));
+  }, true);
   document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || e.defaultPrevented || e.shiftKey) return;
-    if (document.querySelector('.modal-backdrop, .popover, .sheet-backdrop') || document.body.classList.contains('nav-open')) return;
-    const s = [...surfaces].reverse().find((x) => x.isActive() && x.onScreen());
+    if (e.key !== 'Escape' || e.defaultPrevented || !free) return;
+    free = false;
+    const s = [...surfaces].reverse().find((x) => x.isActive() && x.onScreen() && x.owns(document.activeElement));
     if (s) { e.preventDefault(); s.escape(); }
   });
   // Reduced motion changed (the device's setting, or Hearth's own: a class on <html>).
-  const again = () => { for (const s of surfaces) s.sync(true); };
+  const again = () => { const now = readMotion(); if (now === motionNow) return; motionNow = now; for (const s of surfaces) s.sync(true); };
   try { matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', again); } catch { /* old browsers */ }
-  let was = reducedMotion();
-  new MutationObserver(() => { const now = reducedMotion(); if (now !== was) { was = now; again(); } }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+  motionNow = readMotion();
+  new MutationObserver(again).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+  // Sounds: the audio device is let go whenever nothing can play (hidden, off, nothing running).
+  document.addEventListener('visibilitychange', audioIdle);
 }
 
 // The one-time warning. Resolves true if they turn it on.
@@ -86,8 +99,12 @@ function audioCtx() {
   if (audio.state === 'suspended') audio.resume().catch(() => {});
   return audio;
 }
+function audioIdle() {
+  if (audio && audio.state === 'running' && (!sounds || document.hidden || ![...surfaces].some((s) => s.isRunning()))) audio.suspend().catch(() => {});
+}
 function play(kind) {
   if (!sounds || !audio) return;
+  if (audio.state === 'suspended') audio.resume().catch(() => {});
   const now = performance.now();
   if (now - lastSound < 90) return;
   if (kind === 'horn') { if (now - lastHorn < 4000) return; lastHorn = now; }
@@ -182,7 +199,8 @@ export function createBrainrot(opts) {
     if (self.asking) return;
     self.asking = true;
     try { if (!P().warned && !(await warn(uid()))) { self.refocus = false; return; } } finally { self.asking = false; }
-    if (self.session.on) self.choice = 'in';
+    // While everyone's in it, joining is for this session only (it's not left on for next time).
+    if (self.session.on) { self.choice = 'in'; sync(); return; }
     save(uid(), { on: { [o.kind]: true } });
   }
   function turnOff() {
@@ -210,7 +228,9 @@ export function createBrainrot(opts) {
       o.onLayout();
     }
     if (on) setup();
-    if (self.panel) drawPanel();
+    // The settings are drawn again only if something they show changed (not on every update: a half-typed link
+    // or a slider being dragged would be lost).
+    if (self.panel && panelKey() !== self.panelKey) drawPanel();
     kick();
     if (o.onChange) o.onChange();
   }
@@ -243,7 +263,7 @@ export function createBrainrot(opts) {
   function setup() {
     const p = P();
     const slow = reducedMotion();
-    const key = `${p.game}:${slow}:${p.game === 'youtube' ? p.yt : ''}`;
+    const key = p.game === 'youtube' ? `youtube:${p.yt}:${ytConsented}` : `${p.game}:${slow}`; // (a video doesn't reload for a motion change)
     if (key === self.gameKey) return;
     self.gameKey = key;
     clear(stage).append(canvas);
@@ -253,7 +273,7 @@ export function createBrainrot(opts) {
     if (p.game === 'youtube') {
       if (!p.yt) stage.append(h('div', { class: 'br-note' }, h('p', null, 'Paste a YouTube link in Brainrot settings to play it here.'), h('button', { class: 'btn primary sm', type: 'button', onclick: () => togglePanel(true) }, icon('gear'), 'Settings')));
       else if (!ytConsented) stage.append(h('div', { class: 'br-note' }, h('p', null, 'Your background loads from YouTube (youtube-nocookie.com), which sees your IP address. It plays muted, on a loop.'),
-        h('button', { class: 'btn primary sm', type: 'button', onclick: () => { ytConsented = true; self.gameKey = ''; setup(); kick(); } }, icon('play'), 'Load background')));
+        h('button', { class: 'btn primary sm', type: 'button', onclick: () => { ytConsented = true; setup(); kick(); } }, icon('play'), 'Load background')));
       else loadYt(p.yt);
       return;
     }
@@ -267,6 +287,7 @@ export function createBrainrot(opts) {
       else if (ev === 'ended') { self.yt.seek(0); self.yt.play(); }
     }, { background: true });
     self.yt.el.classList.add('br-frame');
+    self.yt.el.inert = true; // never focusable, not even inside
     stage.prepend(self.yt.el);
   }
   function dropYt() { if (self.yt) { self.yt.destroy(); self.yt.el.remove(); self.yt = null; self.ytRun = null; } }
@@ -277,6 +298,7 @@ export function createBrainrot(opts) {
     else if (self.raf) { cancelAnimationFrame(self.raf); self.raf = 0; }
     // The background video plays only while it's on screen too.
     if (self.yt) { const want = running(); if (self.ytRun !== want) { self.ytRun = want; if (want) self.yt.play(); else self.yt.pause(); } }
+    audioIdle();
   }
   function frame(now) {
     self.raf = 0;
@@ -284,7 +306,7 @@ export function createBrainrot(opts) {
     const dt = self.last ? Math.min(0.25, (now - self.last) / 1000) : 0;
     self.last = now;
     // Frames coming too slowly for a couple of seconds: a lower resolution (down to half).
-    if (dt > 1 / 40) self.slowFrames++; else self.slowFrames = Math.max(0, self.slowFrames - 1);
+    if (dt > 1 / 28) self.slowFrames++; // (below 30 a second: a 30 Hz screen in power saving isn't "slow") else self.slowFrames = Math.max(0, self.slowFrames - 1);
     if (self.slowFrames > 120 && self.quality > 0.5) { self.quality = Math.max(0.5, self.quality * 0.8); self.slowFrames = 0; sizeCanvas(); }
     const s = self.scale || 1;
     ctx.setTransform(s, 0, 0, s, 0, 0);
@@ -371,7 +393,9 @@ export function createBrainrot(opts) {
   }
   function closePanel() { if (self.panel) togglePanel(false); }
   // Drawn again whenever a setting changes: whatever had focus in it gets it back.
+  const panelKey = () => JSON.stringify([P(), reducedMotion(), self.session.on, !!(o.share && o.share.can())]);
   function drawPanel() {
+    self.panelKey = panelKey();
     const had = panel.contains(document.activeElement) ? document.activeElement.dataset.k : null;
     drawPanelIn();
     const again = had && panel.querySelector(`[data-k="${had}"]`);
@@ -398,7 +422,7 @@ export function createBrainrot(opts) {
       oninput: (e) => { const v = +e.target.value; e.target.setAttribute('aria-valuetext', LEVELS[v]); out.textContent = `${v} · ${LEVELS[v]}`; },
       onchange: (e) => save(uid(), { level: +e.target.value }) });
     const out = h('output', { class: 'br-level' }, `${lv} · ${LEVELS[lv]}`);
-    const snd = h('input', { type: 'checkbox', 'data-k': 'sounds', checked: sounds, onchange: (e) => { sounds = e.target.checked; if (sounds) { audioCtx(); play('ding'); } } });
+    const snd = h('input', { type: 'checkbox', 'data-k': 'sounds', checked: sounds, onchange: (e) => { sounds = e.target.checked; if (sounds) { audioCtx(); play('ding'); } else audioIdle(); } });
     const sh = o.share && o.share.can() ? h('label', { class: 'row gap tight br-share' },
       h('input', { type: 'checkbox', 'data-k': 'share', checked: self.session.on, onchange: (e) => o.share.set(e.target.checked) }), 'On for everyone scrolling together') : null;
     clear(panel).append(
@@ -412,14 +436,17 @@ export function createBrainrot(opts) {
   }
 
   // ---- scroll together
+  const who = () => (self.session.by ? o.nameOf(self.session.by) : 'Someone');
+  // s: { live: is there a session at all, on: Brainrot for everyone (and this person follows it), by: who turned it on }.
+  // A choice to join in or stay out lasts until the session ends (not until it's next turned off and on).
   function setSession(s) {
     const on = !!(s && s.on);
     const was = self.session;
     self.session = { on, by: (s && s.by) || '' };
-    if (!on) self.choice = null;
-    else if (!was.on && self.session.by && self.session.by !== uid()) {
+    if (!(s && s.live)) self.choice = null;
+    else if (!was.on && self.session.by !== uid()) {
       const p = P();
-      if (!p.on[o.kind] && p.warned && self.choice !== 'out') toast(`${o.nameOf(self.session.by)} turned on Brainrot mode for everyone. Esc turns it off for you.`);
+      if (!p.on[o.kind] && p.warned && self.choice === null) toast(`${who()} turned on Brainrot mode for everyone. Esc turns it off for you.`);
     }
     sync();
   }
@@ -432,7 +459,7 @@ export function createBrainrot(opts) {
     const out = [btn];
     const p = P();
     if (self.session.on && !self.active && self.choice === null && !p.warned) {
-      out.push(h('span', { class: 'br-invite' }, `${o.nameOf(self.session.by)} turned on Brainrot mode`,
+      out.push(h('span', { class: 'br-invite' }, `${who()} turned on Brainrot mode`,
         h('button', { class: 'btn primary sm', type: 'button', onclick: () => turnOn() }, 'Join in'),
         h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { self.choice = 'out'; sync(); } }, 'No thanks')));
     }
@@ -447,6 +474,8 @@ export function createBrainrot(opts) {
     self.dead = true;
     if (self.raf) cancelAnimationFrame(self.raf);
     self.raf = 0;
+    surfaces.delete(api);
+    audioIdle();
     io.disconnect(); if (ro) ro.disconnect();
     document.removeEventListener('visibilitychange', onVis);
     clearTimeout(self.shakeTimer);
@@ -468,7 +497,9 @@ export function createBrainrot(opts) {
 
   const api = {
     el, sync, setSession, barItems, react, destroy, toggle, setFrame,
-    isActive: () => self.active, onScreen: () => self.visible && !el.hidden,
+    isActive: () => self.active, onScreen: () => self.visible && !el.hidden, isRunning: () => !!self.raf,
+    // Whether Esc with focus here is for this one: on the page itself, or inside its place.
+    owns: (a) => !a || a === document.body || o.frame.contains(a),
     escape: () => { if (self.panel) { togglePanel(false); gear.focus({ preventScroll: true }); } else turnOff(); },
     // Tests: the game's state and how many frames were drawn.
     stats: () => ({ active: self.active, running: !!self.raf, frames: self.frames, game: self.game ? self.game.kind : P().game, score: self.score, level: level(), canvas: [canvas.width, canvas.height], session: self.session.on, yt: !!self.yt }),

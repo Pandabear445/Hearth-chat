@@ -164,22 +164,26 @@ test('brainrot: whoever controls scroll together turns it on for everyone; a yes
   assert.equal((await ack(sb, 'reels:start', { key, mid: m })).ok, true);
   await settle();
   assert.equal(gg.state.session.brainrot, false, 'off when a session starts');
+  // Only true turns it on.
+  for (const v of ['yes', 1, {}, null]) { assert.equal((await ack(sb, 'reels:brainrot', { key, on: v })).ok, true); await settle(); assert.equal(gg.state.session.brainrot, false, String(v)); }
   // Everyone controls (the default): the guest may turn it on.
   assert.equal((await ack(sg, 'reels:brainrot', { key, on: true, game: 'youtube', yt: 'dQw4w9WgXcQ', title: '<b>x</b>' })).ok, true);
   await settle();
   const s = gb.state.session;
-  assert.deepEqual([s.brainrot, s.lastBy, s.lastAction], [true, guest.id, 'brainrot']);
+  assert.deepEqual([s.brainrot, s.brainrotBy, s.lastBy, s.lastAction], [true, guest.id, guest.id, 'brainrot']);
+  // Not flipped back and forth: one switch every 2 seconds per conversation.
+  assert.match((await ack(sb, 'reels:brainrot', { key, on: false })).error, /Not so fast/);
+  await sleep(2050);
   // The session carries nothing about it but the yes or no: no game, no link, no text.
   const text = JSON.stringify(gb.state);
   for (const leak of ['youtube', 'dQw4w9WgXcQ', '<b>', 'parkour']) assert.ok(!text.includes(leak), `nothing like ${leak}`);
-  // Only true turns it on.
-  for (const v of ['yes', 1, {}, null]) { assert.equal((await ack(sb, 'reels:brainrot', { key, on: v })).ok, true); await settle(); assert.equal(gg.state.session.brainrot, false, String(v)); await ack(sb, 'reels:brainrot', { key, on: true }); await settle(); }
   // Only I control: the guest can't flip it any more; the starter can.
   assert.equal((await ack(sb, 'reels:mode', { key, hostOnly: true })).ok, true);
   assert.match((await ack(sg, 'reels:brainrot', { key, on: false })).error, /started it/);
   assert.equal((await ack(sb, 'reels:brainrot', { key, on: false })).ok, true);
   await settle();
-  assert.equal(gg.state.session.brainrot, false);
+  assert.deepEqual([gg.state.session.brainrot, gg.state.session.brainrotBy], [false, '']);
+  await sleep(2050);
   // Someone who left the session can't either.
   assert.equal((await ack(sb, 'reels:mode', { key, hostOnly: false })).ok, true);
   assert.equal((await ack(sg, 'reels:follow', { key, on: false })).ok, true);
@@ -197,4 +201,7 @@ test('brainrot: the client takes the session\'s switch only as a yes or no', asy
   const R = await import(pathToFileURL(path.join(__dirname, '..', 'public', 'js', 'reels.js')).href);
   assert.equal(R.cleanSession({ mid: 'm1', brainrot: true }).brainrot, true);
   for (const v of ['true', 1, { on: true }, undefined]) assert.equal(R.cleanSession({ mid: 'm1', brainrot: v }).brainrot, false, String(v));
+  assert.equal(R.cleanSession({ mid: 'm1', brainrot: true, brainrotBy: 'u_1' }).brainrotBy, 'u_1');
+  assert.equal(R.cleanSession({ mid: 'm1', brainrot: true, brainrotBy: '<b>' }).brainrotBy, '');
+  assert.equal(R.cleanSession({ mid: 'm1', brainrot: false, brainrotBy: 'u_1' }).brainrotBy, '');
 });

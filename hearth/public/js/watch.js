@@ -23,6 +23,8 @@ export function expectedPosition(st, offset) {
 // can never navigate the Hearth tab itself.
 const PLAYER_SANDBOX = 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox';
 const YOUTUBE_ORIGIN = 'https://www.youtube-nocookie.com';
+// Brainrot mode's background video (brainrot.js): scripts and its own storage only (no popups, no full screen).
+const BACKGROUND_SANDBOX = 'allow-scripts allow-same-origin';
 // background (Brainrot mode's "your own background", brainrot.js): muted, looping, no controls, can't be focused or
 // clicked, and a tighter sandbox (no popups, no full screen).
 export function youtubeAdapter(item, onEvent, { background = false } = {}) {
@@ -33,7 +35,7 @@ export function youtubeAdapter(item, onEvent, { background = false } = {}) {
   const opts = background ? `controls=0&mute=1&autoplay=1&loop=1&playlist=${item.src}&disablekb=1&fs=0&iv_load_policy=3` : 'controls=1';
   const src = `${YOUTUBE_ORIGIN}/embed/${item.src}?enablejsapi=1&playsinline=1&rel=0&modestbranding=1&${opts}&origin=${encodeURIComponent(location.origin)}`;
   const frame = background
-    ? h('iframe', { class: 'wt-frame', sandbox: 'allow-scripts allow-same-origin', src, allow: 'autoplay; encrypted-media', title: item.title || 'Background video', referrerpolicy: 'strict-origin-when-cross-origin', tabindex: '-1', 'aria-hidden': 'true' })
+    ? h('iframe', { class: 'wt-frame', sandbox: BACKGROUND_SANDBOX, src, allow: 'autoplay; encrypted-media', title: item.title || 'Background video', referrerpolicy: 'strict-origin-when-cross-origin', tabindex: '-1', 'aria-hidden': 'true' })
     : h('iframe', { class: 'wt-frame', sandbox: PLAYER_SANDBOX, src, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: true, title: item.title || 'YouTube video', referrerpolicy: 'strict-origin-when-cross-origin' });
   // Commands go only to YouTube's player, never to whatever page the frame might have ended up on.
   const send = (func, args = []) => frame.contentWindow && frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args }), YOUTUBE_ORIGIN);

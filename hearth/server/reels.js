@@ -17,6 +17,7 @@ const KEY = /^[cd]:[A-Za-z0-9_-]{1,64}$/;
 const COUNTDOWN_MS = 3000;
 const MAX_VIEWERS = 200; // per conversation
 const GO_GAP_MS = 700; // between two moves of one conversation's session: a flood of swipes would reload everyone's players
+const BRAINROT_GAP_MS = 2000; // between two Brainrot switches: flipping it would flicker half of everyone's screen
 
 module.exports = function setupReels(ctx) {
   const { io, db, fail, requireChannel, requireDm, isStaff, isBlocked, voiceChannels, jobs, hiddenFor } = ctx;
@@ -61,7 +62,7 @@ module.exports = function setupReels(ctx) {
       key, viewers,
       session: s ? {
         by: s.by, hostOnly: s.hostOnly, mid: s.mid, i: s.i, playing: s.playing, position: s.position, updatedAt: s.updatedAt, startAt: s.startAt,
-        seq: s.seq, lastBy: s.lastBy, lastAction: s.lastAction, dir: s.dir, brainrot: !!s.brainrot,
+        seq: s.seq, lastBy: s.lastBy, lastAction: s.lastAction, dir: s.dir, brainrot: !!s.brainrot, brainrotBy: s.brainrot ? s.brainrotBy || '' : '',
         following: viewers.filter((u) => room.following.has(u)),
         ready: room.ready && room.ready.mid === s.mid && room.ready.i === s.i ? [...room.ready.users].filter((u) => viewers.includes(u)) : [],
       } : null,
@@ -227,7 +228,10 @@ module.exports = function setupReels(ctx) {
       const { key, room } = control(p);
       const on = p.on === true;
       if (!!room.session.brainrot === on) return { ok: true };
+      if (Date.now() - (room.lastBrainrot || 0) < BRAINROT_GAP_MS) fail(429, 'Not so fast: wait a moment before switching Brainrot mode again.');
+      room.lastBrainrot = Date.now();
       room.session.brainrot = on;
+      room.session.brainrotBy = on ? uid : '';
       touch(room.session, uid, 'brainrot');
       emit(key);
       return { ok: true };

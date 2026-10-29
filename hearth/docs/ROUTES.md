@@ -436,7 +436,7 @@ Routes: 390 HTTP, 26 socket events.
 | EVENT | `reels:ready` | server/reels.js | session (handshake token) | viewer, session on | current mid/index only | socket bucket; state merged to 4/s | scroll-together.test.js | none |
 | EVENT | `reels:follow` | server/reels.js | session (handshake token) | viewer, session on | boolean | socket bucket; state merged to 4/s | scroll-together.test.js | none |
 | EVENT | `reels:mode` | server/reels.js | session (handshake token) | session starter or staff | boolean | socket bucket; state merged to 4/s | scroll-together.test.js | none |
-| EVENT | `reels:brainrot` | server/reels.js | session (handshake token) | following + may control (hostOnly: starter or staff) | boolean (only true turns it on) | socket bucket; state merged to 4/s | brainrot.test.js | none |
+| EVENT | `reels:brainrot` | server/reels.js | session (handshake token) | following + may control (hostOnly: starter or staff) | boolean (only true turns it on) | socket bucket; one switch per 2 s; state merged to 4/s | brainrot.test.js | none |
 | EVENT | `reels:stop` | server/reels.js | session (handshake token) | starter, staff, or anyone when everyone controls | none | socket bucket; state merged to 4/s | scroll-together.test.js | none |
 | EVENT | `voice:leave` | server/index.js:7314 | session (handshake token) | own state only; yes | none | socket bucket | none | none |
 | EVENT | `disconnect` | server/index.js:7321 | n.a. | n.a.; n.a. | n.a. | n.a. | sessions.test.js (indirect) | A socket drop ends the call on every side; no grace period or rejoin (voice-13). |

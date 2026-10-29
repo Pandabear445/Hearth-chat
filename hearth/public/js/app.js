@@ -10901,6 +10901,8 @@ function wtDockEl() {
 // Called whenever the call or the shared video changes: show, move or drop the player.
 function syncWatchDock() {
   const room = voice && voice.channelId;
+  // Brainrot mode in a call you've left (or switched from) goes too, whether or not its page is on screen.
+  if (callBr.s && callBr.room !== room) { callBr.s.destroy(); callBr.room = null; callBr.s = null; }
   const state = room && S.watch[room];
   // Left the call (or switched to another one): that video is done for us.
   if (wtDock.room && wtDock.room !== room) { dropWatchPlayer(wtDock.room); delete S.watch[wtDock.room]; wtDock.room = null; }

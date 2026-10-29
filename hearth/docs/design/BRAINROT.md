@@ -61,14 +61,19 @@ and `.wt`), `app.js` (`callBrainrot`, the call's round button), `server/reels.js
 - **Reduced motion** (the device's `prefers-reduced-motion` or Settings → Appearance → Reduce motion, followed live):
   the games run at half speed, the rain falls at half speed, captions change every 0.9 s without bouncing, no shake,
   no flash, and the slider stops at 1 (a saved 3 counts as 1).
-- **Esc** turns off the one on screen (its settings close first). Dialogs, menus and the phone's navigation drawer
-  take Esc first. The **✕** on the gameplay does the same. The bar's **Brainrot** button is a toggle
+- **Esc** turns off the one on screen (its settings close first) when focus is on the page or inside its place (the
+  Reels feed, the watch-together player, the call). It's left alone when it had something else to do: a dialog,
+  menu, sheet or the phone's navigation drawer was open, or focus was in a text field (judged before anything
+  handles the key). The **✕** on the gameplay does the same. The bar's **Brainrot** button is a toggle
   (`aria-pressed`).
 - The gameplay canvas and the extras are `aria-hidden` (decorative); the settings are a labelled group with a real
   radio group, a range input with `aria-valuetext` naming what each level adds, and a checkbox.
 
 ## Performance and battery
 
+- The reduced-motion setting is read once and followed by its change events (not asked every frame). With sounds
+  turned on, the audio context is suspended whenever nothing can play (sounds off, the page hidden, no gameplay
+  running).
 - One `requestAnimationFrame` loop per surface, **only while it's on screen**: an `IntersectionObserver` on the
   gameplay and `visibilitychange` stop it (another tab of Hearth, another app, scrolled away, a mini player, full
   screen). The background video is paused the same way.
@@ -76,8 +81,8 @@ and `.wt`), `app.js` (`callBrainrot`, the call's round button), `server/reels.js
   quarter of a second is caught up), each frame a few dozen filled polygons: about 1 ms a frame for both games on a
   desktop.
 - The canvas is at most 1.5 device pixels per CSS pixel and 1280 pixels wide (1 and 720 on a low-power device: 4
-  cores or fewer, 4 GB or less, or Data Saver), and if frames keep coming slower than 40 a second for two seconds the
-  resolution drops by a fifth, down to half.
+  cores or fewer, 4 GB or less, or Data Saver), and if frames keep coming slower than 28 a second for two seconds the
+  resolution drops by a fifth, down to half (a 30 Hz screen in power saving isn't "slow").
 - Emoji are drawn once each to a small canvas and reused; the emoji rain is a pure function of time (no state).
   The counter, progress bar and captions are only written when they change.
 - Turning it off, leaving the tab, ending the call or stopping the video destroys the surface: the loop, observers,
@@ -88,7 +93,7 @@ and `.wt`), `app.js` (`callBrainrot`, the call's round button), `server/reels.js
 - The games load nothing. "Your own background" accepts only a YouTube video link (`youtube.com`, `youtu.be`,
   `youtube-nocookie.com`, the same id rules as link previews); it's kept on this device only. It loads only after a
   tap on a cover saying it comes from YouTube (youtube-nocookie.com), which sees your IP address; that tap counts
-  until Hearth is closed or reloaded. The player is watch together's YouTube adapter in background mode:
+  until Hearth is closed or reloaded. The player is watch together's YouTube adapter in background mode (`inert`, so nothing in it takes focus):
   `youtube-nocookie.com/embed/<id>?…&mute=1&loop=1&controls=0…`, sandboxed with only `allow-scripts
   allow-same-origin` (no popups, no full screen, no top navigation), `tabindex=-1`, no pointer events, and its
   commands only go to YouTube's origin.
@@ -99,20 +104,22 @@ and `.wt`), `app.js` (`callBrainrot`, the call's round button), `server/reels.js
 
 Whoever may move everyone (anyone following when *Everyone controls*; the starter or staff with *Only I control*)
 can turn it on **for everyone following** with **Brainrot for everyone** in the bar (or the settings). The session
-gains one field, `brainrot: true|false`, set with `reels:brainrot { key, on }` (only `true` turns it on) and starting
-`false` with every new session. It carries no game, link, title or setting: each person's own settings decide what
-they see.
+gains two fields, `brainrot: true|false` and `brainrotBy` (the user id of who turned it on, so the note names the right
+person), set with `reels:brainrot { key, on }` (only `true` turns it on; at most one switch every 2 seconds per
+conversation, so it can't be flickered) and starting `false` with every new session. It carries no game, link, title
+or setting: each person's own settings decide what they see.
 
 - Someone who has been warned before (on this device) gets it straight away, with a note: "alice turned on Brainrot
   mode for everyone. Esc turns it off for you."
 - Someone who hasn't sees "alice turned on Brainrot mode · Join in · No thanks" in the bar; **Join in** shows the
-  warning first.
-- Anyone can turn it off for themselves (Esc, ✕, the toggle); they aren't asked again for that session. People who
-  left the session (scrolling on their own) aren't affected.
+  warning first. Joining in is for that session only: it isn't left on for next time.
+- Anyone can turn it off for themselves (Esc, ✕, the toggle); that choice (like Join in or No thanks) lasts until the
+  session ends, even if it's turned off and on again, or they leave and rejoin. People who left the session
+  (scrolling on their own) don't get it.
 
 | Event | Who | Carries |
 |---|---|---|
-| `reels:brainrot` `{ key, on }` | someone following who may control | a boolean |
+| `reels:brainrot` `{ key, on }` | someone following who may control; one switch per 2 s | a boolean |
 
 ## Not copied
 

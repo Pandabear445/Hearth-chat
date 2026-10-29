@@ -135,6 +135,8 @@ export async function brainrot(t) {
   await bob.page.waitForTimeout(500);
   check(!(await bob.$(`${R} .br-invite`).count()), 'Bob turned it off: he isn\'t asked again.');
   check(await alice.$(`${R} .br-under`).isVisible(), 'It stays on for Alice.');
+  // (At most one switch every 2 seconds: flipping it would flicker everyone's screen.)
+  await alice.page.waitForTimeout(2100);
   await alice.$(`${R} .reels-bar .br-everyone`).click();
   await alice.$(`${R} .reels-bar .br-everyone[aria-pressed="false"]`).waitFor();
   await alice.$(`${R} .reels-bar button`, { hasText: 'Stop' }).click();

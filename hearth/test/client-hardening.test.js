@@ -517,9 +517,11 @@ test('xss-6: a look file can\'t put anything but a number into the background an
 test('xss-9: watch-together players are sandboxed and YouTube commands go only to YouTube', () => {
   const src = read('public', 'js', 'watch.js');
   const frames = src.split('\n').filter((l) => l.includes("h('iframe'"));
-  assert.equal(frames.length, 5);
-  // YouTube, Vimeo and Twitch use PLAYER_SANDBOX; TikTok and Instagram the same flags from social.js.
-  for (const l of frames) assert.match(l, /sandbox: (PLAYER_SANDBOX|SOCIAL_SANDBOX)/, l.trim().slice(0, 80));
+  assert.equal(frames.length, 6);
+  // YouTube, Vimeo and Twitch use PLAYER_SANDBOX; TikTok and Instagram the same flags from social.js; Brainrot mode's
+  // muted background video (YouTube) fewer still.
+  for (const l of frames) assert.match(l, /sandbox: (PLAYER_SANDBOX|SOCIAL_SANDBOX|BACKGROUND_SANDBOX)/, l.trim().slice(0, 80));
+  assert.match(src, /BACKGROUND_SANDBOX = 'allow-scripts allow-same-origin';/);
   assert.match(src, /PLAYER_SANDBOX = 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox'/);
   assert.match(read('public', 'js', 'social.js'), /SOCIAL_SANDBOX = 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox'/);
   assert.doesNotMatch(src, /allow-top-navigation/);

@@ -444,8 +444,7 @@ export function createReels(deps) {
     st.session = s;
     st.following = !!s && s.following.includes(me);
     // Brainrot mode for everyone: only for the people following (and each can still turn it off).
-    if (s && s.brainrot && s.lastAction === 'brainrot') st.brBy = s.lastBy;
-    if (st.br) st.br.setSession({ on: !!(s && s.brainrot && st.following), by: st.brBy || (s && s.by) || '' });
+    if (st.br) st.br.setSession({ live: !!s, on: !!(s && s.brainrot && st.following), by: (s && s.brainrotBy) || '' });
     if (s && s.seq !== st.lastSeq) {
       if (st.lastSeq && s.lastBy && s.lastBy !== me && st.following) {
         const name = deps.nameOf(s.lastBy);
