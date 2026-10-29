@@ -58,14 +58,15 @@ export function mergeUser(old, x) {
   return u;
 }
 
-// What the app says when it refused a call connection (app.js callWarning; why from checkSdp, or 'self' from
-// voice.js handleSignal).
+// What the app says when it refused a call connection (app.js callWarning; why from checkSdp, 'self' from voice.js
+// handleSignal, or 'not-in-dm' from voice.js createPeer too).
 export function callRefusedText(why, name) {
   if (why === 'key-changed') return `${name}’s security key changed, so their call connection was blocked. Compare safety numbers with them (their profile → Verify encryption) before you talk.`;
   if (why === 'deleted') return `Blocked a call connection in the name of ${name}: that account was deleted, so it can’t be in a call.`;
   if (why === 'no-key') return `Blocked a call connection from ${name}: the server lists no usable security key for them, so it can’t be checked.`;
   if (why === 'lookup-failed') return `Blocked a call connection from ${name}: their security key couldn’t be loaded to check it.`;
   if (why === 'self') return 'Blocked a call connection that claimed to come from your own account. Only the server could have sent it.';
+  if (why === 'not-in-dm') return `Blocked a call connection with ${name}: this 1-to-1 call is with someone else, so only the server could have put them in it.`;
   return `Blocked a voice connection from ${name}: its security signature didn't check out.`;
 }
 // Why there are no safety numbers to compare with someone (app.js openSafetyNumber), or null when there are: the
@@ -109,6 +110,8 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
 
   // ---------------------------------------------------------------- people + trust
   async function userWithKeys(id) {
+    // You: with the keys this device proved are yours, whatever a record of you says (S.users holds the server's).
+    if (S.me && id === S.me.id) return { ...(S.users[id] || {}), ...S.me, ...(proven ? { publicKey: proven.e, signPublicKey: proven.s } : {}) };
     let u = S.users[id];
     if (u && u.id !== id) throw wrongAccount();
     if (u && (u.publicKey || u.deleted)) return u;
@@ -188,8 +191,16 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   // key (sign and verify a fresh text). A server that hands out keys of its own as yours could otherwise plant a
   // "current" server key that looks like your own copy, or read whatever you lock for yourself. Checked again
   // whenever the server lists different keys for you; until then, the ones proven last are the ones used.
+  // Only proven keys are ever used as yours: for the copies of server keys you keep for yourself, your safety numbers
+  // and fingerprint, and your personal vault (ownKeys). A start-up's record of you is proven before the app takes any
+  // of it (proveOwnKeys), so S.me never holds keys of the server's.
   let ownCheck = null; // { e, s, signKey, ok }: the check for the keys S.me lists now
   let proven = null; // { e, s }: your public keys as last proven
+  // Whether this signing key makes signatures that public signing key checks: a fresh text, signed and verified.
+  async function signsFor(s, signKey, id) {
+    const text = `hearth-own-key|${id}|${E2EE.b64(crypto.getRandomValues(new Uint8Array(16)))}`;
+    return E2EE.verify(s, text, await E2EE.sign(signKey, text));
+  }
   function ownKeysOk() {
     const e = S.me && S.me.publicKey;
     const s = S.me && S.me.signPublicKey;
@@ -198,17 +209,92 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       const ok = (async () => {
         if (!signKey || !e || !s) return false;
         if (!(await E2EE.ownsPublicKey(S.privateKey, e))) return false;
-        const text = `hearth-own-key|${S.me.id}|${E2EE.b64(crypto.getRandomValues(new Uint8Array(16)))}`;
-        return E2EE.verify(s, text, await E2EE.sign(signKey, text));
+        return signsFor(s, signKey, S.me.id);
       })().catch(() => false).then((r) => { if (r) proven = { e, s }; return r; });
       ownCheck = { e, s, signKey, ok };
     }
     return ownCheck.ok;
   }
+  // Your public keys as this device last proved them ({ publicKey, signPublicKey }), or null before that: never what a
+  // record of you merely says.
+  const ownKeys = () => (proven ? { publicKey: proven.e, signPublicKey: proven.s } : null);
   function ownKeysMismatch() {
     const err = new Error('The keys this server lists for your account aren’t the ones your password unlocks, so nothing was decrypted or sent. Reload the page; if it keeps happening, tell the server’s owner.');
     err.code = 'own_key_mismatch';
     return err;
+  }
+  function otherAccount(text = 'The server answered as a different account than the one signed in on this device') {
+    const err = new Error(`${text}, so nothing was decrypted or sent. Sign out and in again; if it keeps happening, tell the server’s owner.`);
+    err.code = 'own_key_mismatch';
+    return err;
+  }
+
+  // Which account each identity key this device proved is: { [public key]: account id }, kept through sign-outs.
+  // Every pin and DM record on this device is kept under an account id, and signing in takes whichever id the server
+  // answers with. So a server that signed this device out and in again under a new id for the same keys would start
+  // all of them from nothing: everyone pinned again on first sight with whatever keys it serves, verified contacts
+  // too, and no "security key changed" warning for anyone. Your identity key is what the server can't fake (only your
+  // password unlocks its private half), so a start-up whose key this device already proved for another id is refused.
+  // (Keying the stores by that key instead would lose every pin at a password reset without the recovery key, which
+  // gives you a new key under the same id while the keys you pinned for others stay right; this way that reset just
+  // adds its key here.)
+  const ACCOUNTS = 'hearth.accounts';
+  function provenAccounts() {
+    try {
+      const all = JSON.parse(localStorage.getItem(ACCOUNTS) || '{}');
+      return all && typeof all === 'object' && !Array.isArray(all) ? all : {};
+    } catch { return {}; }
+  }
+  function rememberAccount(e, id) {
+    const all = provenAccounts();
+    if (all[e] === id) return;
+    delete all[e];
+    all[e] = id;
+    const keys = Object.keys(all);
+    keys.slice(0, Math.max(0, keys.length - 50)).forEach((k) => delete all[k]); // the 50 most recent keys
+    try { localStorage.setItem(ACCOUNTS, JSON.stringify(all)); } catch { /* storage off: nothing is kept here at all then (pins can't be saved either) */ }
+  }
+
+  // A start-up's record of you (bootstrap's `me`) proven before any of it is used: it's for the account this tab
+  // started as (`account`), its identity key is the public half of the private key your password unlocked and not
+  // one this device proved for another account, and its signing key is the one that key unlocks (made here, and
+  // uploaded with proof, when the account has none yet). Returns that record with exactly those keys, for the app to
+  // take as S.me. Nothing in S is touched until all of it checks out, so a start-up that's refused leaves no key of
+  // the server's anywhere: the app keeps what it proved before (or, on its first start, doesn't start).
+  async function proveOwnKeys(me, encSignPrivateKey, { account = null } = {}) {
+    if (!me || typeof me.id !== 'string' || !me.id || (account && me.id !== account)) throw otherAccount();
+    const e = me.publicKey;
+    if (typeof e !== 'string' || !e || !(await E2EE.ownsPublicKey(S.privateKey, e))) throw ownKeysMismatch();
+    const knownAs = provenAccounts()[e];
+    if (knownAs && knownAs !== me.id) throw otherAccount('The server named your account by another id than the one this device knows your keys by');
+    let s;
+    let signKey;
+    if (me.signPublicKey && encSignPrivateKey) {
+      // Locked with your identity key (proven yours just now): the signing key one of your own devices made.
+      s = me.signPublicKey;
+      signKey = await E2EE.unwrapSigningKey(S.privateKey, e, encSignPrivateKey).catch(() => null);
+    } else {
+      const k = await E2EE.createSigningKey(S.privateKey, e);
+      // The server wants proof that this device holds both your identity key and the new signing key.
+      const ch = await api('POST', '/me/sign-key/challenge');
+      const keyProof = await E2EE.signKeyProof(S.privateKey, ch.serverPublicKey, ch.nonce, me.id, k.signPublicKey);
+      const signature = await E2EE.sign(k.signKey, `hearth-sign-key|${me.id}|${e}|${ch.nonce}`);
+      try {
+        await api('POST', '/me/sign-key', { signPublicKey: k.signPublicKey, encSignPrivateKey: k.encSignPrivateKey, nonce: ch.nonce, keyProof, signature });
+      } catch (err) {
+        if (err.status === 409) throw new Error('Your signing key changed on another device. Reload the page.');
+        throw err;
+      }
+      // Nothing of the server's answer is taken: your keys are the ones made and checked here.
+      s = k.signPublicKey;
+      signKey = k.signKey;
+    }
+    if (!signKey || !s || !(await signsFor(s, signKey, me.id).catch(() => false))) throw ownKeysMismatch();
+    S.signKey = signKey;
+    proven = { e, s };
+    ownCheck = { e, s, signKey, ok: Promise.resolve(true) };
+    rememberAccount(e, me.id);
+    return { ...me, publicKey: e, signPublicKey: s };
   }
 
   // A record the server hands over for one account but labelled as another: never used (see mergeUser).
@@ -218,35 +304,6 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     return err;
   }
   const sameAccount = (id, x) => { if (!x || x.id !== id) throw wrongAccount(); return x; };
-
-  // ---------------------------------------------------------------- signing key
-  async function ensureSigningKey(encSignPrivateKey) {
-    // Your signing key is locked with your public key: that must really be yours before it's used for that. It's read
-    // once: a record pushed for you while this runs mustn't change which key it's locked to (or signed with).
-    const pub = S.me.publicKey;
-    if (!(await E2EE.ownsPublicKey(S.privateKey, pub))) throw ownKeysMismatch();
-    if (S.me.signPublicKey && encSignPrivateKey) {
-      S.signKey = await E2EE.unwrapSigningKey(S.privateKey, pub, encSignPrivateKey);
-      if (!(await ownKeysOk())) throw ownKeysMismatch();
-      return;
-    }
-    const k = await E2EE.createSigningKey(S.privateKey, pub);
-    try {
-      // The server wants proof that this device holds both your identity key and the new signing key.
-      const ch = await api('POST', '/me/sign-key/challenge');
-      const keyProof = await E2EE.signKeyProof(S.privateKey, ch.serverPublicKey, ch.nonce, S.me.id, k.signPublicKey);
-      if (S.me.publicKey !== pub) throw ownKeysMismatch();
-      const signature = await E2EE.sign(k.signKey, `hearth-sign-key|${S.me.id}|${pub}|${ch.nonce}`);
-      const me = await api('POST', '/me/sign-key', { signPublicKey: k.signPublicKey, encSignPrivateKey: k.encSignPrivateKey, nonce: ch.nonce, keyProof, signature });
-      S.me = { ...S.me, ...me, id: S.me.id, publicKey: pub };
-      S.users[S.me.id] = { ...S.users[S.me.id], ...me, id: S.me.id, publicKey: pub };
-      S.signKey = k.signKey;
-    } catch (e) {
-      if (e.status === 409) throw new Error('Your signing key changed on another device. Reload the page.');
-      throw e;
-    }
-    if (!(await ownKeysOk())) throw ownKeysMismatch();
-  }
 
   // ---------------------------------------------------------------- group keys
   function keysFor(serverId) {
@@ -350,13 +407,19 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     if (!todo.length || !S.signKey || !S.me || !S.me.publicKey) return keeping.get(serverId);
     todo.forEach((k) => rewrapped.add(`${serverId}|${k.epoch}`));
     const job = (async () => {
-      // Our public key as the server tells it must really be ours before we wrap every key we hold to it.
+      // Our public key as the server tells it must really be ours before we wrap every key we hold to it. Every copy
+      // then goes to that proven key, read once (as the signing key), never to whatever S.me lists by the time a
+      // later one is made; and a batch isn't sent at all if the key listed for us has changed by then.
       if (!(await ownKeysOk())) throw new Error('our public keys don’t match our private keys');
+      const pub = proven.e;
+      const signKey = S.signKey;
+      const myId = S.me.id;
       for (let i = 0; i < todo.length; i += 100) {
         const wraps = {};
         for (const k of todo.slice(i, i + 100)) {
-          wraps[k.epoch] = await E2EE.wrapGroupKey({ raw: k.raw, serverId, epoch: k.epoch, recipientId: S.me.id, recipientPub: S.me.publicKey, wrapperId: S.me.id, signKey: S.signKey });
+          wraps[k.epoch] = await E2EE.wrapGroupKey({ raw: k.raw, serverId, epoch: k.epoch, recipientId: myId, recipientPub: pub, wrapperId: myId, signKey });
         }
+        if (!S.me || S.me.publicKey !== pub) throw ownKeysMismatch();
         await api('POST', `/servers/${serverId}/keys/self`, { wraps });
       }
     })().catch((e) => {
@@ -425,6 +488,8 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       wraps[uid] = await E2EE.wrapGroupKey({ raw, serverId, epoch, recipientId: uid, recipientPub: u.publicKey, wrapperId: S.me.id, signKey: S.signKey });
       pubs[uid] = u.publicKey;
     }
+    // (As in keepForMyself: a batch with our own copy isn't sent once the server lists another key for us.)
+    if (pubs[S.me.id] && S.me.publicKey !== pubs[S.me.id]) throw ownKeysMismatch();
     return { wraps, pubs };
   }
   // Someone's keys changed under us: fetch them fresh before trying again.
@@ -591,18 +656,78 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
 
   // ---------------------------------------------------------------- DMs
   // Who each DM is with, as this device first saw it: a server that later names someone else as the other person
-  // (whose key the app would trust on first sight) gets nothing encrypted to them in that conversation.
+  // (whose key the app would trust on first sight) gets nothing encrypted to them in that conversation, and no call.
+  // A record never changes once made. Each one is kept in memory for the whole session as soon as it's made (so it
+  // holds even while storage can't be written: full, or blocked), and stored for the account for next time. The store
+  // is only read for a DM this session hasn't met yet, and parsed again only when its text changed (a start-up opens
+  // the newest message of every DM: parsing the whole store for each one made a long list slow). A new record is
+  // written into what's stored at that moment, so two tabs recording DMs at once keep each other's.
   const peersKey = () => `hearth.dmpeers.${S.me.id}`;
+  let peers = { key: '', map: new Map() }; // this session's records (dmId -> userId) for the account peersKey() names
+  let peerStore = { key: '', raw: null, all: {} }; // the stored records as last parsed, with the text they came from
+  function storedPeers(key) {
+    let raw = null;
+    try { raw = localStorage.getItem(key); } catch { /* storage off: this session's records are all there is */ }
+    if (peerStore.key !== key || peerStore.raw !== raw) {
+      let all;
+      try { all = JSON.parse(raw || '{}'); } catch { all = {}; }
+      peerStore = { key, raw, all: all && typeof all === 'object' && !Array.isArray(all) ? all : {} };
+    }
+    return peerStore.all;
+  }
+  // This session's records written into what's stored now. A DM stored already keeps the person stored for it (it was
+  // recorded there first, by another tab). A record that can't be written stays in memory, and goes with the next one.
+  function savePeers(key) {
+    const all = { ...storedPeers(key) };
+    let added = false;
+    for (const [dmId, userId] of peers.map) if (!all[dmId]) { all[dmId] = userId; added = true; }
+    if (added) {
+      const raw = JSON.stringify(all);
+      try { localStorage.setItem(key, raw); peerStore = { key, raw, all }; } catch { /* full or blocked: see above */ }
+    }
+    return all;
+  }
+  function peerChanged() {
+    const err = new Error('The server now names someone else as the other person in this conversation, so nothing was sent. Reload the page; if it keeps happening, tell the server’s owner.');
+    err.code = 'untrusted';
+    return err;
+  }
   function boundPeerId(d) {
-    let all = {};
-    try { all = JSON.parse(localStorage.getItem(peersKey()) || '{}') || {}; } catch { all = {}; }
-    if (all[d.id] && all[d.id] !== d.userId) {
-      const err = new Error('The server now names someone else as the other person in this conversation, so nothing was sent. Reload the page; if it keeps happening, tell the server’s owner.');
+    const key = peersKey();
+    if (peers.key !== key) peers = { key, map: new Map() };
+    let peer = peers.map.get(d.id);
+    if (!peer) {
+      const stored = storedPeers(key)[d.id];
+      if (typeof stored === 'string' && stored) { peer = stored; peers.map.set(d.id, peer); }
+    }
+    if (peer) {
+      if (peer !== d.userId) throw peerChanged();
+      return peer;
+    }
+    // First sight. Never yourself: no conversation the server makes is with you.
+    if (typeof d.userId !== 'string' || !d.userId || d.userId === S.me.id) {
+      const err = new Error('The server doesn’t say who else is in this conversation, so nothing was sent. Reload the page; if it keeps happening, tell the server’s owner.');
       err.code = 'untrusted';
       throw err;
     }
-    if (!all[d.id] && d.userId) { all[d.id] = d.userId; try { localStorage.setItem(peersKey(), JSON.stringify(all)); } catch { /* private mode: this session only */ } }
+    peers.map.set(d.id, d.userId);
+    const stored = savePeers(key)[d.id];
+    if (stored !== d.userId) { peers.map.set(d.id, stored); throw peerChanged(); } // another tab recorded someone else
     return d.userId;
+  }
+  // The conversation the server answered "Message <userId>" with (POST /dms): only one with exactly that person (never
+  // yourself), and not one this device has as being with someone else. It's remembered as being with them right away,
+  // before anything is drawn or sent in it: otherwise a fresh conversation with an account of the server's, made to look
+  // like them, would be taken on first sight.
+  function dmWith(d, userId) {
+    const known = d && S.dms.find((x) => x.id === d.id);
+    if (!d || typeof d.id !== 'string' || !d.id || !userId || userId === S.me.id || d.userId !== userId || (known && known.userId !== userId)) {
+      const err = new Error('The server answered with a conversation with someone else than the person you chose, so it wasn’t opened. Reload the page; if it keeps happening, tell the server’s owner.');
+      err.code = 'untrusted';
+      throw err;
+    }
+    boundPeerId({ id: d.id, userId });
+    return d;
   }
   async function dmPeer(dmId) {
     const d = S.dms.find((x) => x.id === dmId);
@@ -796,6 +921,19 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   // ---------------------------------------------------------------- voice handshakes
   const sdpText = (channelId, from, to, desc) => `hearth-voice|${channelId}|${from}|${to}|${desc.type}|${desc.sdp}`;
   const signSdp = (channelId, toUserId, desc) => E2EE.sign(S.signKey, sdpText(channelId, S.me.id, toUserId, desc));
+  // A 1-to-1 call ('dm:<dmId>') is with the person this device remembers that DM is with, and nobody else: not whoever
+  // the server rings you in the name of, nor whoever it lists in the call (an account of its own made to look like
+  // them would otherwise be pinned on first sight and connected). null for a DM this device doesn't have, one the
+  // server now names someone else for, and any other call.
+  function callPeer(room) {
+    if (typeof room !== 'string' || !room.startsWith('dm:')) return null;
+    const d = S.dms.find((x) => x.id === room.slice(3));
+    if (!d) return null;
+    try { return boundPeerId(d); } catch { return null; }
+  }
+  // Whether this device may connect with that person in that call at all (voice.js asks before it makes any connection,
+  // checkSdp before it takes any handshake): in a 1-to-1 call only with callPeer, in any other call with anyone.
+  const mayCall = (room, userId) => !(typeof room === 'string' && room.startsWith('dm:')) || (!!userId && callPeer(room) === userId);
   // Whether an offer or answer really comes from that person: { ok: true }, or { ok: false, why } with why one of
   //   'no-key'         the server lists no identity key for them (a bot has none), or no signing key at all
   //   'deleted'        the server says the account was deleted (it can't sign in, so it's never in a call)
@@ -803,11 +941,13 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   //                    safety numbers and accept the new ones
   //   'lookup-failed'  their keys couldn't be loaded
   //   'bad-signature'  no signature, a wrong one, or one claiming to come from your own account
+  //   'not-in-dm'      a 1-to-1 call, and they aren't the person this device has the DM as being with (see callPeer)
   // The signature is checked with the signing key this device pinned for them (pinned on first sight, trust on first
   // use), never just the one the server lists now: the DTLS fingerprint inside the SDP is what the encrypted
   // connection is checked against, so a server that could get its own key accepted could sit in the middle.
   async function checkSdp(channelId, fromUserId, desc, sig) {
     if (!fromUserId || fromUserId === S.me.id || !desc || typeof desc.sdp !== 'string' || !sig) return { ok: false, why: 'bad-signature' };
+    if (!mayCall(channelId, fromUserId)) return { ok: false, why: 'not-in-dm' };
     let u;
     try { u = await userWithKeys(fromUserId); } catch { u = null; }
     if (!u) return { ok: false, why: 'lookup-failed' };
@@ -825,12 +965,13 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   function reset() {
     groupKeys.clear(); states.clear(); busy.clear(); warned.clear(); rewrapped.clear(); keeping.clear(); unverified.clear(); holds.clear();
     ownCheck = null; proven = null; E2EE.clearCaches();
+    peers = { key: '', map: new Map() }; peerStore = { key: '', raw: null, all: {} };
   }
 
   return {
-    ensureSigningKey, applyState, stateOf, currentKey, ready, refresh, forceRotate, maintain, awaitingVerify, heldBack, isHeld,
+    proveOwnKeys, ownKeys, applyState, stateOf, currentKey, ready, refresh, forceRotate, maintain, awaitingVerify, heldBack, isHeld,
     encryptChannel, decryptChannelMessage, encryptDm, decryptDmMessage, decryptAttachment, encryptTag, openTag, encryptLook, openLook,
-    signSdp, verifySdp, checkSdp, keyChanged, keysChanged, acceptKeys, trust, userWithKeys, reset,
+    dmWith, callPeer, mayCall, signSdp, verifySdp, checkSdp, keyChanged, keysChanged, acceptKeys, trust, userWithKeys, reset,
     heldEpochs: (serverId) => [...keysFor(serverId).keys()],
     keysSaved: (serverId) => keeping.get(serverId) || Promise.resolve(), // our own copies are stored back
     signKeysFor,

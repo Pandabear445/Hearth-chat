@@ -443,6 +443,7 @@ function bobEngine({ verify } = {}) {
     socket, getIceServers: () => [], myId: () => bob.id,
     signSdp: (to, d) => b.sec.signSdp(voice.channelId, to, d), // app.js
     verifySdp: verify || ((from, d, sig) => b.sec.checkSdp(voice.channelId, from, d, sig)), // app.js
+    mayConnect: (room, userId) => b.sec.mayCall(room, userId), // app.js
     onSecurityWarning: (userId, why) => warnings.push([userId, why]),
   });
   voice.channelId = ROOM; voice.state = 'connected';
@@ -529,6 +530,52 @@ test('engine: signals that claim to come from this account are refused, and the 
   await assert.rejects(b.voice.createPeer('SX', bob.id, true), 'a server that lists us among the others gets no connection to ourselves');
   assert.equal(pcs.length, n);
   b.voice.cleanup();
+});
+
+test('engine: a 1-to-1 call connects only with the person this device has the DM as being with', async () => {
+  // The server rings Bob for his DM with Alice, then lists (or has offer) only Zed: an account of its own whose record
+  // copies her name, pinned on first sight. Done on both sides, that's the server in the middle of the call.
+  const zed = await person('uz');
+  const b = bobEngine();
+  b.update(rec(alice));
+  b.S.dms.push({ id: 'dm1', userId: alice.id });
+  await b.sec.encryptDm('dm1', { t: 'hi' }); // the DM is remembered (on this device) as being with Alice
+  b.update(rec(zed, { username: alice.id }));
+  const room = 'dm:dm1';
+  b.voice.channelId = room;
+  assert.equal(b.sec.callPeer(room), alice.id, 'the ring card names Alice');
+  // Zed's offer, signed with his own (pinned) key: refused, nothing made or sent, and the user is told why.
+  const zOffer = desc('ZE:D0:ZE:D0');
+  const zSig = await signAs(zed, zed.id, bob.id, zOffer, room);
+  assert.deepEqual(await b.sec.checkSdp(room, zed.id, zOffer, zSig), { ok: false, why: 'not-in-dm' });
+  const n = pcs.length;
+  await quiet(() => b.voice.queueSignal({ from: 'SZ', userId: zed.id, data: { sdp: zOffer, sig: zSig, pc: 'z1' } }));
+  assert.equal(pcs.length, n, 'no RTCPeerConnection');
+  assert.deepEqual(b.signals(), [], 'nothing sent back');
+  // Listed in the call (voice.js doJoin and rejoin connect to everyone listed): no connection is made to him either.
+  await assert.rejects(b.voice.createPeer('SZ', zed.id, true));
+  assert.equal(pcs.length, n);
+  assert.deepEqual(b.callWarnings, [[zed.id, 'not-in-dm'], [zed.id, 'not-in-dm']]);
+  assert.match(SEC.callRefusedText('not-in-dm', 'Alice'), /this 1-to-1 call is with someone else/);
+  // Alice's own offer connects as ever.
+  await b.voice.queueSignal({ from: 'SA', userId: alice.id, data: { sdp: REAL, sig: await signAs(alice, alice.id, bob.id, REAL, room), pc: 'a1' } });
+  assert.equal(pcs.length, n + 1);
+  assert.ok(b.voice.peerByUser(alice.id));
+  // A DM this device doesn't have, or one the server now names Zed for: nobody connects at all.
+  for (const [r, who] of [['dm:nope', alice.id], [room, zed.id], [room, alice.id]]) {
+    if (r === room && who === zed.id) b.S.dms[0].userId = zed.id;
+    assert.equal(b.sec.mayCall(r, who), false, `${r} ${who}`);
+    assert.equal(b.sec.callPeer(r), null);
+  }
+  assert.equal(b.sec.mayCall(ROOM, zed.id), true, 'a server voice channel is anyone’s the server lets in (checked per handshake)');
+  b.voice.cleanup();
+  // app.js: the engine is wired to that check; a ring names the remembered person, and a DM call this device doesn't
+  // have isn't joined.
+  const app = require('node:fs').readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+  assert.match(app, /mayConnect: \(room, userId\) => sec\.mayCall\(room, userId\),/);
+  const ring = app.slice(app.indexOf('function onRing({ room, from, video })'), app.indexOf('// Older desktop apps'));
+  assert.match(ring, /const caller = room\.startsWith\('dm:'\) \? sec\.callPeer\(room\) : from;\n  if \(!caller\) return;\n  const u = getUser\(caller\);/);
+  assert.match(ring, /if \(room\.startsWith\('dm:'\) && !sec\.callPeer\(room\)\) return toast\(/);
 });
 
 test('engine: connections the server doesn’t list are closed after 20 s even when its list is empty', async () => {

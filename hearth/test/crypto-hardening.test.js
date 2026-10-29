@@ -87,13 +87,16 @@ async function send(u, sid, ch, epoch, raw, t) {
   assert.equal(r.status, 200, r.text);
   return r.json.id;
 }
-// The app's start-up on one device (app.js loadBootstrap), with that device's pins.
-async function device(user, pins = new Map()) {
+// The app's start-up on one device (app.js loadBootstrap), with that device's pins: your own record is proven before
+// anything of it is used (secure.js proveOwnKeys), and only then taken as S.me. `id`: the account id the server
+// signed this tab in as (app.js finishLogin → startApp), and names in the start-up.
+async function device(user, pins = new Map(), { id = user.id } = {}) {
   store = pins; curIp = user.ip; API.setToken(user.token);
   const boot = (await as(user, 'GET', '/bootstrap')).json;
-  const S = { me: boot.me, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: user.privateKey, e2eeSince: boot.e2eeSince };
+  const S = { me: null, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: user.privateKey, e2eeSince: boot.e2eeSince };
   const sec = createSecure({ S });
-  await sec.ensureSigningKey(boot.encSignPrivateKey);
+  S.me = await sec.proveOwnKeys(id === user.id ? boot.me : { ...boot.me, id }, boot.encSignPrivateKey, { account: id });
+  S.users[S.me.id] = { ...S.users[S.me.id], ...S.me };
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(boot.keyStates || {})) await sec.applyState(st);
   for (const s of S.servers) await sec.keysSaved(s.id);
@@ -708,31 +711,280 @@ test('a server that files someone else’s record (or its own) under a contact�
 
 test('the app checks which account a start-up is for, and pushed records can’t change your own keys', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
-  // Bootstrap for another account than the one signed in on this device is refused before anything uses it.
-  assert.match(app, /const signedInAs = localStorage\.getItem\('hearth\.userId'\);\n  if \(!b\.me \|\| \(signedInAs && b\.me\.id !== signedInAs\)\) \{/);
-  // Only records filed under their own id are kept from it.
-  assert.match(app, /S\.users = Object\.fromEntries\(Object\.entries\(b\.users \|\| \{\}\)\.filter\(\(\[id, u\]\) => u && u\.id === id\)\);/);
+  // Bootstrap for another account than the one this tab started as is refused before anything uses it, and so is one
+  // whose keys aren't yours: your record is proven first, and only then taken as S.me.
+  const boot = app.slice(app.indexOf('async function loadBootstrap()'), app.indexOf('// "What\'s new"'));
+  assert.match(boot, /const me = await sec\.proveOwnKeys\(b\.me, b\.encSignPrivateKey, \{ account: signedInAs \}\);\n  S\.me = me;/);
+  assert.ok(boot.indexOf('sec.proveOwnKeys(') < boot.indexOf('S.me = me;') && !/S\.me = b\.me/.test(boot), 'nothing of the start-up is assigned before the proof');
+  // Only records filed under their own id are kept from it, and yours carries the proven keys.
+  assert.match(app, /S\.users = Object\.fromEntries\(Object\.entries\(b\.users \|\| \{\}\)\.filter\(\(\[id, u\]\) => u && u\.id === id\)\);\n  S\.users\[me\.id\] = \{ \.\.\.\(S\.users\[me\.id\] \|\| \{\}\), \.\.\.me \};/);
   // A record pushed for yourself never carries new public keys into S.me.
   const setUser = app.slice(app.indexOf('function setUser(u)'), app.indexOf('function getUser(id)'));
   assert.match(setUser, /delete rest\.publicKey; delete rest\.signPublicKey;/);
   assert.match(setUser, /S\.me = mergeUser\(S\.me, rest\);/);
 });
 
-test('a key pushed for you while the signing key is being made can’t become the key it’s locked to', async () => {
+test('a key pushed (or answered) for you while the signing key is being made never becomes yours', async () => {
   const A = await person(uname('alice'), { signKey: false }); const X = await serverKeys();
   store = new Map(); curIp = A.ip; API.setToken(A.token);
   const boot = (await as(A, 'GET', '/bootstrap')).json;
-  const S = { me: boot.me, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: A.privateKey, e2eeSince: boot.e2eeSince };
+  const S = { me: null, users: { ...boot.users }, servers: boot.servers, dms: boot.dms, privateKey: A.privateKey, e2eeSince: boot.e2eeSince };
   const sec = createSecure({ S });
-  // The server pushes its own public key for you as soon as the app starts making the signing key...
+  // The server pushes its own public key for you as soon as the app starts making the signing key, and answers the
+  // upload with its own keys as yours...
   const real = globalThis.fetch;
   globalThis.fetch = async (url, opts) => {
-    if (String(url).endsWith('/api/me/sign-key/challenge')) S.me = { ...S.me, publicKey: X.publicKey };
+    if (String(url).endsWith('/api/me/sign-key/challenge')) S.me = { ...boot.me, publicKey: X.publicKey };
+    const r = await real(url, opts);
+    if (!String(url).endsWith('/api/me/sign-key')) return r;
+    const body = { ...(await r.json()), publicKey: X.publicKey, signPublicKey: X.signPublicKey };
+    return new Response(JSON.stringify(body), { status: r.status, headers: { 'content-type': 'application/json' } });
+  };
+  let me;
+  try { me = await sec.proveOwnKeys(boot.me, boot.encSignPrivateKey, { account: A.id }); } finally { globalThis.fetch = real; }
+  // ...and neither counts: the key made is locked with your real key, and it's the one the app takes as yours.
+  const row = srv.sql('SELECT sign_public_key, enc_sign_private_key FROM users WHERE id = ?', A.id)[0];
+  assert.deepEqual([me.publicKey, me.signPublicKey], [A.publicKey, row.sign_public_key]);
+  assert.deepEqual(sec.ownKeys(), { publicKey: A.publicKey, signPublicKey: row.sign_public_key });
+  assert.ok(await E.unwrapSigningKey(A.privateKey, A.publicKey, row.enc_sign_private_key));
+  // Nothing of the server's answer was copied into the app's records of you either.
+  assert.notEqual((S.users[A.id] || {}).signPublicKey, X.signPublicKey);
+});
+
+// ------------------------------------------------------------------ third review round: only what this device proved
+const src = (f) => fs.readFileSync(path.join(__dirname, '..', 'public', 'js', f), 'utf8');
+
+test('your own copies of server keys go only to the key proven yours, even if the one listed for you changes meanwhile', async () => {
+  const A = await person(uname('alice')); const B = await person(uname('bob')); const X = await serverKeys();
+  const { s } = await serverWith(A, [B]);
+  // 130 server keys Bob's app handed Alice: more than one batch of her own copies (they go 100 at a time).
+  const N = 130; const t = Date.now() - 60000;
+  for (let epoch = 1; epoch <= N; epoch++) {
+    const raw = E.newGroupKey();
+    srv.sql('INSERT INTO server_epochs (server_id, epoch, key_check, creator_id, created_at) VALUES (?, ?, ?, ?, ?)', s.id, epoch, await E.keyCheck(raw, s.id, epoch), B.id, t);
+    for (const u of [A, B]) {
+      const w = await E.wrapGroupKey({ raw, serverId: s.id, epoch, recipientId: u.id, recipientPub: u.publicKey, wrapperId: B.id, signKey: B.signKey });
+      srv.sql('INSERT INTO server_keys (server_id, epoch, user_id, wrapped, wrapper_id, created_at) VALUES (?, ?, ?, ?, ?, ?)', s.id, epoch, u.id, w, B.id, t);
+    }
+  }
+  srv.sql('UPDATE servers SET key_epoch = ?, needs_rotation = 0 WHERE id = ?', N, s.id);
+  // Alice's app starts, and as the first batch of copies goes out the key listed for her turns into the server's (a
+  // reconnect's start-up did that before it was proven first).
+  store = new Map(); curIp = A.ip; API.setToken(A.token);
+  const boot = (await as(A, 'GET', '/bootstrap')).json;
+  const S = { me: null, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: A.privateKey, e2eeSince: boot.e2eeSince };
+  const sec = createSecure({ S });
+  S.me = await sec.proveOwnKeys(boot.me, boot.encSignPrivateKey, { account: A.id });
+  const real = globalThis.fetch; let batches = 0;
+  globalThis.fetch = async (url, opts) => {
+    if (String(url).endsWith(`/api/servers/${s.id}/keys/self`) && ++batches === 1) S.me = { ...S.me, publicKey: X.publicKey };
     return real(url, opts);
   };
-  try { await assert.rejects(sec.ensureSigningKey(boot.encSignPrivateKey), (e) => e.code === 'own_key_mismatch'); } finally { globalThis.fetch = real; }
-  // ...and nothing was stored: the account still has no signing key.
-  assert.equal(srv.sql('SELECT sign_public_key FROM users WHERE id = ?', A.id)[0].sign_public_key, null);
+  const warn = console.warn; console.warn = () => {};
+  try {
+    for (const st of Object.values(boot.keyStates || {})) await sec.applyState(st);
+    await sec.keysSaved(s.id);
+  } finally { globalThis.fetch = real; console.warn = warn; }
+  // None of Alice's rows opens for the server: each is still Bob's copy, or her own copy for her real key.
+  const rows = srv.sql('SELECT epoch, wrapped, wrapper_id FROM server_keys WHERE server_id = ? AND user_id = ? ORDER BY epoch', s.id, A.id);
+  const opens = (r, priv) => E.unwrapGroupKey({ wrapped: r.wrapped, serverId: s.id, epoch: r.epoch, myId: A.id, myPriv: priv, wrapperId: r.wrapper_id, wrapperSignPub: [A.signPublicKey, B.signPublicKey] }).then(() => true, () => false);
+  for (const r of rows) {
+    assert.equal(await opens(r, X.privateKey), false, `epoch ${r.epoch}: never for the server`);
+    assert.equal(await opens(r, A.privateKey), true, `epoch ${r.epoch}: Alice's`);
+  }
+  assert.equal(rows.filter((r) => r.wrapper_id === A.id).length, 100, 'the batch made before the change is hers; the next one wasn’t sent');
+});
+
+test('a start-up that lists the server’s keys as yours is refused with nothing taken, and only proven keys are ever yours', async () => {
+  const A = await person(uname('alice')); const B = await person(uname('bob')); const X = await serverKeys();
+  await serverWith(A, [B]);
+  const d = await device(A, new Map());
+  const before = d.S.me;
+  // Reconnecting, the server lists its own keys for Alice (and shows them to Bob as hers, so he asks her to compare).
+  srv.sql('UPDATE users SET public_key = ?, sign_public_key = ? WHERE id = ?', X.publicKey, X.signPublicKey, A.id);
+  try {
+    const boot = (await as(A, 'GET', '/bootstrap')).json;
+    // Both keys swapped, or the signing key alone: refused (app.js loadBootstrap takes S.me only from what this returns).
+    for (const me of [boot.me, { ...boot.me, publicKey: A.publicKey }]) {
+      await assert.rejects(d.sec.proveOwnKeys(me, boot.encSignPrivateKey, { account: A.id }), (e) => e.code === 'own_key_mismatch');
+    }
+  } finally { srv.sql('UPDATE users SET public_key = ?, sign_public_key = ? WHERE id = ?', A.publicKey, A.signPublicKey, A.id); }
+  assert.equal(d.S.me, before, 'the app keeps what it proved before');
+  // Whatever lands in the app's records of you later, your keys are the proven ones: your safety numbers never match
+  // what the server shows Bob as yours (so his "Numbers match" can't trust its keys), and it can't work out your vault key.
+  d.S.me = { ...d.S.me, publicKey: X.publicKey, signPublicKey: X.signPublicKey };
+  d.S.users[A.id] = { ...d.S.me };
+  const own = d.sec.ownKeys();
+  assert.deepEqual(own, { publicKey: A.publicKey, signPublicKey: A.signPublicKey });
+  const self = await d.sec.userWithKeys(A.id);
+  assert.deepEqual([self.publicKey, self.signPublicKey], [A.publicKey, A.signPublicKey]);
+  const bobSees = await E.safetyNumber(B, { publicKey: X.publicKey, signPublicKey: X.signPublicKey });
+  assert.notDeepEqual(await E.safetyNumber(own, d.S.users[B.id]), bobSees);
+  assert.deepEqual(await E.safetyNumber(own, d.S.users[B.id]), await E.safetyNumber(B, A), 'the real numbers');
+  const sealed = await E.sealVault(await E.vaultKey(A.privateKey, own.publicKey), 'nicknames', A.id, { n: 'only mine' });
+  await assert.rejects(E.openVault(await E.vaultKey(X.privateKey, A.publicKey), 'nicknames', A.id, sealed));
+  // And the app takes your keys for those only from there: safety numbers, the fingerprint, the vault key, Recall's.
+  const app = src('app.js');
+  assert.match(app, /const own = sec\.ownKeys\(\);\n[^\n]*\n    const groupsN = await E2EE\.safetyNumber\(own, user\.id === S\.me\.id \? own : user\);/);
+  assert.match(app, /function myVaultKey\(\) \{\n  const own = sec\.ownKeys\(\);[^]{0,300}E2EE\.vaultKey\(S\.privateKey, own\.publicKey\)/);
+  assert.doesNotMatch(app, /safetyNumber\(S\.me|vaultKey\(S\.privateKey, S\.me\.publicKey\)/);
+  assert.match(app, /createRecall\(\{ S, vaultKey: \(\) => myVaultKey\(\),/);
+  assert.match(src('settings.js'), /const own = app\.sec\.ownKeys\(\);\n  \(own \? E2EE\.keyFingerprint\(own\) : Promise\.reject\(\)\)/);
+  assert.doesNotMatch(src('recall-host.js'), /S\.me\.publicKey/);
+});
+
+test('signed in again under another id for the same keys: refused, instead of every pin starting from nothing', async () => {
+  const A = await person(uname('alice')); const B = await person(uname('bob')); const X = await serverKeys();
+  await serverWith(A, [B]);
+  const pins = new Map();
+  const d = await device(A, pins);
+  assert.equal(d.sec.acceptKeys(d.S.users[B.id]), true, 'Bob verified on this device');
+  const servedBob = (u) => ({ ...u.S.users[B.id], publicKey: X.publicKey, signPublicKey: X.signPublicKey });
+  // The server signs this device out ("Your sign-in expired") and answers the next sign-in with Alice's real keys
+  // (her password unlocks them) under another id, new or another account's: the app stores it and starts as that.
+  for (const id of ['x' + H.hex(10), B.id]) {
+    await assert.rejects(device(A, pins, { id }), (e) => e.code === 'own_key_mismatch' && /another id than the one this device knows your keys by/.test(e.message), id);
+  }
+  // Under her own id it starts as ever, every pin in place: Bob served with the server's keys is a key change.
+  assert.equal((await device(A, pins)).sec.keyChanged(servedBob(d)), true);
+  // A password reset without the recovery key (new keys, the same id) is no other account: it starts, pins and all.
+  const A2 = await resetWithoutRecovery(A);
+  const after = await device(A2, pins);
+  assert.equal(after.S.me.publicKey, A2.publicKey);
+  assert.equal(after.sec.keyChanged(servedBob(after)), true, 'Bob is still pinned');
+});
+
+test('“Message” opens only a conversation with the person chosen, remembered as theirs before anything is shown', async () => {
+  const A = await person(uname('alice')); const B = await person(uname('bob')); const C = await person(uname('carol')); const Z = await person(uname('zed'));
+  await serverWith(A, [B, C, Z]);
+  const withCarol = (await as(A, 'POST', '/dms', { userId: C.id })).json;
+  const d = await device(A, new Map());
+  assert.ok(d.S.dms.some((x) => x.id === withCarol.id));
+  // app.js openDmWith(bob): POST /dms { userId: bob }, and the server answers with...
+  const answers = [
+    ['a fresh conversation with an account of its own (one that looks like Bob)', { id: H.hex(10), userId: Z.id }],
+    ['the conversation with Carol, labelled as being with Bob', { ...withCarol, userId: B.id }],
+    ['a conversation with yourself', { id: H.hex(10), userId: A.id }],
+  ];
+  const real = globalThis.fetch;
+  for (const [label, answer] of answers) {
+    globalThis.fetch = async (url, opts = {}) => (String(url).endsWith('/api/dms') && opts.method === 'POST'
+      ? new Response(JSON.stringify(answer), { status: 200, headers: { 'content-type': 'application/json' } }) : real(url, opts));
+    let got;
+    try { got = await API.api('POST', '/dms', { userId: B.id }); } finally { globalThis.fetch = real; }
+    assert.throws(() => d.sec.dmWith(got, B.id), (e) => e.code === 'untrusted', label);
+  }
+  // Carol's conversation, once remembered as hers, is refused for Bob even when the app's list doesn't have it.
+  await d.sec.encryptDm(withCarol.id, { t: 'hi carol' });
+  const others = d.S.dms.filter((x) => x.id !== withCarol.id);
+  const { dms } = d.S;
+  d.S.dms = others;
+  assert.throws(() => d.sec.dmWith({ ...withCarol, userId: B.id }, B.id), (e) => e.code === 'untrusted');
+  d.S.dms = dms;
+  // A conversation the server lists as being with yourself gets nothing either.
+  d.S.dms.unshift({ id: H.hex(10), userId: A.id });
+  await assert.rejects(d.sec.encryptDm(d.S.dms[0].id, { t: 'note to self' }), (e) => e.code === 'untrusted');
+  // The honest answer is taken, and remembered as Bob's at once: named Zed's afterwards, it gets nothing.
+  const dm = d.sec.dmWith(await API.api('POST', '/dms', { userId: B.id }), B.id);
+  assert.equal(dm.userId, B.id);
+  d.S.dms.unshift({ ...dm, userId: Z.id });
+  await assert.rejects(d.sec.encryptDm(dm.id, { t: 'for bob only' }), (e) => e.code === 'untrusted');
+  // openDmWith takes nothing the server answers with but through that check.
+  const app = src('app.js');
+  const open = app.slice(app.indexOf('async function openDmWith(userId)'), app.indexOf('function openServer(serverId)'));
+  assert.match(open, /const d = sec\.dmWith\(await api\('POST', '\/dms', \{ userId \}\), userId\);\n    if \(!S\.dms\.find/);
+});
+
+test('a DM is opened as a message of the conversation it’s shown in, never of the one the server labels it with', async () => {
+  const A = await person(uname('alice')); const B = await person(uname('bob')); const C = await person(uname('carol'));
+  await serverWith(A, [B, C]);
+  const withBob = (await as(A, 'POST', '/dms', { userId: B.id })).json;
+  const withCarol = (await as(A, 'POST', '/dms', { userId: C.id })).json;
+  const ciphertext = await E.encryptDm({ myPriv: B.privateKey, theirPub: A.publicKey, dmId: withBob.id, authorId: B.id, payload: { t: 'for alice, from bob' } });
+  const sent = (await as(B, 'POST', `/dms/${withBob.id}/messages`, { ciphertext })).json;
+  const d = await device(A, new Map());
+  // dm:message for Carol's conversation, carrying Bob's real message (labelled with his conversation's id): shown in
+  // Carol's, so opened as one of hers (app.js), where it doesn't open.
+  const filed = { ...sent, dmId: withCarol.id };
+  await d.sec.decryptDmMessage(filed);
+  assert.equal(filed.dec.error, true);
+  const own = { ...sent };
+  await d.sec.decryptDmMessage(own);
+  assert.equal(own.dec.t, 'for alice, from bob', 'in its own conversation it opens');
+  // The live event and history loads both open a message as one of the conversation they file it under.
+  const app = src('app.js');
+  const live = app.slice(app.indexOf("socket.on('dm:message'"), app.indexOf("socket.on('dm:update'"));
+  assert.match(live, /message\.dmId = dm\.id;/);
+  assert.ok(live.indexOf('message.dmId = dm.id;') < live.indexOf("await onNewMessage('d:' + dm.id, message);"));
+  assert.match(app, /const fresh = res\.messages\.filter\(\(m\) => !known\.has\(m\.id\)\)\.map\(\(m\) => \(key\.startsWith\('d:'\) \? \{ \.\.\.m, dmId: key\.slice\(2\) \} : \{ \.\.\.m, channelId: key\.slice\(2\) \}\)\);/);
+});
+
+test('who a DM is with holds all session when storage can’t be written, tabs keep each other’s records, and it isn’t parsed per message', async () => {
+  const A = await person(uname('alice')); const B = await person(uname('bob')); const C = await person(uname('carol')); const Z = await person(uname('zed'));
+  await serverWith(A, [B, C, Z]);
+  const [withBob, withCarol, withZed] = await Promise.all([B, C, Z].map(async (u) => (await as(A, 'POST', '/dms', { userId: u.id })).json));
+  const pins = new Map();
+  const d = await device(A, pins); // Bob, Carol and Zed pinned on first sight
+  const key = `hearth.dmpeers.${A.id}`;
+  const bobs = () => d.S.dms.find((x) => x.id === withBob.id);
+  // 1. Storage full (a server can fill it, with records the app pins): Bob's DM isn't stored when first met...
+  const ls = globalThis.localStorage; const setItem = ls.setItem; const getItem = ls.getItem;
+  ls.setItem = (k, v) => { if (k === key) throw Object.assign(new Error('The quota has been exceeded.'), { name: 'QuotaExceededError' }); return setItem(k, v); };
+  try {
+    await d.sec.encryptDm(withBob.id, { t: 'hi bob' });
+    assert.equal(pins.get(key), undefined);
+    // ...but it stays Bob's all session: named Carol's (pinned already), nothing goes to her.
+    bobs().userId = C.id;
+    await assert.rejects(d.sec.encryptDm(withBob.id, { t: 'for bob only' }), (e) => e.code === 'untrusted');
+  } finally { ls.setItem = setItem; }
+  bobs().userId = B.id;
+  // With storage back, it's stored along with the next one.
+  await d.sec.encryptDm(withCarol.id, { t: 'hi carol' });
+  assert.deepEqual(JSON.parse(pins.get(key)), { [withBob.id]: B.id, [withCarol.id]: C.id });
+  // 2. Another tab writes back what it read before (Bob's record lost): this tab still has it, and writes it back with
+  // its next one, keeping what the other tab added.
+  pins.set(key, JSON.stringify({ [withCarol.id]: C.id, other: Z.id }));
+  bobs().userId = C.id;
+  await assert.rejects(d.sec.encryptDm(withBob.id, { t: 'for bob only' }), (e) => e.code === 'untrusted');
+  bobs().userId = B.id;
+  await d.sec.encryptDm(withZed.id, { t: 'hi zed' });
+  assert.deepEqual(JSON.parse(pins.get(key)), { [withCarol.id]: C.id, other: Z.id, [withBob.id]: B.id, [withZed.id]: Z.id });
+  // 3. Opening messages in DMs already met doesn't read (or parse) the store again.
+  const ct = await E.encryptDm({ myPriv: B.privateKey, theirPub: A.publicKey, dmId: withBob.id, authorId: B.id, payload: { t: 'x' } });
+  let reads = 0;
+  ls.getItem = (k) => { if (k === key) reads++; return getItem(k); };
+  try {
+    for (let i = 0; i < 20; i++) {
+      const m = { id: 'm' + i, dmId: withBob.id, authorId: B.id, ciphertext: ct, createdAt: Date.now() };
+      await d.sec.decryptDmMessage(m);
+      assert.equal(m.dec.t, 'x');
+    }
+  } finally { ls.getItem = getItem; }
+  assert.equal(reads, 0);
+});
+
+test('each tab checks a start-up against the account it started as, not the one another tab of the browser signed in', async () => {
+  const A = await person(uname('alice')); const B = await person(uname('bob'));
+  // This tab started as Alice; another tab of the same browser has signed in as Bob since (hearth.userId, shared).
+  const pins = new Map([['hearth.userId', B.id]]);
+  const d = await device(A, pins); // a reconnect: Alice's own start-up goes through
+  assert.equal(d.S.me.id, A.id);
+  // A start-up for Bob in this tab (it took his token) is refused, whatever the shared record says.
+  const bobs = (await as(B, 'GET', '/bootstrap')).json;
+  await assert.rejects(d.sec.proveOwnKeys(bobs.me, bobs.encSignPrivateKey, { account: A.id }), (e) => e.code === 'own_key_mismatch' && /different account than the one signed in/.test(e.message));
+  // app.js: the account is the one this tab started as (startApp's, from init or finishLogin), never read again from
+  // storage every tab shares; and a new sign-in names its account before its token, so a tab of another account
+  // never takes that token for its own (api.js sameOwner).
+  const app = src('app.js');
+  const boot = app.slice(app.indexOf('async function loadBootstrap()'), app.indexOf('// "What\'s new"'));
+  assert.doesNotMatch(boot, /hearth\.userId/);
+  assert.match(boot, /sec\.proveOwnKeys\(b\.me, b\.encSignPrivateKey, \{ account: signedInAs \}\)/);
+  assert.match(app, /function startApp\(account\) \{\n  signedInAs = account;/);
+  assert.match(app, /setTokenOwner\(account\);/);
+  assert.match(app, /if \(key\) \{ S\.privateKey = key; return startApp\(uid\); \}/);
+  const fin = app.slice(app.indexOf('async function finishLogin(res, privateKey)'), app.indexOf('let loggingOut = null;'));
+  assert.match(fin, /startApp\(res\.user\.id\);/);
+  assert.ok(fin.indexOf("localStorage.setItem('hearth.userId', res.user.id);") < fin.indexOf('setToken(res.token);'));
 });
 
 test('refused rotations don’t use up the hour: the owner can still replace the key, and only real keys count', async () => {

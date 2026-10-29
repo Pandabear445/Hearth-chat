@@ -51,7 +51,7 @@ const hasWindow = typeof window !== 'undefined';
 const md = () => (typeof navigator !== 'undefined' && navigator.mediaDevices) || null;
 
 export class Voice {
-  constructor({ socket, getIceServers, ensureIce, avoidHosts, avoids, memberRelayHosts, onChange, onSpeaking, signSdp, verifySdp, onSecurityWarning, isPeerMuted, onNotice, onRegion, onMoved, myId, boardTrack, onBoard }) {
+  constructor({ socket, getIceServers, ensureIce, avoidHosts, avoids, memberRelayHosts, onChange, onSpeaking, signSdp, verifySdp, mayConnect, onSecurityWarning, isPeerMuted, onNotice, onRegion, onMoved, myId, boardTrack, onBoard }) {
     this.socket = socket;
     this.isPeerMuted = isPeerMuted;
     // Offers/answers are signed with the sender's signing key and checked before use. The DTLS
@@ -59,6 +59,10 @@ export class Voice {
     // swapped it to listen in would be caught here.
     this.signSdp = signSdp;
     this.verifySdp = verifySdp;
+    // Whether this app may connect with someone in this call at all (room, userId), asked before any connection is
+    // made, ours or theirs: in a 1-to-1 call, only the person this device has the DM as being with (app.js,
+    // secure.js mayCall), whoever the server lists.
+    this.mayConnect = mayConnect || (() => true);
     this.onSecurityWarning = onSecurityWarning || (() => {});
     this.getIceServers = getIceServers;
     this.ensureIce = ensureIce; // fetches new relay logins first when the ones we have are about to run out
@@ -759,6 +763,10 @@ export class Voice {
     // Never a connection to ourselves (see handleSignal): a server that lists us among the others gets nowhere.
     const me = this.myId();
     if (me && userId === me) throw new Error('Not connecting to this account itself.');
+    if (!this.mayConnect(this.channelId, userId)) {
+      this.onSecurityWarning(userId, 'not-in-dm');
+      throw new Error('Not connecting to someone who isn\u2019t the other person in this 1-to-1 call.');
+    }
     // One connection per person: an older one (from before they reconnected) makes way.
     const dupe = this.peerByUser(userId);
     if (dupe) this.closePeer(dupe.socketId, null);

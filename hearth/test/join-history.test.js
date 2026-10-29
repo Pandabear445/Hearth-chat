@@ -655,9 +655,10 @@ test('the app: a newcomer’s device holds only the new key and reads what came 
   async function device(user) {
     store = new Map(); curIp = user.ip; API.setToken(user.token);
     const boot = (await as(user, 'GET', '/bootstrap')).json;
-    const S = { me: boot.me, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: user.privateKey, e2eeSince: boot.e2eeSince };
+    const S = { me: null, users: boot.users, servers: boot.servers, dms: boot.dms, privateKey: user.privateKey, e2eeSince: boot.e2eeSince };
     const sec = createSecure({ S });
-    await sec.ensureSigningKey(boot.encSignPrivateKey);
+    S.me = await sec.proveOwnKeys(boot.me, boot.encSignPrivateKey, { account: user.id });
+    S.users[S.me.id] = { ...S.users[S.me.id], ...S.me };
     Object.values(S.users).forEach((u) => sec.trust(u));
     for (const st of Object.values(boot.keyStates || {})) await sec.applyState(st);
     for (const s of S.servers) await sec.keysSaved(s.id);
