@@ -2242,6 +2242,8 @@ function syncRead(key, messageId, unread = false, threads = false) {
 }
 function markRead(key) {
   if (!key || document.hidden) return;
+  // On the Reels tab the chat isn't on screen: nothing in it has been read (it is once you go back to it).
+  if (S.view.tab === 'reels' && key === currentKey()) return;
   const st = S.msgs[key];
   // A voice channel's chat opened before anyone wrote in it: the marker '0' (before every message) says you opened
   // it, so what's written there next counts as unread for you, on all your devices.
@@ -3269,6 +3271,7 @@ function setConvTab(tab) {
   if (!reelsKey(S.view) || (S.view.tab || 'chat') === tab) return;
   S.view = { ...S.view, tab };
   renderMain();
+  if (tab === 'chat') markRead(currentKey());
 }
 // Chat | Reels, under the header.
 function convTabs(v) {
@@ -6255,7 +6258,7 @@ async function onNewMessage(key, m) {
     if (!S.view.serverId || S.view.serverId === m.serverId) later(renderSidebar);
     return;
   }
-  const viewing = currentKey() === key && !document.hidden;
+  const viewing = currentKey() === key && !document.hidden && S.view.tab !== 'reels';
   const level = notifyLevel(key);
   const isDm = key.startsWith('d:') || isGroup(S.servers.find((x) => x.id === m.serverId));
   const kind = mentionKind(m);

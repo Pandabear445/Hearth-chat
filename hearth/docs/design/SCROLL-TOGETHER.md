@@ -51,8 +51,9 @@ terms forbid copying them. The tab says so, and its feed is only the videos peop
 Settings → Chat → TikTok and Instagram applies:
 
 - **Load when I tap** (default): a cover says the videos load from TikTok and Instagram, which see your IP address,
-  and that short links are looked up by your server. **Your first tap in the tab** lets every video in it, and in
-  other Reels tabs, load **until you close or reload Hearth**: you don't tap each video.
+  and that short links are looked up by your server. **A tap on that cover** lets every video in the tab, and in
+  other Reels tabs, load **until you close or reload Hearth**: you don't tap each video. Nothing else counts as
+  that tap (not Back, +, or starting a swipe).
 - **Always load**: no cover.
 - **Just show the link**: cards with the link only, never a player.
 
@@ -68,8 +69,14 @@ conversation's call who isn't on the tab is told ("alice started scrolling toget
   see "alice swiped to the next ↓". The bar shows "Scrolling with alice, bob" with their pictures.
 - **Everyone controls** (default) or **Only I control** (the starter's choice). With Only I control, scrolling away
   means scrolling on your own ("You're scrolling on your own now").
-- **Leave** to scroll on your own; **Rejoin** snaps back to where everyone is. Opening the tab during a session
-  joins it; leaving the tab leaves it. The last person following ends it, and so does **Stop**.
+- **Leave** to scroll on your own (kept through a dropped connection); **Rejoin** snaps back to where everyone is.
+  Opening the tab during a session joins it; leaving the tab leaves it. The last person following ends it, and so
+  does **Stop**. If the starter of an "Only I control" session leaves, everyone controls it from then on.
+- Moves are at most one every 0.7 s per conversation (a flood of swipes would reload everyone's players), and the
+  "who swiped" note shows at most every 2 s.
+- A video shared again is the same card (and player): a session on its older share still finds it.
+- The chat isn't on screen on the Reels tab, so messages arriving there stay unread (and notify as usual) until you
+  go back to **Chat**.
 - **TikTok** stays in step with watch together's sync: play, pause and seeks in the player go to everyone, and each
   player is kept where everyone is (a jump over 1.6 s is corrected).
 - **Instagram** can't be controlled: **Start together** shows a 3-second countdown on everyone's screen, then
@@ -89,15 +96,16 @@ but not what it links to (watch together, by contrast, sends the link itself).
 | `reels:start` `{ key, mid, i, hostOnly }` | a viewer, when there's no session | message id, link index |
 | `reels:go` `{ key, mid, i, dir }` | someone following who may control | message id, link index, direction |
 | `reels:control` `{ key, mid, i, action, position, together }` | the same | play / pause / seek, seconds (capped at 24 h) |
-| `reels:ready` `{ key, mid, i, ready }` | someone viewing | |
+| `reels:ready` `{ key, mid, i, ready }` | someone following | |
 | `reels:follow` `{ key, on }` | someone viewing | leave / rejoin |
 | `reels:mode` `{ key, hostOnly }` | the starter (or staff) | |
-| `reels:stop` `{ key }` | the starter, staff, or anyone when everyone controls | |
+| `reels:stop` `{ key }` | the starter, staff, or anyone following when everyone controls | |
 
 The server answers with `reels:state` to the viewers: `{ key, viewers: [user ids], session: { by, hostOnly, mid, i,
 playing, position, updatedAt, startAt, seq, lastBy, lastAction, dir, following, ready }, serverNow }`. Access is
 checked on every event, and again for every viewer before each update goes out: someone who loses access (removed,
-a channel made private) stops hearing and is let go. One tab per connection, 200 viewers per conversation, updates
+a channel made private) stops hearing and is let go. Someone for whom the shared message is from before their
+history starts isn't sent the session at all. One tab per connection, 200 viewers per conversation, updates
 merged to at most 4 a second, and every event counts against the realtime flood limits. Nothing is stored.
 
 ## Limits

@@ -1253,6 +1253,17 @@ async function reelsTab(t) {
   await waitOnScreen(bob, 2, 'Rejoin snaps back to everyone');
   await alice.$('.reels-bar button', { hasText: 'Stop' }).click();
   await bob.$('.reels-bar button', { hasText: 'Scroll together' }).waitFor();
+  // The chat isn't on screen on the Reels tab: a message arriving there stays unread until Bob goes back to Chat.
+  await alice.$('.conv-tab', { hasText: 'Chat' }).click();
+  await alice.send('Written while bob watched reels');
+  const generalRow = bob.$('#sidebar-body .ch-row.unread').filter({ has: bob.$('.ch-name', { hasText: exact('general') }) });
+  await generalRow.waitFor();
+  await bob.page.waitForTimeout(800);
+  check(await generalRow.count(), 'A message that came while on the Reels tab should stay unread.');
+  await bob.$('.conv-tab', { hasText: 'Chat' }).click();
+  await generalRow.waitFor({ state: 'detached' });
+  await bob.$('.conv-tab', { hasText: 'Reels' }).click();
+  await alice.$('.conv-tab', { hasText: 'Reels' }).click();
 
   // A phone: the tab fills the screen; swiping moves between videos; + opens Add a link; Back goes to the chat.
   const phone = await t.open('bob-reels', PHONE);

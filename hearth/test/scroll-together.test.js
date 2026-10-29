@@ -131,6 +131,9 @@ test('scroll together: anyone following moves everyone; Only I control; leave an
   assert.equal((await ack(sg, 'reels:go', { key, mid: b, i: 1, dir: 1 })).ok, true, 'the guest moves everyone');
   await settle();
   assert.deepEqual([gb.state.session.mid, gb.state.session.i, gb.state.session.lastBy, gb.state.session.lastAction, gb.state.session.dir], [b, 1, guest.id, 'go', 1]);
+  // Moves come at most every 0.7 s per conversation: a flood of swipes would reload everyone's players.
+  assert.match((await ack(sb, 'reels:go', { key, mid: c })).error, /Not so fast/);
+  await sleep(750);
   for (const i of [-1, 4, 'x', 99]) { assert.equal((await ack(sg, 'reels:go', { key, mid: c, i })).ok, true); await settle(); assert.equal(gb.state.session.i, 0, `i ${i} becomes 0`); }
   // TikTok: play, pause, seek; a stale one (about another video) changes nothing.
   assert.equal((await ack(sb, 'reels:control', { key, mid: c, i: 0, action: 'pause', position: 7.5 })).ok, true);
@@ -160,13 +163,19 @@ test('scroll together: anyone following moves everyone; Only I control; leave an
   await settle();
   assert.deepEqual(gb.state.session.following, [boss.id]);
   assert.match((await ack(sg, 'reels:go', { key, mid: a })).error, /Rejoin/);
+  assert.match((await ack(sg, 'reels:ready', { key, mid: c, i: 0 })).error, /Rejoin/, 'someone who left can\'t say ready');
+  // Coming back after a dropped connection keeps their choice to scroll on their own.
+  assert.equal((await ack(sg, 'reels:join', { key, follow: false })).ok, true);
+  await settle();
+  assert.deepEqual(gb.state.session.following, [boss.id]);
   assert.equal((await ack(sg, 'reels:follow', { key, on: true })).ok, true);
   await settle();
   assert.deepEqual(gb.state.session.following.sort(), [boss.id, guest.id].sort());
-  // Leaving the tab ends following; the last one to leave ends the room.
+  // Leaving the tab ends following; the starter of an "Only I control" session leaving hands control to everyone.
   assert.equal((await ack(sb, 'reels:leave', {})).ok, true);
   await settle();
   assert.equal(gg.state.session.following.includes(boss.id), false);
+  assert.equal(gg.state.session.hostOnly, false, 'not stuck with nobody in control');
   assert.equal((await ack(sg, 'reels:leave', {})).ok, true);
   assert.equal((await ack(sg, 'reels:join', { key })).state.session, null, 'a room nobody views is gone');
   assert.equal((await ack(sg, 'reels:leave', {})).ok, true);

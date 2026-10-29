@@ -17,7 +17,7 @@ import { h, clear, icon, toast } from './util.js';
 import { tiktokAdapter, instagramAdapter } from './watch.js';
 import { resolveSocial } from './social-embed.js';
 import { parseSocialUrl, KIND_NAME, itemLabel } from './social.js';
-import { feedItems, indexOf, step, liveRange, playersAllowed, cleanSession, withLine, swipedText, sharedPosition, COUNTDOWN_MS } from './reels.js';
+import { feedItems, indexOf, isItem, step, liveRange, playersAllowed, cleanSession, withLine, swipedText, sharedPosition, COUNTDOWN_MS } from './reels.js';
 
 const MORE_WITHIN = 4; // items from the end at which an older page is asked for
 const PAGES_PER_ASK = 4; // pages read in a row looking for more videos before waiting to be asked again
@@ -31,7 +31,7 @@ let consented = false;
 
 export function createReels(deps) {
   let st = null;
-  let layer = null; let raf = 0;
+  let layer = null; let resize = null;
 
   // ---- the layer and where it sits
   function layerEl() {
@@ -52,18 +52,34 @@ export function createReels(deps) {
       Object.assign(layer.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
       layer.hidden = false;
     } else layer.hidden = true;
-    raf = requestAnimationFrame(place);
+  }
+  // Placed again when something could move its place: the window, a scroll, or the place's own size (panels opening).
+  const onMove = () => place();
+  function watchPlace() {
+    window.addEventListener('resize', onMove);
+    document.addEventListener('scroll', onMove, true);
+    if (window.ResizeObserver) { resize = new ResizeObserver(onMove); resize.observe(document.body); if (st.host) resize.observe(st.host); }
+  }
+  function unwatchPlace() {
+    window.removeEventListener('resize', onMove);
+    document.removeEventListener('scroll', onMove, true);
+    if (resize) { resize.disconnect(); resize = null; }
   }
 
   // ---- open and close
   // Called by app.js whenever it draws the tab's place (host): the same conversation keeps everything as it was.
   function show(key, host) {
-    if (st && st.key === key) { st.host = host; return; }
+    if (st && st.key === key) {
+      if (st.host !== host) { st.host = host; if (resize) resize.observe(host); }
+      place();
+      return;
+    }
     if (st) hide();
     st = {
       key, host, msgs: new Map(), items: [], index: 0, cards: new Map(), players: new Map(), oldest: null, hasMore: true, loading: false, idle: 0,
       session: null, viewers: [], offset: 0, following: false, lastSeq: 0, unmuted: false, quietUntil: 0,
       timer: null, countTimer: null, startTimer: null, observer: null, addOpen: false, followTo: null, followUntil: 0,
+      gen: 0, searched: null, myGo: null, left: false, swipeToastAt: 0,
     };
     for (const m of deps.loaded(key)) st.msgs.set(m.id, m);
     st.oldest = oldestId();
@@ -71,7 +87,7 @@ export function createReels(deps) {
     rebuild();
     if (st.items.length < 3) more();
     deps.socket().emit('reels:join', { key }, (r) => { if (st && st.key === key && r && r.state) onState(r.state); });
-    cancelAnimationFrame(raf);
+    watchPlace();
     place();
   }
   function hide() {
@@ -82,7 +98,7 @@ export function createReels(deps) {
     if (st.observer) st.observer.disconnect();
     clearInterval(st.timer); clearInterval(st.countTimer); clearTimeout(st.startTimer);
     st = null;
-    cancelAnimationFrame(raf); raf = 0;
+    unwatchPlace();
     if (layer) { clear(layer); layer.hidden = true; }
   }
 
@@ -92,7 +108,7 @@ export function createReels(deps) {
   function rebuild() {
     const was = st.items[st.index];
     st.items = feedItems([...st.msgs.values()], { ok, text: deps.text });
-    const at = was ? st.items.findIndex((x) => x.key === was.key) : -1;
+    const at = was ? st.items.findIndex((x) => x.vid === was.vid) : -1;
     st.index = at >= 0 ? at : Math.min(st.index, Math.max(0, st.items.length - 1));
     reconcile();
     drawSide();
@@ -102,8 +118,10 @@ export function createReels(deps) {
   function reconcile() {
     const feed = st.feed;
     const want = st.items.map((it, i) => {
-      let c = st.cards.get(it.key);
-      if (!c) { c = cardEl(it); st.cards.set(it.key, c); st.observer.observe(c); }
+      let c = st.cards.get(it.vid);
+      if (!c) { c = cardEl(it); st.cards.set(it.vid, c); st.observer.observe(c); }
+      // The same video shared again: the same card (and player), now saying who shared it last.
+      else if (c._it.key !== it.key || c._it.m !== it.m) { c._it = it; drawInfo(c); drawActions(c); }
       c.dataset.i = String(i);
       return c;
     });
@@ -119,7 +137,7 @@ export function createReels(deps) {
     st.empty.hidden = !!st.items.length;
     if (!st.items.length) add(st.empty, emptyEl());
     // Keep the video you were on in view (new ones may have gone in above it).
-    const cur = st.items[st.index] && st.cards.get(st.items[st.index].key);
+    const cur = st.items[st.index] && st.cards.get(st.items[st.index].vid);
     if (cur && Math.abs(feed.scrollTop - cur.offsetTop) > 2) { st.followTo = st.index; st.followUntil = Date.now() + 600; feed.scrollTop = cur.offsetTop; }
     players();
   }
@@ -162,8 +180,6 @@ export function createReels(deps) {
     st.observer = new IntersectionObserver((entries) => {
       for (const e of entries) if (e.isIntersecting && e.intersectionRatio >= 0.6) onSettle(+e.target.dataset.i);
     }, { root: st.feed, threshold: [0.6] });
-    // The first tap anywhere in the tab: consent to load players ("Load when I tap"), and sound on.
-    L.addEventListener('pointerdown', () => { if (!st) return; if (!consented && deps.mode() === 'ask') { consented = true; drawCover(); players(); } }, true);
     drawCover();
   }
   function emptyEl() {
@@ -178,12 +194,14 @@ export function createReels(deps) {
     const show = deps.mode() === 'ask' && !consented;
     st.cover.hidden = !show;
     clear(st.cover);
+    // Only a tap on the cover itself counts as the go-ahead ("Load when I tap"): not Back, +, or a swipe.
+    st.cover.onclick = show ? () => { consented = true; drawCover(); players(); } : null;
     if (show) {
       add(st.cover, h('div', { class: 'reels-cover-in' },
         h('strong', null, 'Tap to start watching'),
-        h('p', null, 'These videos load from TikTok and Instagram, which see your IP address (and may set cookies in their players). Your first tap here lets every video in this tab, and other Reels tabs, load until you close Hearth.'),
+        h('p', null, 'These videos load from TikTok and Instagram, which see your IP address (and may set cookies in their players). Tapping here lets every video in this tab, and other Reels tabs, load until you close Hearth.'),
         h('p', { class: 'muted-p' }, 'Short TikTok links are looked up by your Hearth server. Settings → Chat → TikTok and Instagram changes this.'),
-        h('button', { class: 'btn primary', onclick: () => { consented = true; drawCover(); players(); } }, icon('play'), 'Start watching')));
+        h('button', { class: 'btn primary', type: 'button' }, icon('play'), 'Start watching')));
     }
   }
 
@@ -195,18 +213,25 @@ export function createReels(deps) {
     const prev = deps.card(m, it.p.url);
     const stage = h('div', { class: `reel-stage kind-${it.p.kind}` });
     const actions = h('div', { class: 'reel-actions' });
+    const info = h('div', { class: 'reel-info' });
     const card = h('section', { class: 'reel-card', 'aria-label': `${itemLabel(it.p)} shared by ${deps.name(m, u)}` },
-      h('div', { class: 'reel-frame' }, stage,
-        h('div', { class: 'reel-info' },
-          h('div', { class: 'reel-who' }, deps.avatar(u, 28), h('strong', null, deps.name(m, u)), h('time', { datetime: new Date(m.createdAt).toISOString() }, deps.when(m.createdAt))),
-          prev && prev.title ? h('div', { class: 'reel-caption' }, prev.title) : null),
-        actions));
+      h('div', { class: 'reel-frame' }, stage, info, actions));
     card._it = it;
+    card._info = info;
+    drawInfo(card);
     card._stage = stage;
     card._actions = actions;
     drawPlaceholder(card);
     drawActions(card);
     return card;
+  }
+  function drawInfo(card) {
+    const m = card._it.m;
+    const u = deps.user(m.authorId);
+    const prev = deps.card(m, card._it.p.url);
+    add(clear(card._info),
+      h('div', { class: 'reel-who' }, deps.avatar(u, 28), h('strong', null, deps.name(m, u)), h('time', { datetime: new Date(m.createdAt).toISOString() }, deps.when(m.createdAt))),
+      prev && prev.title ? h('div', { class: 'reel-caption' }, prev.title) : null);
   }
   function drawPlaceholder(card) {
     const it = card._it;
@@ -236,40 +261,43 @@ export function createReels(deps) {
   function players() {
     if (!st) return;
     const allowed = deps.mode() !== 'off' && playersAllowed(deps.mode(), consented);
-    const live = new Set(allowed ? liveRange(st.index, st.items.length).map((k) => st.items[k].key) : []);
+    const live = new Set(allowed ? liveRange(st.index, st.items.length).map((k) => st.items[k].vid) : []);
     for (const k of [...st.players.keys()]) if (!live.has(k)) dropPlayer(k);
-    for (const k of live) if (!st.players.has(k)) makePlayer(st.items.find((x) => x.key === k));
+    for (const k of live) if (!st.players.has(k)) makePlayer(st.items.find((x) => x.vid === k));
     // Only the one on screen plays (and it starts without sound until a tap on its sound button).
     const cur = current();
     for (const [k, pl] of st.players) {
-      if (cur && k === cur.key) continue;
+      if (cur && k === cur.vid) continue;
       if (pl.playing && pl.playing()) pl.pause();
     }
-    if (cur && st.players.get(cur.key) && !inSession()) { const pl = st.players.get(cur.key); if (pl.ready) pl.play(); }
+    if (cur && st.players.get(cur.vid) && !inSession()) { const pl = st.players.get(cur.vid); if (pl.ready) pl.play(); }
     drawBar();
   }
   async function makePlayer(it) {
     if (!it || !st) return;
-    const card = st.cards.get(it.key);
+    const card = st.cards.get(it.vid);
     const key = st.key;
     const holder = { pending: true, destroy() { this.gone = true; }, playing: () => false, pause() {} };
-    st.players.set(it.key, holder);
+    st.players.set(it.vid, holder);
     let p = it.p;
     if (!p.id) {
       // A short link: looked up (by this server) only for the video on screen.
-      if (!isCurrent(it)) { st.players.delete(it.key); return; }
-      try { p = await resolveSocial(p); } catch (e) { if (st) st.players.delete(it.key); toast(e.message, 'error'); return; }
+      if (!isCurrent(it)) { st.players.delete(it.vid); return; }
+      try { p = await resolveSocial(p); } catch (e) {
+        if (st && st.key === key && st.players.get(it.vid) === holder) { st.players.delete(it.vid); toast(e.message, 'error'); }
+        return;
+      }
     }
-    if (!st || st.key !== key || holder.gone || st.players.get(it.key) !== holder) return;
+    if (!st || st.key !== key || holder.gone || st.players.get(it.vid) !== holder) return;
     const onEvent = (ev, value) => onPlayerEvent(it, ev, value);
     const a = p.kind === 'tiktok' ? tiktokAdapter({ src: p.id, title: itemLabel(p) }, onEvent, { muted: () => !st || !st.unmuted })
       : instagramAdapter({ src: p.id, postType: p.type, title: itemLabel(p) }, onEvent);
     a.it = it;
     a.el.classList.add('soc-frame');
     clear(card._stage).append(a.el);
-    if (p.kind === 'tiktok') card._stage.append(h('button', { class: 'reel-sound', type: 'button', 'aria-label': 'Sound on', onclick: () => unmute() }, icon('speaker'), 'Tap for sound'));
+    if (p.kind === 'tiktok' && !st.unmuted) card._stage.append(h('button', { class: 'reel-sound', type: 'button', 'aria-label': 'Sound on', onclick: () => unmute() }, icon('speaker'), 'Tap for sound'));
     if (a.manual) card._stage.append(h('div', { class: 'reel-note' }, 'Instagram’s player can’t be started from here: press ▶ in the video.'));
-    st.players.set(it.key, a);
+    st.players.set(it.vid, a);
   }
   function dropPlayer(k) {
     const pl = st && st.players.get(k);
@@ -283,15 +311,15 @@ export function createReels(deps) {
     if (!st) return;
     st.unmuted = true;
     const cur = current();
-    const pl = cur && st.players.get(cur.key);
+    const pl = cur && st.players.get(cur.vid);
     if (pl && pl.mute) pl.mute(false);
     for (const c of st.cards.values()) c.querySelector('.reel-sound')?.remove();
   }
   const current = () => (st ? st.items[st.index] : null);
-  const isCurrent = (it) => { const c = current(); return !!c && !!it && c.key === it.key; };
+  const isCurrent = (it) => { const c = current(); return !!c && !!it && c.vid === it.vid; };
   function onPlayerEvent(it, ev, value) {
     if (!st) return;
-    const pl = st.players.get(it.key);
+    const pl = st.players.get(it.vid);
     if (ev === 'ready') {
       if (pl) pl.ready = true;
       if (isCurrent(it)) { if (inSession()) follow(true); else if (pl && pl.play) pl.play(); }
@@ -308,7 +336,7 @@ export function createReels(deps) {
   // following: moved there to follow everyone (not by this person), so landing there tells nobody anything.
   function scrollToIndex(i, smooth = true, following = false) {
     const it = st.items[i];
-    const c = it && st.cards.get(it.key);
+    const c = it && st.cards.get(it.vid);
     if (!c) return;
     if (following) { st.followTo = i; st.followUntil = Date.now() + 1500; }
     c.scrollIntoView({ block: 'start', behavior: smooth && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'auto' });
@@ -338,8 +366,14 @@ export function createReels(deps) {
     if (!inSession()) return;
     const s = st.session;
     const it = st.items[i];
-    if (it.mid === s.mid && it.i === s.i) return;
-    if (mayControl()) deps.socket().emit('reels:go', { key: st.key, mid: it.mid, i: it.i, dir }, (r) => { if (r && r.error) toast(r.error, 'error'); });
+    if (isItem(it, s.mid, s.i)) return;
+    if (mayControl()) {
+      // Until the server says where everyone is, an older update doesn't pull this person back (quick swipes).
+      st.myGo = { mid: it.mid, i: it.i, at: Date.now() };
+      deps.socket().emit('reels:go', { key: st.key, mid: it.mid, i: it.i, dir }, (r) => {
+        if (r && r.error) { toast(r.error, 'error'); if (st) { st.myGo = null; if (st.session) moveTo(st.session.mid, st.session.i); } }
+      });
+    }
     else {
       // Only the starter moves everyone: scrolling away is scrolling on your own.
       follow_(false);
@@ -362,11 +396,13 @@ export function createReels(deps) {
     deps.socket().emit('reels:control', { key: st.key, mid: s.mid, i: s.i, action, position, ...extra }, (r) => { if (r && r.error) toast(r.error, 'error'); });
   }
   function follow_(on) {
+    if (st) st.left = !on;
     deps.socket().emit('reels:follow', { key: st.key, on }, (r) => { if (r && r.error) toast(r.error, 'error'); });
   }
   function start(hostOnly = false) {
     const it = current();
     if (!it) return toast('There’s nothing to scroll through here yet.');
+    st.left = false;
     deps.socket().emit('reels:start', { key: st.key, mid: it.mid, i: it.i, hostOnly }, (r) => { if (r && r.error) toast(r.error, 'error'); });
   }
   async function onState(x) {
@@ -381,30 +417,45 @@ export function createReels(deps) {
     if (s && s.seq !== st.lastSeq) {
       if (st.lastSeq && s.lastBy && s.lastBy !== me && st.following) {
         const name = deps.nameOf(s.lastBy);
-        if (s.lastAction === 'go') toast(swipedText(name, s.dir));
+        // (Swipes come quickly: one note every couple of seconds at most.)
+        if (s.lastAction === 'go') { if (Date.now() - st.swipeToastAt > 2000) { st.swipeToastAt = Date.now(); toast(swipedText(name, s.dir)); } }
         else if (s.lastAction === 'pause') toast(`${name} paused`);
         else if (s.lastAction === 'play' && s.startAt) toast(`${name} started the countdown`);
       } else if (!was && s.lastAction === 'start' && s.by !== me) toast(`${deps.nameOf(s.by)} started scrolling together`);
       st.lastSeq = s.seq;
     }
     if (!s) st.lastSeq = 0;
+    const gen = ++st.gen;
+    const me0 = st;
     clearInterval(st.timer); st.timer = null;
     if (inSession()) {
+      // My own swipe on its way: an update from before it doesn't pull me back.
+      const mine = st.myGo && Date.now() - st.myGo.at < 2000;
+      if (mine && isItem(current(), st.myGo.mid, st.myGo.i) && !(s.mid === st.myGo.mid && s.i === st.myGo.i)) { drawBar(); drawSide(); return; }
+      st.myGo = null;
       await moveTo(s.mid, s.i);
-      if (!st || !inSession()) return;
+      if (st !== me0 || gen !== st.gen || !inSession()) return;
       follow(true);
       countdown();
+      clearInterval(st.timer);
       st.timer = setInterval(() => follow(false), 1000);
     } else { clearInterval(st.countTimer); clearTimeout(st.startTimer); st.count.hidden = true; }
     drawBar();
     drawSide();
   }
   // Go where everyone is, looking further back for it if it isn't loaded yet.
+  // A video that isn't in this person's feed is looked for, and said, once.
   async function moveTo(mid, i) {
+    const me0 = st;
     let k = indexOf(st.items, mid, i);
-    if (k < 0 && st.hasMore) { await more(FIND_PAGES, () => indexOf(st.items, mid, i) >= 0); k = st ? indexOf(st.items, mid, i) : -1; }
-    if (!st) return;
-    if (k < 0) { toast('Everyone moved to a video that isn’t here for you (hidden or gone).'); return; }
+    const want = `${mid}:${i}`;
+    if (k < 0) {
+      if (st.searched === want) return;
+      st.searched = want;
+      if (st.hasMore) { await more(FIND_PAGES, () => indexOf(st.items, mid, i) >= 0); if (st !== me0) return; k = indexOf(st.items, mid, i); }
+      if (k < 0) { toast('Everyone moved to a video that isn’t here for you (hidden or gone).'); return; }
+    }
+    st.searched = null;
     if (k !== st.index) {
       st.index = k;
       scrollToIndex(k, true, true);
@@ -415,8 +466,8 @@ export function createReels(deps) {
   function follow(force) {
     const s = st && st.session;
     const it = current();
-    if (!inSession() || !it || it.mid !== s.mid || it.i !== s.i) return;
-    const pl = st.players.get(it.key);
+    if (!inSession() || !isItem(it, s.mid, s.i)) return;
+    const pl = st.players.get(it.vid);
     if (!pl || !pl.ready || pl.manual || pl.pending) return;
     const counting = s.playing && s.startAt && Date.now() + st.offset < s.startAt;
     if (counting) { if (pl.playing()) { quiet(); pl.pause(); } return; }
@@ -474,7 +525,7 @@ export function createReels(deps) {
       host || !s.hostOnly ? h('button', { class: 'btn ghost sm danger-text', onclick: () => deps.socket().emit('reels:stop', { key: st.key }, (r) => r && r.error && toast(r.error, 'error')) }, 'Stop') : null);
     // Instagram on screen: no player to move, so a ready check and "start together".
     const cur = current();
-    if (inSession() && cur && cur.p.kind === 'instagram' && cur.mid === s.mid && cur.i === s.i) {
+    if (inSession() && cur && cur.p.kind === 'instagram' && isItem(cur, s.mid, s.i)) {
       const ready = s.ready.includes(me);
       add(st.bar, h('div', { class: 'reels-manual' },
         mayControl() ? h('button', { class: 'btn primary sm', onclick: () => control('play', 0, { together: true }) }, icon('play'), 'Start together') : null,
@@ -520,10 +571,13 @@ export function createReels(deps) {
     // Your own new link: shown straight away (unless everyone's scrolling together, which decides where you are).
     if (mine && !inSession()) { const k = st.items.findIndex((x) => x.mid === m.id); if (k >= 0) scrollToIndex(k, false); }
   }
+  // An edit: the feed changes only if its videos did (a fixed typo doesn't reload the one playing).
   function onUpdate(key, m) {
     if (!st || st.key !== key || !st.msgs.has(m.id)) return;
+    const old = st.msgs.get(m.id);
     st.msgs.set(m.id, m);
-    for (const c of st.cards.values()) if (c._it.mid === m.id) { st.cards.delete(c._it.key); dropPlayer(c._it.key); st.observer.unobserve(c); c.remove(); }
+    const vids = (x) => feedItems([x], { ok, text: deps.text }).map((it) => it.vid).join(' ');
+    if (vids(old) === vids(m)) { for (const c of st.cards.values()) if (c._it.mid === m.id) { c._it = { ...c._it, m }; drawInfo(c); drawActions(c); } return; }
     rebuild();
   }
   function onDelete(key, ids) {
@@ -539,7 +593,8 @@ export function createReels(deps) {
     m.reactions = reactions;
     for (const c of st.cards.values()) if (c._it.mid === mid) drawActions(c);
   }
-  function rejoin() { if (st) deps.socket().emit('reels:join', { key: st.key }, (r) => { if (st && r && r.state) onState(r.state); }); }
+  // After a reconnect: back in the room, still following or not as this person chose.
+  function rejoin() { if (st) deps.socket().emit('reels:join', { key: st.key, follow: !st.left }, (r) => { if (st && r && r.state) onState(r.state); }); }
   function setMode() { if (!st) return; drawCover(); for (const k of [...st.players.keys()]) dropPlayer(k); for (const c of st.cards.values()) drawPlaceholder(c); players(); }
 
   return {

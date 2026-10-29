@@ -19,14 +19,16 @@ export const COUNTDOWN_MS = 3000;
 export function feedItems(messages, { ok = () => true, text = (m) => (m && m.dec && m.dec.t) || '' } = {}) {
   const list = (Array.isArray(messages) ? messages : []).filter((m) => m && typeof m.id === 'string' && MID.test(m.id) && !m.threadId && ok(m));
   list.sort(newestFirst);
-  const seen = new Set();
+  const seen = new Map(); // video -> its item
   const out = [];
   for (const m of list) {
     socialLinks(text(m)).forEach((p, i) => {
-      const id = `${p.kind}:${p.id || p.short}`;
-      if (seen.has(id)) return;
-      seen.add(id);
-      out.push({ mid: m.id, i, p, m, key: itemKey(m.id, i) });
+      const vid = `${p.kind}:${p.id || p.short}`;
+      // An older share of the same video: the item answers to it too (also), so a session on it still finds it.
+      if (seen.has(vid)) { seen.get(vid).also.push(itemKey(m.id, i)); return; }
+      const it = { mid: m.id, i, p, m, key: itemKey(m.id, i), vid, also: [] };
+      seen.set(vid, it);
+      out.push(it);
     });
   }
   return out;
@@ -39,7 +41,10 @@ export function newestFirst(a, b) {
 }
 
 // Where an item is in the feed (-1 if it isn't there yet).
-export const indexOf = (items, mid, i = 0) => items.findIndex((x) => x.mid === mid && x.i === i);
+// (Shared again later, a video is shown at its newest share: an older share's id still finds it.)
+export const indexOf = (items, mid, i = 0) => { const k = itemKey(mid, i); return items.findIndex((x) => x.key === k || x.also.includes(k)); };
+// Whether the item is the one the session names.
+export const isItem = (it, mid, i = 0) => !!it && indexOf([it], mid, i) === 0;
 // The next place when moving by dir (+1 down to older, -1 up to newer), kept inside the feed.
 export const step = (index, dir, length) => Math.max(0, Math.min(length - 1, index + (dir < 0 ? -1 : 1)));
 // Which items get a live player: the one on screen and WINDOW on each side.

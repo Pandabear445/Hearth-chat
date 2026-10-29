@@ -16,6 +16,7 @@ const MID = /^[A-Za-z0-9_-]{1,64}$/;
 const KEY = /^[cd]:[A-Za-z0-9_-]{1,64}$/;
 const COUNTDOWN_MS = 3000;
 const MAX_VIEWERS = 200; // per conversation
+const GO_GAP_MS = 700; // between two moves of one conversation's session: a flood of swipes would reload everyone's players
 
 module.exports = function setupReels(ctx) {
   const { io, db, fail, requireChannel, requireDm, isStaff, isBlocked, voiceChannels, jobs, hiddenFor } = ctx;
@@ -67,16 +68,26 @@ module.exports = function setupReels(ctx) {
       serverNow: Date.now(),
     };
   };
-  // To each viewer whose access still holds; anyone else is let go.
+  // To each viewer whose access still holds (checked once per person per update); anyone else is let go. Someone
+  // for whom the shared message is from before their history starts (server/joinhistory.js) isn't told its id.
   function send(key) {
     const room = rooms.get(key);
     if (!room) return;
     room.emit.timer = null; room.emit.last = Date.now();
+    const ok = new Map();
     for (const [sid, uid] of [...room.viewers]) {
-      if (!allowed(key, uid)) { drop(sid); continue; }
+      if (!ok.has(uid)) ok.set(uid, allowed(key, uid));
+      if (!ok.get(uid)) drop(sid, true);
     }
+    if (!rooms.has(key)) return;
     const state = out(key, room);
-    for (const sid of room.viewers.keys()) io.to(sid).emit('reels:state', state);
+    const s = room.session;
+    const row = s && key[0] === 'c' ? db.prepare('SELECT * FROM messages WHERE id = ?').get(s.mid) : null;
+    const hidden = new Map();
+    for (const [sid, uid] of room.viewers) {
+      if (row && !hidden.has(uid)) hidden.set(uid, hiddenFor(row, uid));
+      io.to(sid).emit('reels:state', row && hidden.get(uid) ? { ...state, session: null } : state);
+    }
   }
   function emit(key) {
     const room = rooms.get(key);
@@ -85,17 +96,21 @@ module.exports = function setupReels(ctx) {
     if (wait <= 0) send(key); else room.emit.timer = setTimeout(jobs.job('reels.emit', () => send(key)), wait);
   }
   // A connection stops viewing (left the tab, closed, lost access). The last one out ends the conversation's room.
-  function drop(sid) {
+  // quiet: the caller sends the update itself.
+  function drop(sid, quiet = false) {
     const key = where.get(sid);
     where.delete(sid);
     const room = key && rooms.get(key);
     if (!room) return;
     const uid = room.viewers.get(sid);
     room.viewers.delete(sid);
-    if (uid && ![...room.viewers.values()].includes(uid)) room.following.delete(uid);
+    const gone = uid && ![...room.viewers.values()].includes(uid);
+    if (gone) room.following.delete(uid);
     if (!room.viewers.size) { clearTimeout(room.emit.timer); rooms.delete(key); return; }
     if (room.session && !room.following.size) room.session = null;
-    emit(key);
+    // The starter of an "Only I control" session left: everyone controls now, so it isn't stuck.
+    if (gone && room.session && room.session.by === uid && room.session.hostOnly) { room.session.hostOnly = false; touch(room.session, uid, 'mode'); }
+    if (!quiet) emit(key);
   }
 
   const posOf = (s) => s.position + (s.playing ? Math.max(0, Date.now() - s.updatedAt) / 1000 : 0);
@@ -128,8 +143,9 @@ module.exports = function setupReels(ctx) {
       if (!room.viewers.has(socket.id) && room.viewers.size >= MAX_VIEWERS) fail(429, 'Too many people are viewing this tab.');
       room.viewers.set(socket.id, uid);
       where.set(socket.id, key);
-      // Opening the tab while people scroll together joins them (Leave scrolls on your own).
-      if (room.session) room.following.add(uid);
+      // Opening the tab while people scroll together joins them, unless this app had chosen to scroll on its own
+      // (Leave) before it reconnected.
+      if (room.session && p.follow !== false) room.following.add(uid);
       emit(key);
       return { ok: true, call: !!a.call, state: out(key, room) };
     }));
@@ -164,6 +180,8 @@ module.exports = function setupReels(ctx) {
       const s = room.session;
       const i = idx(p.i);
       if (s.mid === p.mid && s.i === i) return { ok: true };
+      if (Date.now() - (room.lastGo || 0) < GO_GAP_MS) fail(429, 'Not so fast: one video at a time.');
+      room.lastGo = Date.now();
       Object.assign(s, { mid: p.mid, i, playing: true, position: 0, updatedAt: Date.now(), startAt: 0, dir: p.dir === -1 ? -1 : 1 });
       touch(s, uid, 'go');
       room.ready = null;
@@ -187,6 +205,7 @@ module.exports = function setupReels(ctx) {
     }));
     socket.on('reels:ready', guard((p = {}) => {
       const { key, room } = session(p);
+      if (!room.following.has(uid)) fail(403, 'Rejoin first.');
       const s = room.session;
       if (p.mid !== s.mid || idx(p.i) !== s.i) return { ok: true };
       if (!room.ready || room.ready.mid !== s.mid || room.ready.i !== s.i) room.ready = { mid: s.mid, i: s.i, users: new Set() };
@@ -204,7 +223,7 @@ module.exports = function setupReels(ctx) {
     }));
     socket.on('reels:stop', guard((p = {}) => {
       const { key, room } = session(p);
-      if (room.session.by !== uid && !isStaff(uid) && room.session.hostOnly) fail(403, 'Only the person who started it can stop it.');
+      if (room.session.by !== uid && !isStaff(uid) && (room.session.hostOnly || !room.following.has(uid))) fail(403, room.session.hostOnly ? 'Only the person who started it can stop it.' : 'Rejoin first.');
       room.session = null; room.ready = null; room.following.clear();
       emit(key);
       return { ok: true };
