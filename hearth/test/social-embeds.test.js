@@ -355,12 +355,12 @@ test('social: adding watch-together videos is limited per person, and titles are
   assert.equal((await ack(so, 'voice:join', { channelId: voiceCh.id })).ok, true);
   assert.equal((await ack(so, 'watch:start', { url: `https://www.tiktok.com/@hearth/video/${ID}` })).ok, true);
   let refused = null;
-  for (let i = 0; i < 25 && !refused; i++) {
+  for (let i = 0; i < 35 && !refused; i++) {
     const r = await ack(so, 'watch:side', { url: `https://www.tiktok.com/@hearth/video/72${String(i).padStart(17, '0')}` });
     if (!r.ok) refused = { i, error: r.error };
   }
   assert.ok(refused, 'a flood of side videos is cut off');
-  assert.equal(refused.i, 19, 'twenty a minute, watch:start included');
+  assert.equal(refused.i, 29, 'thirty a minute, watch:start included');
   assert.match(refused.error, /Too many/);
   assert.match((await ack(so, 'watch:start', { url: `https://www.tiktok.com/@hearth/video/${ID2}`, queue: true })).error, /Too many/, 'shared with watch:start');
   await ack(so, 'watch:stop', {});

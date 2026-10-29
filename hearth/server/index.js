@@ -7699,11 +7699,11 @@ function setupSockets(server) {
     socket.on('watch:start', guard((p = {}) => {
       if (!features().watch) fail(403, 'Watch together is turned off on this server.');
       const room = myWatchRoom();
-      // Adding videos (and side-by-side ones) has its own limits, per person and per call: each can mean a title
-      // lookup, and a side video pauses everyone.
-      rateLimit('watch-add:' + uid, 20, 60000);
-      rateLimit('watch-add-room:' + room, 40, 60000);
       const item = { ...parseWatchUrl(p.url), id: newId(), title: '', addedBy: uid };
+      // Adding videos (and side-by-side ones) has its own limits, per person and per call: each can mean a title
+      // lookup, and a side video pauses everyone. (A whole queue, 25, fits in a minute.)
+      rateLimit('watch-add:' + uid, 30, 60000);
+      rateLimit('watch-add-room:' + room, 60, 60000);
       const cur = watchRooms.get(room);
       if (cur && p.queue) {
         if (!mayControl(room, cur) && cur.hostOnly) fail(403, 'Only the host can add videos.');
@@ -7785,11 +7785,11 @@ function setupSockets(server) {
       if (!w) fail(404, 'Nothing is playing.');
       if (!mayControl(room, w)) fail(403, 'Only the host can change the videos.');
       if (p.url == null) { w.side = null; emitWatch(room); return { ok: true }; }
-      rateLimit('watch-add:' + uid, 20, 60000); // (shared with watch:start)
-      rateLimit('watch-add-room:' + room, 40, 60000);
       if (!SIDE_KINDS.has(w.item.kind)) fail(400, 'Side by side works for TikTok videos and Instagram reels.');
       const item = { ...parseWatchUrl(p.url), id: newId(), title: '', addedBy: uid };
       if (!SIDE_KINDS.has(item.kind)) fail(400, 'Side by side works for TikTok videos and Instagram reels.');
+      rateLimit('watch-add:' + uid, 30, 60000); // (shared with watch:start)
+      rateLimit('watch-add-room:' + room, 60, 60000);
       w.side = item;
       w.playing = false; w.position = watchPos(w); w.updatedAt = Date.now(); w.startAt = 0;
       w.seq = (w.seq || 0) + 1; w.lastBy = uid; w.lastAction = 'side';
