@@ -1271,8 +1271,9 @@ async function loadBootstrap() {
   S.blocked = new Set(b.blocked || []);
   S.voice = b.voice;
   // Reading back through a conversation when the connection came back: it opens again where you were (below), not at
-  // the newest messages.
-  const readingKey = S.me && $('#messages') ? currentKey() : null;
+  // the newest messages. Only the chat that fills the main area, which renderAll draws anew (and so takes restoreAt up):
+  // a voice channel's chat beside its call is kept as it is, and would leave it waiting for whenever it's drawn next.
+  const readingKey = S.me && $('#main #messages') ? currentKey() : null;
   const reading = readingKey ? readingAt() : undefined;
   S.msgs = {};
   S.threads = {};
