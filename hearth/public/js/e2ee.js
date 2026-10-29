@@ -226,6 +226,18 @@ export async function unwrapIdentity(wrapKey, encPrivateKey) {
 export async function unwrapPrivateKey(wrapKey, encPrivateKey) {
   return (await unwrapIdentity(wrapKey, encPrivateKey)).privateKey;
 }
+// A password reset with the recovery key: which post-quantum seed goes on. Only one for the key the account publishes
+// now (listedPub) counts as kept (inEnvelope): the recovery copy's (envelopeSeed), else the one this browser kept
+// (keptSeed, then put into the new envelope: putKept). A recovery key made before the account's key was replaced holds
+// an older seed: not the published key's, so the server drops that key and the app makes a new one; the older seed
+// stays in the envelope for what was locked to it. With no key published, whatever seed the envelope has is kept.
+export function pickResetSeed(envelopeSeed, keptSeed, listedPub) {
+  if (!listedPub) return { seed: envelopeSeed || null, inEnvelope: !!envelopeSeed, putKept: false };
+  const fits = (seed) => { try { return !!seed && pqKeyPair(seed).publicKey === listedPub; } catch { return false; } };
+  if (fits(envelopeSeed)) return { seed: envelopeSeed, inEnvelope: true, putKept: false };
+  if (fits(keptSeed)) return { seed: keptSeed, inEnvelope: true, putKept: true };
+  return { seed: envelopeSeed || null, inEnvelope: false, putKept: false };
+}
 // An envelope from before post-quantum keys, locked again with a seed inside (the same identity key): `seed`, or a new
 // one. One that already has a seed comes back as it was, unless `replace` (its seed isn't the one the account
 // publishes: after a reset with a recovery key made before the upgrade, or put back by a password change that raced
@@ -906,9 +918,10 @@ export function checkPins(myId, users) {
   for (const user of users) {
     if (!user || user.id === myId) continue;
     const r = judgePin(pins[user.id], user);
-    if (r === 'changed') { changed.add(user.id); noteChangeSeen(myId, pins[user.id], user.id); }
-    else if (r === 'pin') { pins[user.id] = { e: user.publicKey, s: keyIn(user.signPublicKey) }; save = true; }
+    if (r === 'changed') { changed.add(user.id); noteChangeSeen(myId, pins[user.id], user.id); continue; }
+    if (r === 'pin') { pins[user.id] = { e: user.publicKey, s: keyIn(user.signPublicKey) }; save = true; }
     else if (r === 'fill') { pins[user.id].s = user.signPublicKey; save = true; }
+    if (listPq(pins[user.id], user)) save = true;
   }
   if (save) savePins(myId, pins);
   return changed;
@@ -918,6 +931,21 @@ export function checkPins(myId, users) {
 // apps to fall back on P-256 alone, is then refused (secure.js pqKeyOf). Accepting a new identity key for them
 // (acceptPin) starts the pin over, so a reset that really gave them no post-quantum key yet doesn't block anything after
 // that; accepting the same one again keeps it.
+// A post-quantum key listed for someone is noted at first sight, next to the identity key pinned for them (q: its
+// fingerprint, as pinPq does), before anything is encrypted to them: a server that leaves it out later, to get some
+// member's app to hand them the server's key with P-256 alone, is refused then (secure.js pqKeyOf), not only once this
+// device happened to write to them. The key itself is still fetched and checked against their signature before use.
+const PQ_FP = /^[A-Za-z0-9+/=_-]{8,128}$/;
+function listPq(p, user) {
+  if (!p || !user || p.e !== user.publicKey || p.q || typeof user.pq !== 'string' || !PQ_FP.test(user.pq)) return false;
+  p.q = user.pq;
+  return true;
+}
+export function notePqListed(myId, user) {
+  if (!user || user.id === myId || typeof user.pq !== 'string' || !user.pq) return;
+  const pins = loadPins(myId);
+  if (listPq(pins[user.id], user)) savePins(myId, pins);
+}
 export function pinPq(myId, user, fp) {
   if (!user || user.id === myId || typeof fp !== 'string' || !fp) return;
   const pins = loadPins(myId);

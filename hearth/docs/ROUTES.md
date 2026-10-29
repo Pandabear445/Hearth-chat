@@ -4,7 +4,7 @@ Generated from the code by enumerating every `api.*`/`app.*` route and `socket.o
 then annotated during the security audit (which middleware and checks actually run, limits, tests). "Gaps" lists
 what the audit found missing at the time; items fixed since are tracked in [ENGINEERING-REPORT.md](ENGINEERING-REPORT.md).
 
-Routes: 390 HTTP, 17 socket events.
+Routes: 393 HTTP, 17 socket events.
 
 ## HTTP routes
 
@@ -18,6 +18,9 @@ Routes: 390 HTTP, 17 socket events.
 | DELETE | `/api/me/email` | server/accounts.js:192 | session+stepUp | self; yes | none | stepup only | attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | No test. Does not delete outstanding reset tokens (auth-4). |
 | PUT | `/api/me/recovery` | server/accounts.js:205 | session+stepUp | self; yes | isB64ish 4000, isSalt | stepup only | recovery.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) |  |
 | DELETE | `/api/me/recovery` | server/accounts.js:215 | session+stepUp | self; yes | none | stepup only | recovery.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | No email notice (unlike create). |
+| POST | `/api/me/pq-key` | server/index.js:2599 | session+stepUp (grace) | self; the key must be signed by the account's signing key over its id and identity key (hearth-pq-key-v1); replacing a published key only with replace:true and a new envelope made from the stored one (fromEnvelope) | base64, exactly 1184 bytes; envelope isB64ish 4000 | 10 / 10 min | pq-keys.test.js (publishing a post-quantum key…, review 12 and 15…, third review R3-19…) |  |
+| POST | `/api/users/pq-keys` | server/index.js:2831 | session | any signed-in user (public keys and signatures only) | ids: array of at most 500 strings ≤ 64 | 120 / min | pq-keys.test.js (third review R3-15 and R3-17…) |  |
+| GET | `/api/users/:id/pq-key` | server/index.js:2839 | session | any signed-in user (public key and signature only; checked by the app before use) | none | general | pq-keys.test.js, pq-crypto.test.js |  |
 | POST | `/api/me/2fa/setup` | server/accounts.js:286 | session+password (checkPassword, no 2FA since off) | self; 2FA off; yes | authKey | stepup:<uid> 10/10min | recovery.test.js, helpers.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) |  |
 | POST | `/api/me/2fa/enable` | server/accounts.js:295 | session | self; secret from setup; yes | 6-digit TOTP from new secret | totpsetup:<uid> 10/15min | recovery.test.js, helpers.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) | Current token kept (auth-11); outstanding reset links kept (mitigated: reset then needs 2FA). |
 | POST | `/api/me/2fa/disable` | server/accounts.js:313 | session+password+2FA (always fresh) | self; yes | authKey + totp/backupCode | stepup + totp limits | recovery.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) |  |

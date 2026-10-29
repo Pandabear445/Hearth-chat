@@ -1458,3 +1458,74 @@ test('a 500-message post-quantum DM opens on a new device in reasonable time', a
   assert.ok(msgs.length >= 100 && msgs.every((m) => /^m\d+$/.test(m.dec.t)));
   assert.ok(ms / msgs.length < 50, 'well under 50 ms a message');
 });
+
+test('fourth review 1: a post-quantum key seen listed for someone is noted at once, so a server hiding it later gets no P-256 copy for them', async () => {
+  const { a, b } = await twoWithPq('f1');
+  const m = await person(uname('f1m'));
+  const s = (await as(a, 'POST', '/servers', { name: 'f1' })).json;
+  const code = (await as(a, 'POST', `/servers/${s.id}/invites`, {})).json.code;
+  for (const u of [b, m]) assert.equal((await as(u, 'POST', `/invites/${code}/join`, {})).status, 200);
+  const ch = s.channels.find((c) => c.type === 'text').id;
+  // A new device of a's that has never written to b nor read anything from b: it has only seen b's record (as every
+  // start-up and member list shows it), with b's post-quantum key listed.
+  const aR = await device(a, { ctx: await passwordCtx(a) });
+  use(aR);
+  const rec = await fresh(aR, b.id);
+  assert.ok(rec.pq, 'b has a post-quantum key listed');
+  aR.sec.trust(rec);
+  assert.equal(E.pinnedPq(a.id, rec), true, 'noted at first sight');
+  // Now the server stops listing it, and a rotation comes up: b is left out, never given a P-256-only copy.
+  srv.sql('UPDATE users SET pq_public_key = NULL, pq_sig = NULL WHERE id = ?', b.id);
+  assert.equal((await as(m, 'POST', `/servers/${s.id}/leave`)).status, 200);
+  await fresh(aR, b.id);
+  await refreshServers(aR);
+  use(aR);
+  const e = (await aR.sec.encryptChannel(s.id, ch, { t: 'after' })).epoch;
+  assert.equal(srv.sql('SELECT COUNT(*) AS n FROM server_keys WHERE server_id = ? AND user_id = ? AND epoch = ?', s.id, b.id, e)[0].n, 0, 'no P-256 copy for b');
+});
+
+test('fourth review 3: an edit of an old message doesn’t date the DM going post-quantum back to when that message was sent', async () => {
+  const alice = await person(uname('f3a'), { legacy: true });
+  const bob = await person(uname('f3b'));
+  await friends(alice, bob);
+  const dm = await dmBetween(alice, bob);
+  const bobD = await device(bob, { ctx: await passwordCtx(bob) });
+  const aliceD = await device(alice);
+  await fresh(aliceD, bob.id);
+  const day1 = Date.now() - 5 * 24 * 3600 * 1000;
+  assert.match(await sendDm(aliceD, dm.id, 'alice, day 1 (d2)'), /^d2:/);
+  await fresh(bobD, alice.id);
+  assert.match(await sendDm(bobD, dm.id, 'bob, before the upgrade (d2)'), /^d2:/);
+  // Alice gets her post-quantum key and edits her day-1 message: the edit keeps that message's time (binding.js
+  // bindEdit) and is written post-quantum.
+  const laptop = await device(alice, { ctx: await passwordCtx(alice) });
+  await fresh(laptop, bob.id); await fresh(bobD, alice.id);
+  use(laptop);
+  await refreshDms(laptop);
+  const edit = await laptop.sec.encryptDm(dm.id, { t: 'alice, day 1 (edited)', ts: day1, v: 1 });
+  assert.match(edit, /^d3:/);
+  assert.equal((await as({ ...laptop.user, token: laptop.token }, 'POST', `/dms/${dm.id}/messages`, { ciphertext: edit })).status, 200);
+  assert.ok(!(E.dmFirstAt(alice.id, dm.id) > 0 && E.dmFirstAt(alice.id, dm.id) <= day1 + 1000), 'the writer doesn’t date it from day 1');
+  // Bob's honest P-256 message, sent after day 1 but before anything new was written post-quantum, isn't flagged.
+  const flagged = (msgs) => msgs.filter((m) => m.dec.noPq).map((m) => m.dec.t);
+  assert.deepEqual(flagged(await readDms(bobD, dm.id)), []);
+  assert.deepEqual(flagged(await readDms(laptop, dm.id)), []);
+  use(bobD);
+  assert.equal(E.dmPqSeen(bob.id, dm.id), true, 'still known to be post-quantum (on bob’s device)');
+  use(laptop);
+  assert.equal(E.dmPqSeen(alice.id, dm.id), true, '…and on the one that wrote the edit');
+});
+
+test('fourth review 2: a reset with a recovery key holding an older post-quantum seed keeps only a seed for the published key', () => {
+  const s1 = E.newPqSeed(); const s2 = E.newPqSeed();
+  const pk2 = E.pqKeyPair(s2).publicKey;
+  // The recovery copy holds the replaced key's seed: not kept, unless this browser has the current one.
+  assert.deepEqual(E.pickResetSeed(s1, null, pk2), { seed: s1, inEnvelope: false, putKept: false });
+  assert.deepEqual(E.pickResetSeed(s1, s2, pk2), { seed: s2, inEnvelope: true, putKept: true });
+  assert.deepEqual(E.pickResetSeed(s2, s1, pk2), { seed: s2, inEnvelope: true, putKept: false });
+  assert.deepEqual(E.pickResetSeed(null, s2, pk2), { seed: s2, inEnvelope: true, putKept: true });
+  assert.deepEqual(E.pickResetSeed(null, s1, pk2), { seed: null, inEnvelope: false, putKept: false });
+  // No key published: whatever the envelope has.
+  assert.deepEqual(E.pickResetSeed(s1, null, null), { seed: s1, inEnvelope: true, putKept: false });
+  assert.deepEqual(E.pickResetSeed(null, s2, null), { seed: null, inEnvelope: false, putKept: false });
+});

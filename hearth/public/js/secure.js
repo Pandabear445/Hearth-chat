@@ -152,6 +152,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     if (!user || user.id === S.me.id) return true;
     const ok = E2EE.checkPin(S.me.id, user) === 'ok';
     if (!ok && !warned.has(user.id)) { warned.add(user.id); onKeyWarning(user); }
+    if (ok) E2EE.notePqListed(S.me.id, user); // (their post-quantum key, if listed: see e2ee.js listPq)
     return ok;
   }
   const keyChanged = (user) => !!user && user.id !== S.me.id && E2EE.checkPin(S.me.id, user) === 'changed';
@@ -1087,6 +1088,10 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   // their new keys. A device without the account's seed writes nothing that needs it (myPqForWriting throws
   // need_password): read-only until the password is entered.
   const tsOf = (payload) => (payload && Number.isSafeInteger(payload.ts) && payload.ts > 0 ? payload.ts : 0);
+  // When a d3 message dates this DM going post-quantum: a new message's own time. An edit keeps the time of the message
+  // it edits (binding.js bindEdit), which can be days before the conversation went post-quantum: dating it from that
+  // would flag the other person's honest P-256 messages in between (d2AfterPq). An edit only says the DM is post-quantum.
+  const writtenAt = (payload) => (payload && Number(payload.v) > 0 ? 0 : tsOf(payload));
   async function encryptDm(dmId, payload) {
     const peer = await writablePeer(dmId);
     const peerPq = await pqKeyOf(peer);
@@ -1103,7 +1108,8 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     }
     if (!(await ownKeysOk())) throw ownKeysMismatch();
     const text = await E2EE.encryptDm3({ dmId, authorId: S.me.id, myPriv: S.privateKey, myPub: proven.e, myPq: minePq, peerId: peer.id, peerPub: peer.publicKey, peerPq, payload });
-    E2EE.noteDmFirst(S.me.id, dmId, tsOf(payload) || Date.now());
+    if (payload && Number(payload.v) > 0) E2EE.noteDmPq(S.me.id, dmId);
+    else E2EE.noteDmFirst(S.me.id, dmId, writtenAt(payload) || Date.now());
     return text;
   }
   // A d3 message: opened with this device's post-quantum key and whichever identity key of theirs made it (yours, for
@@ -1118,7 +1124,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
     const { payload, index } = await E2EE.decryptDm3({ text, dmId, authorId, myId: S.me.id, myPriv: S.privateKey, myPub: proven.e, myPq: mine, authorPubs: keys.map((k) => k.key) });
     const how = keys[index].trust;
     // Only a key this device trusts dates the DM going post-quantum (not one the server merely lists).
-    if (how === 'now' || how === 'pinned') E2EE.noteDmFirst(S.me.id, dmId, tsOf(payload));
+    if (how === 'now' || how === 'pinned') E2EE.noteDmFirst(S.me.id, dmId, writtenAt(payload));
     // Written by them with their current key: they have a post-quantum key, so it's checked and pinned now (in a batch,
     // a moment later: no request per message), and a server that hides it later gets nothing P-256 alone for them.
     if (how === 'now' && authorId !== S.me.id) pinSoon(S.dms.find((x) => x.id === dmId));

@@ -503,19 +503,16 @@ async function openReset(token) {
         const rk = await E2EE.recoveryWrapKey(rec.value, info.recoverySalt);
         try { body.encPrivateKey = await E2EE.rewrapPrivateKey(rk, next.wrapKey, info.encPrivateKeyRecovery); } catch { throw new Error('That recovery key isn\u2019t right.'); }
         ({ privateKey, pqSeed } = await E2EE.unwrapIdentity(next.wrapKey, body.encPrivateKey));
-        // A recovery key from before the account's post-quantum key doesn't hold its seed. This browser may still have
-        // it (it was signed in here): then it goes into the new envelope and nothing is lost.
-        if (!pqSeed && info.pqPublicKey) {
-          const kept = await E2EE.loadPqSeed(info.userId);
-          if (kept && E2EE.pqKeyPair(kept).publicKey === info.pqPublicKey) {
-            body.encPrivateKey = (await E2EE.addPqToEnvelope(next.wrapKey, body.encPrivateKey, { seed: kept, replace: true })).encPrivateKey;
-            pqSeed = kept;
-          }
-        }
+        // A recovery key from before the account's post-quantum key doesn't hold its seed, and one from before that key
+        // was replaced holds an older seed: only a seed for the key published now counts (E2EE.pickResetSeed). This
+        // browser may still have that one (it was signed in here): then it goes into the new envelope and nothing is
+        // lost. Otherwise the server drops the key, which nobody could open any more, and this app publishes a new one
+        // as it starts (secure.js ensurePqKey); an older seed still in the envelope keeps opening what was locked to it.
+        const pick = E2EE.pickResetSeed(pqSeed, await E2EE.loadPqSeed(info.userId).catch(() => null), info.pqPublicKey);
+        if (pick.putKept) body.encPrivateKey = (await E2EE.addPqToEnvelope(next.wrapKey, body.encPrivateKey, { seed: pick.seed, replace: true })).encPrivateKey;
+        pqSeed = pick.seed;
         body.keepKeys = true;
-        // Without it, the server drops the account's post-quantum key, which nobody could open any more, and this app
-        // publishes a new one as it starts (secure.js ensurePqKey).
-        body.pqInEnvelope = !!pqSeed;
+        body.pqInEnvelope = pick.inEnvelope;
         body.keyProof = await E2EE.resetKeyProof(privateKey, info.keyChallenge.serverPublicKey, info.keyChallenge.nonce, info.userId);
       } else {
         const id = await E2EE.createIdentity(next.wrapKey);
@@ -527,10 +524,10 @@ async function openReset(token) {
       history.replaceState(null, '', '/');
       // The server dropped the account's post-quantum key (new keys, or a recovery key older than it): this browser
       // forgets that it saw it, or it would refuse every DM until the new one is published.
-      if (!body.keepKeys || !pqSeed) E2EE.forgetOwnPq(info.userId);
+      if (!body.keepKeys || !body.pqInEnvelope) E2EE.forgetOwnPq(info.userId);
       // What a reset with a recovery key older than the account's post-quantum key loses, exactly: what was locked to
       // that key alone (secure.js keeps older copies as they were while the recovery key is older).
-      toast(body.keepKeys && info.hasPq && !pqSeed ? 'Password reset. Your messages are still here, except direct messages, and server and group messages, encrypted to your account’s post-quantum key since you first signed in after Hearth added it: your recovery key is older than that key, so those can’t be opened on your account any more (the people you talked to still have them). Each server’s and group’s current key is shared with you again. Make a new recovery key in Settings.'
+      toast(body.keepKeys && info.hasPq && !body.pqInEnvelope ? 'Password reset. Your messages are still here, except direct messages, and server and group messages, encrypted to your account’s post-quantum key since you first signed in after Hearth added it: your recovery key is older than that key, so those can’t be opened on your account any more (the people you talked to still have them). Each server’s and group’s current key is shared with you again. Make a new recovery key in Settings.'
         : body.keepKeys ? 'Password reset. All your messages are still here.'
         : res.user && res.user.keysReset ? 'Password reset with new keys. Ask a member to verify you so you can read your servers and groups again, and add a recovery key in Settings so this can\u2019t happen again.'
           : 'Password reset with new keys. Add a recovery key in Settings so this can\u2019t happen again.');
