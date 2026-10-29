@@ -10108,7 +10108,7 @@ function openEditChannel(c, startTab = 'overview', { overrides } = {}) {
   // A voice channel's chat follows the chat permissions too (deny Send Messages to keep it voice only); it has no threads.
   const VOICE_CHAT = hasChat(ch0) ? ['SEND_MESSAGES', 'EMBED_LINKS', 'ATTACH_FILES', 'ADD_REACTIONS', 'MENTION_EVERYONE', 'MANAGE_MESSAGES'] : [];
   const scoped = PERM_GROUPS.flatMap(([, l]) => l).filter(([k]) => (c.type === 'voice'
-    ? ['VIEW_CHANNEL', 'CONNECT', 'SPEAK', 'MOVE_MEMBERS', 'MANAGE_CHANNELS', 'MANAGE_ROLES', ...VOICE_CHAT]
+    ? ['VIEW_CHANNEL', 'CONNECT', 'SPEAK', 'MOVE_MEMBERS', 'USE_SOUNDBOARD', 'MANAGE_CHANNELS', 'MANAGE_ROLES', ...VOICE_CHAT]
     : ['VIEW_CHANNEL', 'SEND_MESSAGES', 'CREATE_THREADS', 'EMBED_LINKS', 'ATTACH_FILES', 'ADD_REACTIONS', 'MENTION_EVERYONE', 'MANAGE_MESSAGES', 'MANAGE_CHANNELS', 'MANAGE_ROLES']).includes(k));
   const label = (o) => {
     if (o.type === 'member') return nameInServer(server, getUser(o.id));

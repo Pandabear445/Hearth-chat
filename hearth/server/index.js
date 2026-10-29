@@ -1027,8 +1027,12 @@ function uploadLimits() {
   };
 }
 const MB = 1024 * 1024;
-const usedBytes = (uid) => db.prepare('SELECT COALESCE(SUM(size), 0) n FROM user_files WHERE user_id = ?').get(uid).n;
-const dayBytes = (uid) => db.prepare('SELECT COALESCE(SUM(size), 0) n FROM user_files WHERE user_id = ? AND created_at > ?').get(uid, now() - 86400000).n;
+// What an account stores, and has uploaded in the last day: its files, and its soundboard's sounds (soundboard.js:
+// encrypted audio kept in the database, counted at its stored size).
+const usedBytes = (uid) => db.prepare(`SELECT (SELECT COALESCE(SUM(size), 0) FROM user_files WHERE user_id = ?)
+  + (SELECT COALESCE(SUM(size), 0) FROM soundboard_items WHERE user_id = ? AND kind = 'sound') n`).get(uid, uid).n;
+const dayBytes = (uid) => { const since = now() - 86400000; return db.prepare(`SELECT (SELECT COALESCE(SUM(size), 0) FROM user_files WHERE user_id = ? AND created_at > ?)
+  + (SELECT COALESCE(SUM(size), 0) FROM soundboard_items WHERE user_id = ? AND kind = 'sound' AND audio_at > ?) n`).get(uid, since, uid, since).n; };
 function quotaOf(uid) {
   const row = getUserRow(uid);
   const lim = uploadLimits();
@@ -5474,7 +5478,7 @@ const NEWS = require('./newsbot')({ api, app, auth, db, fail, wrap, rateLimit, s
   } });
 // Study tools (server/study.js): encrypted sync for Recall's decks, pictures and profile.
 require('./study')({ api, auth, db, fail, rateLimit, pushTo: (...a) => pushTo(...a), emitToUser: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
-BOARD.setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, emitToUser: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
+BOARD.setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, quotaOf, overLimit, emitToUser: (uid, ev, data) => io && io.to(`user:${uid}`).emit(ev, data) });
 ACT = require('./activity')({ api, app, auth, db, emit: (...a) => io && io.emit(...a), fail, wrap, rateLimit, isOnline, getUserRow, getSetting, setSetting, checkMediaToken, mediaLinks: MEDIA_LINKS, sealSecret, openSecret, auditLog,
   requireInstanceAdmin, checkWords, broadcastUser: (id) => broadcastUser(id), DATA_DIR, version: require('../package.json').version });
 

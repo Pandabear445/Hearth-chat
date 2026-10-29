@@ -97,14 +97,17 @@ export function moveSound(layout, id, to, index) {
 }
 
 // What a profile shows of a board (only when its owner turns it on): name, emoji and color of the first 12 sounds,
-// in board order. Never the audio or its key.
+// in board order. Never the audio or its key. Cleaned exactly as the server keeps it (profile.js soundShowcase: no
+// angle brackets in a name, and one left empty is dropped), so the copy the server sends back compares equal and the
+// board doesn't save the profile again on every change.
 export function showcaseOf(layout, sounds) {
   const out = [];
   for (const p of layout.pages) for (const id of p.ids) {
     const s = sounds.get(id);
     if (s && out.length < 12) out.push({ name: s.name, emoji: s.emoji, color: s.color });
   }
-  return out;
+  return out.map((x) => ({ emoji: glyphs(x.emoji, 6), name: text(x.name, 64).replace(/[<>]/g, '').trim().slice(0, 32), color: HEX.test(x.color || '') ? x.color.toLowerCase() : DEFAULT_COLOR }))
+    .filter((x) => x.name);
 }
 
 export function newSoundId() {

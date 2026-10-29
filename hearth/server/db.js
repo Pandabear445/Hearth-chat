@@ -1759,7 +1759,9 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_servers_discoverable ON servers(discover
 // ciphertext and never learns a sound's name, picture or audio.
 //   soundboard_items  one row per sound (kind 'sound': meta = the sealed name, emoji, color, volume and the audio's
 //                     own key; audio = the encrypted audio, base64) and one for the board's layout (kind 'layout':
-//                     meta = the sealed grid, size, order and pages; audio = '').
+//                     meta = the sealed grid, size, order and pages; audio = ''). A sound's size counts toward its
+//                     owner's storage limit, and audio_at (when its audio was last written) toward the day's
+//                     upload allowance (index.js usedBytes, dayBytes).
 // The new Use Soundboard permission (perms.js) is on for @everyone by default, as in Discord, so servers made
 // before it get it on their @everyone role too.
 db.exec(`
@@ -1771,9 +1773,11 @@ CREATE TABLE IF NOT EXISTS soundboard_items (
   audio TEXT NOT NULL DEFAULT '',
   size INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
+  audio_at INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, id)
 );
 `);
+addColumn('soundboard_items', 'audio_at', 'INTEGER NOT NULL DEFAULT 0');
 if (hasData && fromVersion < 25) db.prepare('UPDATE roles SET permissions = permissions | ? WHERE id = server_id').run(1 << 22);
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);

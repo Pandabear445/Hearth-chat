@@ -84,6 +84,47 @@ test('soundboard: what isn’t sealed, too big, not base64 or over the limit is 
   assert.match(full.json.error, /full \(24 sounds\)/);
 });
 
+test('soundboard: sounds count toward the account’s storage limit, are refused while uploads are blocked, and have byte budgets', async () => {
+  const owner = srv.owner;
+  const limits = (u, body) => srv.api('PATCH', `/admin/users/${u.id}/limits`, { token: owner.token, ip: owner.ip, body });
+  const a = await srv.register();
+  const put = (id, body) => as(a, 'PUT', `/me/soundboard/${id}`, body);
+  // A 1 MB storage limit: one sound of 700 KB fits, a second doesn't; replacing the first with one the same size does.
+  assert.equal((await limits(a, { quotaMb: 1 })).status, 200);
+  const one = sid();
+  assert.equal((await put(one, { kind: 'sound', meta: sealed(), audio: audio(700 * 1024) })).status, 200);
+  const over = await put(sid(), { kind: 'sound', meta: sealed(), audio: audio(700 * 1024) });
+  assert.equal(over.status, 413);
+  assert.equal(over.json.code, 'quota');
+  assert.match(over.json.error, /storage limit/);
+  assert.equal((await put(one, { kind: 'sound', meta: sealed(), audio: audio(700 * 1024) })).status, 200, 'replacing adds nothing');
+  // Blocked from uploading: no new audio, but renaming (no audio) and deleting still work.
+  assert.equal((await limits(a, { uploadsBlocked: true, quotaMb: null })).status, 200);
+  const blocked = await put(sid(), { kind: 'sound', meta: sealed(), audio: audio() });
+  assert.equal(blocked.status, 403);
+  assert.match(blocked.json.error, /Uploads are turned off/);
+  assert.equal((await put(one, { kind: 'sound', meta: sealed(), audio: audio() })).status, 403, 'nor new audio for an old sound');
+  assert.equal((await put(one, { kind: 'sound', meta: sealed(300) })).status, 200);
+  assert.equal((await as(a, 'DELETE', `/me/soundboard/${one}`)).status, 200);
+  await limits(a, { uploadsBlocked: false });
+  // A minute's saves: about eight full-size sounds (rewriting one over and over counts every time).
+  const b = await srv.register();
+  const big = audio(1024 * 1024);
+  const id = sid();
+  let refused = 0;
+  for (let i = 0; i < 9; i++) {
+    const r = await as(b, 'PUT', `/me/soundboard/${id}`, { kind: 'sound', meta: sealed(), audio: big });
+    if (r.status === 429) refused++;
+    else assert.equal(r.status, 200, r.text);
+  }
+  assert.equal(refused, 1, 'the ninth full-size save in a minute is refused');
+  // A minute's audio fetches: about two whole boards. Like study sync, the fetch that goes past the budget is still
+  // answered (it's counted once read); the next one is refused before anything is read.
+  const per = Math.ceil(BOARD.AUDIO_BYTES / big.length);
+  for (let i = 0; i < per; i++) assert.equal((await as(b, 'GET', `/me/soundboard/${id}/audio`)).status, 200, `fetch ${i + 1}`);
+  assert.equal((await as(b, 'GET', `/me/soundboard/${id}/audio`)).status, 429);
+});
+
 // ------------------------------------------------------------------ playing into a call
 test('voice:board: only someone in the call, unmuted, with Use Soundboard and Speak; the others are told how long', async () => {
   const { owner, member, server, voiceCh } = await community();
@@ -156,6 +197,13 @@ test('Use Soundboard: on for @everyone in new servers, scoped per channel, and t
   assert.equal(CP.USE_SOUNDBOARD, PERMS.USE_SOUNDBOARD, 'the app has the same bit');
   assert.ok(PERM_GROUPS.find(([g]) => g === 'Voice')[1].some(([k]) => k === 'USE_SOUNDBOARD'), 'and shows it in the role editor');
   assert.ok(GROUP_MEMBER & CP.USE_SOUNDBOARD);
+  // The voice channel override editor offers it, and the app's copy of the channel permissions (selfroles.js) is the
+  // server's, so its checks see such overrides too.
+  const src = (f) => require('node:fs').readFileSync(path.join(__dirname, '..', 'public', 'js', f), 'utf8');
+  assert.match(src('app.js'), /\? \['VIEW_CHANNEL', 'CONNECT', 'SPEAK', 'MOVE_MEMBERS', 'USE_SOUNDBOARD',/);
+  const scoped = src('selfroles.js').match(/const CHANNEL_SCOPED = ([^;]+);/)[1];
+  const bits = scoped.split('|').map((x) => x.trim().replace(/^P\./, '')).reduce((a, k) => a | CP[k], 0);
+  assert.equal(bits, CHANNEL_SCOPED);
   const { owner, server } = await community(0);
   const boot = (await as(owner, 'GET', '/bootstrap')).json;
   assert.ok(boot.servers.find((s) => s.id === server.id).roleDefs.find((r) => r.id === server.id).permissions & PERMS.USE_SOUNDBOARD);
@@ -312,11 +360,26 @@ test('soundboard-core: decrypted details and layouts are cleaned before use', as
   const show = C.showcaseOf(moved, sounds);
   assert.deepEqual(show.map((x) => x.name), ['S1', 'S0', 'S2']);
   assert.ok(show.every((x) => Object.keys(x).sort().join() === 'color,emoji,name'), 'never the key');
+  // Cleaned as the server keeps it, so what comes back compares equal and nothing is saved again on every change.
+  const odd = new Map([['aaaaaaaa1', { name: '<3 boom', emoji: '💥', color: '#ABCDEF', k }], ['bbbbbbbb2', { name: '<>', emoji: '', color: '#123456', k }], ['cccccccc3', { name: 'Fine', emoji: '', color: 'nope', k }]]);
+  const shown = C.showcaseOf(l, odd);
+  assert.deepEqual(shown, [{ emoji: '', name: 'Fine', color: '#f2a541' }, { emoji: '💥', name: '3 boom', color: '#abcdef' }]);
+  assert.deepEqual(sanitizeProfile({ showSoundboard: true, soundShowcase: shown }).soundShowcase, shown);
   const id = C.newSoundId();
   assert.match(id, /^[a-z0-9]{8,32}$/);
 });
 
 // ------------------------------------------------------------------ profile extras
+test('profile editor: saving never sends the soundboard showcase, so an old copy can’t bring it back', () => {
+  const settings = require('node:fs').readFileSync(path.join(__dirname, '..', 'public', 'js', 'settings.js'), 'utf8');
+  assert.match(settings, /const payload = \{ \.\.\.draft \};[\s\S]{0,600}delete payload\.showSoundboard;\s*delete payload\.soundShowcase;/);
+  // What the server does with a save that leaves them out: keeps what's stored.
+  const stored = sanitizeProfile({ showSoundboard: false, soundShowcase: [] });
+  const after = sanitizeProfile({ bio: 'new bio' }, stored);
+  assert.equal(after.showSoundboard, false);
+  assert.deepEqual(after.soundShowcase, []);
+});
+
 test('profile: banner styles, decorations, text size, sections, favorites, song links and the soundboard showcase are validated', () => {
   const p = sanitizeProfile({
     bannerFx: 'aurora', bannerColor2: '#ABCDEF', avatarDecoration: 'crown', textSize: 'xl',

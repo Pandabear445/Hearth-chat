@@ -232,6 +232,10 @@ function profileTab(app, setDirty, go, start = null) {
       // (Not called `body`: that's this tab, which is swapped for a fresh one below.)
       const payload = { ...draft };
       if (JSON.stringify(draft.customStatus) === JSON.stringify(JSON.parse(original).customStatus)) delete payload.customStatus;
+      // The soundboard on the profile is only ever set from the soundboard (soundboard.js setShowcase, syncShowcase):
+      // this page's copy may be from before it was turned off or a sound was renamed, and must not bring it back.
+      delete payload.showSoundboard;
+      delete payload.soundShowcase;
       const u = await api('PATCH', '/me/profile', payload);
       app.onMe(u);
       setDirty(false);

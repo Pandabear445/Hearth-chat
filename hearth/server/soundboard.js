@@ -26,11 +26,15 @@ const ID = /^[a-z0-9]{8,32}$/;
 const LAYOUT_ID = 'layout';
 const B64 = /^[A-Za-z0-9+/]*={0,2}$/;
 const PLAY_MAX_MS = LIMITS.ms;
+// Data per person per minute, like study.js SYNC_BYTES: saving is about eight full-size sounds a minute (making a
+// board is a handful at a time), and fetching audio about two whole boards (a new device needs one).
+const SAVE_BYTES = 8 * AUDIO_B64_MAX;
+const AUDIO_BYTES = 2 * LIMITS.sounds * AUDIO_B64_MAX;
 // Plays per person: one at a time (a new one replaces it), at most one every 800 ms, 12 in 30 seconds, and 15
 // seconds of sound in those 30 seconds (so the lane is open at most about half the time).
 const PLAY_RATE = Object.freeze({ gapMs: 800, burst: 12, windowMs: 30000, msPerWindow: 15000 });
 
-function setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, emitToUser }) {
+function setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, quotaOf, overLimit, emitToUser }) {
   const now = () => Date.now();
   const changed = (req) => emitToUser(req.userId, 'soundboard:changed', { from: req.session && req.session.id });
 
@@ -44,10 +48,13 @@ function setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, emit
   // One sound's encrypted audio (only the owner's own; the listeners in a call hear it through the call).
   api.get('/me/soundboard/:id/audio', auth, (req, res) => {
     rateLimit('board-audio:' + req.userId, 600, 60000);
+    const budget = 'board-audio-bytes:' + req.userId;
+    rateLimit(budget, AUDIO_BYTES, 60000, 0); // used up already? (refused before reading anything)
     const id = String(req.params.id);
     if (!ID.test(id)) fail(400, 'Bad id.');
     const r = db.prepare("SELECT audio FROM soundboard_items WHERE user_id = ? AND id = ? AND kind = 'sound'").get(req.userId, id);
     if (!r) fail(404, 'No such sound.');
+    rateLimit(budget, Infinity, 60000, r.audio.length); // counted, never refused: it has been read already
     res.set('Cache-Control', 'no-store');
     res.json({ audio: r.audio });
   });
@@ -69,7 +76,7 @@ function setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, emit
     if (!ID.test(id)) fail(400, 'Bad id.');
     if (b.kind !== 'sound') fail(400, 'Unknown kind.');
     if (!sealed(meta, META_MAX)) fail(400, 'Bad sound details.');
-    const cur = db.prepare('SELECT kind, size FROM soundboard_items WHERE user_id = ? AND id = ?').get(req.userId, id);
+    const cur = db.prepare('SELECT kind, size, audio_at FROM soundboard_items WHERE user_id = ? AND id = ?').get(req.userId, id);
     if (cur && cur.kind !== 'sound') fail(409, 'That id is used by something else.');
     let audio = null;
     if (b.audio !== undefined) {
@@ -83,12 +90,26 @@ function setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, emit
       const n = db.prepare("SELECT COUNT(*) n FROM soundboard_items WHERE user_id = ? AND kind = 'sound'").get(req.userId).n;
       if (n >= LIMITS.sounds) fail(413, `Your soundboard is full (${LIMITS.sounds} sounds). Delete one to add another.`);
     }
+    if (audio !== null) {
+      // New audio is an upload like any other: refused while uploads are turned off for the account, counted toward
+      // its storage limit and the day's allowance (index.js quotaOf, overLimit), and within a per-minute data budget
+      // so it can't be rewritten over and over. A replaced sound counts only what it adds to the storage used, and to
+      // the day's uploads only what it adds to a sound already uploaded today.
+      const q = quotaOf(req.userId);
+      if (q.blocked) fail(403, 'Uploads are turned off for your account.');
+      rateLimit('board-save-bytes:' + req.userId, SAVE_BYTES, 60000, audio.length);
+      const today = cur && cur.audio_at > now() - 86400000 ? cur.size : 0;
+      const over = overLimit(req.userId, { ...q, dailyMb: 0 }, Math.max(0, audio.length - (cur ? cur.size : 0)))
+        || overLimit(req.userId, { ...q, quotaMb: 0 }, Math.max(0, audio.length - today));
+      if (over) throw over;
+    }
     if (audio === null) {
       db.prepare('UPDATE soundboard_items SET meta = ?, updated_at = ? WHERE user_id = ? AND id = ?').run(meta, now(), req.userId, id);
     } else {
-      db.prepare(`INSERT INTO soundboard_items (id, user_id, kind, meta, audio, size, updated_at) VALUES (?, ?, 'sound', ?, ?, ?, ?)
-        ON CONFLICT(user_id, id) DO UPDATE SET meta = excluded.meta, audio = excluded.audio, size = excluded.size, updated_at = excluded.updated_at`)
-        .run(id, req.userId, meta, audio, audio.length, now());
+      const t = now();
+      db.prepare(`INSERT INTO soundboard_items (id, user_id, kind, meta, audio, size, updated_at, audio_at) VALUES (?, ?, 'sound', ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, id) DO UPDATE SET meta = excluded.meta, audio = excluded.audio, size = excluded.size, updated_at = excluded.updated_at, audio_at = excluded.audio_at`)
+        .run(id, req.userId, meta, audio, audio.length, t, t);
     }
     changed(req);
     res.json({ ok: true });
@@ -105,4 +126,4 @@ function setupSoundboard({ api, auth, db, fail, rateLimit, requireUnlocked, emit
   });
 }
 
-module.exports = { setupSoundboard, LIMITS, PLAY_MAX_MS, PLAY_RATE, AUDIO_B64_MAX };
+module.exports = { setupSoundboard, LIMITS, PLAY_MAX_MS, PLAY_RATE, AUDIO_B64_MAX, SAVE_BYTES, AUDIO_BYTES };
