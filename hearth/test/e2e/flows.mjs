@@ -4545,7 +4545,10 @@ async function postQuantum(t) {
   const envelope = `${b64(iv)}:${b64(new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, wrapKey, pkcs8)))}`;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const olgaId = Date.now().toString(36).padStart(9, '0') + crypto.randomBytes(5).toString('hex'); // (as server/db.js newId)
-  const aliceId = t.server.rows("SELECT id FROM users WHERE username = 'alice'")[0].id;
+  // (alice's username may have changed in earlier flows: found by her id, as her app knows it.)
+  const aliceId = await alice.page.evaluate(() => localStorage.getItem('hearth.userId'));
+  const aliceName = t.server.rows('SELECT username, profile FROM users WHERE id = ?', aliceId)[0];
+  const aliceShown = JSON.parse(aliceName.profile || '{}').displayName || aliceName.username;
   const terms = (await (await fetch(`${t.server.base}/api/config`)).json()).termsVersion || null;
   t.server.sql(`INSERT INTO users (id, username, auth_hash, public_key, enc_private_key, profile, created_at, kdf, kdf_salt, tos_version)
       VALUES (?, 'olga', ?, ?, ?, '{}', ?, 'argon2id', ?, ?)`, olgaId, require('bcryptjs').hashSync(authKey, 11),
@@ -4579,7 +4582,7 @@ async function postQuantum(t) {
   check(await E.ownsPublicKey(opened.privateKey, b64(await crypto.subtle.exportKey('spki', kp.publicKey))), 'Her identity key should be the same as before.');
   check(!(await olga.$('.modal').count()), 'Nothing should be asked or shown for the upgrade.');
   await olga.railButton('Direct messages');
-  await olga.dmRow('alice').click();
+  await olga.dmRow(aliceShown).click();
   await olga.message('Before your upgrade: quince').waitFor();
   await olga.send('After my upgrade: persimmon');
   await alice.message('After my upgrade: persimmon').waitFor();
