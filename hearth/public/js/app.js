@@ -4875,7 +4875,7 @@ function fillMessage(el, m, prev, ctx, { author, mine, isGrouped, text, blur = n
     if (socials.length) {
       out.append(h('div', { class: `msg-socials${socials.length > 1 ? ' many' : ''}` }, socials.map((p) => socialEmbedEl(p, {
         // Blurred by the word filter: always a placeholder, so nothing loads for a message you chose to hide.
-        key: `${m.id}|${p.kind}:${p.id || p.short}`, card: cards.find((l) => l.url === p.url) || null, mode: blur ? 'ask' : playerMode(chat),
+        key: `${m.id}|${p.kind}:${p.id || p.short}`, card: cards.find((l) => l.url === p.url) || null, mode: blur ? 'ask' : playerMode(chat), blurred: !!blur,
       }))));
     }
     // Image links wait for a click unless they load from here or you chose Always (embedEl). Blurred, the Load button

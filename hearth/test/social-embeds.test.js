@@ -91,6 +91,46 @@ test('social: a player address is built from a checked id only, on exactly two o
   assert.ok(sb.includes('allow-scripts') && sb.includes('allow-popups-to-escape-sandbox'));
 });
 
+test('social: a player opened earlier stays a placeholder when the word filter blurs its message', async () => {
+  // social-embed.js with a stand-in for the page (util.js) and the API: elements are plain objects.
+  const { register } = require('node:module');
+  const fakes = {
+    './util.js': `const el = (tag, props, kids) => ({ tag, props: props || {}, kids, append(...k) { this.kids.push(...k.flat(9).filter(Boolean)); return this; }, classList: { add() {}, remove() {} } });
+      export const h = (tag, props, ...kids) => el(tag, props, kids.flat(9).filter(Boolean)); export const clear = (x) => { x.kids = []; return x; }; export const icon = () => null; export const toast = () => {};`,
+    './api.js': 'export const api = async () => { throw new Error("no server here"); };',
+  };
+  const urls = Object.fromEntries(Object.entries(fakes).map(([k, src]) => [k, 'data:text/javascript,' + encodeURIComponent(src)]));
+  register('data:text/javascript,' + encodeURIComponent(`const urls = ${JSON.stringify(urls)};
+    export async function resolve(spec, ctx, next) {
+      if (ctx.parentURL && /\\/social-embed\\.js$/.test(ctx.parentURL) && urls[spec]) return { url: urls[spec], shortCircuit: true };
+      return next(spec, ctx);
+    }`));
+  const SE = await clientModule('social-embed.js');
+  const C = await clientModule('social.js');
+  const find = (node, test) => (!node || typeof node !== 'object' ? null : test(node) ? node : (node.kids || []).reduce((a, k) => a || find(k, test), null));
+  const frameIn = (box) => find(box, (n) => n.tag === 'iframe');
+  const p = C.parseSocialUrl(`https://www.tiktok.com/@hearth/video/${ID}`);
+  const key = `m1|tiktok:${ID}`;
+  const settle = () => new Promise((r) => setTimeout(r, 10));
+  // Tapped: the player loads and is remembered for this tab.
+  const box = SE.socialEmbedEl(p, { key, mode: 'ask' });
+  assert.equal(frameIn(box), null, 'a placeholder until tapped');
+  find(box, (n) => n.props && n.props.class === 'soc-play').props.onclick({ currentTarget: {} });
+  await settle();
+  assert.ok(frameIn(box), 'tapped: the player');
+  // Drawn again: it comes back as a player, unless the message is now blurred.
+  const again = SE.socialEmbedEl(p, { key, mode: 'ask' });
+  await settle();
+  assert.ok(frameIn(again));
+  const blurred = SE.socialEmbedEl(p, { key, mode: 'ask', blurred: true });
+  await settle();
+  assert.equal(frameIn(blurred), null, 'blurred: nothing loads from TikTok');
+  const always = SE.socialEmbedEl(p, { key: 'm2|x', mode: 'always', blurred: true });
+  await settle();
+  assert.equal(frameIn(always), null, 'not even with "Always"');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8'), /mode: blur \? 'ask' : playerMode\(chat\), blurred: !!blur,/);
+});
+
 test('social: links in a message (not in code or spoilers), one each, at most four; TikTok player messages', async () => {
   const C = await clientModule('social.js');
   const text = [
@@ -305,4 +345,30 @@ test('social: watch together plays TikTok in step and Instagram as "start togeth
   await settle();
   assert.equal(state.playing, false, 'the queue is empty: it stops');
   assert.equal((await ack(so, 'watch:stop', {})).ok, true);
+});
+
+test('social: adding watch-together videos is limited per person, and titles are looked up only within the link-preview rules', async () => {
+  const owner = await srv.register();
+  const server = (await as(owner, 'POST', '/servers', { name: 'Flood ' + hex(3) })).json;
+  const voiceCh = server.channels.find((c) => c.type === 'voice');
+  const so = await sock(owner);
+  assert.equal((await ack(so, 'voice:join', { channelId: voiceCh.id })).ok, true);
+  assert.equal((await ack(so, 'watch:start', { url: `https://www.tiktok.com/@hearth/video/${ID}` })).ok, true);
+  let refused = null;
+  for (let i = 0; i < 25 && !refused; i++) {
+    const r = await ack(so, 'watch:side', { url: `https://www.tiktok.com/@hearth/video/72${String(i).padStart(17, '0')}` });
+    if (!r.ok) refused = { i, error: r.error };
+  }
+  assert.ok(refused, 'a flood of side videos is cut off');
+  assert.equal(refused.i, 19, 'twenty a minute, watch:start included');
+  assert.match(refused.error, /Too many/);
+  assert.match((await ack(so, 'watch:start', { url: `https://www.tiktok.com/@hearth/video/${ID2}`, queue: true })).error, /Too many/, 'shared with watch:start');
+  await ack(so, 'watch:stop', {});
+  // The title lookup: through netguard with a size cap, skipped when link previews are off or past the 'lpf:' budget.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function watchTitle('), src.indexOf('// ready: who in the call said'));
+  assert.doesNotMatch(fn, /await fetch\(/);
+  assert.match(fn, /netguard\.request\(api, \{[\s\S]*maxBytes: WATCH_TITLE_MAX_BYTES/);
+  assert.match(fn, /features\(\)\.linkPreviews === false\) return ''/);
+  assert.match(fn, /hitsSoFar\('lpf:' \+ uid\) >= 100\) return ''/);
 });

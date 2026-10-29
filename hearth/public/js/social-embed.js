@@ -33,8 +33,10 @@ export function socialFrame(p, { autoplay = false, lazy = false } = {}) {
 }
 
 // p: from socialLinks(); key: what remembers it as opened (the message id and the video); card: the sender's link
-// preview for the same link, if any (its picture and title); mode: 'ask' | 'always'.
-export function socialEmbedEl(p, { key, card = null, mode = 'ask' } = {}) {
+// preview for the same link, if any (its picture and title); mode: 'ask' | 'always'; blurred: the message is blurred
+// by the word filter, so it's a placeholder even if its player was opened before (nothing loads for a message you
+// chose to hide).
+export function socialEmbedEl(p, { key, card = null, mode = 'ask', blurred = false } = {}) {
   const site = p.kind === 'tiktok' ? 'tiktok.com' : 'instagram.com';
   const box = h('div', { class: `soc-embed kind-${p.kind}${p.type === 'p' ? ' post' : ''}`, dataset: { kind: p.kind } });
   const external = h('a', { class: 'soc-open', href: p.url, target: '_blank', rel: 'noopener noreferrer nofollow', title: p.url }, icon('external'), `Open on ${KIND_NAME[p.kind]}`);
@@ -60,6 +62,6 @@ export function socialEmbedEl(p, { key, card = null, mode = 'ask' } = {}) {
         external));
   };
   // "Always" loads straight away, except a short link (opening one asks this server, so that waits for a tap).
-  if (opened.has(key) || (mode === 'always' && p.id)) load(false); else draw();
+  if (!blurred && (opened.has(key) || (mode === 'always' && p.id))) load(false); else draw();
   return box;
 }

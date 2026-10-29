@@ -7308,7 +7308,14 @@ function parseWatchUrl(raw) {
   }
   fail(400, 'That site isn\u2019t supported yet. YouTube, Vimeo, Twitch (live), TikTok, Instagram reels and direct video files (.mp4, .webm) work. For anything else, share your screen.');
 }
-async function watchTitle(item) {
+// A video's title for watch together, from YouTube's, Vimeo's or TikTok's oEmbed. It's only a nicety, so it's
+// skipped rather than refused: when link previews are turned off (this server doesn't look up links), and once the
+// person who added it has used the hourly budget link previews share ('lpf:', linkpreview.js). Titles are kept for a
+// while by link, so the same video added again asks nobody. The request goes through netguard, to that site only,
+// with a 64 KB cap on the answer.
+const WATCH_TITLE_MAX_BYTES = 64 * 1024;
+const watchTitles = new Map(); // link -> { title, at }
+async function watchTitle(item, uid) {
   try {
     const api = item.kind === 'youtube' ? `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(item.link)}`
       : item.kind === 'vimeo' ? `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(item.link)}`
@@ -7316,10 +7323,21 @@ async function watchTitle(item) {
     // Instagram's oEmbed needs a Meta app token, so its items keep a plain name.
     if (item.kind === 'instagram') return item.postType === 'p' ? 'Instagram post' : 'Instagram reel';
     if (!api) return item.kind === 'twitch' ? `${item.src} (live on Twitch)` : decodeURIComponent(item.src.split('/').pop()).slice(0, 120);
-    const r = await fetch(api, { signal: AbortSignal.timeout(4000) });
+    const known = watchTitles.get(item.link);
+    if (known && known.at > now() - 6 * 3600000) return known.title;
+    if (features().linkPreviews === false) return '';
+    if (hitsSoFar('lpf:' + uid) >= 100) return '';
+    countHit('lpf:' + uid, 3600000);
+    const host = new URL(api).host;
+    const r = await netguard.request(api, {
+      protocols: ['https:'], allowUrl: (u) => u.protocol === 'https:' && u.host === host, maxRedirects: 1,
+      timeout: 4000, maxBytes: WATCH_TITLE_MAX_BYTES, headers: { Accept: 'application/json' },
+    });
     if (!r.ok) return '';
-    const j = await r.json();
-    return String(j.title || '').slice(0, 150);
+    const title = String((JSON.parse(r.body.toString('utf8')) || {}).title || '').slice(0, 150);
+    if (watchTitles.size >= 500) watchTitles.delete(watchTitles.keys().next().value);
+    watchTitles.set(item.link, { title, at: now() });
+    return title;
   } catch { return ''; }
 }
 // ready: who in the call said they're ready for the current video (a manual one: Instagram), as a list.
@@ -7681,6 +7699,10 @@ function setupSockets(server) {
     socket.on('watch:start', guard((p = {}) => {
       if (!features().watch) fail(403, 'Watch together is turned off on this server.');
       const room = myWatchRoom();
+      // Adding videos (and side-by-side ones) has its own limits, per person and per call: each can mean a title
+      // lookup, and a side video pauses everyone.
+      rateLimit('watch-add:' + uid, 20, 60000);
+      rateLimit('watch-add-room:' + room, 40, 60000);
       const item = { ...parseWatchUrl(p.url), id: newId(), title: '', addedBy: uid };
       const cur = watchRooms.get(room);
       if (cur && p.queue) {
@@ -7693,7 +7715,7 @@ function setupSockets(server) {
         watchRooms.set(room, { item, queue: cur ? cur.queue : [], playing: !item.manual, position: item.start || 0, rate: 1, updatedAt: Date.now(), by: cur && cur.hostOnly ? cur.by : uid, hostOnly: cur ? cur.hostOnly : !!p.hostOnly, seq: ((cur && cur.seq) || 0) + 1, lastBy: uid, lastAction: 'start', side: cur && cur.side && SIDE_KINDS.has(item.kind) ? cur.side : null, startAt: 0 });
       }
       emitWatch(room);
-      watchTitle(item).then((t) => { if (t && watchRooms.has(room)) { item.title = t; emitWatch(room); } });
+      watchTitle(item, uid).then((t) => { if (t && watchRooms.has(room)) { item.title = t; emitWatch(room); } });
       return { ok: true };
     }));
     socket.on('watch:control', guard((p = {}) => {
@@ -7763,6 +7785,8 @@ function setupSockets(server) {
       if (!w) fail(404, 'Nothing is playing.');
       if (!mayControl(room, w)) fail(403, 'Only the host can change the videos.');
       if (p.url == null) { w.side = null; emitWatch(room); return { ok: true }; }
+      rateLimit('watch-add:' + uid, 20, 60000); // (shared with watch:start)
+      rateLimit('watch-add-room:' + room, 40, 60000);
       if (!SIDE_KINDS.has(w.item.kind)) fail(400, 'Side by side works for TikTok videos and Instagram reels.');
       const item = { ...parseWatchUrl(p.url), id: newId(), title: '', addedBy: uid };
       if (!SIDE_KINDS.has(item.kind)) fail(400, 'Side by side works for TikTok videos and Instagram reels.');
@@ -7770,7 +7794,7 @@ function setupSockets(server) {
       w.playing = false; w.position = watchPos(w); w.updatedAt = Date.now(); w.startAt = 0;
       w.seq = (w.seq || 0) + 1; w.lastBy = uid; w.lastAction = 'side';
       emitWatch(room);
-      watchTitle(item).then((t) => { if (t && watchRooms.get(room) === w && w.side === item) { item.title = t; emitWatch(room); } });
+      watchTitle(item, uid).then((t) => { if (t && watchRooms.get(room) === w && w.side === item) { item.title = t; emitWatch(room); } });
       return { ok: true };
     }));
     socket.on('watch:remove', guard((p = {}) => {
