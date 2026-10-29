@@ -12,6 +12,14 @@
 import { parseSocialUrl } from './social.js';
 
 const TEXT_MAX = 4096;
+// Punctuation after a link isn't part of it ("…/video/123)." in a sentence). Trimmed from the end one character at a
+// time: a regular expression for it took time growing with the square of a long run of dots.
+const TAIL = new Set([...')].,;:!?\'"»”']);
+export function trimTail(s) {
+  let end = s.length;
+  while (end > 0 && TAIL.has(s[end - 1])) end--;
+  return s.slice(0, end);
+}
 const URLISH = /https?:\/\/[^\s<>"'`]{1,2048}/gi;
 
 // The TikTok and Instagram links in shared text, in order, each once (at most `max`). Apps share "Look at this!
@@ -20,7 +28,7 @@ export function socialLinksIn(text, max = 50) {
   const out = []; const seen = new Set();
   const s = typeof text === 'string' ? text.slice(0, TEXT_MAX * 64) : '';
   for (const m of s.matchAll(URLISH)) {
-    const raw = m[0].replace(/[)\].,;:!?'"»”]+$/, '');
+    const raw = trimTail(m[0]);
     const p = parseSocialUrl(raw);
     if (!p) continue;
     const key = `${p.kind}:${p.id || p.short}`;

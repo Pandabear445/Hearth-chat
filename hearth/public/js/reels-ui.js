@@ -33,6 +33,7 @@ const add = (el, ...kids) => { el.append(...kids.flat().filter((k) => k != null 
 
 // The tap that lets players load ("Load when I tap"), for as long as the app is open.
 let consented = false;
+let clipboardAt = 0; // when the desktop app last looked at the clipboard for a link (at most once every 10 minutes)
 const offered = new Set(); // copied links already offered (the desktop app): each once
 
 export function createReels(deps) {
@@ -117,7 +118,8 @@ export function createReels(deps) {
     if (!st.mine) deps.socket().emit('reels:leave', { key }, () => {});
     document.removeEventListener('paste', onPaste);
     st.off.forEach((f) => f());
-    if (st.pending) { clearTimeout(st.pending.timer); st.pending.commit(); } // an undo bar left showing: it goes ahead
+    // An undo bar left showing: nothing was sent, and nothing will be (you left before it went).
+    if (st.pending) { clearTimeout(st.pending.timer); st.pending = null; toast('Not added: you left the Reels tab before it went.'); }
     for (const pl of st.players.values()) pl.destroy();
     if (st.observer) st.observer.disconnect();
     clearInterval(st.timer); clearInterval(st.countTimer); clearTimeout(st.startTimer);
@@ -594,7 +596,7 @@ export function createReels(deps) {
       const url = input.value.trim();
       if (!parseSocialUrl(url)) return toast('That isn’t a link to one TikTok video or Instagram reel or post.', 'error');
       try {
-        if (st.mine) { await deps.myReels.add([parseSocialUrl(url)]); toast('Added to My Reels.'); } else { await deps.send(st.key, url, { preview: box.checked }); toast('Shared in the chat.'); }
+        if (st.mine) { const r = await deps.myReels.add([parseSocialUrl(url)]); toast(r.added ? 'Added to My Reels.' : r.full ? 'My Reels is full. Remove some first.' : 'That video is already in My Reels.'); } else { await deps.send(st.key, url, { preview: box.checked }); toast('Shared in the chat.'); }
         input.value = ''; st.addOpen = false; drawSide();
       } catch (x) { if (x && x.message) toast(x.message, 'error'); }
     };
@@ -629,7 +631,8 @@ export function createReels(deps) {
   // Adds the links found in text, after a few seconds with Undo (nothing is sent before that).
   function addLinks(text, how) {
     if (!st) return;
-    const known = new Set(st.items.map((x) => x.vid));
+    // (Already here, or waiting under the undo bar.)
+    const known = new Set([...st.items.map((x) => x.vid), ...(st.pending ? st.pending.vids : [])]);
     const found = socialLinksIn(String(text || ''), PASTE_MAX);
     const links = found.filter((p) => !known.has(`${p.kind}:${p.id || p.short}`));
     if (!found.length) return toast(how === 'drop' ? 'Drop a TikTok or Instagram link here.' : 'There’s no TikTok or Instagram link in what you pasted.');
@@ -640,7 +643,7 @@ export function createReels(deps) {
     const n = links.length;
     const what = `${n} video${n === 1 ? '' : 's'}`;
     const pending = {
-      timer: 0,
+      timer: 0, vids: [...links.map((p) => `${p.kind}:${p.id || p.short}`), ...(st.pending ? st.pending.vids : [])],
       commit: () => {
         if (st && st.pending === pending) { st.pending = null; st.undo.hidden = true; }
         const done = mine ? deps.myReels.add(links) : deps.sendLinks(key, links.map((p) => p.url));
@@ -658,10 +661,12 @@ export function createReels(deps) {
   async function offerClipboard() {
     const D = window.hearthDesktop;
     if (!D || !navigator.permissions || !navigator.clipboard || !navigator.clipboard.readText) return;
+    if (Date.now() - clipboardAt < 600000) return;
     const key = st.key;
     try {
       const p = await navigator.permissions.query({ name: 'clipboard-read' });
       if (p.state !== 'granted' || !st || st.key !== key) return;
+      clipboardAt = Date.now();
       const text = await navigator.clipboard.readText();
       const link = socialLinksIn(text, 1)[0];
       if (!link || !st || st.key !== key || st.items.some((x) => x.vid === `${link.kind}:${link.id || link.short}`) || offered.has(link.url)) return;

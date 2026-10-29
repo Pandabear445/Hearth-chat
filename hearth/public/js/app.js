@@ -3352,17 +3352,28 @@ function openReels(key) {
   const s = serverOfChannel(key.slice(2));
   if (s) setView(channelView(key.slice(2), s.id, { tab: 'reels' }));
 }
-// Links sent in a conversation: at most 4 to a message (what the feed shows from one), a message every 1.5 s.
-async function sendLinksTo(key, urls, onProgress) {
-  const groups = batches(urls, 4);
-  for (const [i, g] of groups.entries()) {
-    if (i) await new Promise((r) => setTimeout(r, 1500));
-    const why = photoPostBlock(key, null);
-    if (why) throw new Error(why);
-    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join('');
-    await sendTo(key, null, { t: g.join('\n'), f: [] }, null, nonce);
-    if (onProgress) onProgress(i + 1, groups.length);
-  }
+// Links sent in a conversation: at most 4 to a message (what the feed shows from one), a message every 1.5 s. One
+// queue for the whole app, so several pastes or imports at once still go out one message at a time.
+// onProgress(sent, of) after each message; from: how many messages of these already went (an import going on
+// after an error), so none is sent twice.
+let linkQueue = Promise.resolve();
+let lastLinkSend = 0;
+function sendLinksTo(key, urls, onProgress, from = 0) {
+  const run = async () => {
+    const groups = batches(urls, 4);
+    for (let i = from; i < groups.length; i++) {
+      const wait = lastLinkSend + 1500 - Date.now();
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      const why = photoPostBlock(key, null);
+      if (why) throw Object.assign(new Error(why), { sent: i });
+      const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join('');
+      try { await sendTo(key, null, { t: groups[i].join('\n'), f: [] }, null, nonce); } catch (e) { throw Object.assign(e, { sent: i }); } finally { lastLinkSend = Date.now(); }
+      if (onProgress) onProgress(i + 1, groups.length);
+    }
+  };
+  const p = linkQueue.then(run, run);
+  linkQueue = p.catch(() => {});
+  return p;
 }
 // "Share to Hearth": pick where a TikTok or Instagram link goes (it came from a share sheet, the bookmarklet, the
 // Android app or My Reels). Nothing is sent until a place is picked; then the link goes as an ordinary encrypted
@@ -3378,7 +3389,7 @@ function openSharePicker(raw) {
     [...list.querySelectorAll('button')].forEach((b) => { b.disabled = true; });
     btn.querySelector('.share-name span').textContent = 'Sending…';
     try {
-      if (t.key === MY_REELS) { const n = await MY.add([p]); toast(n ? 'Added to My Reels.' : 'That video is already in My Reels.'); }
+      if (t.key === MY_REELS) { const r = await MY.add([p]); toast(r.added ? 'Added to My Reels.' : r.full ? 'My Reels is full (5,000 videos). Remove some first.' : 'That video is already in My Reels.'); }
       else { await sendReelLink(t.key, p.url, { preview: (S.config.features || {}).linkPreviews !== false && P.chat.linkPreviews === 'always' }); toast(`Shared to ${t.name}.`); }
       rememberRecent(t.key);
       m.close();
@@ -3419,6 +3430,8 @@ function openReelsImport(toKey = null) {
   let found = null; let busy = false;
   const read = async (files) => {
     if (!files.length || busy) return;
+    // (Checked before anything is read: a huge file would fill the memory.)
+    if (files.reduce((n, f) => n + f.size, 0) > 200 * 1024 * 1024) { clear(out).append(h('p', { class: 'field-hint error' }, 'That’s too much to read at once (200 MB at most). Pick the JSON or TXT export, or only its likes and saved files.')); return; }
     busy = true;
     clear(out).append(h('p', { class: 'field-hint' }, 'Reading…'));
     try {
@@ -3450,19 +3463,29 @@ function openReelsImport(toKey = null) {
         : `Shared as ${Math.ceil(k / 4)} message${k > 4 ? 's' : ''} of up to 4 links, one every 1.5 s, encrypted like any other. Everyone there will see them.${n > k ? ` The newest ${k} only: put the rest in My Reels.` : ''}`;
     };
     where.addEventListener('change', say);
+    let sent = 0; let sentTo = null; // messages already sent, to which conversation (pressing Add again goes on from there)
     go.onclick = async () => {
       const key = where.value;
+      if (key !== sentTo) sent = 0;
       go.disabled = true; where.disabled = true; busy = true;
       try {
-        if (key === MY_REELS) { const added = await MY.add(found.items); toast(`${added} new video${added === 1 ? '' : 's'} in My Reels.`); }
+        if (key === MY_REELS) {
+          const r = await MY.add(found.items);
+          toast(`${r.added} new video${r.added === 1 ? '' : 's'} in My Reels.${r.full ? ` ${r.full} didn’t fit: My Reels holds 5,000.` : ''}`);
+        }
         else {
           bar.hidden = false;
-          await sendLinksTo(key, found.items.slice(0, IMPORT_SHARE_MAX).map((x) => x.link), (i, of) => { bar.firstChild.style.width = `${Math.round((i / of) * 100)}%`; });
+          sentTo = key;
+          await sendLinksTo(key, found.items.slice(0, IMPORT_SHARE_MAX).map((x) => x.link), (i, of) => { sent = i; bar.firstChild.style.width = `${Math.round((i / of) * 100)}%`; }, sent);
           toast('Shared.');
         }
         m.close();
         openReels(key);
-      } catch (e) { toast(e.message, 'error'); go.disabled = false; where.disabled = false; } finally { busy = false; }
+      } catch (e) {
+        if (Number.isInteger(e.sent)) sent = e.sent;
+        toast(sent ? `${e.message} ${sent * 4} were shared; Add goes on from there.` : e.message, 'error');
+        go.disabled = false; where.disabled = false;
+      } finally { busy = false; }
     };
     say();
     out.append(h('div', { class: 'import-found' }, h('strong', null, `${n} video${n === 1 ? '' : 's'}`),

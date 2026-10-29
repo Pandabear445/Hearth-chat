@@ -14,6 +14,7 @@
 // string in it is looked at, iteratively, with caps on size, depth and how many things are looked at; text and HTML
 // are only searched for links. Only links social.js accepts come out, in social.js's own form.
 import { parseSocialUrl } from './social.js';
+import { trimTail } from './share.js';
 
 export const FILE_MAX = 200 * 1024 * 1024; // a whole export (.zip) at most
 export const TEXT_MAX = 64 * 1024 * 1024; // one file inside it, unpacked, at most
@@ -21,13 +22,14 @@ export const ENTRIES_MAX = 5000; // files inside a .zip looked at
 export const NODES_MAX = 3000000; // JSON values looked at, all files together
 export const DEPTH_MAX = 64;
 export const ITEMS_MAX = 10000;
+export const UNPACKED_MAX = 256 * 1024 * 1024; // everything unpacked from one .zip together
 const READABLE = /\.(json|txt|html?)$/i;
 const URLISH = /https?:\/\/[^\s<>"'`\\]{1,2048}/gi;
 
 // One link from an export, in the form social.js reads, or null. TikTok's exports use tiktokv.com/share/video/<id>.
 export function exportLink(raw) {
   if (typeof raw !== 'string' || raw.length > 2048) return null;
-  const s = raw.trim().replace(/[)\].,;:!?'"»”]+$/, '');
+  const s = trimTail(raw.trim());
   const tv = /^https?:\/\/(?:www\.)?(?:tiktokv|tiktok)\.com\/share\/video\/(\d{15,21})\/?(?:[?#].*)?$/i.exec(s);
   const p = parseSocialUrl(tv ? `https://m.tiktok.com/v/${tv[1]}.html` : s);
   // Short links can't be told apart (or checked) without asking TikTok, so imports keep full links only.
@@ -66,6 +68,7 @@ export function zipEntries(buf) {
   const count = dv.getUint16(eocd + 10, true);
   let at = dv.getUint32(eocd + 16, true);
   const out = [];
+  const used = new Set(); // (a damaged or hostile .zip can point many entries at the same data: read once)
   for (let n = 0; n < count && n < ENTRIES_MAX; n++) {
     if (at + 46 > b.length || dv.getUint32(at, true) !== 0x02014b50) break;
     const flags = dv.getUint16(at + 8, true); const method = dv.getUint16(at + 10, true);
@@ -75,7 +78,8 @@ export function zipEntries(buf) {
     const name = new TextDecoder().decode(b.subarray(at + 46, at + 46 + nlen));
     at += 46 + nlen + xlen + clen;
     if (!READABLE.test(name) || flags & 1 || (method !== 0 && method !== 8) || usize > TEXT_MAX || csize === 0xffffffff || local + 30 > b.length) continue;
-    if (dv.getUint32(local, true) !== 0x04034b50) continue;
+    if (used.has(local) || dv.getUint32(local, true) !== 0x04034b50) continue;
+    used.add(local);
     const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
     if (start + csize > b.length) continue;
     const data = b.subarray(start, start + csize);
@@ -137,9 +141,12 @@ export async function readExport(files) {
     if (total > FILE_MAX) throw new Error('That’s too much to read at once (200 MB at most).');
     const zip = bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
     if (zip) {
+      let unpacked = 0;
       for (const e of zipEntries(bytes)) {
         let data;
         try { data = await e.bytes(); } catch { skipped.push(e.name); continue; }
+        unpacked += data.byteLength;
+        if (unpacked > UNPACKED_MAX) { capped = true; break; }
         if (!(await readOne(e.name, data))) break;
       }
     } else if (READABLE.test(name) || !/\.[a-z0-9]{1,5}$/i.test(name)) {

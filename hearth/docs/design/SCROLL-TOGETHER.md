@@ -117,8 +117,8 @@ Copying links by hand is the slow way. Faster ones, all ending in an ordinary en
 | **The Android app** | Share → Hearth on a TikTok or Instagram video (an `ACTION_SEND text/plain` intent filter) | the share picker |
 | **Chrome on Android**, Hearth installed as a web app | Share → Hearth (the manifest's `share_target`: `GET /share?url=&text=&title=`) | the share picker |
 | **A computer** | the **Send to Hearth** bookmarklet (Settings → Reels): opens `/share?url=<the page you're on>` | the share picker |
-| **Any Reels tab** | Ctrl/⌘+V anywhere (not in a text box), or drop a link on it | added after 4 s, with **Undo** |
-| **The desktop app** | when the tab opens, a TikTok/Instagram link you copied is *offered* ("Add the TikTok video you copied?") | the tab |
+| **Any Reels tab** | Ctrl/⌘+V anywhere (not in a text box), or drop a link on it | added after 4 s, with **Undo** (leaving the tab first cancels it) |
+| **The desktop app** | when the tab opens, a TikTok/Instagram link you copied is *offered* ("Add the TikTok video you copied?"), only if clipboard reading was already allowed for this server, at most once every 10 minutes | the tab |
 | **Your TikTok/Instagram data download** | Settings → Reels → Import (or Import on a Reels tab / My Reels) | My Reels, or a conversation |
 
 **iPhone and iPad can't do either share target:** iOS doesn't let a web page (or an installed web app) receive
@@ -160,7 +160,10 @@ or the HTML version), as the .zip or the files in it (`reels-import.js`).
   - **My Reels** (all of them), or
   - **a conversation**: the newest 100, 4 links to a message (what the feed shows from one message), one message
     every 1.5 s (well within the server's 30-per-10-s limit), stopping with the reason if posting there isn't
-    allowed (slowmode, a timeout, a block).
+    allowed (slowmode, a timeout, a block); pressing Add again goes on from where it stopped. Pastes, drops and
+    imports all go through one queue, so several at once still send one message every 1.5 s.
+- A .zip whose entries point at the same data reads it once; everything unpacked from one .zip stops at 256 MB.
+- My Reels takes as many as it has room for (5,000 in all) and says how many didn't fit.
 
 ### My Reels
 
@@ -170,7 +173,8 @@ vault key (only your identity key makes it), numbered and padded to 16 KB steps,
 (`GET/PUT /me/reels`, at most 512 KB sealed, 5,000 videos), and synced to your devices (`myreels:changed`). The
 server can't tell which videos are in it, or how many beyond the padded size. Each device keeps the newest sealed
 copy it opened, so a server handing back an older one can't bring back what you removed; a save that races another
-device's is refused as stale and made again on top of it. Each card has **Share to…** (the picker) and **Remove**.
+device's is refused as stale and made again on top of it. Short TikTok links (what the TikTok app shares) are kept as
+they are, and looked up by your server when one is played. Each card has **Share to…** (the picker) and **Remove**.
 No scroll together there (it's yours alone).
 
 ## Limits

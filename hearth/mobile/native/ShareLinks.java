@@ -33,10 +33,18 @@ final class ShareLinks {
         String s = text.length() > TEXT_MAX ? text.substring(0, TEXT_MAX) : text;
         Matcher m = URL.matcher(s);
         while (m.find()) {
-            String raw = m.group().replaceAll("[)\\].,;:!?'\"»”]+$", "");
+            String raw = trimTail(m.group());
             if (ok(raw)) return raw;
         }
         return null;
+    }
+
+    // Punctuation after a link isn't part of it; trimmed one character at a time (a regular expression for it took
+    // time growing with the square of a long run of dots).
+    static String trimTail(String s) {
+        int end = s.length();
+        while (end > 0 && ")].,;:!?'\"\u00bb\u201d".indexOf(s.charAt(end - 1)) >= 0) end--;
+        return s.substring(0, end);
     }
 
     static boolean ok(String link) {

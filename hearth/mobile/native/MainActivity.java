@@ -325,7 +325,7 @@ public class MainActivity extends BridgeActivity {
                     pageReady = server;
                     pageApi = Math.max(1, m.optInt("v", 1));
                     reply.postMessage(info(server).toString());
-                    if (server && pendingShare != null) deliverShare(); // (an older page: /share instead)
+                    if (server && pendingShare != null) deliverShare(); // (an older page: it says so)
                     break;
                 }
                 case "setServer": {
@@ -506,15 +506,14 @@ public class MainActivity extends BridgeActivity {
         return code;
     }
 
-    // The page is open: a current page opens its share picker in place; an older one loads /share with the link.
+    // The page is open: it opens its share picker in place. A page from a server older than sharing can't take it:
+    // the person is told, and the page is left alone (reloading it would end a call).
     private void deliverShare() {
         String link = pendingShare;
         if (link == null || serverOrigin().isEmpty()) return;
         pendingShare = null;
         if (pageApi >= 3) toServerPage("hearth-share", JSONObject.quote(link));
-        else {
-            try { getBridge().getWebView().loadUrl(InviteLinks.normalOrigin(serverOrigin()) + "/share?url=" + java.net.URLEncoder.encode(link, "UTF-8")); } catch (Exception ignored) { }
-        }
+        else runOnUiThread(() -> Toast.makeText(this, "This Hearth server is too old to share to. Paste the link in a conversation instead.", Toast.LENGTH_LONG).show());
     }
 
     // The page is already open: a current page shows the "Join a server" box in place (a call keeps going); an

@@ -100,6 +100,28 @@ test('import: TikTok’s and Instagram’s exports, as files or in their .zip, r
   assert.equal(proto.items.length, 1);
   assert.equal({}.polluted, undefined, 'nothing reaches Object.prototype');
   await assert.rejects(I.readExport([{ name: 'huge.json', bytes: new Uint8Array(I.FILE_MAX + 1) }]), /too much/);
+  // Text that made a regular expression take quadratic time (a link followed by a long run of dots), and a .zip whose
+  // entries all point at the same data: both read quickly, the data once.
+  let t0 = Date.now();
+  await I.readExport([{ name: 'dots.txt', bytes: enc(`http://${'.'.repeat(2040)}x `.repeat(4000)) }]);
+  assert.ok(Date.now() - t0 < 3000, `dots: ${Date.now() - t0} ms`);
+  const one = zip([{ name: 'a.txt', data: `https://www.tiktok.com/@a/video/${ID}` }]);
+  // (Rebuilt with 200 central entries all naming the first local header.)
+  const dv = new DataView(one.buffer); const eocd = one.length - 22; const cdOff = dv.getUint32(eocd + 16, true); const cdLen = dv.getUint32(eocd + 12, true);
+  const cd = one.slice(cdOff, cdOff + cdLen);
+  const shared = new Uint8Array(cdOff + cdLen * 200 + 22);
+  shared.set(one.slice(0, cdOff)); for (let k = 0; k < 200; k++) shared.set(cd, cdOff + k * cdLen);
+  const tail = one.slice(eocd); const tv = new DataView(tail.buffer, tail.byteOffset);
+  tv.setUint16(8, 200, true); tv.setUint16(10, 200, true); tv.setUint32(12, cdLen * 200, true);
+  shared.set(tail, cdOff + cdLen * 200);
+  t0 = Date.now();
+  const dup = await I.readExport([{ name: 'dup.zip', bytes: shared }]);
+  assert.deepEqual([dup.files, dup.items.length], [1, 1], 'the same data is read once');
+  const S = await clientModule('share.js');
+  t0 = Date.now();
+  S.socialLinksIn(`https://www.tiktok.com/${'.'.repeat(2040)}x `.repeat(2000));
+  assert.ok(Date.now() - t0 < 3000, 'shared text too');
+  assert.equal(S.trimTail('https://x/y)."»'), 'https://x/y');
   // At most ITEMS_MAX videos.
   const many = { list: Array.from({ length: I.ITEMS_MAX + 5 }, (_, i) => `https://www.tiktok.com/@a/video/${(7000000000000000000n + BigInt(i)).toString()}`) };
   const capped = await I.readExport([{ name: 'many.json', bytes: enc(JSON.stringify(many)) }]);
@@ -114,7 +136,10 @@ test('my reels: the list is checked, and sealed with the vault key before it lea
   assert.deepEqual(clean, [{ k: 'i', id: 'C9abc_DEF-1', ty: 'reel', at: 5 }, { k: 't', id: ID, at: 1 }]);
   assert.equal(M.linkOf({ k: 'i', id: 'C9abc_DEF-1', ty: 'p' }), 'https://www.instagram.com/p/C9abc_DEF-1/');
   assert.deepEqual(M.entryOf({ kind: 'tiktok', id: ID }, 3), { k: 't', id: ID, at: 3 });
-  assert.equal(M.entryOf({ kind: 'tiktok', short: 'ZMabc123' }), null, 'a short link isn’t kept (it has no id yet)');
+  // A short link (what the TikTok app shares) is kept as one, and looked up when it's played.
+  assert.deepEqual(M.entryOf({ kind: 'tiktok', short: 'ZMabc123', link: 'https://vm.tiktok.com/ZMabc123/' }, 4), { k: 'ts', id: 'ZMabc123', h: 'vm', at: 4 });
+  assert.equal(M.linkOf({ k: 'ts', id: 'ZTabc123', h: 't' }), 'https://www.tiktok.com/t/ZTabc123/');
+  assert.deepEqual(M.cleanList([{ k: 'ts', id: 'bad-code!', h: 'vm' }, { k: 'ts', id: 'ZMabc123', h: 'evil' }]), [{ k: 'ts', id: 'ZMabc123', h: 'vm', at: 0 }]);
   // A store with a fake server: what goes up is 'x1:…' ciphertext with no id in it; a stale save is made again on top.
   const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   let server = { data: null, updatedAt: 0 }; const puts = [];
@@ -127,11 +152,11 @@ test('my reels: the list is checked, and sealed with the vault key before it lea
   };
   let local = null;
   const mr = M.createMyReels({ api, vaultKey: async () => key, me: () => 'u1', store: { get: () => local, set: (v) => { local = v; } } });
-  assert.equal(await mr.add([{ kind: 'tiktok', id: ID }, { kind: 'instagram', id: 'C9abc_DEF-1', type: 'reel' }]), 2);
+  assert.deepEqual(await mr.add([{ kind: 'tiktok', id: ID }, { kind: 'instagram', id: 'C9abc_DEF-1', type: 'reel' }]), { added: 2, full: 0 });
   assert.match(puts[0], /^x1:/);
   assert.doesNotMatch(puts[0], new RegExp(ID));
   assert.equal(puts[0].length % 4, 0);
-  assert.equal(await mr.add([{ kind: 'tiktok', id: ID }]), 0, 'already there');
+  assert.deepEqual(await mr.add([{ kind: 'tiktok', id: ID }]), { added: 0, full: 0 }, 'already there');
   // Another device saved meanwhile: refused as stale, loaded, and the removal made again on top of theirs.
   const other = M.createMyReels({ api, vaultKey: async () => key, me: () => 'u1', store: { get: () => null, set() {} } });
   await other.add([{ kind: 'instagram', id: 'CAbcdEfgh12', type: 'p' }]);
@@ -142,6 +167,17 @@ test('my reels: the list is checked, and sealed with the vault key before it lea
   server = { data: older, updatedAt: 99 };
   await mr.load();
   assert.deepEqual(mr.list().map((e) => e.id).sort(), ['C9abc_DEF-1', 'CAbcdEfgh12']);
+  // It loads the newest copy any device wrote, and keeps that as the one to compare with.
+  let seen = null;
+  const fourth = M.createMyReels({ api, vaultKey: async () => key, me: () => 'u1', store: { get: () => seen, set: (v) => { seen = v; } } });
+  await fourth.load();
+  assert.ok(seen && seen.n >= 1, 'a device that only loaded a copy keeps it as the newest seen');
+  await fourth.add([{ kind: 'tiktok', short: 'ZMabc123', link: 'https://vm.tiktok.com/ZMabc123/' }]);
+  assert.ok(fourth.list().some((e) => e.k === 'ts' && e.id === 'ZMabc123'), 'a short link is kept');
+  // Full: as many as fit go in, and the rest are counted.
+  const big = M.createMyReels({ api: async (m, p, b) => (m === 'GET' ? { data: null, updatedAt: 0 } : { updatedAt: 1 }), vaultKey: async () => key, me: () => 'u2', store: { get: () => null, set() {} } });
+  const lots = Array.from({ length: M.MAX + 3 }, (_, i) => ({ kind: 'tiktok', id: (7000000000000000000n + BigInt(i)).toString() }));
+  assert.deepEqual(await big.add(lots), { added: M.MAX, full: 3 });
   // Sealed to the account: another account's key can't open it.
   const key2 = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   const stranger = M.createMyReels({ api, vaultKey: async () => key2, me: () => 'u1', store: { get: () => null, set() {} } });
