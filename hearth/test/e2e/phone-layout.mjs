@@ -38,6 +38,10 @@ export async function phoneStaysPut(t) {
   for (let i = 0; i < 14 && (await desk.$eval('#messages', (m) => m.scrollHeight - m.clientHeight)) < 900; i++) {
     await bob.send(`A long line for scrolling back through, number ${i + 1}: ${'the quick brown fox jumps over the lazy dog, '.repeat(6)}`);
   }
+  // (Every line sent has gone through first: the app keeps you at the newest message while your own are still being
+  // sent, so a place picked before that isn't one it was asked to keep.)
+  await desk.waitForFunction(() => !document.querySelector('#messages .msg.sending'), null, { timeout: 15000 });
+  await desk.waitForTimeout(1000);
   const mark = () => desk.evaluate(() => {
     const m = document.querySelector('#messages');
     m.scrollTop = Math.round((m.scrollHeight - m.clientHeight) / 2);
@@ -194,8 +198,18 @@ export async function phoneCall(t) {
     check(await level(page) === 'conv', `Esc that turned Brainrot off should leave the call open (now ${await level(page)}).`);
   } else check(false, 'The call should have its Brainrot button.');
 
-  // On a list page, the call floats over it: from the keyboard, Mute and Unmute stay focused as they swap.
-  await phone.phoneBack();
+  // On a list page, the call floats over it: from the keyboard, Mute and Unmute stay focused as they swap. Focus put
+  // on Mute right as Back lands stays there (going back moves focus to the list a frame later, unless it was taken).
+  const raced = await page.evaluate(async () => {
+    document.querySelector('#main-head .head-back').click();
+    const mute = document.querySelector('#m-callbar:not([hidden]) button[aria-label="Mute"]');
+    if (!mute) return 'no call bar';
+    mute.focus();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const a = document.activeElement;
+    return a === mute ? 'ok' : (a && (a.getAttribute('aria-label') || a.tagName));
+  });
+  check(raced === 'ok', `Focus put on the call bar's Mute as Back landed should stay there (it's on ${raced}).`);
   await page.waitForSelector('#m-callbar:not([hidden]) button[aria-label="Mute"]');
   await page.locator('#m-callbar button[aria-label="Mute"]').focus();
   await page.keyboard.press('Enter');

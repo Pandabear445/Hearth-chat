@@ -3847,7 +3847,8 @@ function phoneShell() {
     for (const el of main) if (el) el.inert = on && !conv;
     M.inerted = on;
     if (on && conv && (!was || leaving)) requestAnimationFrame(phoneFocusConversation);
-    else if (on && leaving) requestAnimationFrame(() => phoneFocusList());
+    // (A frame later: unless something on screen took focus meanwhile, the call bar's Mute say, which it keeps.)
+    else if (on && leaving) requestAnimationFrame(() => { const now = document.activeElement; if (now && now !== document.body && !now.closest('[inert]')) return; phoneFocusList(); });
   }
   if (bar && on) bar.querySelectorAll('.tab-btn').forEach((t) => t.setAttribute('aria-current', t.dataset.tab === M.tab ? 'page' : 'false'));
 }
