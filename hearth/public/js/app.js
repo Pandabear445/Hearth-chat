@@ -3950,20 +3950,26 @@ function renderCallBar() {
   const here = room && M.level === 'conv' && ((v.type === 'voice' && v.channelId === room) || (v.type === 'dm' && dmRoom(v.dmId) === room)
     || (v.type === 'channel' && isGroup(currentServer()) && callRoomFor(currentServer()) === room));
   const show = isPhoneUI() && !!room && !!S.me && !here && !(M.level === 'list' && M.tab === 'you');
+  // Its buttons are made anew: keyboard focus on one stays on it (Mute is Unmute now); with the bar gone (Leave), it
+  // goes to the list page's title rather than being lost.
+  const a = document.activeElement;
+  const had = a && a !== bar && bar.contains(a) ? (a.closest('[data-cb]')?.dataset.cb || 'where') : null;
   document.body.classList.toggle('m-call', show);
   bar.hidden = !show;
   clear(bar);
-  if (!show) return;
+  if (!show) { if (had) { if (M.level === 'list') phoneFocusList(null); else phoneFocusConversation(); } return; }
   const ch = !room.startsWith('dm:') && channelById(room);
   const srv = ch && serverOfChannel(ch.id);
   const where = room.startsWith('dm:') ? roomTitle(room) : srv ? (isGroup(srv) ? groupName(srv) : ch.name) : 'Call';
   const st = voice.status();
   bar.append(
-    h('button', { class: 'cb-where', onclick: () => goToCall(room), 'aria-label': `In call: ${where}. Go to the call` },
+    h('button', { class: 'cb-where', dataset: { cb: 'where' }, onclick: () => goToCall(room), 'aria-label': `In call: ${where}. Go to the call` },
       h('span', { class: `cb-dot q-${({ ok: 'connected', bad: 'failed', warn: 'warn' })[st.tone] || 'connecting'}`, 'aria-hidden': 'true' }),
       h('span', { class: 'cb-text' }, h('small', null, st.tone === 'ok' ? 'In call' : st.label), h('strong', null, where))),
-    ibtn(voice.muted ? 'micOff' : 'mic', voice.muted ? 'Unmute' : 'Mute', toggleMute, { cls: voice.muted ? 'off' : '', active: voice.muted }),
-    ibtn('phoneOff', 'Leave call', () => { voice.leave(); playSound('selfLeave'); }, { cls: 'hang' }));
+    ibtn(voice.muted ? 'micOff' : 'mic', voice.muted ? 'Unmute' : 'Mute', toggleMute, { cls: voice.muted ? 'off' : '', active: voice.muted, attrs: { 'data-cb': 'mute' } }),
+    ibtn('phoneOff', 'Leave call', () => { voice.leave(); playSound('selfLeave'); }, { cls: 'hang', attrs: { 'data-cb': 'leave' } }));
+  const back = had && bar.querySelector(`[data-cb="${had}"]`);
+  if (back) back.focus({ preventScroll: true });
 }
 // The conversation's header on a phone: Back, its name (and a line under it), at most two buttons, and More with
 // the rest (phoneOverflowItems).
