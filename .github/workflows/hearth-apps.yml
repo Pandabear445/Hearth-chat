@@ -513,6 +513,7 @@ jobs:
   # Android: there's nothing to keep in sync by hand, and no Mac is needed anywhere.
   ios:
     runs-on: macos-26
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: hearth/mobile
@@ -645,11 +646,18 @@ jobs:
       # Opens the app once and checks it's still running after 20 seconds (the connect screen, then the server's
       # page when HEARTH_SERVER is set). The screenshot shows what it looked like.
       - name: Open it in the simulator
+        # simctl's own wait (bootstatus) can hang for hours on a slow runner; this one gives up after 10 minutes.
+        timeout-minutes: 15
         env:
           UDID: ${{ steps.sim.outputs.udid }}
         run: |
           xcrun simctl boot "$UDID" || true
-          xcrun simctl bootstatus "$UDID" -b
+          for i in $(seq 1 60); do
+            if xcrun simctl list devices | grep "$UDID" | grep -q '(Booted)'; then break; fi
+            [ "$i" = 60 ] && { echo "::error::The simulator didn't start within 10 minutes."; xcrun simctl list devices | grep "$UDID"; exit 1; }
+            sleep 10
+          done
+          sleep 30 # let SpringBoard finish starting before installing
           xcrun simctl install "$UDID" "$RUNNER_TEMP/dd/Build/Products/Debug-iphonesimulator/App.app"
           xcrun simctl launch "$UDID" app.hearth.mobile
           sleep 20
