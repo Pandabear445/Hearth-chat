@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { exact, makeGif, makePng, totp, newPassword, Person, PHONE } from './harness.mjs';
 import { brainrot } from './brainrot.mjs';
+import { phoneStaysPut, phoneCall, phoneTargets } from './phone-layout.mjs';
 
 export function check(ok, message) { if (!ok) throw new Error(message); }
 export const SERVER = 'E2E Hall';
@@ -6616,6 +6617,9 @@ export const FLOWS = [
   ['staff deletion: the owner deletes an account for someone who can’t sign in, from Admin → Users', staffDelete],
   ['phones: a tab bar (48 px, hidden with the keyboard) over list pages; a conversation pushed full screen, held sideways too; Back closes members, a picture, the More sheet, then the conversation, then the tab, and settings without leaving; an edge swipe and Esc go back; their own buttons leave no history behind; a desktop adds none', phoneNavigation],
   ['phone message actions: a long press opens a sheet (react, reply, copy, edit, delete; closes with Back, Esc, a tap or a swipe); a roomier message box with GIFs and Send later under +; the desktop keeps its hover toolbar and buttons', phoneMessageActions],
+  ['phone lists: a window crossing into the phone layout and back keeps its chat and place; a channel deleted or a server left elsewhere leaves the list page showing; new and renamed channels and friend requests show on the list at once', phoneStaysPut],
+  ['phone calls: every control 44 px at 360 px wide; Esc turns Brainrot off in the call; Mute on the call bar keeps focus; its words 4.5:1 in the light theme; a second call rings above it, clear of a notch sideways', phoneCall],
+  ['phone targets: categories, Create channel, Notifications and Friends tabs, icon buttons, emoji and GIF picker buttons 44 px at 360 px; a DM’s whole title opens the profile', phoneTargets],
   ['a video over the limit: made smaller on the device to fit, sent, and it plays', videoShrink],
   ['the owner sends 12 files in one message; everyone else still stops at 10', ownerManyFiles],
   ['update notes: only the owner publishes them; open apps show a new one once, as plain text', updateNotes],
