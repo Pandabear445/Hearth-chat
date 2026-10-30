@@ -1931,8 +1931,8 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   body.m-ui .dm-row-status { font-size: 14.5px; }
   body.m-ui .dm-row .badge { height: 22px; min-width: 22px; border-radius: 11px; font-size: 12px; line-height: 22px; }
   body.m-ui .group-label, body.m-ui .cat-head { padding: 18px 6px 6px 14px; font-size: 13px; }
-  body.m-ui .cat-toggle { font-size: 13px; gap: 6px; min-height: 40px; }
-  body.m-ui .cat-head .icon-btn.sm, body.m-ui .group-label .icon-btn.sm { width: 40px; height: 40px; }
+  body.m-ui .cat-toggle { font-size: 13px; gap: 6px; min-height: 44px; }
+  body.m-ui .cat-head .icon-btn.sm, body.m-ui .group-label .icon-btn.sm { width: 44px; height: 44px; }
   body.m-ui .ch-row { border-radius: 12px; }
   body.m-ui .ch-main { height: 48px; gap: 12px; padding: 0 14px; font-size: 16.5px; }
   body.m-ui .ch-ic { width: 21px !important; height: 21px !important; }
@@ -1943,7 +1943,7 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   body.m-ui .vc-users { padding-left: 44px; }
   body.m-ui .vc-user { min-height: 40px; font-size: 15px; }
   body.m-ui .sidebar-empty { font-size: 15px; padding: 10px 14px; }
-  body.m-ui .icon-btn { min-width: 40px; min-height: 40px; }
+  body.m-ui .icon-btn { min-width: 44px; min-height: 44px; }
 
   /* Side panels (members, threads, pins…) cover the conversation: their rows and header roomier too. */
   body.m-ui #members > .panel-head { height: calc(var(--head-h) + 4px); padding: 0 4px 0 16px; }
@@ -1954,7 +1954,7 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   /* Notifications, as a page. */
   body.m-ui .inbox-page { width: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; overflow: visible; }
   body.m-ui .inbox-page .seg { margin: 2px 4px 10px; }
-  body.m-ui .inbox-page .seg-btn { flex: 1 1 0; min-height: 40px; font-size: 14.5px; }
+  body.m-ui .inbox-page .seg-btn { flex: 1 1 0; min-height: 44px; font-size: 14.5px; }
   body.m-ui .inbox-page .inbox-list { padding: 0; overflow: visible; }
   body.m-ui .inbox-page .inbox-day { padding: 14px 12px 6px; font-size: 13px; }
   body.m-ui .inbox-page .inbox-item { min-height: 64px; padding: 12px; gap: 12px; border-radius: 14px; }
@@ -2023,13 +2023,22 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   body.m-ui .head-names { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.2; }
   body.m-ui .head-title h1 { max-width: 100%; font-size: 17px; outline: none; }
   body.m-ui .head-name-btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; color: inherit; text-align: left; }
+  /* A DM's name opens the profile: the whole title (picture, name and the line under it) is the button's to tap, the
+     header's full height. */
+  body.m-ui #main-head .head-title:has(.head-name-btn) { position: relative; align-self: stretch; min-height: 44px; }
+  body.m-ui #main-head .head-title:has(.head-name-btn) > * { pointer-events: none; }
+  body.m-ui .head-name-btn { pointer-events: auto; }
+  body.m-ui .head-name-btn::before { content: ''; position: absolute; inset: 0; z-index: 1; border-radius: 12px; }
+  body.m-ui .head-name-btn:focus-visible { outline: none; }
+  body.m-ui .head-name-btn:focus-visible::before { outline: 2px solid var(--focus); outline-offset: -2px; }
+  body.m-ui .head-name-btn:active::before { background: var(--active); }
   body.m-ui .head-sub { display: block; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   body.m-ui .head-sub.warn { color: var(--danger); font-weight: 600; }
   body.m-ui #main-head .head-tools { gap: 0; }
   body.m-ui #main-head .head-tools .icon-btn.live { color: var(--ok); }
   body.m-ui #main-head .head-tools .icon-btn.hang { color: #fff; background: var(--danger-fill); }
   body.m-ui #main-head .m-head-tabs { order: 3; flex-basis: 100%; gap: 6px; padding: 0 10px; }
-  body.m-ui .m-head-tabs .tab { min-height: 40px; padding: 0 16px; border-radius: 20px; background: var(--hover); font-size: 14.5px; }
+  body.m-ui .m-head-tabs .tab { min-height: 44px; padding: 0 16px; border-radius: 22px; background: var(--hover); font-size: 14.5px; }
   body.m-ui .m-head-tabs .tab.active { background: rgb(var(--accent-rgb) / .2); color: var(--text); }
   body.m-ui .conv-tabs { padding-left: 10px; padding-right: 10px; }
 
