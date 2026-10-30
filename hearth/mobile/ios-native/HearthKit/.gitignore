@@ -1,0 +1,4 @@
+# What `swift build` / `swift test` and Xcode leave here.
+/.build/
+/.swiftpm/
+/Package.resolved

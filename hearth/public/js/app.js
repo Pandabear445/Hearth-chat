@@ -1,6 +1,8 @@
 // Hearth web client.
 // Layout: server rail | sidebar (home or server) | conversation | contextual right panel (members, pins, thread).
 import { androidApp, noPayments } from './android.js';
+import { iosApp } from './ios.js';
+import { reasonText as iosReasonText, apnsEndpoint, registration as iosRegistration } from './ios-push.js';
 import { h, $, $$, clear, icon, fmtTime, fmtStamp, fmtDay, fmtSize, toast, playSound, copyText, debounce } from './util.js';
 import { api, upload, getToken, setToken, setTokenOwner, onTokenChange, tokenMovedFrom } from './api.js';
 import * as E2EE from './e2ee.js';
@@ -237,14 +239,17 @@ export const app = {
   get canInstall() { return !!installPrompt; },
   get isInstalled() { return isStandalone(); },
   push: {
-    // In the Android app, push goes through the app (a UnifiedPush push app such as ntfy), not the browser's.
-    supported: () => (androidApp.push ? !!(S.config && S.config.pushEnabled) : 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && S.config && S.config.pushEnabled),
+    // In the Android app, push goes through the app (a UnifiedPush push app such as ntfy), not the browser's; in the
+    // iPhone app, through Apple's push service, which this server must be set up for (apnsEnabled).
+    supported: () => (iosApp.on ? !!(iosApp.push && S.config && S.config.apnsEnabled)
+      : androidApp.push ? !!(S.config && S.config.pushEnabled) : 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && S.config && S.config.pushEnabled),
     status: () => pushStatus(),
     enable: () => enablePush(),
     disable: () => disablePush(),
     // Android app only: pick another push app (resubscribes with the new address).
     choose: () => enablePush({ choose: true }),
     get android() { return androidApp.push; },
+    get ios() { return iosApp.push; },
   },
   openServerSettings: (id) => openServerSettings(S.servers.find((s) => s.id === id)),
   unblock: (id) => toggleBlock(id, false),
@@ -577,9 +582,9 @@ function logout() {
 }
 async function signOutHere() {
   // This browser stops getting notifications for the account (the server drops the subscription too), and
-  // doesn't pass them on to whoever signs in here next. In the Android app the phone's push registration goes
-  // too. Never holds up signing out for more than a moment.
-  if (androidApp.push || (localStorage.getItem('hearth.push') === 'on' && 'serviceWorker' in navigator)) await Promise.race([disablePush({ signOut: true }).catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
+  // doesn't pass them on to whoever signs in here next. In the Android and iPhone apps the phone's push registration
+  // goes too. Never holds up signing out for more than a moment.
+  if (androidApp.push || (localStorage.getItem('hearth.push') === 'on' && 'serviceWorker' in navigator) || iosApp.push) await Promise.race([disablePush({ signOut: true }).catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
   try { await api('POST', '/auth/logout'); } catch { /* ignore */ }
   if (voice) await voice.leave().catch(() => {});
   setToken('');
@@ -671,9 +676,10 @@ function startApp(account) {
     }).catch(() => {});
   }
   androidApp.onHangUp = () => { if (voice && voice.channelId) { voice.leave(); playSound('selfLeave'); } };
-  // A conversation read here (or on another device) also clears the notification the Android app posted for it
-  // while it was closed (same tag).
-  if (androidApp.cancel) alsoCloseNotifications(androidApp.cancel);
+  iosApp.onHangUp = androidApp.onHangUp;
+  // A conversation read here (or on another device) also clears the notification the Android (or iPhone) app
+  // posted for it while it was closed (same tag).
+  if (androidApp.cancel || iosApp.cancel) alsoCloseNotifications(androidApp.cancel || iosApp.cancel);
   voice = new Voice({
     // The call's soundboard lane carries our sounds; someone else's lights up their tile while one plays.
     boardTrack: () => board.track(),
@@ -1390,7 +1396,7 @@ async function loadBootstrap() {
   const open = new URLSearchParams(location.search).get('open');
   if (open) { history.replaceState(null, '', '/' + location.hash); if (open === 'messages') openMessages(); if (open === 'friends') goFriends(); }
   if (localStorage.getItem('hearth.push') === 'on') enablePush({ quiet: true }).catch(() => {});
-  if (androidApp.on) androidPushAtStart(); else applePushAtStart();
+  if (androidApp.on) androidPushAtStart(); else if (iosApp.on) iosPushAtStart(); else applePushAtStart();
   const invite = sessionStorage.getItem('hearth.pendingInvite');
   const share = sessionStorage.getItem('hearth.pendingShare');
   if (share !== null) { sessionStorage.removeItem('hearth.pendingShare'); openSharePicker(share); }
@@ -11254,7 +11260,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) { ma
 // ======================================================================= installable app (PWA), updates, push
 let installPrompt = null;
 let wantReload = false;
-const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true || !!window.hearthDesktop || androidApp.on;
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true || !!window.hearthDesktop || androidApp.on || iosApp.on;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; });
 window.addEventListener('appinstalled', () => { installPrompt = null; toast('Installed. You can open it from your apps like any other program.'); });
 async function installApp() {
@@ -11305,8 +11311,10 @@ function setupServiceWorker() {
 const b64url = (s) => { const p = '='.repeat((4 - (s.length % 4)) % 4); const b = atob((s + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
 async function pushStatus() {
   if (androidApp.on) await androidApp.ready;
+  if (iosApp.on) await iosApp.ready;
   if (!app.push.supported()) return 'unsupported';
   if (androidApp.push) return androidPushStatus();
+  if (iosApp.push) return iosPushStatus();
   if (Notification.permission === 'denied') return 'blocked';
   const reg = await navigator.serviceWorker.ready;
   return (await reg.pushManager.getSubscription()) ? 'on' : 'off';
@@ -11314,6 +11322,12 @@ async function pushStatus() {
 async function enablePush({ quiet = false, choose = false } = {}) {
   if (androidApp.on) await androidApp.ready;
   if (androidApp.push && app.push.supported()) return enableAndroidPush({ quiet, choose });
+  if (iosApp.on) {
+    await iosApp.ready;
+    if (!iosApp.push) throw new Error('Update the Hearth app to get notifications while it\u2019s closed.');
+    if (!(S.config && S.config.apnsEnabled)) { if (quiet) return; throw new Error(iosReasonText.noApns); }
+    return enableIosPush({ quiet });
+  }
   if (!app.push.supported()) throw new Error(/iPhone|iPad/.test(navigator.userAgent) && !isStandalone() ? 'On iPhone and iPad, add Hearth to your Home Screen first, then turn this on from the app.' : 'This browser doesn\u2019t support push notifications.');
   if (Notification.permission !== 'granted') {
     if (quiet) return;
@@ -11338,6 +11352,14 @@ async function disablePush({ signOut = false } = {}) {
     localStorage.removeItem('hearth.push.endpoint');
     return;
   }
+  if (iosApp.push) {
+    const endpoint = localStorage.getItem('hearth.push.endpoint');
+    if (endpoint) await api('POST', '/push/unsubscribe', { endpoint }).catch(() => {});
+    await iosApp.push.unregister();
+    localStorage.removeItem('hearth.push.endpoint');
+    return;
+  }
+  if (iosApp.on) return; // an iPhone app without push: nothing of the browser's to turn off
   const reg = await navigator.serviceWorker.ready;
   const sub = await reg.pushManager.getSubscription();
   if (sub) { await api('POST', '/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }
@@ -11387,6 +11409,48 @@ async function androidPushAtStart() {
   });
   // (Not over an update offer, which shares its place on screen: it's offered again next start.)
   if (localStorage.getItem('hearth.push') !== null || androidApp.notify === 'denied' || document.querySelector('.push-offer, .update-bar')) return;
+  offerPush();
+}
+// ---- push in the iPhone app: a device token from Apple's push service and keys the app made for this server
+// (ios-push.js), subscribed here with the server's APNs sender (server/apns.js). Its address is apns:<env>:<token>.
+async function iosPushStatus() {
+  const st = await iosApp.push.state();
+  if (st.state === 'blocked' || iosApp.notify === 'denied') return 'blocked';
+  if (st.state === 'registered' && localStorage.getItem('hearth.push') === 'on') return 'on';
+  if (st.state === 'failed') return 'failed';
+  return 'off';
+}
+let iosEnabling = 0; // a subscribe in progress: the app's own change events wait for it
+async function enableIosPush(opts = {}) {
+  iosEnabling++;
+  try { await subscribeIosPush(opts); } finally { iosEnabling--; }
+}
+async function subscribeIosPush({ quiet = false } = {}) {
+  if (Notification.permission !== 'granted') {
+    if (quiet) return;
+    if ((await Notification.requestPermission()) !== 'granted') throw new Error(iosReasonText.blocked);
+  }
+  // A registration the app still has is used as it is; otherwise the app asks Apple (nothing pops up: permission
+  // was given above).
+  const st = iosRegistration(await iosApp.push.state()) || iosRegistration(await iosApp.push.register());
+  const endpoint = apnsEndpoint(st);
+  const prev = localStorage.getItem('hearth.push.endpoint');
+  await api('POST', '/push/subscribe', { subscription: { type: 'apns', token: st.token, environment: st.environment, keys: st.keys }, replaces: prev && prev !== endpoint ? prev : undefined });
+  localStorage.setItem('hearth.push.endpoint', endpoint);
+  localStorage.setItem('hearth.push', 'on');
+}
+// Once per start: keep the server's copy of this phone's token current when Apple changes it, and offer push once
+// to someone who never decided (only on a server that can send to iPhones).
+let iosPushWatched = false;
+async function iosPushAtStart() {
+  await iosApp.ready;
+  if (!iosApp.push || !app.push.supported() || iosPushWatched) return;
+  iosPushWatched = true;
+  iosApp.push.onChange((st) => {
+    if (localStorage.getItem('hearth.push') !== 'on' || iosEnabling) return;
+    if (st.state === 'registered' && apnsEndpoint(st) && apnsEndpoint(st) !== localStorage.getItem('hearth.push.endpoint')) enablePush({ quiet: true }).catch(() => {});
+  });
+  if (localStorage.getItem('hearth.push') !== null || iosApp.notify === 'denied' || document.querySelector('.push-offer, .update-bar')) return;
   offerPush();
 }
 // The one-time "Get notifications?" bar (Android app, and Hearth on an iPhone or iPad Home Screen).
@@ -11537,6 +11601,7 @@ const stageSpotlight = new Map(); // room -> tile key
 // called when the lock-screen setting changes, so the notification's title follows it.
 function syncCallNotification() {
   if (androidApp.callState && voice) androidApp.callState({ inCall: !!voice.channelId, title: voice.channelId ? callTitle(voice.channelId) : '' });
+  if (iosApp.callState && voice) iosApp.callState({ inCall: !!voice.channelId, title: voice.channelId ? callTitle(voice.channelId) : '' });
 }
 // What the Android app's call notification says. Android shows it on the lock screen too (unless the phone is set
 // to hide sensitive content), so it names who or where only with "Show who and where on the lock screen" on, like

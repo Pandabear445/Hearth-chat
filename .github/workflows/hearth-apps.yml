@@ -1,4 +1,4 @@
-# Builds the Hearth apps: Windows, macOS and Linux (hearth/desktop) and Android (hearth/mobile).
+# Builds the Hearth apps: Windows, macOS and Linux (hearth/desktop), Android and iPhone (hearth/mobile).
 #   Runs on every push that changes the apps, on tags like `app-v1.17.0` (attached to a GitHub release),
 #   and from the Actions tab ("Run workflow").
 #   Result: download them from the run's "Artifacts" section, or the release for tags.
@@ -27,13 +27,14 @@
 #   release). Actions are pinned to exact commits (the comment says which version; Dependabot updates them),
 #   checkouts don't keep the token, and the Android build installs exactly what's in its package-lock.json.
 #   The server copy uses the runner's own ssh/scp, so no third-party code ever handles VPS_SSH_KEY.
-#   The jobs that sign update files or publish releases (sign-updates, play-upload, release, publish-to-vps) run
-#   in the GitHub environment "production", and only for app-v* tags and the default branch: put
-#   UPDATE_SIGNING_KEY, PLAY_SERVICE_ACCOUNT_JSON and the VPS_* secrets there (Settings > Environments), delete the
-#   repository secrets of the same names, and add its protection rules (only the default branch and app-v* tags;
-#   required reviewers if you want to approve each one). The release and the server copy take only the final
-#   artifacts and refuse an unsigned APK, the Play bundle and SignPath's unsigned inputs. Still repository-wide:
-#   the Windows and Android signing secrets, which the build jobs use on every branch.
+#   The jobs that sign update files or publish releases (sign-updates, play-upload, ios-archive, testflight-upload,
+#   release, publish-to-vps) run in the GitHub environment "production", and only for app-v* tags and the default
+#   branch: put UPDATE_SIGNING_KEY, PLAY_SERVICE_ACCOUNT_JSON, the ASC_* and IOS_* secrets and the VPS_* secrets
+#   there (Settings > Environments), delete the repository secrets of the same names, and add its protection rules
+#   (only the default branch and app-v* tags; required reviewers if you want to approve each one). The release and
+#   the server copy take only the final artifacts and refuse an unsigned APK, the Play bundle, the iPhone .ipa and
+#   SignPath's unsigned inputs. Still repository-wide: the Windows and Android signing secrets, which the build jobs
+#   use on every branch.
 #
 #   Code signing (all optional; builds stay unsigned without them; step-by-step guide: hearth/docs/SIGNING.md):
 #     Windows, Azure Artifact Signing: secrets AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET and
@@ -48,6 +49,17 @@
 #     Windows: variable WINDOWS_REQUIRE_SIGNING=true fails the build instead of making an unsigned installer.
 #     Google Play: secret PLAY_SERVICE_ACCOUNT_JSON uploads the bundle to the internal testing track
 #       (needs the ANDROID_KEYSTORE_* secrets; variable PLAY_RELEASE_STATUS=draft while the app is still a draft).
+#     iPhone (App Store, through TestFlight; hearth/docs/IOS-STORE.md): variable APPLE_TEAM_ID and, in the
+#       production environment, secrets ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8_BASE64 (an App Store Connect API key:
+#       Admin role for Xcode's cloud-managed signing, option A). Option B, your own certificate: also
+#       IOS_DIST_CERT_P12_BASE64 / IOS_DIST_CERT_PASSWORD and IOS_PROFILE_APP_BASE64 / IOS_PROFILE_NSE_BASE64 /
+#       IOS_PROFILE_SHARE_BASE64 there (then App Manager is enough). Variable IOS_REQUIRE_SIGNING=true fails the run
+#       instead of skipping the signed app. The iPhone app is built for one server (HEARTH_SERVER, locked): its push
+#       goes through Apple with the publisher's own key, which only that server has. Every push builds and opens it
+#       in the simulator, unsigned and with no secrets; tags and the default branch also sign it (ios-archive) and
+#       send it to TestFlight (testflight-upload); without a HEARTH_SERVER of the form https://host there's no signed
+#       iPhone app, and a manual run's "server" never changes it. The .ipa is never attached to a release or copied
+#       to your server.
 name: Hearth apps
 
 on:
@@ -390,6 +402,14 @@ jobs:
         continue-on-error: true
         run: npx --no -- capacitor-assets generate --android --assetPath resources --iconBackgroundColor '#100e16' --iconBackgroundColorDark '#100e16' --splashBackgroundColor '#100e16' --splashBackgroundColorDark '#100e16'
       - run: npx cap sync android
+      # The server's page runs inside the app: no Capacitor plugin from npm is compiled in (capacitor.config.json's
+      # android.includePlugins is empty; the keyboard plugin is only for the iPhone).
+      - name: Check the plugins
+        run: |
+          node -e "
+            const p = require('./android/app/src/main/assets/capacitor.plugins.json');
+            if (p.length) { console.log('::error::Plugins the remote page could reach: ' + p.map((x) => x.classpath).join(', ')); process.exit(1); }
+          "
 
       # Signing only with your own key, from the ANDROID_KEYSTORE_* secrets. Without them the APK is built unsigned,
       # named and uploaded as UNSIGNED, and never released or copied to your server (Android won't install it
@@ -488,6 +508,443 @@ jobs:
           track: internal
           status: ${{ vars.PLAY_RELEASE_STATUS || 'completed' }}
 
+  # iPhone: HearthKit's tests (swift test), then the app built for the simulator, unsigned, and opened there once.
+  # Every push, no secrets. The Xcode project is generated by Capacitor and patched (scripts/patch-ios.rb), as for
+  # Android: there's nothing to keep in sync by hand, and no Mac is needed anywhere.
+  ios:
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: hearth/mobile
+    outputs:
+      version: ${{ steps.v.outputs.name }}
+      code: ${{ steps.v.outputs.code }}
+      project: ${{ steps.server.outputs.store }}
+    env:
+      # Only xcodeproj (for the patch script), exactly as in Gemfile.lock; fastlane is for the upload job.
+      BUNDLE_DEPLOYMENT: 'true'
+      BUNDLE_WITHOUT: upload
+    steps:
+      # Tags and the default branch also hand this project to ios-archive, which signs it for the App Store: then it's
+      # always for HEARTH_SERVER, locked (a manual run's "server" doesn't change it; push only works there). Without
+      # HEARTH_SERVER (or with one that isn't https://host) there's no App Store build.
+      - name: Which server
+        id: server
+        working-directory: .
+        env:
+          RELEASE_REF: ${{ github.event.inputs.signpath_test != 'true' && (startsWith(github.ref, 'refs/tags/app-v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+          HEARTH_SERVER: ${{ vars.HEARTH_SERVER }}
+        run: |
+          if [ "$RELEASE_REF" != "true" ]; then exit 0; fi
+          if [[ "$HEARTH_SERVER" =~ ^https://[A-Za-z0-9.-]+/?$ ]]; then
+            echo "SERVER=$HEARTH_SERVER" >> "$GITHUB_ENV"
+            echo "store=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "SERVER=" >> "$GITHUB_ENV"
+            echo "::warning title=iPhone::No App Store build: the HEARTH_SERVER variable must be your server's https://host address (the iPhone app is locked to it)."
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: '3.3'
+          working-directory: hearth/mobile
+      # App Store Connect only takes builds made with the iOS 26 SDK and a released Xcode: the newest Xcode 26 on the
+      # runner that isn't a beta. A new major Xcode each autumn means updating this line (and runs-on) on purpose.
+      - name: Xcode 26
+        run: |
+          x="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -viE 'beta|_rc' | sort -V | tail -1)"
+          if [ -z "$x" ]; then echo "::error::No Xcode 26 on this runner."; exit 1; fi
+          sudo xcode-select -s "$x"
+          xcodebuild -version
+      - name: Version
+        id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/app-v* ]]; then v="${GITHUB_REF_NAME#app-v}"; else v="$(node -p "require('../package.json').version")"; fi
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]+)?$ ]] || { echo "::error::Not a version number: $v"; exit 1; }
+          echo "name=$v" >> "$GITHUB_OUTPUT"
+          # The build number (CFBundleVersion) must go up with every upload: the same formula as Android's
+          # versionCode, (major*100 + minor) * 100000 + this workflow's run number. The version people see
+          # (CFBundleShortVersionString) is only major.minor.patch; scripts/patch-ios.rb drops the rest.
+          IFS=. read -r major minor _ <<< "${v%%-*}"
+          code=$(( (10#${major:-0} * 100 + 10#${minor:-0}) * 100000 + GITHUB_RUN_NUMBER % 100000 ))
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Hearth $v, iPhone build $code"
+      # Pure logic shared by the app and its extensions (link rules, push decryption, the keys), on macOS for CryptoKit.
+      - name: HearthKit tests
+        working-directory: hearth/mobile/ios-native/HearthKit
+        run: swift test
+      # The App Store build talks to one server only (push uses the publisher's own APNs key): the connect screen
+      # can't change it.
+      - name: Bake in the server address
+        if: env.SERVER != ''
+        run: node -e "const f='www/config.json';const c=require('./'+f);c.defaultServer=process.env.SERVER;c.lockServer=true;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
+      - run: npm ci --no-audit --no-fund
+      - run: bundle install
+      - name: Create the iPhone project
+        env:
+          VERSION_NAME: ${{ steps.v.outputs.name }}
+          VERSION_CODE: ${{ steps.v.outputs.code }}
+        run: |
+          npx cap add ios
+          # Hearth's Swift sources, the notification and share extensions, HearthKit, Info.plist, entitlements and
+          # the ring sound. Fails if Capacitor's template changed.
+          bundle exec ruby scripts/patch-ios.rb ios
+      - name: App icon
+        continue-on-error: true
+        run: npx --no -- capacitor-assets generate --ios --assetPath resources --iconBackgroundColor '#100e16' --iconBackgroundColorDark '#100e16' --splashBackgroundColor '#100e16' --splashBackgroundColorDark '#100e16'
+      - run: npx cap sync ios
+      # The server's page runs inside the app, so any Capacitor plugin compiled in is reachable from it: only the
+      # keyboard one (and Capacitor's own, with its HTTP and cookie plugins turned off in capacitor.config.json).
+      - name: Check the project and its plugins
+        env:
+          VERSION_NAME: ${{ steps.v.outputs.name }}
+          VERSION_CODE: ${{ steps.v.outputs.code }}
+        run: |
+          bundle exec ruby scripts/patch-ios.rb --check ios
+          node -e "
+            const c = require('./ios/App/App/capacitor.config.json');
+            const bad = (c.packageClassList || []).filter((p) => p !== 'KeyboardPlugin');
+            if (bad.length) { console.log('::error::Plugins the remote page could reach: ' + bad.join(', ')); process.exit(1); }
+            const spm = require('fs').readFileSync('ios/App/CapApp-SPM/Package.swift', 'utf8');
+            const pkgs = [...spm.matchAll(/\.package\((?:url|name): \"([^\"]+)\"/g)].map((m) => m[1]);
+            const extra = pkgs.filter((p) => !/capacitor-swift-pm\.git$/.test(p) && p !== 'CapacitorKeyboard');
+            if (extra.length) { console.log('::error::Unexpected Swift packages in CapApp-SPM: ' + extra.join(', ')); process.exit(1); }
+          "
+      # The checked project, before anything builds in it, for ios-archive: that job runs no npm code at all (it
+      # holds the App Store Connect key), so the project is made here.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.server.outputs.store == '1'
+        with:
+          name: hearth-ios-project
+          path: hearth/mobile/ios
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+      - name: Pick a simulator
+        id: sim
+        run: |
+          udid="$(xcrun simctl list devices available -j | node -e "
+            const d = JSON.parse(require('fs').readFileSync(0, 'utf8')).devices;
+            const ios = Object.keys(d).filter((k) => /SimRuntime\.iOS-26/.test(k)).sort().reverse();
+            for (const k of ios) { const p = d[k].find((x) => /^iPhone/.test(x.name)); if (p) { console.log(p.udid); break; } }
+          ")"
+          if [ -z "$udid" ]; then echo "::error::No iOS 26 iPhone simulator on this runner."; exit 1; fi
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      - name: Build for the simulator (unsigned)
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug \
+            -destination "id=$UDID" -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO build
+      # Opens the app once and checks it's still running after 20 seconds (the connect screen, then the server's
+      # page when HEARTH_SERVER is set). The screenshot shows what it looked like.
+      - name: Open it in the simulator
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" "$RUNNER_TEMP/dd/Build/Products/Debug-iphonesimulator/App.app"
+          xcrun simctl launch "$UDID" app.hearth.mobile
+          sleep 20
+          mkdir -p "$RUNNER_TEMP/screens"
+          xcrun simctl io "$UDID" screenshot "$RUNNER_TEMP/screens/launch.png"
+          if ! xcrun simctl spawn "$UDID" launchctl list | grep -q 'UIKitApplication:app\.hearth\.mobile'; then
+            echo "::error::Hearth quit (or crashed) within 20 seconds of opening in the simulator."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: hearth-ios-simulator-screenshot
+          path: ${{ runner.temp }}/screens/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The signed iPhone app (.ipa) for App Store Connect. Tags and the default branch only, in the production
+  # environment, and only with the App Store Connect API key (ASC_* secrets) and the APPLE_TEAM_ID variable. A job of
+  # its own so that key never reaches the build that runs on every branch, and one that runs no npm package's code:
+  # it signs the project the ios job made (for HEARTH_SERVER, locked), after checking nothing in it runs at build
+  # time, with Capacitor's keyboard plugin fetched from the exact package-lock.json tarball and Ruby's patch script.
+  #   Option A (default): Xcode's cloud-managed signing. The key needs the Admin role; Xcode makes the distribution
+  #     certificate and the profiles itself, and no certificate file is ever kept anywhere.
+  #   Option B: your own Apple Distribution certificate (IOS_DIST_CERT_P12_BASE64 / IOS_DIST_CERT_PASSWORD) and the
+  #     three App Store profiles (IOS_PROFILE_APP_BASE64 / IOS_PROFILE_NSE_BASE64 / IOS_PROFILE_SHARE_BASE64), in a
+  #     throwaway keychain. The key then only needs App Manager. See hearth/docs/SIGNING.md.
+  ios-archive:
+    needs: ios
+    if: >-
+      github.event.inputs.signpath_test != 'true' &&
+      (startsWith(github.ref, 'refs/tags/app-v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: macos-26
+    environment: production
+    defaults:
+      run:
+        working-directory: hearth/mobile
+    outputs:
+      built: ${{ steps.ipa.outcome == 'success' && '1' || '' }}
+    env:
+      BUNDLE_DEPLOYMENT: 'true'
+      BUNDLE_WITHOUT: upload
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      # Only ever HEARTH_SERVER, never a manual run's "server": the App Store build is locked to the publisher's own.
+      SERVER: ${{ vars.HEARTH_SERVER }}
+      PROJECT: ${{ needs.ios.outputs.project }}
+    steps:
+      # Which signing, and whether there's any: nothing below runs without it.
+      - name: Choose how to sign
+        id: signing
+        working-directory: .
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          IOS_PROFILE_APP_BASE64: ${{ secrets.IOS_PROFILE_APP_BASE64 }}
+          IOS_PROFILE_NSE_BASE64: ${{ secrets.IOS_PROFILE_NSE_BASE64 }}
+          IOS_PROFILE_SHARE_BASE64: ${{ secrets.IOS_PROFILE_SHARE_BASE64 }}
+          IOS_REQUIRE_SIGNING: ${{ vars.IOS_REQUIRE_SIGNING }}
+        run: |
+          if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$ASC_KEY_P8_BASE64" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            msg="No signed iPhone app: add the ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8_BASE64 secrets to the production environment and the APPLE_TEAM_ID variable (hearth/docs/SIGNING.md, iPhone)."
+            if [ "$IOS_REQUIRE_SIGNING" = "true" ]; then echo "::error title=iPhone signing::$msg"; exit 1; fi
+            echo "::warning title=iPhone signing::$msg"
+            exit 0
+          fi
+          if [[ ! "$SERVER" =~ ^https://[A-Za-z0-9.-]+/?$ ]] || [ "$PROJECT" != "1" ]; then
+            msg="No signed iPhone app: the App Store build is locked to one server, and the HEARTH_SERVER variable isn't its https://host address."
+            if [ "$IOS_REQUIRE_SIGNING" = "true" ]; then echo "::error title=iPhone signing::$msg"; exit 1; fi
+            echo "::warning title=iPhone signing::$msg"
+            exit 0
+          fi
+          if [[ ! "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then echo "::error title=iPhone signing::APPLE_TEAM_ID isn't a 10-character team ID."; exit 1; fi
+          if [ -n "$IOS_DIST_CERT_P12_BASE64" ]; then
+            if [ -z "$IOS_PROFILE_APP_BASE64" ] || [ -z "$IOS_PROFILE_NSE_BASE64" ] || [ -z "$IOS_PROFILE_SHARE_BASE64" ]; then
+              echo "::error title=iPhone signing::IOS_DIST_CERT_P12_BASE64 is set, but not all three IOS_PROFILE_*_BASE64 profiles."; exit 1
+            fi
+            echo "method=manual" >> "$GITHUB_OUTPUT"
+          else
+            echo "method=cloud" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.signing.outputs.method != ''
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        if: steps.signing.outputs.method != ''
+        with:
+          ruby-version: '3.3'
+          working-directory: hearth/mobile
+      - name: Xcode 26
+        if: steps.signing.outputs.method != ''
+        run: |
+          x="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -viE 'beta|_rc' | sort -V | tail -1)"
+          if [ -z "$x" ]; then echo "::error::No Xcode 26 on this runner."; exit 1; fi
+          sudo xcode-select -s "$x"
+          xcodebuild -version
+      # Option B: the certificate goes into a keychain made for this run (random password), the profiles where Xcode
+      # looks for them. Their names go to the patch script, which signs each target with its own.
+      - name: Certificate and profiles (option B)
+        if: steps.signing.outputs.method == 'manual'
+        env:
+          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_PROFILE_APP_BASE64: ${{ secrets.IOS_PROFILE_APP_BASE64 }}
+          IOS_PROFILE_NSE_BASE64: ${{ secrets.IOS_PROFILE_NSE_BASE64 }}
+          IOS_PROFILE_SHARE_BASE64: ${{ secrets.IOS_PROFILE_SHARE_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          kc="$RUNNER_TEMP/hearth-signing.keychain-db"
+          kc_pass="$(openssl rand -hex 32)"
+          printf '%s' "$IOS_DIST_CERT_P12_BASE64" | base64 -D > "$RUNNER_TEMP/dist.p12"
+          security create-keychain -p "$kc_pass" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$kc_pass" "$kc"
+          security import "$RUNNER_TEMP/dist.p12" -k "$kc" -P "$IOS_DIST_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kc_pass" "$kc" > /dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/dist.p12"
+          dirs=("$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles")
+          mkdir -p "${dirs[@]}"
+          for t in APP:app.hearth.mobile NSE:app.hearth.mobile.NotificationService SHARE:app.hearth.mobile.ShareExtension; do
+            var="IOS_PROFILE_${t%%:*}_BASE64"; bundle="${t#*:}"
+            f="$RUNNER_TEMP/profile-${t%%:*}.mobileprovision"
+            printf '%s' "${!var}" | base64 -D > "$f"
+            security cms -D -i "$f" > "$f.plist"
+            uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$f.plist")"
+            name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$f.plist")"
+            appid="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$f.plist")"
+            if [ "$appid" != "$APPLE_TEAM_ID.$bundle" ]; then echo "::error title=iPhone signing::$var is a profile for $appid, not $APPLE_TEAM_ID.$bundle."; exit 1; fi
+            for d in "${dirs[@]}"; do cp "$f" "$d/$uuid.mobileprovision"; done
+            echo "IOS_PROFILE_${t%%:*}=$name" >> "$GITHUB_ENV"
+            echo "$bundle=$name" >> "$RUNNER_TEMP/profiles.txt"
+          done
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.signing.outputs.method != ''
+        with:
+          name: hearth-ios-project
+          path: hearth/mobile/ios
+      # The one Swift package from npm (CapApp-SPM points at node_modules/@capacitor/keyboard): the tarball
+      # package-lock.json names, checked against its hash, unpacked without running anything.
+      - name: Keyboard plugin from package-lock.json
+        if: steps.signing.outputs.method != ''
+        run: |
+          set -euo pipefail
+          read -r url integrity < <(ruby -rjson -e 'p = JSON.parse(File.read("package-lock.json")).dig("packages", "node_modules/@capacitor/keyboard"); puts "#{p["resolved"]} #{p["integrity"]}"')
+          [[ "$url" =~ ^https://registry\.npmjs\.org/@capacitor/keyboard/-/keyboard-[0-9.]+\.tgz$ ]] || { echo "::error::Unexpected @capacitor/keyboard source: $url"; exit 1; }
+          curl -fsSL --proto '=https' -o "$RUNNER_TEMP/keyboard.tgz" "$url"
+          got="sha512-$(openssl dgst -sha512 -binary "$RUNNER_TEMP/keyboard.tgz" | base64 | tr -d '\n')"
+          [ "$got" = "$integrity" ] || { echo "::error::@capacitor/keyboard doesn't match package-lock.json"; exit 1; }
+          mkdir -p node_modules/@capacitor/keyboard
+          tar -xzf "$RUNNER_TEMP/keyboard.tgz" -C node_modules/@capacitor/keyboard --strip-components 1
+      - if: steps.signing.outputs.method != ''
+        run: bundle install
+      # Signed for this team (and with option B's profiles), versioned, then checked again: the same patch script
+      # as the ios job, which also refuses build scripts, build rules, swapped compilers and any Swift package but
+      # Capacitor's and the keyboard plugin. The App Store build must be locked to HEARTH_SERVER.
+      - name: Check the project, sign and version it
+        if: steps.signing.outputs.method != ''
+        env:
+          VERSION_NAME: ${{ needs.ios.outputs.version }}
+          VERSION_CODE: ${{ needs.ios.outputs.code }}
+        run: |
+          rm -rf ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+          bundle exec ruby scripts/patch-ios.rb ios
+          ruby -rjson -e '
+            c = JSON.parse(File.read("ios/App/App/public/config.json"))
+            unless c["lockServer"] == true && c["defaultServer"] == ENV["SERVER"]
+              puts "::error::config.json must lock the app to #{ENV["SERVER"]}: #{c.inspect}"; exit 1
+            end
+            bad = (JSON.parse(File.read("ios/App/App/capacitor.config.json"))["packageClassList"] || []) - ["KeyboardPlugin"]
+            unless bad.empty?
+              puts "::error::Plugins the remote page could reach: #{bad.join(", ")}"; exit 1
+            end
+          '
+      # The App Store Connect key, only for the two xcodebuild steps (and only option A signs with it), mode 600.
+      - name: App Store Connect key
+        if: steps.signing.outputs.method != ''
+        env:
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          umask 077
+          printf '%s' "$ASC_KEY_P8_BASE64" | base64 -D > "$RUNNER_TEMP/AuthKey.p8"
+          grep -q 'BEGIN PRIVATE KEY' "$RUNNER_TEMP/AuthKey.p8" || { echo "::error title=iPhone signing::ASC_KEY_P8_BASE64 isn't a base64 .p8 key (base64 -w0 AuthKey_XXXX.p8)."; exit 1; }
+      - name: Archive
+        if: steps.signing.outputs.method != ''
+        env:
+          METHOD: ${{ steps.signing.outputs.method }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          auth=()
+          if [ "$METHOD" = cloud ]; then
+            auth=(-allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          fi
+          xcodebuild archive -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Hearth.xcarchive" \
+            "${auth[@]}" DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
+      - name: Export the .ipa
+        id: ipa
+        if: steps.signing.outputs.method != ''
+        env:
+          METHOD: ${{ steps.signing.outputs.method }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          VERSION_NAME: ${{ needs.ios.outputs.version }}
+          VERSION_CODE: ${{ needs.ios.outputs.code }}
+        run: |
+          opts="$RUNNER_TEMP/ExportOptions.plist"
+          cp ios-native/ExportOptions.plist "$opts"
+          plutil -replace teamID -string "$APPLE_TEAM_ID" "$opts"
+          auth=()
+          if [ "$METHOD" = cloud ]; then
+            auth=(-allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          else
+            plutil -replace signingStyle -string manual "$opts"
+            plutil -replace signingCertificate -string "Apple Distribution" "$opts"
+            plutil -replace provisioningProfiles -json "$(ruby -rjson -e 'puts JSON.generate(File.readlines(ARGV[0], chomp: true).reject(&:empty?).to_h { |l| l.split("=", 2) })' "$RUNNER_TEMP/profiles.txt")" "$opts"
+          fi
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Hearth.xcarchive" -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$opts" "${auth[@]}"
+          mkdir -p ios-dist
+          mv "$RUNNER_TEMP"/export/*.ipa "ios-dist/Hearth-$VERSION_NAME-$VERSION_CODE.ipa"
+      - name: Remove the key, certificate and profiles
+        if: always()
+        working-directory: .
+        run: |
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP"/profile-*.mobileprovision* "$RUNNER_TEMP/profiles.txt"
+          if [ -f "$RUNNER_TEMP/hearth-signing.keychain-db" ]; then security delete-keychain "$RUNNER_TEMP/hearth-signing.keychain-db" || true; fi
+          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"/*.mobileprovision
+      # For TestFlight only (the next job): never attached to a release or copied to your server.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.ipa.outcome == 'success'
+        with:
+          name: hearth-ios-ipa
+          path: hearth/mobile/ios-dist/*.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+  # TestFlight: you and the testers you add install Hearth from Apple's TestFlight app; App Review for the store
+  # starts from a build here. A job of its own, in the production environment, that runs only fastlane's upload
+  # (pinned in Gemfile.lock) on the .ipa.
+  testflight-upload:
+    needs: ios-archive
+    if: >-
+      github.event.inputs.signpath_test != 'true' && needs.ios-archive.outputs.built == '1' &&
+      (startsWith(github.ref, 'refs/tags/app-v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: macos-26
+    environment: production
+    defaults:
+      run:
+        working-directory: hearth/mobile
+    env:
+      BUNDLE_DEPLOYMENT: 'true'
+      LC_ALL: en_US.UTF-8
+      LANG: en_US.UTF-8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: '3.3'
+          working-directory: hearth/mobile
+      - run: bundle install
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: hearth-ios-ipa
+          path: hearth/mobile/ios-dist
+      # The default branch's version is the server's (hearth/package.json): once App Store Connect has approved a
+      # tag's version as high or higher, it refuses these until the next app-v* tag. Only a warning there; a tag's
+      # upload must work.
+      - name: Upload to TestFlight
+        id: upload
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/app-v') }}
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          ruby -rjson -rbase64 -e 'print JSON.generate(key_id: ENV.fetch("ASC_KEY_ID"), issuer_id: ENV.fetch("ASC_ISSUER_ID"), key: Base64.decode64(ENV.fetch("ASC_KEY_P8_BASE64")), in_house: false)' > "$RUNNER_TEMP/asc.json"
+          ipa="$(ls ios-dist/*.ipa | head -1)"
+          bundle exec fastlane run upload_to_testflight ipa:"$ipa" api_key_path:"$RUNNER_TEMP/asc.json" skip_waiting_for_build_processing:true
+      - name: Upload refused
+        if: steps.upload.outcome == 'failure'
+        run: echo "::warning title=TestFlight::App Store Connect didn't take this default-branch build (often its version isn't higher than one already approved). Tag app-vX.Y.Z with a higher version for the next TestFlight build."
+      - name: Remove the key
+        if: always()
+        working-directory: .
+        run: rm -f "$RUNNER_TEMP/asc.json"
+
   release:
     needs: [desktop, android, sign-updates]
     if: github.event.inputs.signpath_test != 'true' && startsWith(github.ref, 'refs/tags/app-v')
@@ -497,7 +954,8 @@ jobs:
       contents: write # the only job that writes: it creates the GitHub release
     steps:
       # Only the final files: the desktop builds with their update signatures, and the signed APK. Never SignPath's
-      # unsigned inputs (hearth-windows-unsigned-*), an unsigned APK, or the Play bundle (not installable by itself).
+      # unsigned inputs (hearth-windows-unsigned-*), an unsigned APK, the Play bundle (not installable by itself), or
+      # the iPhone .ipa (only Apple distributes it, through TestFlight and the App Store).
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: hearth-desktop-*
@@ -513,6 +971,9 @@ jobs:
           shopt -s nullglob nocaseglob
           bad=(dist/*unsigned* dist/*.aab)
           if [ ${#bad[@]} -gt 0 ]; then echo "::error::Not releasing unsigned or intermediate files: ${bad[*]}"; exit 1; fi
+          # The iPhone app only goes to TestFlight and the App Store.
+          ipa=(dist/*.ipa)
+          if [ ${#ipa[@]} -gt 0 ]; then echo "::error::Not releasing an iPhone app (.ipa): ${ipa[*]}"; exit 1; fi
           apks=(dist/*.apk)
           if [ ${#apks[@]} -eq 0 ]; then echo "::warning title=Android::No signed APK in this release: add the ANDROID_KEYSTORE_* secrets (hearth/mobile/README.md)."; fi
       # A copy of each installer without the version in its name, so the website can link straight to the newest
@@ -575,6 +1036,9 @@ jobs:
           shopt -s nullglob nocaseglob
           bad=(dist/*unsigned* dist/*.aab)
           if [ ${#bad[@]} -gt 0 ]; then echo "::error::Not publishing unsigned or intermediate files: ${bad[*]}"; exit 1; fi
+          # The iPhone app only goes to TestFlight and the App Store.
+          ipa=(dist/*.ipa)
+          if [ ${#ipa[@]} -gt 0 ]; then echo "::error::Not publishing an iPhone app (.ipa): ${ipa[*]}"; exit 1; fi
       # The runner's own OpenSSH does the copy: no third-party action (or the image or download one could swap in
       # without a new commit) ever sees VPS_SSH_KEY. ssh only talks to the machine whose host key matches
       # VPS_HOST_FINGERPRINT, which is required: without it nothing is copied.

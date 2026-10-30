@@ -11,6 +11,8 @@ import { runExport, EXPORT_LIMITS, quietNow } from './usability.js';
 import { androidApp } from './android.js';
 import { bookmarklet } from './share.js';
 import { reasonText } from './android-push.js';
+import { iosApp } from './ios.js';
+import { reasonText as iosReasonText } from './ios-push.js';
 import { desktopSettingsSection } from './desktop-settings.js';
 import { englishHere } from './spelling.js';
 import { underWay } from './auto-update.js';
@@ -1546,7 +1548,7 @@ function reelsTab(app) {
   let mark = '';
   try { mark = bookmarklet(location.origin); } catch { /* an origin the bookmarklet can't name */ }
   const link = mark ? h('a', { class: 'bookmarklet', href: mark, draggable: 'true', onclick: (e) => { e.preventDefault(); toast('Drag it to your bookmarks bar, then press it on a TikTok or Instagram video.'); } }, icon('play'), 'Send to Hearth') : null;
-  const phoneShare = window.HearthAndroid ? 'In the Hearth app, Share → Hearth on a TikTok or Instagram video picks where it goes.'
+  const phoneShare = window.HearthAndroid || iosApp.on ? 'In the Hearth app, Share → Hearth on a TikTok or Instagram video picks where it goes.'
     : 'On Android, install Hearth (the app, or Chrome’s Install app / Add to Home screen for this page) and Share → Hearth on a TikTok or Instagram video picks where it goes. An iPhone can’t share to a web page: copy the link and paste it on a Reels tab instead.';
   return h('div', { class: 'set-form narrow' },
     h('h2', { class: 'set-title' }, 'Reels'),
@@ -1614,7 +1616,7 @@ function studyTab(app) {
 // signed out from here (it's disconnected right away), or all of them except this one.
 const deviceOf = (ua) => {
   ua = String(ua || '');
-  const app = /Electron\//.test(ua) ? 'Hearth desktop app' : /HearthAndroid|; wv\)/.test(ua) ? 'Hearth Android app' : '';
+  const app = /Electron\//.test(ua) ? 'Hearth desktop app' : /HearthiOS/.test(ua) ? 'Hearth iPhone app' : /HearthAndroid|; wv\)/.test(ua) ? 'Hearth Android app' : '';
   const b = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : ua ? 'Browser' : 'Unknown device';
   const o = /Windows/.test(ua) ? 'Windows' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS X/.test(ua) ? 'macOS' : /Android/.test(ua) ? 'Android' : /CrOS/.test(ua) ? 'ChromeOS' : /Linux/.test(ua) ? 'Linux' : '';
   return { name: app || b, os: o, icon: /Android|iPhone|iPad/.test(ua) ? 'phone' : 'monitor' };
@@ -2160,17 +2162,19 @@ function pushRows(app) {
 }
 function pushToggleRow(app, onChanged = () => {}) {
   const note = h('span', { class: 'field-hint' }, 'Checking\u2026');
-  const label = h('span', { class: 'toggle-label' }, androidApp.on ? 'Notifications when Hearth is closed' : 'Push notifications on this device');
+  const label = h('span', { class: 'toggle-label' }, androidApp.on || iosApp.on ? 'Notifications when Hearth is closed' : 'Push notifications on this device');
   const box = h('input', { type: 'checkbox', disabled: true });
   const row = h('label', { class: 'toggle-row' },
     h('span', { class: 'toggle-text' }, label, note),
     h('span', { class: 'switch' }, box, h('span', { class: 'switch-track' })));
   const refresh = async () => {
     const st = await app.push.status().catch(() => 'unsupported');
-    // In the Android app, through a push app such as ntfy (android-push.js); elsewhere, the browser's own.
+    // In the Android app, through a push app such as ntfy (android-push.js); in the iPhone app, Apple's push
+    // service (ios-push.js); elsewhere, the browser's own.
     const inApp = !!app.push.android;
     box.checked = st === 'on';
     box.disabled = st === 'unsupported' || st === 'blocked';
+    if (iosApp.on) { note.textContent = iosPushNote(app, st); return; }
     note.textContent = {
       on: inApp ? 'You\u2019ll get notifications even after you swipe Hearth away. They say \u201cNew message\u201d (or who, if you show names below), never what a message says.'
         : 'You\u2019ll get notified about DMs, mentions and replies even when Hearth is closed. Notifications say who and where, never what \u2014 messages stay encrypted.',
@@ -2187,7 +2191,7 @@ function pushToggleRow(app, onChanged = () => {}) {
   };
   box.addEventListener('change', async () => {
     box.disabled = true;
-    const inApp = !!app.push.android;
+    const inApp = !!app.push.android || !!app.push.ios;
     try {
       if (box.checked) await app.push.enable(); else await app.push.disable();
       toast(box.checked ? (inApp ? 'Notifications are on, even when Hearth is closed.' : 'Push notifications are on for this device.') : (inApp ? 'Notifications when Hearth is closed are off.' : 'Push notifications are off for this device.'));
@@ -2198,6 +2202,17 @@ function pushToggleRow(app, onChanged = () => {}) {
   refresh();
   row.refresh = refresh;
   return row;
+}
+// The iPhone app's notes under the switch: Apple's push service, which this server has to be set up for.
+function iosPushNote(app, st) {
+  const p = app.push.ios;
+  return {
+    on: 'You\u2019ll get notifications even when Hearth is closed. They say \u201cNew message\u201d (or who, if you show names below), never what a message says: the app decrypts them on this iPhone.',
+    off: 'Get notified about DMs, mentions, replies and calls even when Hearth is closed.',
+    failed: iosReasonText[(p && p.last && p.last.reason) || ''] || iosReasonText.INTERNAL_ERROR,
+    blocked: iosReasonText.blocked,
+    unsupported: !p ? 'Update the Hearth app to get notifications while it\u2019s closed.' : iosReasonText.noApns,
+  }[st] || '';
 }
 // Android app: which push app delivers Hearth's notifications while it's closed, and what that means.
 function androidPushAppRow(app, onChanged = () => {}) {
@@ -2263,6 +2278,10 @@ function appsTab(app) {
         h('div', null, h('button', { class: 'btn', onclick: () => androidApp.switchServer() }, 'Switch server')));
       return;
     }
+    if (iosApp.on) {
+      installBox.append(h('p', { class: 'muted-p' }, `You\u2019re using the Hearth iPhone app${iosApp.version ? ` (version ${iosApp.version})` : ''}. Files you save open the share sheet: pick Save to Files to keep them.`));
+      return;
+    }
     if (app.isInstalled) { installBox.append(h('p', { class: 'muted-p' }, 'Hearth is installed on this device. \uD83C\uDF89')); return; }
     if (app.canInstall) {
       installBox.append(h('p', { class: 'muted-p' }, 'Install Hearth as an app: it gets its own window and icon, opens instantly and can send notifications.'),
@@ -2281,9 +2300,9 @@ function appsTab(app) {
     h('h2', { class: 'set-title' }, 'Apps & devices'),
     section('Install on this device', installBox),
     window.hearthDesktop ? desktopSettingsSection({ h, section, toggle, field, toast }) : null,
-    // Not in the Android app: the download page offers the Android app itself, and an app from Google Play
-    // updates only through Play.
-    window.hearthDesktop || androidApp.on ? null : section('Desktop app',
+    // Not in the Android or iPhone app: the download page offers the Android app itself, and an app from Google Play
+    // or the App Store updates only through the store.
+    iosApp.on || window.hearthDesktop || androidApp.on ? null : section('Desktop app',
       h('p', { class: 'muted-p' }, 'A Windows, Mac and Linux app with a tray icon, unread badge and launch-at-login.'),
       dl.length || cfg.desktopUrl
         ? h('div', null, h('a', { class: 'btn ghost', href: '/download', target: '_blank', rel: 'noopener' }, icon('download'), 'Download page'))
@@ -2292,7 +2311,7 @@ function appsTab(app) {
     androidApp.on && !androidApp.push ? section('Notifications', androidNotifyRow())
       : section('Notifications', ...pushRows(app),
         h('p', { class: 'field-hint' }, 'Turn this on separately on each phone or computer you use.')),
-    androidApp.on ? null : section('Share', h('p', { class: 'muted-p' }, 'Send friends this link to get the app:'),
+    iosApp.on || androidApp.on ? null : section('Share', h('p', { class: 'muted-p' }, 'Send friends this link to get the app:'),
       h('div', { class: 'row gap' }, h('input', { class: 'input mono', readonly: true, value: `${location.origin}/download`, 'aria-label': 'Download page link' }),
         h('button', { class: 'btn ghost', onclick: () => { navigator.clipboard.writeText(`${location.origin}/download`).then(() => toast('Link copied.')); } }, 'Copy'))),
     privacyLink(cfg) ? section('Privacy', h('p', { class: 'muted-p' }, 'How this server handles your data: ', privacyLink(cfg))) : null,

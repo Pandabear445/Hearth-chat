@@ -2,8 +2,11 @@
 // notifications (window.Notification) and saving files (<a download> links), and with a current app also
 // notifications while it's closed (androidApp.push, see android-push.js), calls that keep going with the
 // screen locked (androidApp.callState) and invite links that open in the app.
-// Does nothing in browsers or the desktop app.
+// Does nothing in browsers or the desktop app. The iPhone app's version is ios.js, which gets what it needs from
+// other modules here (it has no imports of its own).
 import { createAndroidPush, safeOpenHash, safeInviteHash } from './android-push.js';
+import { createIosPush } from './ios-push.js';
+import { iosApp, connectIos } from './ios.js';
 import { underWay } from './auto-update.js';
 import { sharedLink, shareHash } from './share.js';
 
@@ -12,13 +15,16 @@ const A = window.HearthAndroid;
 // in time). onHangUp: set by app.js; the call notification's Hang up button calls it.
 export const androidApp = { on: !!A, version: '', notify: 'default', push: null, calls: false, ready: Promise.resolve(), onHangUp: null };
 // Inside the Android app there is no way to pay: no supporter window, funding card or memberships to join. Google
-// Play doesn't allow an app to send people to pay outside Play's own billing. The web and the desktop app are
-// unchanged. The app's user agent (HearthAndroid, mobile/capacitor.config.json) counts too, for a web view too
-// old to have window.HearthAndroid.
+// Play doesn't allow an app to send people to pay outside Play's own billing, nor does Apple's App Store (the iPhone
+// app, ios.js). The web and the desktop app are unchanged. The apps' user agents (HearthAndroid and HearthiOS,
+// mobile/capacitor.config.json) count too, for a web view too old to have window.HearthAndroid, or a page the
+// iPhone app shows without its bridge.
 // A link shared to the app (mobile/native/ShareLinks.java): checked again here, and only a TikTok or Instagram link
 // becomes #share=…, which opens the share picker (nothing is sent until a conversation is picked).
 const safeShareHash = (link) => { const p = typeof link === 'string' ? sharedLink({ url: link }) : null; return p ? shareHash(p.url) : ''; };
-export const noPayments = androidApp.on || /\bHearthAndroid\b/.test((typeof navigator !== 'undefined' && navigator.userAgent) || '');
+const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+export const noPayments = androidApp.on || /\bHearthAndroid\b/.test(ua) || iosApp.on || /\bHearthiOS\b/.test(ua);
+if (iosApp.on) connectIos({ createPush: createIosPush, openHash: safeOpenHash, inviteHash: safeInviteHash, shareHash: safeShareHash, underWay });
 
 if (A) {
   const send = (msg) => { try { A.postMessage(JSON.stringify(msg)); } catch { /* app closing */ } };

@@ -1537,6 +1537,18 @@ app.get('/.well-known/assetlinks.json', (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=3600');
   res.json([{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: ANDROID_PACKAGE, sha256_cert_fingerprints: fps } }]);
 });
+// The same for the iPhone app (Universal Links): Apple fetches this file when the app is installed and then opens
+// https://this-server/invite/... in the app. APPLE_APP_IDS lists the apps allowed to, as TEAMID.bundle.id
+// (comma-separated). Apple wants it at exactly this path, as JSON, without a redirect.
+const APPLE_APP_ID = /^[A-Z0-9]{10}\.[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*$/;
+const APPLE_APP_IDS = String(process.env.APPLE_APP_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
+if (APPLE_APP_IDS.some((x) => !APPLE_APP_ID.test(x))) log.warn('ios', 'bad_app_id', { msg: 'APPLE_APP_IDS entries look like TEAMID1234.app.hearth.mobile; the bad ones are ignored.' });
+app.get('/.well-known/apple-app-site-association', (req, res) => {
+  const ids = APPLE_APP_IDS.filter((x) => APPLE_APP_ID.test(x));
+  if (!ids.length) return res.status(404).json({});
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.json({ applinks: { details: [{ appIDs: ids, components: [{ '/': '/invite/*' }] }] } });
+});
 // The desktop app's self-updater reads latest.yml (latest-linux.yml…) here, then downloads the installer it
 // names. electron-builder writes these next to the installers; GitHub Actions copies them to data/downloads.
 // latest*.yml.sig is the publisher's signature over latest*.yml (desktop/build/sign-update.js): apps built
@@ -1801,6 +1813,17 @@ try {
   if (vs.placeholder) log.warn('push', 'vapid_subject', { msg: 'Set VAPID_SUBJECT=mailto:you@yourdomain (a real address) or PUBLIC_URL=https://your.domain in .env: Apple\u2019s push service can refuse notifications for iPhone, iPad and Mac without one.' });
   webpush.setVapidDetails(vs.subject, vapid.publicKey, vapid.privateKey);
 } catch (e) { log.warn('push', 'disabled', { err: e, msg: 'Push notifications are off.' }); vapid = null; }
+// The iPhone app's notifications go through Apple (server/apns.js), with the publisher's APNs key: only a server
+// whose operator publishes the app can have one. Off (apnsEnabled: false) unless it's set up.
+const APNS_ALLOW_SANDBOX = process.env.APNS_ALLOW_SANDBOX === '1';
+const apns = (process.env.APNS_KEY || process.env.APNS_KEY_FILE || process.env.APNS_KEY_ID || process.env.APNS_TEAM_ID || process.env.APNS_TOPIC)
+  ? require('./apns').createApns({
+    keyPem: process.env.APNS_KEY || null, keyFile: process.env.APNS_KEY_FILE || null, keyId: process.env.APNS_KEY_ID, teamId: process.env.APNS_TEAM_ID,
+    topic: process.env.APNS_TOPIC, allowSandbox: APNS_ALLOW_SANDBOX, log, pad: (p) => pushBody(p, APNS_PUSH_MAX_BYTES), brandName: () => brand().name, now,
+    // Tests point it at a fake APNs (trusted through NODE_EXTRA_CA_CERTS); a real server always talks to Apple.
+    hostOverride: process.env.NODE_ENV === 'test' && process.env.APNS_HOST_OVERRIDE ? process.env.APNS_HOST_OVERRIDE : null,
+  })
+  : null;
 
 const nameOf = (uid) => { const r = getUserRow(uid); return r ? (parseProfile(r).displayName || r.username) : 'Someone'; };
 // A push endpoint is a web address the app hands us, so sending to it is an outbound request like a feed and
@@ -1846,7 +1869,7 @@ const pushWaiting = new Map(); // user id → jobs waiting, oldest first; the Ma
 const pushBusy = { total: 0, user: new Map(), host: new Map() };
 let pushWaitingCount = 0;
 const bump = (m, k, d) => { const n = (m.get(k) || 0) + d; if (n > 0) m.set(k, n); else m.delete(k); };
-const pushHost = (endpoint) => { try { return new URL(endpoint).hostname.toLowerCase(); } catch { return ''; } };
+const pushHost = (endpoint) => { if (String(endpoint).startsWith('apns:')) return 'api.push.apple.com'; try { return new URL(endpoint).hostname.toLowerCase(); } catch { return ''; } };
 const dropPushSub = (endpoint) => db.prepare('DELETE FROM push_subs WHERE endpoint = ?').run(endpoint);
 const pushUserOk = (row) => !!row && !row.deleted_at && !stillSuspended(row);
 // A subscription belongs to the session that turned it on: once that session is signed out, revoked or
@@ -1868,17 +1891,18 @@ function pushSubsFor(uid) {
     return !(sub.retry_at > t); // sitting out after failed sends
   }).slice(0, PUSH_MAX_PER_USER);
 }
-function queuePush(uid, sub, payload) {
+// meta: { kind, generic } for APNs, which needs to know a ring from a message and the hidden-preview text.
+function queuePush(uid, sub, payload, meta = {}) {
   let jobs = pushWaiting.get(uid);
   // A newer notification for the same device and conversation takes the place of one still waiting (the
   // device would replace it on screen anyway), so a flood of messages is still one send per device.
   const same = jobs && jobs.find((j) => j.endpoint === sub.endpoint && j.payload.tag === payload.tag);
-  if (same) { same.payload = payload; return; }
+  if (same) { same.payload = payload; same.meta = meta; return; }
   if (!jobs) {
     if (pushWaitingCount >= PUSH_QUEUE_MAX) return;
     jobs = []; pushWaiting.set(uid, jobs);
   } else if (jobs.length >= PUSH_WAITING_PER_USER) { jobs.shift(); pushWaitingCount--; } else if (pushWaitingCount >= PUSH_QUEUE_MAX) return;
-  jobs.push({ uid, endpoint: sub.endpoint, host: pushHost(sub.endpoint), payload });
+  jobs.push({ uid, endpoint: sub.endpoint, host: pushHost(sub.endpoint), payload, meta });
   pushWaitingCount++;
 }
 function pumpPush() {
@@ -1903,12 +1927,14 @@ function pumpPush() {
     }
   }
 }
-async function sendPush({ uid, endpoint, payload }) {
+async function sendPush({ uid, endpoint, payload, meta }) {
   // Checked again now, not only when it was queued: a device signed out (or an account suspended) while this
   // waited gets nothing.
   const sub = db.prepare('SELECT * FROM push_subs WHERE endpoint = ? AND user_id = ?').get(endpoint, uid);
   if (!sub || !pushUserOk(getUserRow(uid)) || sub.retry_at > now()) return;
   if (!pushSubLive(uid, sub)) { dropPushSub(endpoint); return; }
+  if (sub.kind === 'apns') return sendApns(sub, payload, meta);
+  if (!vapid) return; // Web Push is off (only iPhones get notifications on this server)
   let details;
   // web-push only encrypts the payload and signs the VAPID header here; the request itself goes through
   // netguard, never through web-push's own (unguarded, unbounded) https.request.
@@ -1945,6 +1971,21 @@ async function sendPush({ uid, endpoint, payload }) {
   pushRefused(sub.endpoint, s);
   pushFailed(sub.endpoint);
 }
+// An iPhone, through Apple. apns.send says what to do about the device (server/apns.js). Trouble on the server's
+// side (its key, team or topic) or Apple's (errors, the network) is never counted against the device: apns.js
+// pauses all sends instead, so a mistake in .env or an outage can't unsubscribe every iPhone.
+async function sendApns(sub, payload, meta = {}) {
+  if (!apns) return; // set up once, then taken out of .env: kept for when it's back
+  const r = await apns.send(sub, payload, { kind: meta.kind, generic: meta.generic });
+  if (r.status === 'ok') { if (sub.fails || sub.retry_at) db.prepare('UPDATE push_subs SET fails = 0, retry_at = NULL WHERE endpoint = ?').run(sub.endpoint); return; }
+  if (r.status === 'drop') { dropPushSub(sub.endpoint); return; } // the app was removed, or a token from another build
+  if (r.status === 'retryAfter') {
+    const wait = Math.min(Math.max(r.ms || 5 * 60000, 60000), 3600000);
+    db.prepare('UPDATE push_subs SET retry_at = ? WHERE endpoint = ?').run(now() + wait, sub.endpoint);
+    pushRefused(sub.endpoint, 429);
+  }
+  // keep, configError, transient, bug: the device stays as it is (apns.js logs what the operator should know).
+}
 // Retry-After: seconds, or an HTTP date.
 function retryAfterMs(h) {
   if (h === undefined || h === null || h === '') return null;
@@ -1969,9 +2010,11 @@ function pushRefused(endpoint, status) {
 // size) can't tell one name's length from another's. It stays far below UnifiedPush's 4096-byte limit.
 const PUSH_STEP = 256;
 const PUSH_MAX_BYTES = 3072;
+// Apple takes at most 4096 bytes in all, and `enc` is base64 of the encrypted text: 2048 leaves room for the rest.
+const APNS_PUSH_MAX_BYTES = 2048;
 // Control characters and lone surrogates would grow sixfold as JSON escapes, so they go first.
 const cutCodePoints = (s, n) => { const a = [...String(s).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/[\ud800-\udfff]/gu, '\ufffd')]; return a.slice(0, n).join(''); };
-function pushBody(payload) {
+function pushBody(payload, maxBytes = PUSH_MAX_BYTES) {
   const p = { ...payload };
   if (typeof p.title === 'string') p.title = cutCodePoints(p.title, 200);
   if (typeof p.body === 'string') p.body = cutCodePoints(p.body, 300);
@@ -1980,7 +2023,7 @@ function pushBody(payload) {
   const size = (o) => Buffer.byteLength(JSON.stringify(o));
   // `,"_":""` adds 7 bytes; then one space per byte up to the next step (never past the ceiling).
   const base = size(p) + 7;
-  const target = Math.min(Math.ceil(base / PUSH_STEP) * PUSH_STEP, PUSH_MAX_BYTES);
+  const target = Math.min(Math.ceil(base / PUSH_STEP) * PUSH_STEP, maxBytes);
   return JSON.stringify({ ...p, _: ' '.repeat(Math.max(0, target - base)) });
 }
 function pushFailed(endpoint) {
@@ -2006,7 +2049,7 @@ let LOOKS = null; // server/looks.js: chat backgrounds
 // What someone is called in a server's notifications: their nickname there, else their display name.
 const nameIn = (serverId, uid) => (NICK && NICK.nicknameOf(serverId, uid)) || nameOf(uid);
 function pushTo(userIds, payload, what = { kind: 'other' }) {
-  if (!vapid) return;
+  if (!vapid && !apns) return;
   const ids = [...new Set(userIds)];
   setImmediate(() => {
     for (const uid of ids) {
@@ -2018,7 +2061,8 @@ function pushTo(userIds, payload, what = { kind: 'other' }) {
       // push service's cache); the Android app shows an old call as "Missed call" instead of ringing.
       const stamped = { ...payload, at: now() };
       const shaped = USE ? USE.shapePush(uid, stamped) : stamped;
-      for (const sub of pushSubsFor(uid)) queuePush(uid, sub, shaped);
+      const meta = { kind: what.kind, generic: typeof stamped.generic === 'string' ? stamped.generic : undefined };
+      for (const sub of pushSubsFor(uid)) if (sub.kind === 'apns' ? apns : vapid) queuePush(uid, sub, shaped, meta);
     }
     pumpPush();
   });
@@ -2038,37 +2082,59 @@ function validPushKeys(keys) {
     return true;
   } catch { return false; } // not on the curve
 }
+// The iPhone app subscribes with an APNs device token (hex) and the environment its build gets them from instead of
+// an endpoint: { type: 'apns', token, environment: 'production' | 'sandbox', keys }. It's saved as the endpoint
+// 'apns:<environment>:<token in lowercase>', which is also what the app unsubscribes and "replaces" with.
+const APNS_TOKEN = /^[0-9a-f]{64,200}$/i;
 api.post('/push/subscribe', auth, wrap(async (req, res) => {
   const body = req.body || {};
   const sub = body.subscription || {};
-  if (!vapid) fail(400, 'Push notifications are turned off on this server.');
-  if (typeof sub.endpoint !== 'string' || sub.endpoint.length > 1000) fail(400, 'Bad subscription.');
+  const isApns = sub.type === 'apns';
+  let endpoint;
+  if (isApns) {
+    if (!apns) fail(400, 'This server can’t send iPhone notifications.');
+    if (typeof sub.token !== 'string' || !APNS_TOKEN.test(sub.token)) fail(400, 'Bad subscription.');
+    // Development builds run from Xcode get sandbox tokens, which only an operator testing the app wants.
+    if (sub.environment !== 'production' && !(sub.environment === 'sandbox' && APNS_ALLOW_SANDBOX)) fail(400, 'Bad subscription.');
+    endpoint = `apns:${sub.environment}:${sub.token.toLowerCase()}`;
+  } else {
+    if (!vapid) fail(400, 'Push notifications are turned off on this server.');
+    if (typeof sub.endpoint !== 'string' || sub.endpoint.length > 1000) fail(400, 'Bad subscription.');
+    endpoint = sub.endpoint;
+  }
   if (!validPushKeys(sub.keys)) fail(400, 'Bad subscription.');
   // replaces: the endpoint this device had before (a push app can hand out a new one), so a phone stays one
   // device instead of piling up dead ones that push out real ones.
-  const replaces = body.replaces;
+  const replaces = typeof body.replaces === 'string' && body.replaces.startsWith('apns:') ? body.replaces.toLowerCase() : body.replaces;
   if (replaces !== undefined && replaces !== null && (typeof replaces !== 'string' || replaces.length > 1000)) fail(400, 'Bad subscription.');
-  // Checked every time, for endpoints already saved too, so tightening PUSH_HOSTS takes effect at once.
-  let u;
-  try { u = netguard.parseUrl(sub.endpoint, { protocols: ['https:'] }); } catch { fail(400, 'Bad subscription.'); }
-  if (!pushHostAllowed(u)) fail(400, 'This server doesn\u2019t send notifications through that push service.');
+  // Checked every time, for endpoints already saved too, so tightening PUSH_HOSTS takes effect at once. (An
+  // APNs row has no address to check: it only ever goes to Apple's fixed host.)
+  if (!isApns) {
+    let u;
+    try { u = netguard.parseUrl(endpoint, { protocols: ['https:'] }); } catch { fail(400, 'Bad subscription.'); }
+    if (!pushHostAllowed(u)) fail(400, 'This server doesn’t send notifications through that push service.');
+  }
   rateLimit('pushsub-any:' + req.userId, 60, 3600000);
   // The app turns push on again each time it starts. An endpoint this account already has was checked when it
   // was saved (and every send checks it again), so only new ones are looked up and count toward this limit.
-  if (!db.prepare('SELECT 1 FROM push_subs WHERE endpoint = ? AND user_id = ?').get(sub.endpoint, req.userId)) {
+  if (!db.prepare('SELECT 1 FROM push_subs WHERE endpoint = ? AND user_id = ?').get(endpoint, req.userId)) {
     rateLimit('pushsub:' + req.userId, 10, 3600000);
     // Push services are public https sites. (Each send checks again, pinned, since DNS answers can change.)
-    try { await netguard.checkPublicUrl(sub.endpoint, { protocols: ['https:'], allowPrivate: pushPrivateOk }); } catch (e) { fail(400, e.code === 'NOT_FOUND' ? 'Bad subscription: its push service couldn’t be found.' : 'Bad subscription.'); }
+    if (!isApns) {
+      try { await netguard.checkPublicUrl(endpoint, { protocols: ['https:'], allowPrivate: pushPrivateOk }); } catch (e) { fail(400, e.code === 'NOT_FOUND' ? 'Bad subscription: its push service couldn’t be found.' : 'Bad subscription.'); }
+    }
   }
   db.transaction(() => {
     // Only the caller's own old row, and before the cap below, so the replaced one never pushes out another device.
-    if (typeof replaces === 'string' && replaces !== sub.endpoint) db.prepare('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?').run(replaces, req.userId);
+    if (typeof replaces === 'string' && replaces !== endpoint) db.prepare('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?').run(replaces, req.userId);
     // Saving it again keeps its count of failed sends: subscribing again doesn't restart a dead push service's back-off.
     // (The token too: see pushSubLive. Taken from the token this very request used, so one that was in flight
     // while the token was replaced doesn't count for the new one.)
-    db.prepare(`INSERT INTO push_subs (endpoint, user_id, keys, ua, created_at, session_id, token_hash) VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, keys = excluded.keys, ua = excluded.ua, created_at = excluded.created_at, session_id = excluded.session_id, token_hash = excluded.token_hash`)
-      .run(sub.endpoint, req.userId, JSON.stringify({ p256dh: sub.keys.p256dh, auth: sub.keys.auth }), String(req.headers['user-agent'] || '').slice(0, 300), now(), req.session.id, tokenId(req.token));
+    db.prepare(`INSERT INTO push_subs (endpoint, user_id, keys, ua, created_at, session_id, token_hash, kind, apns_env) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, keys = excluded.keys, ua = excluded.ua, created_at = excluded.created_at, session_id = excluded.session_id, token_hash = excluded.token_hash,
+        kind = excluded.kind, apns_env = excluded.apns_env`)
+      .run(endpoint, req.userId, JSON.stringify({ p256dh: sub.keys.p256dh, auth: sub.keys.auth }), String(req.headers['user-agent'] || '').slice(0, 300), now(), req.session.id, tokenId(req.token),
+        isApns ? 'apns' : 'webpush', isApns ? sub.environment : null);
     // Only the newest few per account are kept.
     db.prepare('DELETE FROM push_subs WHERE user_id = ? AND endpoint NOT IN (SELECT endpoint FROM push_subs WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?)')
       .run(req.userId, req.userId, PUSH_MAX_PER_USER);
@@ -2076,7 +2142,9 @@ api.post('/push/subscribe', auth, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 api.post('/push/unsubscribe', auth, (req, res) => {
-  db.prepare('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?').run(String((req.body || {}).endpoint || ''), req.userId);
+  let endpoint = String((req.body || {}).endpoint || '');
+  if (endpoint.startsWith('apns:')) endpoint = endpoint.toLowerCase(); // saved with the token in lowercase
+  db.prepare('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?').run(endpoint, req.userId);
   res.json({ ok: true });
 });
 
@@ -2101,6 +2169,7 @@ api.get('/config', (req, res) => {
     announcement: (() => { try { return JSON.parse(getSetting('announcement') || 'null'); } catch { return null; } })(),
     maintenance: maintenance() || null,
     pushEnabled: !!vapid,
+    apnsEnabled: !!apns, // the iPhone app's notifications (server/apns.js)
     pushNtfy: PUSH_NTFY_URL, // this server's own ntfy, for the Android app's push settings
     downloads: listDownloads(),
     desktopUrl: process.env.DESKTOP_DOWNLOAD_URL || null,

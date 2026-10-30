@@ -1,0 +1,17 @@
+{
+  "about": "Made by scripts/node-vector.js with the server's web-push library, throwaway keys made for this file. d is the phone's P-256 scalar and s16 the subscription's 16-byte auth secret, both base64url. ciphertext is RFC 8291 aes128gcm in standard base64, and plaintext the UTF-8 text it decrypts to.",
+  "plaintext": "{\"title\":\"Zoë 🔥\",\"body\":\"Sent you a message: \\\"hi\\\" \\\\ /\",\"tag\":\"d:abc123\",\"url\":\"/#m/xyz789\",\"at\":1760000000000,\"generic\":\"New message\",\"_\":\"                                                                                                                                                                                                                                                                                                                                                                            \"}",
+  "single": {
+    "d": "h6gYOLFEfd88zvpkbmiv5Rp6BzSkgk48IICy8YJsHk4",
+    "p256dh": "BE5UcgRacc_USLVXSFX_srwfMZC6k5gdamJZFBn9xsgTqizTwmk4daXVP9WOAfuHYv3mxi1_7FAKXsW9NRQqGK0",
+    "s16": "lge45MF8vRk8sOzPNkWxzA",
+    "ciphertext": "5n8Dx4a8j4whlNVzrGw7pAAAEABBBAqjEjHchqOVEkuJq/2HfYOTiKXCESrzwEbtOh+ptjUiibwvEb4revznYZ5r3kmkWQI5wSywc3HrYZphNP8NA+2rkGdTG3hdM5o7iOQnF5GmN9mzqVGQU8SIT3HWEc78GlA+v1ZxQHXDjTS/C0C5rQWO5GUIqrWmCQb0rbnemd2NUfK87SaVWvqP7TytD2/5pcLg8XHqEgW5HJfPmFNk4kfhbckWwRXBXgJczpqrKXlqAl8KmLeA6G9tDt9SpKO8lBS4zEdZQSVeMJprPNaqSm9B1wJlwT109mY9fEN7wkFtB1QSS/K9lFnhgiUSNWJ5g6/vB7AK9KBdXFBWnXGtBc/1t/zId/FfzL69NhVtuliAedcfoeWtv44RnuvTlGRMKW2McRh7I9V1bWLzvgNg0e13w5pUWzJoSfSDOINRJRoPoUQ2+R7wgBAlbL7u68QPScBQ3RsT6bS/yxtnqLhoF8tTFn8ZWk7nVZNQDIbkwXDukp98gZp2uWIsnZuRHWeJ9atpx2M9LcWrRvmt8zbolo4GF+UXdZM6zXaF8oAPSavVJqlmJcm58niZXbievYGwvdqVcDgvtf/GnhrwYoLi2FPX4Vx+uGbMCgbBkzGhHu7F85FQNoR0l0y/l8E4fctpaw0UC4e0kI1+mfOex8WKQUXQSek7ei0rmFgdjAFFlTDmeNT9ZIr78JP0uzSbF4U7PIUCA58mg2LFIWI0r4av449aarOJTt1LA2Kw2EGJpDRqyk9zPJWj4ClP5VR1TU3byQXt/YybR8TID2ee+bafeHWG"
+  },
+  "records": {
+    "d": "1x1scZKaS_X7VGk2a7QNv2xRXqq8_ZQmYo6eWeqxTOs",
+    "p256dh": "BMd7KZ0OMheeSixdAyPH1JWGxiYH4Mqjge4onex0U9HjgBxuznALhwLs5z26RacvvdOUwSZBDbteJlodQ9bkxEU",
+    "s16": "MMOHC3x8Lgjb3rz913Zy1g",
+    "ciphertext": "w5KysJwqmkU4RsOiq0oZJQAAAGRBBHd8j9y7a0bAN1HyElwf+QLZ8nvyPRYC3SwZnCZKWiDi2E8itf1PTWBdM4m49X342WgM+xNCfKxouYXFasrUlou17hME3S35JtUX1BgFWctgV6HhLTKTpGdp2IaSmG87HNeZeISA0f9BwgHRPVRpuwf9DDocxqmmihG9+O3jmBHUA5K8jD2oCj2Msd/L6sexo1aqCTmaOGTa67BE73D6JlvoXSS5lhxsbbdss/wy747iF8XpM9MwOhXSOmUoESDtlJG4l/9ZfuHtkqH+Ov3dy1nmWSscA9dtdQlRMgkYWBknwcfWxW5HK7hYbTjbeNmAcVzwCu++83BRtE7gyhtIBKzgpfHF7B8nHSy5Dmb6VemvTOhI5EynkvtLutMlp5EZmQ1S98MysLSh9md4cKXVGyXygKGd1EqL7C8MN5OpyYoNj5UFHxglvh8p1VL1cdqFW1iXxUruIG2V9KOvbgAuUVk4yE6BvNB8aunSwJneyz3BW5/CQkDBydIc7XdD41sB4nmbnhKLRIrWjF2odxU6l2a5wp7NwhNkNaGzgwZzKKse0Js++lTCxJ4bzl8J6UIE7L6/vjsHWn4qKLTAQ/oTJHl9SllIs2XiX7CfJcx0x//R2ExIy2s7uqSPh/KCe9nqCykWYvIOOFbjMij4Q+Ebb50JOTazwe5GO1mlhwt1qGLbN10jutH1hETstBoO2dPO+AphOvL2f9cJQCeRCkzSyM/zbphiqrY3tJ/yJPFnH5AwvDmabnepkfrkrmobMYliNBahlS9niQUd7atEfYLk+5FwERP+FZKFZ+rcIJyqDpzWDumOR4mHGNL3V8/y2AGlkz+tGku0U5RvAY5eTWseD0AFQ3IRemuthIsxfQ6NF9x5tH1VijLla8RHNqlKXbw7Zf2ZUFK3o5kFfeBwlnh1Nmh3f2eY3iuy",
+    "rs": 100
+  }
+}

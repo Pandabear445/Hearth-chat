@@ -1,0 +1,12 @@
+# Ruby tools for the iPhone build, at the exact versions in Gemfile.lock (the "Hearth apps" workflow installs them
+# with `bundle install` in deployment mode, so nothing else comes in):
+#   - xcodeproj: scripts/patch-ios.rb adds Hearth's targets and settings to the generated Xcode project;
+#   - fastlane: only its upload_to_testflight action, in the testflight-upload job (the build jobs leave the
+#     upload group out: BUNDLE_WITHOUT=upload).
+source 'https://rubygems.org'
+
+gem 'xcodeproj', '1.28.1'
+
+group :upload do
+  gem 'fastlane', '2.241.2'
+end

@@ -1,6 +1,7 @@
-# Hearth for Android
+# Hearth for Android (and iPhone)
 
-A small app that opens your Hearth server, like the desktop app does. Everything in Hearth works in it
+A small app that opens your Hearth server, like the desktop app does. The iPhone app is built from the same folder
+and works the same way; its differences are in [iPhone](#iphone) at the end. Everything in Hearth works in it
 (chats, calls, video, voice messages, polls, events, profiles, watch together…) because it *is* your
 server's app, and it updates whenever you update the server.
 
@@ -238,3 +239,73 @@ The native code: `MainActivity.java` (the web view and the page bridge), `Bridge
 for what), `HearthPush.java` / `HearthPushService.java` (UnifiedPush), `HearthNotifications.java` (channels and
 notifications), `CallService.java`, and the plain-Java rules `PushPolicy.java`, `PushPayload.java` and
 `InviteLinks.java`.
+
+## iPhone
+
+The iPhone app (App Store, through TestFlight) is the same idea: the server's own page in a web view
+(`WKWebView`), with native parts around it. It's built on GitHub's macOS machines, so nobody needs a Mac. Getting it
+into the App Store, step by step: [`../docs/IOS-STORE.md`](../docs/IOS-STORE.md); signing and its secrets:
+[`../docs/SIGNING.md`](../docs/SIGNING.md#iphone).
+
+How it differs from the Android app:
+
+* **One server.** The App Store build is made for `HEARTH_SERVER` and can't switch (`lockServer`). Its
+  notifications come from Apple's push service (APNs) with the publisher's key, which only that server has
+  (`APNS_*` in the server's `.env`); any other server says `apnsEnabled: false`. No self-signed certificates: the
+  server needs a normal public one.
+* **Notifications** need no push app. The server sends Apple a notice that only says "New message" or "Incoming
+  call"; the real text travels encrypted to keys the phone made (the same Web Push encryption Android gets), and
+  the notification extension decrypts it on the phone. Call rings are *Time Sensitive* with their own sound
+  (`ios-native/resources/ring.wav`, 15 seconds, made by `scripts/make-ring.js`); a ring more than two minutes old
+  shows as *Missed call*.
+* **Calls** keep their audio with the screen locked only while a call is going on (background audio). Whether the
+  microphone keeps working when the phone locks hasn't been tried on a device yet. There's no in-call notification
+  or full-screen call screen (that would need CallKit).
+* **Share → Hearth** is a share extension: it keeps a TikTok or Instagram link and Hearth's share picker opens the
+  next time you open Hearth (iOS doesn't let it open the app itself).
+* **Invite links:** `hearth://invite/CODE`, and `https://your-server/invite/CODE` (Universal Links) once the server
+  has `APPLE_APP_IDS` set.
+* **Saving files** opens the share sheet (*Save to Files*, AirDrop…); files saved in the app show in the Files app.
+* **Nothing copied off the phone:** the sign-in, the web view's data and the push keys are kept out of iCloud
+  backups and phone transfers.
+* **No back button:** swipe from the left edge to go back.
+
+### What's in this folder for it
+
+* `ios-native/HearthKit/`: a Swift package with the rules ported from the Java files (`BridgePolicy`,
+  `PushPolicy`, `PushPayload`, `InviteLinks`, `ShareLinks`) plus Web Push decryption (`WebPushDecrypt`), the push
+  keys (`DeviceKeys`) and certificate fingerprints. No UIKit, so `swift test` runs it on its own (`API.md` lists
+  what it offers).
+* `ios-native/App/`: the app's Swift code (the web view and its navigation rules, the page bridge `hearthIOS`, push,
+  notifications, calls, saving files, links). `AppDelegate.swift` and `SceneDelegate.swift` replace Capacitor's.
+* `ios-native/NotificationService/` and `ios-native/ShareExtension/`: the two extensions.
+* `ios-native/resources/`: the extensions' `Info.plist` files, the three targets' entitlements and the ring sound.
+* `ios-native/ExportOptions.plist`: how the signed archive is exported for App Store Connect.
+* `scripts/patch-ios.rb`: adds all of the above to the Xcode project `npx cap add ios` makes, and checks it.
+* `Gemfile` / `Gemfile.lock`: the Ruby tools at exact versions (`xcodeproj` for the patch script, `fastlane` for the
+  TestFlight upload only).
+
+### Building it yourself
+
+On a Mac with Xcode 26, Node 22 and Ruby 3.3 (the `ios` job in `.github/workflows/hearth-apps.yml` does exactly
+this):
+
+```
+npm ci
+bundle install
+npx cap add ios
+bundle exec ruby scripts/patch-ios.rb ios
+npx cap sync ios
+(cd ios-native/HearthKit && swift test)
+xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO build
+```
+
+`patch-ios.rb` takes `SERVER` (the baked-in server, for Universal Links), `APPLE_TEAM_ID`, `VERSION_NAME` and
+`VERSION_CODE` from the environment, refuses a project that doesn't look like Capacitor's template, changes nothing
+more when run twice, and ends by reading everything back (`--check` only checks; the workflow runs it again after
+`cap sync`). Run `npm run ios:patch` for the same thing. `ios/` is generated and never committed.
+
+The page reaches native code only through the `hearthIOS` bridge, which checks every message's origin (the
+connect screen or the saved server, as on Android). The server's page could also reach any Capacitor plugin built
+into the app, so the build fails if one other than the keyboard plugin is.

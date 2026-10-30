@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 26;
+const SCHEMA_VERSION = 27;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1815,6 +1815,14 @@ CREATE TABLE IF NOT EXISTS key_owed (
 );
 `);
 addColumn('scheduled_messages', 'peer_pq', 'TEXT');
+
+// v27 (iPhone app): push subscriptions can also be Apple's own push service (APNs, server/apns.js) instead of Web Push.
+//   push_subs.kind       'webpush' (every row from before) or 'apns'
+//   push_subs.apns_env   'production' or 'sandbox' (a development build run from Xcode); NULL for Web Push
+// An APNs row's endpoint is 'apns:<env>:<device token in lowercase hex>', so the device limit, the session and token
+// checks, back-off, "replaces", unsubscribing and sign-out all treat it like any other subscription.
+addColumn('push_subs', 'kind', "TEXT NOT NULL DEFAULT 'webpush'");
+addColumn('push_subs', 'apns_env', 'TEXT');
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
 db.exec('COMMIT');

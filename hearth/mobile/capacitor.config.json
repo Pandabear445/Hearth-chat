@@ -9,12 +9,30 @@
     "allowMixedContent": false,
     "captureInput": true,
     "webContentsDebuggingEnabled": false,
-    "appendUserAgent": "HearthAndroid"
+    "appendUserAgent": "HearthAndroid",
+    "includePlugins": []
+  },
+  "ios": {
+    "appendUserAgent": "HearthiOS",
+    "webContentsDebuggingEnabled": false,
+    "contentInset": "never",
+    "scrollEnabled": true,
+    "allowsLinkPreview": false,
+    "includePlugins": ["@capacitor/keyboard"]
   },
   "plugins": {
     "SystemBars": {
       "insetsHandling": "disable",
       "style": "DARK"
+    },
+    "Keyboard": {
+      "resize": "native"
+    },
+    "CapacitorHttp": {
+      "enabled": false
+    },
+    "CapacitorCookies": {
+      "enabled": false
     }
   }
 }

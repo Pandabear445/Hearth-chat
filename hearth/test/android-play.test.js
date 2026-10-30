@@ -154,7 +154,7 @@ test('play-3: inside the app, Settings has no download page or share link, and /
   }
   // The page: with the app's user agent, no files at all, and the page stops before listing any.
   const page = read('public', 'js', 'download-page.js');
-  assert.match(page, /const inApp = \/\\bHearthAndroid\\b\/\.test\(ua\);/);
+  assert.match(page, /const inApp = \/\\bHearth\(Android\|iOS\)\\b\/\.test\(ua\);/);
   assert.match(page, /const files = inApp \? \[\] : cfg\.downloads \|\| \[\];/);
   const render = fnSource(page, 'render');
   assert.match(render, /^function render\(\) \{\n {2}const p = document\.getElementById\('primary'\);\n {2}p\.replaceChildren\(\);\n {2}if \(inApp\) \{[\s\S]*?\n {4}return;\n {2}\}/);

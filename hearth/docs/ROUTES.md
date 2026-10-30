@@ -96,6 +96,7 @@ Routes: 396 HTTP, 26 socket events.
 | GET | `/download` | server/index.js:1302 | none | none (public static page); n.a. | none | none | platform.test.js (CSP present on /download) | none |
 | GET | `/terms` | server/index.js:1303 | none | none; n.a. | none | none | platform.test.js, attack.test.js (generic every-route sweep: unauthenticated, revoked token, hostile bodies) |  |
 | GET | `/.well-known/assetlinks.json` | server/index.js:1321 |  |  |  |  |  |  |
+| GET | `/.well-known/apple-app-site-association` | server/index.js:1546 | none | none; n.a. | none (no input); 404 unless APPLE_APP_IDS is set | none | ios-push.test.js |  |
 | GET | `/updates/:file` | server/index.js:1332 | none | none; n.a. | UPDATE_FILE regex + no ".."; existsSync | none | attack.test.js |  |
 | GET | `/downloads/:file` | server/index.js:1340 | none | none; n.a. | must equal a name from listDownloads() (platform ext, no dotfiles) | none | attack.test.js |  |
 | GET | `/vendor/argon2.js` | server/index.js:1402 | none | none (static wasm loader from hash-wasm); n.a. | fixed require.resolve path | none | none direct (loaded by client) | none |

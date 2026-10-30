@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The app's entitlements. scripts/patch-ios.rb copies this to ios/App/App/App.entitlements and sets
+     aps-environment (development for cloud-managed signing, which Xcode turns into production when it exports for
+     the App Store; production for a distribution profile) and, for a build with HEARTH_SERVER, the associated
+     domain for that server's invite links. -->
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>development</string>
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.app.hearth.mobile</string>
+	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)group.app.hearth.mobile</string>
+	</array>
+</dict>
+</plist>

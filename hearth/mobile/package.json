@@ -2,14 +2,19 @@
   "name": "hearth-mobile",
   "version": "1.0.0",
   "private": true,
-  "description": "Hearth for Android: opens your Hearth server in an app, with microphone, camera and file access.",
+  "description": "Hearth for Android and iPhone: opens your Hearth server in an app, with microphone, camera and file access.",
   "scripts": {
     "android:add": "cap add android",
-    "android:sync": "cap sync android"
+    "android:sync": "cap sync android",
+    "ios:add": "cap add ios",
+    "ios:patch": "bundle exec ruby scripts/patch-ios.rb ios",
+    "ios:sync": "cap sync ios"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.3",
-    "@capacitor/core": "^8.5.3"
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/ios": "^8.6.0",
+    "@capacitor/keyboard": "^8.0.6"
   },
   "devDependencies": {
     "@capacitor/assets": "3.0.5",

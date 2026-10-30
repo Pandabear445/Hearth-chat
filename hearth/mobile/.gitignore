@@ -2,3 +2,7 @@ node_modules/
 # The Android project the build generates (npx cap add android), not fastlane/metadata/android.
 /android/
 dist/
+# The iPhone project the build generates (npx cap add ios), and the Ruby gems `bundle install` puts here.
+/ios/
+/vendor/
+/.bundle/

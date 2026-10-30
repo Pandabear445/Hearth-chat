@@ -541,7 +541,49 @@ Hearth avoids both. The phone's ntfy app is the same; only its server changes.
 it's dropped after a few tries); `status=429` means ntfy's rate limit (Hearth waits as long as ntfy asks, and keeps
 the phone). Each host and answer is logged at most once an hour, and never the address itself.
 
-## 8. What's still missing
+## 8. iPhone notifications (APNs)
+
+An app from the App Store can't use Web Push, so the iPhone app gets its notifications from Apple's push service
+(APNs, `server/apns.js`). The key that sends them belongs to the Apple team that publishes the app, so this only
+works on the publisher's own server; every other server answers `apnsEnabled: false` in `/api/config`, and the app
+says notifications aren't available there.
+
+1. **The key:** developer.apple.com → Certificates, Identifiers & Profiles → Keys → a new key with Apple Push
+   Notifications service (both environments, or production only). Download the `.p8` once.
+2. **Put it on the server, outside the image:** for example `/etc/hearth/AuthKey_ABC123DEFG.p8`, owned by the user
+   Hearth runs as, mode 600 (mount it read-only into the container). Then in `.env`:
+   `APNS_KEY_FILE=/etc/hearth/AuthKey_ABC123DEFG.p8`, `APNS_KEY_ID=ABC123DEFG` (the key's ID), `APNS_TEAM_ID=…` (the
+   team's 10-character ID) and `APNS_TOPIC=app.hearth.mobile` (the app's bundle ID). `APNS_KEY` can hold the key's
+   text instead of a file. Leave `APNS_ALLOW_SANDBOX` unset unless you're testing a build run from Xcode.
+3. **Universal Links:** `APPLE_APP_IDS=TEAMID1234.app.hearth.mobile` makes `/.well-known/apple-app-site-association`
+   list the app, so `https://this-server/invite/…` links open in it. Unset, that address answers 404.
+4. **The firewall:** the server talks to `api.push.apple.com` on port 443 (HTTP/2) directly. It doesn't go through
+   `HTTPS_PROXY` or the outbound guard: the host is fixed in the code, so there's nothing a user could point it at.
+   An egress allowlist needs that host (and `api.sandbox.push.apple.com` with `APNS_ALLOW_SANDBOX=1`).
+
+**What Apple sees:** the device token, the app's bundle ID, and an alert that always reads like hidden previews (the
+instance's name and "New message" or "Incoming call"), plus the conversation's tag and in-app link. Who wrote and
+where travel inside `enc`, encrypted to keys the phone made (the same encryption and padding as Web Push); the app
+decrypts them on the phone and shows them only if the person chose to see names.
+
+**Troubleshooting** (each logged at most once an hour, never the key):
+- `push apns_disabled why=…`: the key can't be read (`key_file_unreadable`, `key_unreadable`, `key_not_p256`) or an
+  ID is missing or malformed (`bad_key_id`, `bad_team_id`, `bad_topic`). iPhone notifications are off; nothing else is.
+- `push apns_config reason=InvalidProviderToken` (or `BadTopic`, `TopicDisallowed`, `ExpiredProviderToken`…): Apple
+  refused the key, team or topic. Hearth stops sending to Apple for 15 minutes and tries again. No iPhone is
+  unsubscribed for this, so fixing `.env` and restarting is enough.
+- `push apns_unreachable`: Apple couldn't be reached or answered with an error twice in a row; Hearth waits (30
+  seconds, doubling up to 15 minutes) before trying again. Usually the firewall.
+- `push apns_bug reason=…`: a request Apple called malformed. Please report it.
+- `push apns_unconfirmed reason=DeviceTokenNotForTopic` (or `BadDeviceToken`): Apple says a phone's token belongs to
+  another app or environment, but nothing has reached an iPhone since Hearth started, so it might be `APNS_TOPIC`
+  instead. The phone is kept. Three different phones answered that way with nothing delivered is logged as
+  `push apns_config` naming `APNS_TOPIC` and pauses sending for 15 minutes, again without unsubscribing anyone.
+- A phone whose app was removed is forgotten when Apple says so (`Unregistered`). A token from another app or a
+  development build sent to production (`DeviceTokenNotForTopic`, `BadDeviceToken`) is forgotten too, once Apple has
+  accepted a notification for that environment since Hearth started (which shows the topic is right).
+
+## 9. What's still missing
 
 - **Metrics history.** `/metrics` (section 3) is point-in-time like Admin → Health; keeping history is up to
   Prometheus (or whatever scrapes it). There's no OpenMetrics format, no per-route timings and no histograms.

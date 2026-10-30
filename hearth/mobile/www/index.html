@@ -53,13 +53,17 @@
       if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
       try { const u = new URL(v); return u.protocol === 'https:' || u.protocol === 'http:' ? u.origin : ''; } catch { return ''; }
     };
-    // Tells the app which site is "yours" (it alone loads inside the app and gets notifications/downloads).
+    // Tells the app which site is "yours" (it alone loads inside the app and gets notifications/downloads). The
+    // iPhone app's bridge is window.HearthIOS (over webkit.messageHandlers.hearthIOS), the Android app's HearthAndroid.
     const tellApp = (origin) => new Promise((resolve) => {
-      const A = window.HearthAndroid;
+      const ios = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hearthIOS;
+      const A = ios ? window.HearthIOS : window.HearthAndroid;
       if (!A) return resolve();
       const done = setTimeout(resolve, 1500);
-      A.onmessage = (e) => { try { if (JSON.parse(e.data).type === 'serverSet') { clearTimeout(done); resolve(); } } catch { /* ignore */ } };
-      A.postMessage(JSON.stringify({ type: 'setServer', origin }));
+      const answer = (d) => { try { if ((typeof d === 'string' ? JSON.parse(d) : d).type === 'serverSet') { clearTimeout(done); resolve(); } } catch { /* ignore */ } };
+      A.onmessage = (e) => answer(e.data);
+      const r = A.postMessage(JSON.stringify({ type: 'setServer', origin }));
+      if (r && typeof r.then === 'function') r.then(answer, () => {});
     });
     async function go(origin) {
       const btn = document.getElementById('go');

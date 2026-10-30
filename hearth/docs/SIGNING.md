@@ -3,10 +3,10 @@
 This page explains, in plain language, why Windows and Android warn people before they install the Hearth
 apps, what you can buy or set up to make those warnings go away (or get smaller), what it costs, and exactly
 which GitHub settings to fill in. It also covers signing the desktop app's updates, which protects people's apps
-from a server that's been broken into, and signing server updates, which protects servers from a swapped update
-zip. The build (`.github/workflows/hearth-apps.yml`) already knows how to sign:
-it signs automatically as soon as the secrets below exist, and builds unsigned apps (like today) when they
-don't.
+from a server that's been broken into, signing server updates, which protects servers from a swapped update
+zip, and signing the iPhone app for TestFlight and the App Store. The build (`.github/workflows/hearth-apps.yml`)
+already knows how to sign: it signs automatically as soon as the secrets below exist, and builds unsigned apps
+(like today) when they don't.
 
 Prices and rules below were checked in October 2026. They change, so check the linked pages before paying.
 
@@ -22,6 +22,7 @@ Prices and rules below were checked in October 2026. They change, so check the l
 | Windows, same | or: **Azure Artifact Signing** (your own name as publisher) | about **$9.99 / month** | an evening, plus a few days for the ID check |
 | Windows: SmartScreen still warns about a *signed* installer for a while | Nothing to buy; it fades as people download it (reputation) | free | wait |
 | Android: "Install unknown apps", Play Protect "unrecognised app" | Install from **Google Play** (internal testing for friends) | **$25 once** | an evening, plus Google's ID check |
+| iPhone: no way to install at all outside the App Store | The **Apple Developer Program**, then TestFlight and the App Store (see [iPhone](#iphone)) | **$99 / year** | an evening, then App Review (days) |
 | Browser padlock / "Not secure" on your website | Already done: Caddy gets a real TLS certificate | free | none |
 | Desktop apps installing an update someone else put on your server | Your own **update signing key** (`UPDATE_SIGNING_KEY`, see [Signing desktop updates](#signing-desktop-updates)) | **free** | ten minutes |
 | Servers installing a swapped update zip (it carries the code that does the encryption) | Your own **server update signing key** (`update-signing.pub`, see [Signing server updates](#signing-server-updates)) | **free** | ten minutes |
@@ -555,14 +556,110 @@ the Play build. Play also asks every app with a foreground service to say what i
 
 ---
 
+## iPhone
+
+### Why it's different
+
+An iPhone only installs apps Apple has signed for it: from the App Store, from TestFlight, or a developer's own
+test builds. There's no "install anyway" like Android's. So the iPhone app needs the **Apple Developer Program**
+($99 a year), and it reaches people through **TestFlight** (you and up to 100 testers, then up to 10,000 by
+invitation) and the **App Store**. The whole walkthrough, from the account to App Review, is
+[IOS-STORE.md](IOS-STORE.md). This section is only about the signing and the keys.
+
+No Mac is needed: GitHub's macOS machines build and sign the app (the `ios-archive` job) and upload it to TestFlight
+(`testflight-upload`). Both run in the `production` environment, only for `app-v*` tags and the default branch.
+The `ios` job builds the app for the simulator on every push without signing it and without any secret.
+
+There are **two different keys**, and they go to different places:
+
+| Key | What it does | Where it goes |
+|---|---|---|
+| **APNs key** (`AuthKey_….p8` from *Keys*, "Apple Push Notifications service") | Your server sends notifications to iPhones with it | **The server only**: `/etc/hearth/`, mode 600, owned by the user Hearth runs as, outside the image; `APNS_KEY_FILE` in `.env` ([OPERATIONS.md](OPERATIONS.md#8-iphone-notifications-apns)). Never GitHub. |
+| **App Store Connect API key** (`AuthKey_….p8` from App Store Connect → *Integrations*) | GitHub signs the app and uploads it to TestFlight with it | **GitHub only**: the `production` environment's secrets. Never the server. |
+
+### Option A (recommended): Xcode's cloud-managed signing
+
+Xcode makes the Apple Distribution certificate and the provisioning profiles itself, keeps the certificate's
+private key in Apple's cloud, and signs with it when it exports the app. There's no certificate file for you to
+make, back up or renew.
+
+1. App Store Connect → *Users and Access → Integrations → App Store Connect API → Team Keys → +*: name `GitHub`,
+   access **Admin**. Xcode needs Admin to create cloud-managed certificates and profiles. Download the key (once
+   only) and note the **Key ID** and the **Issuer ID**.
+2. In the `production` environment's secrets: `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8_BASE64` (the `.p8` as
+   one line of base64: `base64 -w0 AuthKey_XXXX.p8` on Linux, or in PowerShell
+   `[Convert]::ToBase64String([IO.File]::ReadAllBytes("AuthKey_XXXX.p8"))`). As a variable: `APPLE_TEAM_ID`.
+3. Delete the downloaded file, or keep it only in a password manager.
+
+The job writes the key to the runner's temporary folder with mode 600 for the two `xcodebuild` steps and deletes
+it at the end, whatever happened. Archiving signs with a development certificate first (Xcode makes one through
+the key if the runner has none; the export then re-signs for the App Store), so *Certificates* in the developer
+portal slowly collects *Apple Development* certificates "created via API". Revoke old ones now and then; that
+doesn't affect the App Store app *(unverified: whether Apple caps how many there can be)*.
+
+**The risk:** an Admin key can do anything in App Store Connect (add users, change the listing, remove the app).
+It's only in the `production` environment, whose jobs run only for the default branch and `app-v*` tags and run no
+code from pull requests. Add *required reviewers* to the environment if you want to approve each run. If that's
+still too much, use option B with an App Manager key.
+
+### Option B: your own certificate (still no Mac)
+
+1. Make a certificate request on any Linux machine (or WSL), with your email:
+
+   ```
+   openssl req -new -newkey rsa:2048 -nodes -keyout dist.key -out dist.csr -subj "/emailAddress=you@example.com/CN=Hearth/C=US"
+   ```
+
+2. developer.apple.com → *Certificates → +* → **Apple Distribution** → upload `dist.csr` → download
+   `distribution.cer`. Then turn it into a `.p12` with a password of your choice:
+
+   ```
+   openssl x509 -inform DER -in distribution.cer -out dist.pem
+   openssl pkcs12 -export -legacy -inkey dist.key -in dist.pem -out dist.p12
+   ```
+
+3. *Profiles → +* → **App Store Connect** (distribution), three times: for `app.hearth.mobile`,
+   `app.hearth.mobile.NotificationService` and `app.hearth.mobile.ShareExtension`, each with that certificate.
+   Download the three `.mobileprovision` files.
+4. In the `production` environment's secrets, as one line of base64 each: `IOS_DIST_CERT_P12_BASE64` and
+   `IOS_DIST_CERT_PASSWORD` (the password, as it is), and `IOS_PROFILE_APP_BASE64`, `IOS_PROFILE_NSE_BASE64`,
+   `IOS_PROFILE_SHARE_BASE64`. The API key (option A's secrets) still uploads to TestFlight, but **App Manager**
+   is enough for it now.
+5. Back up `dist.key` and `dist.p12` somewhere safe and offline, then delete the working copies.
+
+With `IOS_DIST_CERT_P12_BASE64` set, the job uses option B: it imports the certificate into a keychain made for
+that run (random password, deleted at the end), installs the profiles, checks each is for the right app ID, and
+signs each target with its own profile. Certificates and profiles expire after a year: make new ones and update
+the secrets before then.
+
+### Settings for both
+
+- **`APPLE_TEAM_ID`** (variable): the 10-character Team ID from *Membership details*.
+- **`HEARTH_SERVER`** (variable, already there for Android): the App Store app is built for this one server and
+  can't be switched. Its `https://…/invite/…` links open the app (Universal Links) once the server has
+  `APPLE_APP_IDS=TEAMID.app.hearth.mobile` in its `.env`.
+- **`IOS_REQUIRE_SIGNING`** (variable, optional): `true` makes `ios-archive` fail instead of skipping when the
+  secrets are missing.
+
+**Version numbers:** the version people see is `major.minor.patch` from the `app-v*` tag (or Hearth's
+`package.json`); the build number uses Android's formula, `(major × 100 + minor) × 100000 + run number`, so it
+always goes up, which App Store Connect requires.
+
+**What's never released:** the `.ipa` only goes to TestFlight. The `release` and `publish-to-vps` jobs refuse an
+`.ipa`, so it can't end up on GitHub or on your server's download page.
+
+---
+
 ## Where each secret and variable goes
 
 All in GitHub: your repository → *Settings → Secrets and variables → Actions*, except the secrets that only sign or
-publish releases (`UPDATE_SIGNING_KEY`, `PLAY_SERVICE_ACCOUNT_JSON` and the `VPS_*` ones): put those in the
-**`production` environment** (*Settings → Environments → production → Environment secrets*; create it if the
-workflow hasn't yet). Only the jobs that sign update files or publish releases (`sign-updates`, `play-upload`,
-`release`, `publish-to-vps`) run there, only for `app-v*` tags and the default branch, and none of them installs
-npm packages or runs the build. Give the environment protection rules: **deployment branches and tags** limited to
+publish releases (`UPDATE_SIGNING_KEY`, `PLAY_SERVICE_ACCOUNT_JSON`, the `ASC_*` and `IOS_*` ones and the `VPS_*`
+ones): put those in the **`production` environment** (*Settings → Environments → production → Environment
+secrets*; create it if the workflow hasn't yet). Only the jobs that sign or publish (`sign-updates`, `play-upload`,
+`ios-archive`, `testflight-upload`, `release`, `publish-to-vps`) run there, only for `app-v*` tags and the default
+branch. None of them installs npm packages or runs the build, except `ios-archive`: an iPhone app can only be
+signed on the machine that builds it, so it builds the app again from the same `package-lock.json` and only hands
+the App Store Connect key to the two `xcodebuild` steps. Give the environment protection rules: **deployment branches and tags** limited to
 the default branch and `app-v*` (add `desktop-v*` if you use `hearth/.github/workflows/desktop.yml` in a
 repository of its own), and **required reviewers** (you) if you want to approve each release build: each of those
 jobs then waits for you on every tag and every default-branch push that changes the apps, even one with nothing to
@@ -592,14 +689,19 @@ copy copies nothing. Keep these as repository secrets in that case, knowing ever
 | `UPDATE_SIGNING_KEY` | Secret (`production` environment) | Signs desktop updates |
 | `UPDATE_PUBLIC_KEY` | Variable | Its public half, built into the apps: they only install updates signed with `UPDATE_SIGNING_KEY` |
 | `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_DOWNLOADS_DIR` | Secret (`production` environment) | Copy release installers and update files to your server's `data/downloads` (use a user that can only write that folder, not root) |
+| `APPLE_TEAM_ID` | Variable | iPhone: your Apple team, for signing |
+| `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8_BASE64` | Secret (`production` environment) | iPhone: the App Store Connect API key that signs (option A, Admin role) and uploads to TestFlight |
+| `IOS_DIST_CERT_P12_BASE64`, `IOS_DIST_CERT_PASSWORD`, `IOS_PROFILE_APP_BASE64`, `IOS_PROFILE_NSE_BASE64`, `IOS_PROFILE_SHARE_BASE64` | Secret (`production` environment) | iPhone, option B only: your own distribution certificate and the three profiles |
+| `IOS_REQUIRE_SIGNING` | Variable (optional) | `true` = fail instead of skipping the signed iPhone app |
 | `VPS_HOST_FINGERPRINT` | Secret (`production` environment) | **Required with `VPS_HOST`:** the server's SSH host key fingerprint (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the server, the `SHA256:…` part). Without it the copy fails and copies nothing |
 
 Forks and Dependabot runs don't get your secrets; their builds are simply unsigned.
 
 ## Mac
 
-The Mac build stays unsigned (signing and notarising needs Apple's Developer Program, $99/year). Mac users
-right-click the app → *Open* the first time, and download new versions from your server's `/download` page.
+The Mac build stays unsigned. Signing and notarising it needs the same Apple Developer Program as the iPhone app
+(see [iPhone](#iphone)), but nothing in the workflow does it yet. Mac users right-click the app → *Open* the first
+time, and download new versions from your server's `/download` page.
 
 ## Sources
 
@@ -614,3 +716,6 @@ right-click the app → *Open* the first time, and download new versions from yo
 - Google: [Play Console internal testing](https://support.google.com/googleplay/android-developer/answer/9845334),
   [Play App Signing](https://support.google.com/googleplay/android-developer/answer/9842756)
 - [SignPath Foundation](https://signpath.org/) (free signing for open-source projects)
+- Apple: [cloud-managed certificates](https://developer.apple.com/help/account/certificates/cloud-managed-certificates),
+  [App Store Connect API keys](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api),
+  [TestFlight](https://developer.apple.com/testflight/)
