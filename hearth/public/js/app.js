@@ -930,7 +930,7 @@ function startApp(account) {
       }
     }
     renderRail();
-    if (!S.view.serverId) renderSidebar();
+    if (homeListShows()) renderSidebar();
     if (['friends', 'home'].includes(S.view.type) && S.view.tab !== 'add') renderMain();
   });
   socket.on('server:add', ({ server, users, voice: vs, keyState }) => {
@@ -945,7 +945,7 @@ function startApp(account) {
     // A group chat's line in the conversation list, from the copy the list draws (drawn again once decrypted).
     if (isGroup(server)) previewGroup(S.servers.find((s) => s.id === server.id)).then(redrawConvList);
     renderRail();
-    if (!S.view.serverId) renderSidebar();
+    if (homeListShows()) renderSidebar();
   });
   socket.on('rail:update', ({ rail }) => folders.applyRemote(rail));
   // Read markers, notification preferences and saved messages changed on another of your devices.
@@ -962,7 +962,7 @@ function startApp(account) {
   });
   socket.on('study:changed', (p) => { if (S.me.studyEnabled) study.onRemoteChange(p); });
   socket.on('soundboard:changed', () => { board.load(true).catch(() => {}); });
-  socket.on('study:enabled', ({ enabled }) => { S.me.studyEnabled = enabled; if (!S.view.serverId) renderSidebar(); });
+  socket.on('study:enabled', ({ enabled }) => { S.me.studyEnabled = enabled; if (homeListShows()) renderSidebar(); });
   socket.on('updates:new', (p) => { updates.onNew(p); if (S.view.type === 'updates') renderMain(); });
   socket.on('server:update', (server) => {
     const i = S.servers.findIndex((s) => s.id === server.id);
@@ -978,13 +978,13 @@ function startApp(account) {
     if (S.view.serverId === server.id) {
       applyServerTheme();
       // Lost access to the channel you're in (permissions changed)? Go somewhere you can see.
-      if (S.view.channelId && !server.channels.some((c) => c.id === S.view.channelId)) { toast('You no longer have access to that channel.'); return openServer(server.id); }
+      if (S.view.channelId && !server.channels.some((c) => c.id === S.view.channelId)) { toast('You no longer have access to that channel.'); return redirectQuietly(() => openServer(server.id)); }
       renderSidebar(); renderHeader(); renderPanel();
       if (composers.main) composers.main.renderExtras();
       refreshWelcomeRoles(server);
       refreshInviteNudge(server);
     }
-    else if (server.kind === 'group' && !S.view.serverId) renderSidebar();
+    else if (server.kind === 'group' ? homeListShows() : serverListShows(server.id)) renderSidebar();
   });
   socket.on('server:remove', ({ serverId }) => {
     const was = S.servers.find((s) => s.id === serverId);
@@ -998,8 +998,8 @@ function startApp(account) {
       Object.entries(S.threadState).forEach(([id, t]) => { if (gone.has(t.channelId)) delete S.threadState[id]; });
       updateTitle();
     }
-    if (S.view.serverId === serverId) { toast(was && was.kind === 'group' ? 'You left the group.' : 'You are no longer in that server.'); goHome(); }
-    else { renderRail(); if (!S.view.serverId) renderSidebar(); }
+    if (S.view.serverId === serverId) { toast(was && was.kind === 'group' ? 'You left the group.' : 'You are no longer in that server.'); redirectQuietly(goHome); }
+    else { renderRail(); if (homeListShows() || isPhoneUI()) renderSidebar(); } // (a phone's list may show that server's channels)
   });
   socket.on('member:add', ({ serverId, user }) => {
     setUser(user);
@@ -1030,7 +1030,7 @@ function startApp(account) {
   socket.on('channel:create', (ch) => {
     const s = S.servers.find((x) => x.id === ch.serverId);
     if (s && !s.channels.find((c) => c.id === ch.id)) s.channels.push(ch);
-    if (S.view.serverId === ch.serverId) renderSidebar();
+    if (serverListShows(ch.serverId)) renderSidebar();
   });
   socket.on('call:region', (p) => onCallRegion(p));
   socket.on('channel:update', (ch) => {
@@ -1039,14 +1039,15 @@ function startApp(account) {
     const i = s.channels.findIndex((c) => c.id === ch.id);
     if (i >= 0) s.channels[i] = ch;
     if (S.view.serverId === ch.serverId) { renderSidebar(); renderHeader(); }
+    else if (serverListShows(ch.serverId)) renderSidebar();
   });
   socket.on('channel:delete', ({ id, serverId }) => {
     const s = S.servers.find((x) => x.id === serverId);
     if (s) s.channels = s.channels.filter((c) => c.id !== id);
     delete S.msgs['c:' + id];
     if (S.threadMentions.delete('c:' + id)) updateTitle();
-    if (S.view.channelId === id) openServer(serverId);
-    else if (S.view.serverId === serverId) renderSidebar();
+    if (S.view.channelId === id) redirectQuietly(() => openServer(serverId));
+    else if (S.view.serverId === serverId || serverListShows(serverId)) renderSidebar();
   });
 
   socket.on('message:new', (m) => { if (!S.me) return; if (m.threadId) onThreadMessage(m); else onNewMessage('c:' + m.channelId, m); });
@@ -1114,7 +1115,7 @@ function startApp(account) {
     S.dms.unshift(dm);
     if (dm.look !== undefined) LOOK.onEvent('dm:look', { dmId: dm.id, look: dm.look }); // (a new DM's chat background)
     await onNewMessage('d:' + dm.id, message);
-    if (!S.view.serverId) renderSidebar();
+    if (homeListShows()) renderSidebar();
   });
   socket.on('dm:update', (m) => onUpdateMessage('d:' + m.dmId, m));
   // With the DM's newest message now (last), for its line in the conversation list.
@@ -1568,7 +1569,7 @@ const openPersonalName = (u) => PN.openEditor(u, { realName });
 async function loadPreviews() {
   for (const d of S.dms) await previewDm(d);
   for (const s of S.servers.filter((x) => x.kind === 'group')) await previewGroup(s);
-  if (!S.view.serverId) renderSidebar();
+  if (homeListShows()) renderSidebar();
   if (S.view.type === 'home') renderMain();
 }
 function dmById(id) { return S.dms.find((x) => x.id === id); }
@@ -2670,12 +2671,12 @@ function resizeHandle(which) {
 const serverIconEl = (s) => (s.icon ? h('img', { src: s.icon, alt: '' }) : h('span', { class: 'rail-initials', style: s.theme && s.theme.accent ? { color: s.theme.accent } : null }, s.name.split(/\s+/).map((w) => w[0]).join('').slice(0, 3)));
 const updates = createUpdates({
   S, mediaSrc: (src) => mediaSrc(src),
-  onUnread: () => { if (!S.view.serverId) renderSidebar(); renderRail(); },
+  onUnread: () => { if (homeListShows()) renderSidebar(); renderRail(); },
 });
 // Study tools: Recall in a sandboxed frame, with its decks end-to-end encrypted and synced (recall-host.js).
 // Input in its frame doesn't reach this page, so the frame says when it's in use (for automatic Away, and so an update
 // waits; while Study is open an update waits anyway: updateBlockedBy).
-const study = createRecall({ S, vaultKey: () => myVaultKey(), onEnabled: () => { if (!S.view.serverId) renderSidebar(); }, onActive: () => { if (away) away.used(); autoUpdate.input(); } });
+const study = createRecall({ S, vaultKey: () => myVaultKey(), onEnabled: () => { if (homeListShows()) renderSidebar(); }, onActive: () => { if (away) away.used(); autoUpdate.input(); } });
 const folders = createFolders({
   S, servers: () => realServers(), favorites: () => new Set(P.favorites.filter((f) => f.startsWith('s:')).map((f) => f.slice(2))),
   rerender: () => renderRail(), serverUnread: (s) => serverUnread(s), setNotify: (k, v) => setNotify(k, v), railSide: () => railSide(),
@@ -3756,11 +3757,29 @@ function tabFor(v, cur) {
 }
 // setView, on a phone: what it opens is pushed over the list (M.pending: 'list' keeps the list showing), in its tab.
 function phoneEnter(v) {
-  M.level = M.pending || 'conv';
+  const stay = M.pending === 'list';
+  M.level = stay ? 'list' : 'conv';
   M.pending = null;
+  if (stay) return; // (the page showing stays as it is: redirectQuietly)
   M.tab = tabFor(v, M.tab);
   const s = v.serverId && S.servers.find((x) => x.id === v.serverId);
   if (s && !isGroup(s)) M.server = s.id;
+}
+// The view moved by something that happened elsewhere (a server left or deleted, a channel deleted or taken away):
+// on a phone's list page the list stays showing, with nothing pushed over it and the same tab.
+function redirectQuietly(go) {
+  if (isPhoneUI() && M.level === 'list') M.pending = 'list';
+  try { go(); } finally { M.pending = null; }
+}
+// Whether the sidebar shows Home's list and the conversations (so a change to them is drawn there): on a computer when
+// no server or group is open; on a phone on every page but a server's channels.
+function homeListShows() { return isPhoneUI() ? sidebarMode() !== 'server' : !S.view.serverId; }
+// Whether it shows this server's channels: on a computer the server open; on a phone the one picked on Home's page,
+// whatever's open over it.
+function serverListShows(id) {
+  if (!isPhoneUI()) return S.view.serverId === id;
+  const s = sidebarMode() === 'server' && sidebarServer();
+  return !!s && s.id === id;
 }
 // What the sidebar draws: on a computer, a server's channels or Home with the conversations; on a phone, the list
 // page of the tab that's showing.
@@ -5235,7 +5254,7 @@ async function onKeysChanged(serverId, added, heldChanged) {
     MEDIA.onKeys(serverId);
     SIDE.onKeys(serverId); // (and in the side view)
     await REELS.onKeys((k) => !!server && server.channels.some((c) => k === 'c:' + c.id)); // (and in a Reels tab)
-    if (server && isGroup(server)) { await previewGroup(server); if (!S.view.serverId) renderSidebar(); }
+    if (server && isGroup(server)) { await previewGroup(server); if (homeListShows()) renderSidebar(); }
   }
   if (S.view.serverId === serverId && composers.main) { composers.main.renderExtras(); renderHeader(); }
   if (added) SCHED.onKeys(); // scheduled messages waiting for this key can be re-encrypted now
@@ -11920,7 +11939,7 @@ async function ringingDm(room, from) {
     const d = sec.dmForCall(room, from, await api('POST', '/dms', { userId: from }));
     if (!S.dms.find((x) => x.id === d.id)) S.dms.unshift(d);
     if (d.look !== undefined) LOOK.onEvent('dm:look', { dmId: d.id, look: d.look });
-    if (!S.view.serverId) renderSidebar();
+    if (homeListShows()) renderSidebar();
     return true;
   } catch { return false; }
 }
