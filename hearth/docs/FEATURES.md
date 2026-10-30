@@ -1782,6 +1782,14 @@ in a drawer behind a ☰ button. Now it's built like a phone app:
   before.
 - **The call bar** (`#m-callbar`): while you're in a call and not looking at it, a bar floats over the list (above the
   tab bar), or runs along the top of another conversation: where the call is (a tap goes back to it), Mute and Leave.
+  From the keyboard, focus stays on Mute as it turns into Unmute; after Leave it goes to the page's title. A second
+  call ringing comes up above it, and both keep clear of a notch held sideways. In a call, the controls are 44 px
+  each; on a phone narrower than 480 px, seven or eight of them go in two rows of four.
+- **Changes from elsewhere** (a channel made, renamed or deleted, a friend request, a server left on another device)
+  are drawn on the list page that's showing at once, and one that moves the open view (its channel deleted, its
+  server left) leaves the list page and its tab showing rather than pushing a conversation over it.
+- **A window crossing into the phone layout** (or out of it: snapped to half a screen, an iPad turned) redraws only
+  the lists, the conversation's header and the bars; the chat stays as it was, where it was scrolled.
 - The level out of sight is `inert`, so Tab and a screen reader only find what's on screen. Going into a
   conversation puts focus on its name (from the keyboard, the message box); coming back puts it on the row it was
   opened from; a new tab puts it on the page's title. "Skip to conversation" brings the conversation forward first.
@@ -1814,7 +1822,8 @@ straight onto a conversation from a notification leaves on its first Back until 
 Back always works), or while a `#c/…` link waits for app.js to follow it (it rewrites that entry's address). A link
 followed while something is open isn't taken for Back. A step left over from before a reload is turned into an
 ordinary entry. Esc on a phone closes the side panel, then a selection, an edit, a reply or a thread, then takes
-the conversation back to its list (not while Reels or Brainrot is full screen: Esc turns those off); on a desktop it
+the conversation back to its list (not while Reels or Brainrot is full screen, nor with Brainrot on in a call or
+the watch-together player: Esc turns those off); on a desktop it
 doesn't close the panel, as before. Going back stops a Reels feed and pauses the chat's videos (a call's keep
 playing).
 
@@ -1846,7 +1855,13 @@ settings adds nothing to the history. The flow "phone message actions": Back can
 recording and stays in Hearth, and focus goes back to the message without a ring. The Reels and Brainrot flows check
 that neither the tab bar nor the call bar shows over Reels full screen. The accessibility suite
 (`npm run test:a11y`) checks the tab bar's size, names and landmark, every tab's page for sideways scrolling and a
-heading, that the hidden level is inert, and that Esc goes back to the list with focus on it.
+heading, that the hidden level is inert, and that Esc goes back to the list with focus on it. The flows in
+`test/e2e/phone-layout.mjs` cover the rest: "phone lists" (a window narrowed into the phone layout and widened again
+keeps its chat and place; channel and friend changes reach the list; a deleted channel or a server left elsewhere
+leaves the list page showing), "phone calls" (at 360 px every call control 44 px; Esc turns Brainrot off in a call;
+the call bar keeps focus; its words 4.5:1 in the light theme; a ringing call above the call bar; safe areas sideways)
+and "phone targets" (44 px categories, Create channel, Notifications and Friends tabs, icon buttons, emoji and GIF
+picker buttons at 360 px; a DM's whole title opens its profile).
 
 ## Photos & videos, comments on one photo, and tags
 
