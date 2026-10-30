@@ -2069,6 +2069,15 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   /* Collisions with the tab bar and the call bar. */
   body.m-ui.m-list .wt-dock.mini { bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 84px); }
   body.m-ui .ring-card { left: calc(10px + env(safe-area-inset-left)); right: calc(10px + env(safe-area-inset-right)); width: auto; bottom: calc(12px + env(safe-area-inset-bottom)); }
+  /* The owner's announcement: a strip across the top, and everything else moved down by its height (--ann-h, set by
+     app.js fitAnnouncement), so it never covers Back, a title, a button or a row. */
+  body.m-ui .announce {
+    top: 0; left: 0; right: 0; transform: none; max-width: none; border-radius: 0; border-width: 0 0 1px; z-index: 30; animation: none;
+    padding: calc(env(safe-area-inset-top) + 8px) calc(6px + env(safe-area-inset-right)) 8px calc(14px + env(safe-area-inset-left));
+  }
+  body.m-ui.has-ann #app { margin-top: var(--ann-h, 0px); height: calc(var(--app-h, 100%) - var(--ann-h, 0px)); }
+  body.m-ui.has-ann #rail, body.m-ui.has-ann #sidebar, body.m-ui.has-ann #members, body.m-ui.has-ann .reels-layer.full { top: var(--ann-h, 0px); }
+  body.m-ui.has-ann.m-conv #m-callbar:not([hidden]) { top: var(--ann-h, 0px); }
   body.m-ui.m-list .ring-card { bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 12px); }
   /* (Above the call bar floating over the list, not on its Mute and Leave.) */
   body.m-ui.m-list.m-call .ring-card { bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 80px); }

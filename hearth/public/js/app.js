@@ -3831,7 +3831,9 @@ function phoneShell() {
   const b = document.body;
   const conv = on && M.level === 'conv';
   const was = b.classList.contains('m-conv');
+  const flipped = b.classList.contains('m-ui') !== on;
   b.classList.toggle('m-ui', on);
+  if (flipped) fitAnnouncement(); // (a strip on a phone, floating on a computer)
   b.classList.toggle('m-list', on && !conv);
   b.classList.toggle('m-conv', conv);
   if (on) b.dataset.mtab = M.tab; else delete b.dataset.mtab;
@@ -12196,10 +12198,23 @@ function pqUpgraded() {
 function renderAnnouncement() {
   const a = S.config.announcement;
   let el = $('#announce');
-  if (!a || localStorage.getItem('hearth.annDismissed') === a.id) { if (el) el.remove(); return; }
-  if (!el) { el = h('div', { id: 'announce', role: 'status' }); document.body.append(el); }
+  if (!a || localStorage.getItem('hearth.annDismissed') === a.id) { if (el) el.remove(); fitAnnouncement(); return; }
+  if (!el) {
+    el = h('div', { id: 'announce', role: 'status' });
+    document.body.append(el);
+    if (window.ResizeObserver) new ResizeObserver(() => fitAnnouncement()).observe(el); // (wraps differently turned sideways)
+  }
   el.className = `announce lvl-${a.level || 'info'}`;
   clear(el).append(icon(a.level === 'warning' ? 'shield' : a.level === 'success' ? 'check' : 'megaphone'),
     h('span', { class: 'announce-text', html: md(a.text, { inline: true }) }),
-    ibtn('close', 'Dismiss', () => { localStorage.setItem('hearth.annDismissed', a.id); el.remove(); }, { cls: 'sm' }));
+    ibtn('close', 'Dismiss', () => { localStorage.setItem('hearth.annDismissed', a.id); el.remove(); fitAnnouncement(); }, { cls: 'sm' }));
+  fitAnnouncement();
+}
+// On a phone the announcement is a strip across the top and the app is moved down by its height (app.css --ann-h), so
+// it covers nothing; on a computer it floats as before.
+function fitAnnouncement() {
+  const el = $('#announce');
+  const hgt = el && el.isConnected && isPhoneUI() ? Math.ceil(el.getBoundingClientRect().height) : 0;
+  document.documentElement.style.setProperty('--ann-h', `${hgt}px`);
+  document.body.classList.toggle('has-ann', hgt > 0);
 }

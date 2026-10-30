@@ -287,10 +287,13 @@ export async function phoneCall(t) {
 export async function phoneTargets(t) {
   const { alice, bob } = t.people;
   const d = await api(alice, 'POST', '/dms', { userId: (await boot(bob)).me.id });
-  // Alice on her phone (she runs the server: its categories have Create channel).
+  // Alice on her phone, with a server of her own (its categories have Create channel; she may have handed the shared
+  // one over by now).
+  const MINE = 'Targets of mine';
+  await alice.createServer(MINE);
   const phone = await t.open('alice-targets', PHONE);
   const { page } = phone;
-  await phone.login('alice', t.pw.alice);
+  await phone.login((await boot(alice)).me.username, t.pw.alice); // (renamed earlier on: alice_w)
   await page.setViewportSize({ width: 360, height: 640 });
   const allIn = async (where, sel) => {
     const got = await sizes(page, sel);
@@ -298,7 +301,7 @@ export async function phoneTargets(t) {
     check(!small(got).length, `${where}: each should be at least 44 px (got ${small(got).join(', ')}).`);
   };
   // A server's channels: the categories, their Create channel, every icon button on the list.
-  await phone.phoneServer(SERVER);
+  await phone.phoneServer(MINE);
   await allIn('Category names', '#sidebar-body .cat-toggle');
   await allIn('Categories\' Create channel', '#sidebar-body .cat-head .icon-btn');
   await allIn('Icon buttons on the channel list', '#sidebar .icon-btn');
@@ -325,6 +328,14 @@ export async function phoneTargets(t) {
     const hit = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); const top = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return !!top && !!top.closest('.head-name-btn'); };
     return { h: Math.round(r.height), w: Math.round(r.width), avatar: hit(t.querySelector('.av')), name: hit(t.querySelector('.head-name-btn')), sub: hit(t.querySelector('.head-sub')) };
   });
+  // An owner's announcement showing (one was posted earlier on) is a strip above everything else on a phone, never
+  // over Back, the title or its buttons.
+  const over = await page.evaluate(() => {
+    const a = document.querySelector('.announce'); if (!a) return 'none';
+    const r = a.getBoundingClientRect(); const head = document.querySelector('#main-head').getBoundingClientRect();
+    return r.bottom <= head.top + 1 || r.top >= head.bottom - 1 ? 'ok' : `${Math.round(r.top)}-${Math.round(r.bottom)} over the header at ${Math.round(head.top)}-${Math.round(head.bottom)}`;
+  });
+  check(over === 'none' || over === 'ok', `The announcement shouldn't cover the header on a phone (${over}).`);
   check(title.h >= 44 && title.avatar && title.name && title.sub, `In a DM the title (picture, name, status) should all open the profile, at least 44 px tall (got ${JSON.stringify(title)}).`);
   // (A tap on the picture, as a finger would.)
   const av = await page.locator('#main-head .head-title .av').boundingBox();
@@ -350,4 +361,5 @@ export async function phoneTargets(t) {
   await page.keyboard.press('Escape');
   await page.locator('.popover').waitFor({ state: 'detached' });
   await phone.close();
+  await alice.railButton(SERVER); // (where the next flows expect her)
 }
