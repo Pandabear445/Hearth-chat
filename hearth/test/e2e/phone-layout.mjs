@@ -102,10 +102,22 @@ export async function phoneStaysPut(t) {
   await page.waitForSelector('body.m-conv #composer-input[placeholder="Message #extra"]');
   await phone.phoneBack();
   await phone.phoneTab('you');
+  // (A mention for bob waiting in #general, the channel the app moves to once #extra is gone. His computer looks at
+  // another server meanwhile, so nothing there reads it.)
+  await bob.railButton(SERVER);
+  await bob.openChannel('general');
+  await alice.railButton(NAME);
+  await alice.openChannel('general');
+  await alice.send('@bob something for you in general');
+  await page.waitForTimeout(1500);
   await api(alice, 'DELETE', `/channels/${extra.id}`);
   await page.waitForFunction(() => !document.querySelector('#composer-input[placeholder="Message #extra"]'), null, { timeout: 10000 });
   await page.waitForTimeout(500);
   check(await level(page) === 'list:you', `A channel deleted from elsewhere shouldn't take the phone off the You page (now ${await level(page)}).`);
+  // …and #general, never shown, isn't marked read by being moved to behind the list.
+  await phone.phoneServer(NAME);
+  await page.waitForTimeout(500);
+  check(await phone.channelRow('general').locator('.badge').count() > 0, 'A channel the app moved to behind the list, never shown, should keep its unread mention.');
 
   // Its server left from another device while the Messages page shows: still the Messages page.
   await phone.phoneServer(NAME);
@@ -133,6 +145,16 @@ export async function phoneStaysPut(t) {
   if (wereFriends) await api(bob, 'POST', `/friends/${aliceId}/accept`);
   else await api(alice, 'DELETE', `/friends/${me.id}`);
   await phone.$('#sidebar-body .nav-row', { hasText: 'Friends' }).locator('.badge').waitFor({ state: 'detached', timeout: 10000 });
+  // The Notifications page with a filter picked: a change elsewhere (a friend request) leaves the filter as it was.
+  await phone.phoneTab('inbox');
+  await phone.$('#sidebar-body .seg-btn', { hasText: 'Mentions' }).tap();
+  const wereFriends2 = (await boot(alice)).relationships.some((r) => r.userId === me.id && r.direction === 'mutual');
+  await api(alice, 'DELETE', `/friends/${me.id}`);
+  await api(alice, 'POST', '/friends', { username: 'bob' });
+  await page.waitForTimeout(1500);
+  check(await phone.$('#sidebar-body .seg-btn.active', { hasText: 'Mentions' }).count() === 1, 'A friend request arriving should leave the Notifications page on the filter picked.');
+  if (wereFriends2) await api(bob, 'POST', `/friends/${aliceId}/accept`);
+  else await api(alice, 'DELETE', `/friends/${me.id}`);
   await phone.close();
   await alice.railButton(SERVER);
 }

@@ -2372,6 +2372,9 @@ function markRead(key) {
   if (!key || document.hidden) return;
   // On the Reels tab the chat isn't on screen: nothing in it has been read (it is once you go back to it).
   if (S.view.tab === 'reels' && key === currentKey()) return;
+  // Likewise on a phone's list page: the conversation behind it isn't on screen (one a change elsewhere moved to, or
+  // new messages coming into the one you went back from), so nothing in it has been read until it's opened.
+  if (isPhoneUI() && M.level === 'list' && key === currentKey()) return;
   const st = S.msgs[key];
   // A voice channel's chat opened before anyone wrote in it: the marker '0' (before every message) says you opened
   // it, so what's written there next counts as unread for you, on all your devices.
@@ -3772,8 +3775,9 @@ function redirectQuietly(go) {
   try { go(); } finally { M.pending = null; }
 }
 // Whether the sidebar shows Home's list and the conversations (so a change to them is drawn there): on a computer when
-// no server or group is open; on a phone on every page but a server's channels.
-function homeListShows() { return isPhoneUI() ? sidebarMode() !== 'server' : !S.view.serverId; }
+// no server or group is open; on a phone on Home's and Messages' pages (Notifications and You redraw themselves, and
+// drawing them again would lose the filter picked and where they're scrolled).
+function homeListShows() { return isPhoneUI() ? ['home', 'dms'].includes(sidebarMode()) : !S.view.serverId; }
 // Whether it shows this server's channels: on a computer the server open; on a phone the one picked on Home's page,
 // whatever's open over it.
 function serverListShows(id) {
