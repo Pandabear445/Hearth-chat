@@ -24,7 +24,7 @@ import { watchPlayer, dropWatchPlayer } from './watch.js';
 import { socialLinks, parseSocialUrl, playerMode } from './social.js';
 import { socialEmbedEl, resolveSocial } from './social-embed.js';
 import { createReels, MY_REELS } from './reels-ui.js';
-import { createBrainrot } from './brainrot.js';
+import { createBrainrot, brainrotTakesEsc } from './brainrot.js';
 import { shareFromLocation, sharedLink, socialLinksIn, rankConversations, pushRecent, batches } from './share.js';
 import { createMyReels } from './my-reels.js';
 import { readExport } from './reels-import.js';
@@ -2559,9 +2559,9 @@ function globalKeys(e) {
     else if (S.editing) { e.preventDefault(); S.editing = null; renderMessages(false); }
     else if (composers.main && composers.main.state.replyTo) { e.preventDefault(); composers.main.setReply(null); }
     else if (S.panel === 'thread') { e.preventDefault(); closeThread(); }
-    // Phones: nothing else to close, so the conversation goes back to its list (not from Reels or Brainrot full
-    // screen, whose own Esc turns them off: brainrot.js).
-    else if (isPhoneUI() && M.level === 'conv' && !M.escBusy && !$('.reels-layer.full:not([hidden])')) { e.preventDefault(); phoneBack(); }
+    // Phones: nothing else to close, so the conversation goes back to its list (not from Reels full screen, nor with
+    // Brainrot on in the call or the player: their own Esc turns them off, brainrot.js).
+    else if (isPhoneUI() && M.level === 'conv' && !M.escBusy && !$('.reels-layer.full:not([hidden])') && !brainrotTakesEsc()) { e.preventDefault(); phoneBack(); }
   }
 }
 // Ctrl+/ (⌘+/ on a Mac), Settings → Keybinds or the user menu: every shortcut, with this person's own call keys.

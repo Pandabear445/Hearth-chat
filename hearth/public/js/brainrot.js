@@ -512,5 +512,8 @@ export function createBrainrot(opts) {
   return api;
 }
 
+// Whether an Esc now is Brainrot's to take: one is on, on screen, and focus is on the page or inside its place (the call's
+// stage, the watch-together player). The phone layout's Esc (back to the list) leaves those to turn it off instead.
+export const brainrotTakesEsc = () => [...surfaces].some((x) => x.isActive() && x.onScreen() && x.owns(document.activeElement));
 // Tests: every surface's numbers.
 export const brainrotStats = () => [...surfaces].map((s) => s.stats());
