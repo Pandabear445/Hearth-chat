@@ -1986,7 +1986,7 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   /* The call you're in: floating over the lists, a bar across the top of a conversation. */
   #m-callbar { display: none; }
   body.m-ui #m-callbar:not([hidden]) {
-    display: flex; align-items: center; gap: 4px; position: fixed; z-index: 27; left: 10px; right: 10px;
+    display: flex; align-items: center; gap: 4px; position: fixed; z-index: 27; left: calc(10px + env(safe-area-inset-left)); right: calc(10px + env(safe-area-inset-right));
     bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 10px); min-height: 60px; padding: 6px 8px 6px 14px; border-radius: 18px;
     background: rgb(var(--elev)); border: 1px solid rgb(63 207 131 / .4); box-shadow: var(--pop-shadow); animation: m-call-in .22s var(--m-ease);
   }
@@ -1998,6 +1998,8 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   body.m-ui .cb-dot.q-failed { background: var(--danger); box-shadow: none; }
   body.m-ui .cb-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
   body.m-ui .cb-text small { font-size: 12.5px; font-weight: 700; color: var(--ok); }
+  /* (The light theme's green is for dots, 3:1: as words on the bar it's darkened to 4.5:1.) */
+  [data-theme='light'] body.m-ui .cb-text small { color: color-mix(in oklab, var(--ok) 55%, var(--text)); }
   body.m-ui .cb-text strong { font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   body.m-ui #m-callbar .icon-btn { width: 44px; height: 44px; border-radius: 50%; background: var(--hover); flex: none; }
   body.m-ui #m-callbar .icon-btn.off { color: var(--danger); }
@@ -2066,13 +2068,19 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
 
   /* Collisions with the tab bar and the call bar. */
   body.m-ui.m-list .wt-dock.mini { bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 84px); }
-  body.m-ui .ring-card { left: 10px; right: 10px; width: auto; bottom: calc(12px + env(safe-area-inset-bottom)); }
+  body.m-ui .ring-card { left: calc(10px + env(safe-area-inset-left)); right: calc(10px + env(safe-area-inset-right)); width: auto; bottom: calc(12px + env(safe-area-inset-bottom)); }
   body.m-ui.m-list .ring-card { bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 12px); }
+  /* (Above the call bar floating over the list, not on its Mute and Leave.) */
+  body.m-ui.m-list.m-call .ring-card { bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 80px); }
   body.m-ui .ring-actions .round-btn { width: 52px; height: 52px; }
   body.m-ui .cs-controls { gap: 4px; }
-  body.m-ui .cs-controls .round-btn { width: min(44px, calc((100vw - 84px) / 7)); height: min(44px, calc((100vw - 84px) / 7)); } /* (7 in a row from 360px up) */
-  body.m-ui .emoji-tab { width: 40px; height: 40px; }
-  body.m-ui .xp-back, body.m-ui .xp-clear { width: 40px; height: 40px; }
+  body.m-ui .cs-controls .round-btn { width: 44px; height: 44px; }
+  /* Seven or eight of them don't fit in one row on a narrow phone: two rows of four, every one a finger's size. */
+  @media (max-width: 480px) {
+    body.m-ui .cs-controls:has(> .round-btn:nth-child(7)) { display: grid; grid-template-columns: repeat(4, 44px); justify-content: center; gap: 8px 18px; }
+  }
+  body.m-ui .emoji-tab { width: 44px; height: 44px; }
+  body.m-ui .xp-back, body.m-ui .xp-clear { width: 44px; height: 44px; }
   body.m-ui #toasts { top: calc(70px + env(safe-area-inset-top)); }
 
   /* Sideways (a short screen): a slimmer tab bar, its labels beside the icons, and a smaller call bar. */
@@ -2080,7 +2088,7 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
     body.m-ui { --tab-h: 48px; }
     body.m-ui .tab-btn { flex-direction: row; gap: 6px; }
     body.m-ui .tab-ic { width: 44px; height: 30px; }
-    body.m-ui #m-callbar:not([hidden]) { left: auto; width: min(420px, calc(100% - 20px)); min-height: 52px; padding-block: 4px; }
+    body.m-ui #m-callbar:not([hidden]) { left: auto; width: min(420px, calc(100% - 20px - env(safe-area-inset-left) - env(safe-area-inset-right))); min-height: 52px; padding-block: 4px; }
     body.m-ui.m-conv #m-callbar:not([hidden]) { width: auto; left: 0; height: calc(env(safe-area-inset-top) + 44px); }
     body.m-ui.m-conv.m-call #main { padding-top: calc(env(safe-area-inset-top) + 44px); }
     body.m-ui.m-list.m-call #sidebar { padding-bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 66px); }
