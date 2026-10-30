@@ -4141,9 +4141,19 @@ function phoneNav() {
   onDeviceChange(() => {
     // Turned or resized into the phone layout: what was showing stays, pushed over its list; and out of it, the usual
     // columns. (A different layout needs a new swipe handler: the drawer comes or goes.)
-    if (isPhoneUI() && !document.body.classList.contains('m-ui')) { M.level = ['home'].includes(S.view.type) ? 'list' : 'conv'; M.tab = tabFor(S.view, 'home'); }
+    // Only a change between the phone layout and the computer's redraws anything, and only what's laid out differently
+    // (the lists, the conversation's header, the call bar and the tab bar): the chat itself, and where it's scrolled to,
+    // stay as they are.
+    const was = document.body.classList.contains('m-ui');
+    const now = isPhoneUI();
+    if (now && !was) {
+      M.level = ['home'].includes(S.view.type) ? 'list' : 'conv';
+      M.tab = tabFor(S.view, 'home');
+      const s = currentServer();
+      if (s && !isGroup(s)) M.server = s.id;
+    }
     phoneShell();
-    renderAll();
+    if (now !== was && S.me) { renderRail(); renderSidebar(); renderHeader(); renderVoicePanel(); renderTabbar(); }
     swipes.update(); watchInside(); back.sync();
   });
 }
