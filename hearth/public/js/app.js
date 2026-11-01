@@ -5123,6 +5123,10 @@ function keepPlace(sc) {
       now.max = setTimeout(() => { if (held === now) release(); }, PLACE_MAX);
       changed();
     },
+    // Where the list is now, before its scroll event says so (that comes a frame later): moved away from the newest
+    // by code (a scrollTop set and older messages asked for at once), rows added in the same moment mustn't pull it
+    // back down to the newest.
+    sync() { if (!held && fromBottom() >= NEAR_NEWEST) stuck = false; lastTop = sc.scrollTop; },
     release,
   };
 }
@@ -5256,6 +5260,7 @@ async function loadMessages(key, mode = 'latest') {
 // as much, and taken away the same way, so what you're reading never moves (no layout shift).
 function olderSkeleton(sc) {
   if (!sc || !sc.querySelector('.msg[data-mid]')) return null;
+  if (sc._place) sc._place.sync();
   const el = h('div', { class: 'msg-skeleton older-skeleton', 'aria-busy': 'true', 'aria-label': 'Loading earlier messages' },
     [1, 2].map(() => h('div', { class: 'sk-row' }, h('span', { class: 'sk-av' }), h('span', { class: 'sk-lines' }, h('i'), h('i')))));
   sc.prepend(el);
