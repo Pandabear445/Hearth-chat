@@ -703,5 +703,5 @@ test('android-push-20: a new page ends the call notification; "Change" lists eve
   assert.match(title, /if \(\(S\.notifySettings \|\| \{\}\)\.previews !== 'names'\) return 'In a call';/);
   assert.match(js, /S\.notifySettings = \{ dnd: r\.dnd, tz: r\.tz, previews: r\.previews \};\s*syncCallNotification\(\);/);
   // The one-time offer names the app, not the server.
-  assert.match(js, /h\('span', null, 'Get notifications when Hearth is closed\?'\)/);
+  assert.match(js, /offerCard\('push-offer', 'bell', 'Get notifications when Hearth is closed\?'/);
 });

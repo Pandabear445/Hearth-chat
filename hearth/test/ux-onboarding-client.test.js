@@ -45,7 +45,7 @@ test('first paint: a splash in the page itself, outside anything hidden, with no
 test('first paint: every way the start can end takes the splash away', () => {
   assert.match(fn('showSignIn'), /dropSplash\(\)/, 'the sign-in screen');
   assert.match(fn('startApp'), /dropSplash\(\)/, 'the app');
-  assert.match(app, /^init\(\)\.catch\(\(e\) => bootFailed\(e\)\);/m, 'a start that fails says so in the splash');
+  assert.match(fn('init'), /try \{ await bootUp\(\); \} catch \(e\) \{ bootFailed\(e\); \}/, 'a start that fails says so in the splash');
   assert.match(fn('bootFailed'), /Reload the page/);
 });
 

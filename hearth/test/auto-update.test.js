@@ -126,7 +126,9 @@ test('the web app has no reload bar left to click; the desktop app still asks be
   const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
   for (const gone of ['A new version of Hearth is ready', 'Hearth was updated.', 'Reload after your call']) assert.ok(!app.includes(gone), gone);
   const bars = [...app.matchAll(/class: '(update-bar[^']*)'/g)].map((m) => m[1]);
-  assert.deepEqual(bars, ['update-bar app-update']);
+  assert.deepEqual(bars, []);
+  // (The desktop app's own update waits in a pill above your name in the sidebar, app.js showAppUpdate.)
+  assert.ok(app.includes("class: 'update-pill'"));
   // Reloading never cuts off a call, a recording, an upload, a message being sent or an open dialog.
   const blocked = app.slice(app.indexOf('function updateBlockedBy()'), app.indexOf('const autoUpdate = createUpdater'));
   for (const what of ['voice.channelId', 'voice.joinPromise', 'ringing.size', 'pendingSends.size', 'jobsUnderWay()', '.rec-bar', '.pending-files', '.reply-bar',

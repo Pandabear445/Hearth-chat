@@ -271,8 +271,7 @@ export const app = {
 };
 
 // ======================================================================= boot
-// Whatever goes wrong while starting, the page never stays on its loading screen (index.html #boot-splash): it says so.
-init().catch((e) => bootFailed(e));
+init();
 
 // The page's own loading screen, drawn before any script ran, goes once the sign-in screen or the app is drawn.
 function dropSplash() {
@@ -287,7 +286,11 @@ function bootFailed(e) {
   if (t) t.textContent = `Hearth couldn\u2019t start${e && e.message ? `: ${e.message}` : '.'} Reload the page to try again.`;
 }
 
+// Whatever goes wrong while starting, the page never stays on its loading screen (index.html #boot-splash): it says so.
 async function init() {
+  try { await bootUp(); } catch (e) { bootFailed(e); }
+}
+async function bootUp() {
   // Settings changes your own record through app.onMe (an email added, a recovery key made): the "Secure your
   // account" card and the You tab's dot follow it.
   const onMe = app.onMe;
