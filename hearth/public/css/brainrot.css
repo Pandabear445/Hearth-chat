@@ -7,7 +7,7 @@
 /* "Your own background": the video covers the area (cropped, never letterboxed), and can't be clicked or focused. */
 .br-stage .br-frame { position: absolute; top: 50%; left: 50%; width: max(100cqw, calc(100cqh * 16 / 9)); height: auto; aspect-ratio: 16 / 9; transform: translate(-50%, -50%); border: 0; pointer-events: none; }
 .br-note { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; text-align: center; background: rgb(0 0 0 / .62); }
-.br-note p { margin: 0; max-width: 360px; font-size: 13.5px; line-height: 1.45; }
+.br-note p { margin: 0; max-width: 360px; font-size: calc(13.5 / 16 * 1rem); line-height: 1.45; }
 
 .br-hud { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
 .br-prog { position: absolute; top: 0; left: 0; right: 0; height: 5px; background: rgb(255 255 255 / .22); }
@@ -35,7 +35,7 @@ html.reduce-motion :is(.br-cap.br-pop-a, .br-cap.br-pop-b, .br-flash.on, .br-sha
 .br-tools .icon-btn { width: 36px; height: 36px; border-radius: 50%; background: rgb(0 0 0 / .55); color: #fff; }
 .br-tools .icon-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .br-panel { position: absolute; top: 52px; right: 8px; z-index: 4; width: min(320px, calc(100% - 16px)); max-height: calc(100% - 60px); overflow-y: auto; box-sizing: border-box;
-  display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 14px; background: rgb(var(--s1)); color: var(--text); border: 1px solid var(--line); box-shadow: var(--pop-shadow); font-size: 13.5px; }
+  display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 14px; background: rgb(var(--s1)); color: var(--text); border: 1px solid var(--line); box-shadow: var(--pop-shadow); font-size: calc(13.5 / 16 * 1rem); }
 .br-panel[hidden] { display: none; }
 .br-panel-head { display: flex; align-items: center; justify-content: space-between; }
 .br-games { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; }
@@ -47,10 +47,10 @@ html.reduce-motion :is(.br-cap.br-pop-a, .br-cap.br-pop-b, .br-flash.on, .br-sha
 .br-yt-form .input { flex: 1 1 160px; min-width: 0; }
 .br-field { display: flex; flex-direction: column; gap: 4px; }
 .br-slider { width: 100%; accent-color: var(--accent); }
-.br-level { font-size: 12px; color: var(--muted); }
+.br-level { font-size: calc(12 / 16 * 1rem); color: var(--muted); }
 .br-toggle.active, .br-everyone.active { background: rgb(var(--accent-rgb) / .18); }
 .br-toggle .ic { width: 16px; height: 16px; }
-.br-invite { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+.br-invite { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: calc(13 / 16 * 1rem); }
 
 /* ---- the split, in each place */
 /* The Reels tab: half and half, one above the other (phones) or side by side (wide). Nothing is moved: the feed

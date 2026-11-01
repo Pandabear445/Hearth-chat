@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Person, launchBrowser, newPassword, startServer } from './harness.mjs';
 import { FLOWS, check } from './flows.mjs';
 
@@ -30,9 +31,16 @@ const FLOW_TIMEOUT = Number(process.env.E2E_FLOW_TIMEOUT) || 240000;
 const started = Date.now();
 const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
 
+// Each part of the UX work keeps its flows in its own test/e2e/ux-*.mjs (export const FLOWS = [[name, fn], …]), so
+// no two parts edit the same list. They run after the main flows, in file-name order, with the same shared state
+// (the accounts, the server) and the same sign-up limit: sign in to an existing account rather than make one.
+const here = path.dirname(fileURLToPath(import.meta.url));
+const ALL = [...FLOWS];
+for (const f of fs.readdirSync(here).filter((n) => /^ux-.*\.mjs$/.test(n)).sort()) ALL.push(...(await import(pathToFileURL(path.join(here, f)).href)).FLOWS);
+
 // Later flows build on earlier ones, so --until runs everything up to (and including) the one named.
-const last = until ? FLOWS.findIndex(([name]) => name.includes(until)) : FLOWS.length - 1;
-const flows = FLOWS.slice(0, last + 1);
+const last = until ? ALL.findIndex(([name]) => name.includes(until)) : ALL.length - 1;
+const flows = ALL.slice(0, last + 1);
 
 async function main() {
   if (last < 0) throw new Error(`No flow matches --until=${until}`);

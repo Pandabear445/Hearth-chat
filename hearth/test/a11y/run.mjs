@@ -4,6 +4,7 @@
 import nodeCrypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { launch, signUp, createServer, sendMessage, settle, toConversation, phoneTab, PASSWORD, ROOT } from '../browser/harness.mjs';
 import { auditDom, overflowDom } from './checks.mjs';
 import { checkContrast } from './contrast.mjs';
@@ -548,6 +549,15 @@ try {
   const warned = await lp.evaluate(() => [...document.querySelectorAll('#members .member')].filter((m) => m.querySelector('.key-warn')).map((m) => m.textContent.trim()));
   check(warned.length === 1 && /crowd7\b/.test(warned[0]), 'denied: a changed key is still flagged in the member list', warned);
   await lp.close();
+
+  // Each part of the UX work keeps its browser checks in its own checks-ux-*.mjs, so no two parts edit this file.
+  // Such a module exports run(ctx), gets the browser and the helpers below, and opens (and closes) its own pages;
+  // they run here, in file-name order.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  for (const f of fs.readdirSync(here).filter((n) => /^checks-ux-.*\.mjs$/.test(n)).sort()) {
+    const mod = await import(pathToFileURL(path.join(here, f)).href);
+    await mod.run({ H, base, check, section, audit, active, settle, signUp, createServer, sendMessage, toConversation, phoneTab, PASSWORD, ROOT });
+  }
 
   check(!H.errors.length, 'no script errors on any page', H.errors.slice(0, 5));
 } catch (e) {
