@@ -758,7 +758,7 @@ html.has-bg #sidebar, html.has-bg #main, html.has-bg #members { backdrop-filter:
 .unread-jump span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unread-jump strong { margin-left: auto; white-space: nowrap; }
 .unread-mark { border-left: 1px solid rgb(0 0 0 / .15); white-space: nowrap; font-weight: 600; }
-@media (max-width: 520px) { .unread-jump span { display: none; } .unread-bar { left: 8px; right: 8px; } }
+@media (max-width: 520px) { .unread-jump .unread-text { display: none; } .unread-bar { left: 8px; right: 8px; } }
 
 /* messages: comfortable (default) */
 .msg {
@@ -1840,7 +1840,7 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   .msg-hover-time { font-size: calc(9.5 / 16 * 1rem); }
   .msg-reply { padding-left: 48px; }
   .reply-spine { left: 23px; width: 21px; }
-  .sending-note { padding-left: 50px; }
+  .sending-note { padding-left: 0; }
 }
 /* ===== Phone shell (stack + tabs)
    app.js phoneShell: a list page (body.m-list, the tab bar at the bottom, and on Home the server bar beside the list)
@@ -2890,7 +2890,7 @@ html.reduce-motion .mys-page *, html.reduce-motion .mys-name.glitter { animation
 /* Your own message while it's on its way */
 .msg.sending { opacity: .55; }
 .msg.sending .msg-actions, .msg.sending .msg-hover { display: none; }
-.sending-note { font-size: calc(12 / 16 * 1rem); color: var(--muted); padding-left: 72px; }
+.sending-note { grid-column: 2; font-size: calc(12 / 16 * 1rem); color: var(--muted); padding-left: 0; }
 
 /* ------------------------------------------------------------------ performance mode
    For slower computers and phones (Settings → Appearance → Performance): no frosted-glass blur,

@@ -645,6 +645,13 @@ function startApp(account) {
       try {
         const n = new Notification(title, { body, icon: '/icons/icon-192.png', ...(tag ? { tag } : {}) });
         if (tag) rememberNotification(tag, n, msgId);
+        // A click brings Hearth forward (the desktop app's window too), at the message when it says which.
+        n.onclick = () => {
+          window.focus();
+          if (window.hearthDesktop) window.hearthDesktop.focus();
+          if (msgId) jumpToMessageId(msgId);
+          n.close();
+        };
       } catch { /* ignore */ }
     },
   });
@@ -760,7 +767,9 @@ function startApp(account) {
       if (voice.channelId && S.voice[voice.channelId]) voice.setListed(S.voice[voice.channelId].map((u) => u.userId));
       hideUpdating();
       $('#app').classList.remove('loading');
-      $('#conn-banner').hidden = true;
+      connUi(false);
+      // Messages that waited for the connection go now, in order (flushWaiting).
+      flushWaiting({ fresh: true });
     } catch (e) {
       // Turned away: unless another tab of this browser has just stored a newer token for this sign-in (then the
       // connection is made again with it, above), this device was signed out.
@@ -774,14 +783,14 @@ function startApp(account) {
   });
   socket.on('connect_error', (e) => {
     if (e.message === 'maintenance') { api('GET', '/config').then((c) => showUpdating('Down for maintenance', c.maintenance || 'Back soon.')).catch(() => {}); return; }
-    if (e.message !== 'unauthorized' && !S.restarting) $('#conn-banner').hidden = false; // 'unauthorized': signed out (below)
+    if (e.message !== 'unauthorized' && !S.restarting) connUi(true); // 'unauthorized': signed out (below)
   });
   // Signed out from somewhere else (Settings → Sessions, a password change or reset, staff), or this device isn't
   // let back in. Any other connection the server closes (too many events at once, say) just reconnects.
   watchConnection(socket, {
     paused: () => !!S.restarting, // expected: the server is restarting for an update
     tokenMoved: (ms) => tokenMovedFrom(socketToken, ms), // a new token for this sign-in (conn.js)
-    onDown: () => { $('#conn-banner').hidden = false; },
+    onDown: () => { connUi(true); },
     onSignedOut: (reason) => {
       if (loggingOut) return; // already signing out (this device's own "Log out", say): nothing more to explain
       const why = {
@@ -2468,6 +2477,13 @@ function addInbox(entry) {
   P.inbox = list;
   updateTitle();
   if (entry.exp) armClientExpiry();
+}
+// The notifications about one message, marked read (it was seen as it arrived).
+function readInbox(msgId) {
+  const list = P.inbox;
+  let changed = false;
+  for (const x of list) if (x.msgId === msgId && !x.read) { x.read = true; changed = true; }
+  if (changed) { P.inbox = list; updateTitle(); }
 }
 // Inbox entries keep a copy of a message's words on this device: one for a disappearing message goes with it (exp,
 // in the server's time), and so does one whose message disappeared (gone: ids).
@@ -4949,6 +4965,8 @@ async function loadMessages(key, mode = 'latest') {
   if (!store || (mode === 'latest' && store.hasNewer) || typeof mode === 'object') store = S.msgs[key] = { list: [], hasMore: true, hasNewer: false, loaded: false, loading: false };
   if (store.loading || (mode === 'older' && !store.hasMore) || (mode === 'newer' && !store.hasNewer)) return;
   store.loading = true;
+  // Older messages coming: two grey rows at the top say so while they load (olderSkeleton).
+  const skel = mode === 'older' && currentKey() === key ? olderSkeleton($('#messages')) : null;
   let q = '';
   if (mode === 'older' && store.list.length) q = `?before=${encodeURIComponent(store.list[0].id)}`;
   else if (mode === 'newer' && store.list.length) q = `?after=${encodeURIComponent(store.list[store.list.length - 1].id)}`;
@@ -4974,8 +4992,11 @@ async function loadMessages(key, mode = 'latest') {
     if (currentKey() !== key) return;
     const sc = $('#messages');
     if (mode === 'older') {
+      // (Measured with the loading rows still there: they go in the same moment the older messages come in, so
+      // the line below keeps what you're reading in place even when the rows were on screen.)
       const prevH = sc.scrollHeight;
       const prevTop = sc.scrollTop;
+      if (skel) skel.remove();
       if (newLines || hid || !prependOlder(sc, store, fresh)) renderMessages(false);
       sc.scrollTop = sc.scrollHeight - prevH + prevTop;
       dropNewest(sc, store);
@@ -4987,7 +5008,23 @@ async function loadMessages(key, mode = 'latest') {
     if (!store.hasNewer) markRead(key);
   } catch (e) {
     toast(e.message, 'error');
-  } finally { store.loading = false; }
+  } finally { store.loading = false; if (skel && skel.isConnected) dropSkeleton(skel.parentElement, skel); }
+}
+// The rows at the top while older messages load. Added above what's on screen with the scroll position moved by
+// as much, and taken away the same way, so what you're reading never moves (no layout shift).
+function olderSkeleton(sc) {
+  if (!sc || !sc.querySelector('.msg[data-mid]')) return null;
+  const el = h('div', { class: 'msg-skeleton older-skeleton', 'aria-busy': 'true', 'aria-label': 'Loading earlier messages' },
+    [1, 2].map(() => h('div', { class: 'sk-row' }, h('span', { class: 'sk-av' }), h('span', { class: 'sk-lines' }, h('i'), h('i')))));
+  sc.prepend(el);
+  sc.scrollTop += el.offsetHeight;
+  return el;
+}
+function dropSkeleton(sc, el) {
+  if (!sc || !el || !el.isConnected) return;
+  const hgt = el.offsetHeight;
+  el.remove();
+  sc.scrollTop -= hgt;
 }
 // Keep only the newest messages of a conversation in memory and on screen; older ones load again
 // when you scroll up. Without this, a long session made the page heavier and heavier.
@@ -5064,7 +5101,8 @@ function onMessagesScroll(e) {
   const key = currentKey();
   const store = S.msgs[key];
   if (!store) return;
-  if (sc.scrollTop < 200 && store.hasMore && !store.loading) loadMessages(key, 'older');
+  // Older ones start loading a screen and a half before the top, so they're usually there before you get to it.
+  if (sc.scrollTop < Math.max(200, sc.clientHeight * 1.5) && store.hasMore && !store.loading) loadMessages(key, 'older');
   const fromBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
   if (fromBottom < 200 && store.hasNewer && !store.loading) loadMessages(key, 'newer');
   const jl = $('#jump-latest');
@@ -5191,7 +5229,19 @@ async function decryptAll(key) {
 }
 const textOf = (m) => (m.dec && m.dec.t) || '';
 // A message's words for a snippet (the inbox): the word filter's note instead, when it hides or blurs the message.
-const snippetOf = (m, n) => { const wf = WF.check(m); return wf ? previewLabel(wf) : textOf(m).slice(0, n); };
+// Plain text, as a preview reads: no Markdown marks, "[code]" for a code block, "[spoiler]" for what a spoiler hides,
+// and mentions, channels and custom emoji by name (readableText).
+const snippetOf = (m, n) => { const wf = WF.check(m); return wf ? previewLabel(wf) : plainSnippet(textOf(m)).slice(0, n); };
+function plainSnippet(text) {
+  return readableText(String(text || '')
+    .replace(/```[\s\S]*?(```|$)/g, ' [code] ')
+    .replace(/\|\|[\s\S]+?\|\|/g, '[spoiler]')
+    .replace(/`([^`\n]+)`/g, '$1')
+    .replace(/(\*\*|__|~~)(?=\S)([\s\S]*?\S)\1/g, '$2')
+    .replace(/(^|[\s(])[*_](?=\S)([^*_\n]*?\S)[*_](?=$|[\s).,!?])/g, '$1$2')
+    .replace(/^(#{1,3}|-#|>{1,3}) +/gm, ''))
+    .replace(/\s+/g, ' ').trim();
+}
 const filesOf = (m) => (m.dec && m.dec.f) || [];
 const linksOf = (m) => (m.dec && m.dec.l) || []; // link previews the sender built (already checked by secure.js)
 const readable = (m) => !!m.dec && !m.dec.error && !m.dec.pending;
@@ -5369,7 +5419,9 @@ function renderMessages(stick) {
   renderTyping();
 }
 // "12 new messages since 3:04 PM · Jump to first unread · Mark as read", above the messages while there's a
-// "New messages" line in this conversation.
+// "New messages" line in this conversation, and only while that line is above what's on screen (once it's in view,
+// or below it, the bar would only cover messages). A line that isn't loaded yet counts as above. On a phone it says
+// "3 new". Under a call shown above the chat, it sits below the call instead of over it.
 function renderUnreadBar() {
   const bar = $('#unread-bar');
   if (!bar) return;
@@ -5377,12 +5429,46 @@ function renderUnreadBar() {
   clear(bar);
   const store = S.msgs[key];
   const n = S.unreadMarker === key ? Math.max(S.markerCount || 0, store ? store.list.filter((m) => m.id > S.markerId && m.authorId !== S.me.id).length : 0) : 0;
-  bar.hidden = !n;
-  if (!n) return;
+  bar._count = n;
+  watchNewLine(bar);
+  if (!n) { bar.hidden = true; return; }
   const first = store && store.list.find((m) => m.id > S.markerId && m.authorId !== S.me.id);
-  bar.append(h('button', { class: 'unread-jump', onclick: () => jumpToFirstUnread() }, icon('arrowUp'),
-    h('span', null, `${n >= 100 ? '99+' : n} new message${n === 1 ? '' : 's'}${first ? ` since ${fmtTime(first.createdAt)}` : ''}`), h('strong', null, 'Jump to first unread')),
+  const many = n >= 100 ? '99+' : n;
+  bar.append(h('button', { class: 'unread-jump', onclick: () => jumpToFirstUnread(), 'aria-label': `${many} new message${n === 1 ? '' : 's'}. Jump to first unread` }, icon('arrowUp'),
+    h('span', { class: 'unread-text' }, `${many} new message${n === 1 ? '' : 's'}${first ? ` since ${fmtTime(first.createdAt)}` : ''}`),
+    h('span', { class: 'unread-count', 'aria-hidden': 'true' }, `${many} new`), h('strong', null, 'Jump to first unread')),
   h('button', { class: 'unread-mark', onclick: () => markConvRead(key, { threads: false }) }, 'Mark as read', icon('check')));
+  placeUnreadBar(bar);
+}
+// Shows or hides the bar as the "New messages" line goes in and out of view above (an IntersectionObserver on it).
+function watchNewLine(bar) {
+  const sc = $('#messages');
+  const line = sc && sc.querySelector('.new-div');
+  if (sc && sc._newIO && sc._newIO.line !== line) { sc._newIO.disconnect(); sc._newIO = null; }
+  const show = (above) => { bar.hidden = !bar._count || !above; };
+  if (!line || !window.IntersectionObserver) { show(true); return; }
+  // Right away from where it is now (the observer answers a frame later), so the bar doesn't blink.
+  const r = line.getBoundingClientRect(); const top = sc.getBoundingClientRect().top;
+  show(r.bottom <= top);
+  if (sc._newIO) return;
+  const io = new IntersectionObserver((entries) => {
+    const e = entries[entries.length - 1];
+    const b = $('#unread-bar');
+    if (!b || !e.rootBounds) return;
+    b.hidden = !b._count || e.isIntersecting || e.boundingClientRect.top > e.rootBounds.top;
+  }, { root: sc });
+  io.line = line;
+  io.observe(line);
+  sc._newIO = io;
+}
+// Below a call shown above the chat (its height can change: the call grows, someone shares a screen).
+function placeUnreadBar(bar) {
+  const stage = bar.parentElement && bar.parentElement.querySelector(':scope > .call-stage');
+  bar.style.top = stage ? `${stage.offsetTop + stage.offsetHeight + 8}px` : '';
+  if (stage && window.ResizeObserver && !stage._unreadRO) {
+    stage._unreadRO = new ResizeObserver(() => { const b = $('#unread-bar'); if (b && b.parentElement === stage.parentElement) b.style.top = `${stage.offsetTop + stage.offsetHeight + 8}px`; });
+    stage._unreadRO.observe(stage);
+  }
 }
 async function jumpToFirstUnread() {
   const key = currentKey();
@@ -6386,7 +6472,11 @@ function editBox(m, ctx) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); }
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(); }
   });
-  const wrap = h('div', { class: 'edit-wrap' }, ta, h('div', { class: 'edit-hint' }, 'Esc to ', h('button', { class: 'link-btn', onclick: done }, 'cancel'), ' \u00b7 Enter to ', h('button', { class: 'link-btn', onclick: save }, 'save')));
+  // A keyboard says Esc and Enter; on a touch screen (no Esc, and Enter may be a new line) Cancel and Save buttons.
+  const keys = isTouchUI()
+    ? h('div', { class: 'edit-btns' }, h('button', { class: 'btn ghost', type: 'button', onclick: () => wrap._cancel() }, 'Cancel'), h('button', { class: 'btn primary', type: 'button', onclick: save }, 'Save'))
+    : h('div', { class: 'edit-hint' }, 'Esc to ', h('button', { class: 'link-btn', onclick: done }, 'cancel'), ' \u00b7 Enter to ', h('button', { class: 'link-btn', onclick: save }, 'save'));
+  const wrap = h('div', { class: 'edit-wrap' }, ta, keys);
   // Back on a phone (phoneNav) cancels too. Focus stays on the message, without a ring (it came from a gesture), and
   // the keyboard doesn't come back up for the message box.
   wrap._cancel = () => {
@@ -7107,7 +7197,9 @@ async function onNewMessage(key, m) {
     if (!S.view.serverId || S.view.serverId === m.serverId) later(renderSidebar);
     return;
   }
-  const viewing = currentKey() === key && !document.hidden && S.view.tab !== 'reels';
+  // (On a phone's list page the conversation you came back from is still the current one, but it isn't on screen:
+  // what arrives there counts as unread, as markRead has it.)
+  const viewing = currentKey() === key && !document.hidden && S.view.tab !== 'reels' && !(isPhoneUI() && M.level === 'list');
   const level = notifyLevel(key);
   const isDm = key.startsWith('d:') || isGroup(S.servers.find((x) => x.id === m.serverId));
   const kind = mentionKind(m);
@@ -7130,8 +7222,14 @@ async function onNewMessage(key, m) {
       if (!quiet()) claimOnce(m.id).then((mineToShow) => { if (!mineToShow) return; playSound((mentioned && kind) || (isDm ? (key.startsWith('d:') ? 'dm' : 'groupDm') : 'reply')); notify(getUser(m.authorId), previewText(m).replace(/^You: /, ''), key, m.id); if (!document.hasFocus()) flashTaskbar(); });
     } else if (counts && level === 'all' && !S.blocked.has(m.authorId) && !quiet()) claimOnce(m.id).then((ok) => { if (ok) playSound('message'); });
   } else {
-    // Reading along at the bottom: the marker follows (and your other devices clear their badge).
-    later(() => { const sc = currentKey() === key && $('#messages'); if (sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160) markRead(key); });
+    // Reading along at the bottom: the marker follows (and your other devices clear their badge). A mention or reply
+    // seen like that (the window in front, too) is read in the notifications as well: no bell for what you just saw.
+    later(() => {
+      const sc = currentKey() === key && $('#messages');
+      if (!sc || sc.scrollHeight - sc.scrollTop - sc.clientHeight >= 160) return;
+      markRead(key);
+      if (document.hasFocus()) readInbox(m.id);
+    });
   }
   if ((mentioned || repliedToMe) && !S.blocked.has(m.authorId)) {
     addInbox({
@@ -7352,7 +7450,8 @@ function closeThread(all = false) {
 // Only then do replies count as read (the thread can stay chosen while the panel shows something else).
 function readingThread(rootId) {
   const t = S.threads[rootId];
-  return panelMode() === 'thread' && !!S.thread && S.thread.rootId === rootId && !document.hidden && !!t && t.loaded && !t.hasNewer;
+  return panelMode() === 'thread' && !!S.thread && S.thread.rootId === rootId && !document.hidden && !!t && t.loaded && !t.hasNewer
+    && !(isPhoneUI() && M.level === 'list'); // (on a phone's list page it isn't on screen)
 }
 // Reading a thread moves its marker to its newest reply, a moment later (one request for a burst of replies). The
 // server tells your other devices, and its answer sets the channel's badge right.
@@ -8368,7 +8467,13 @@ function createComposer({ id, key, threadId, placeholder }) {
   const laterBtn = h('button', { class: 'icon-btn send-later', 'aria-label': 'Send later', 'data-tip': 'Send later', 'data-pop-anchor': '', onclick: (e) => sendLater(e.currentTarget) }, icon('clock'));
   sendBtn.addEventListener('contextmenu', (e) => { if (sendBtn.disabled || laterBtn.hidden) return; e.preventDefault(); sendLater(sendBtn); });
   const suggest = h('div', { class: 'suggest', role: 'listbox', hidden: true });
-  const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 260) + 'px'; };
+  // At most 260 px tall; on a phone also at most 30% of what's visible, so with the keyboard up the box never pushes
+  // the conversation off the screen (visualViewport is what's left above the keyboard).
+  const autosize = () => {
+    ta.style.height = 'auto';
+    const seen = isPhoneUI() ? Math.round(((window.visualViewport && window.visualViewport.height) || window.innerHeight) * 0.3) : 260;
+    ta.style.height = Math.min(ta.scrollHeight, 260, Math.max(seen, 44)) + 'px';
+  };
   // A video still being looked at (checkShrink) can't go yet: whether it fits isn't known.
   const checking = () => state.pending.some((p) => p.shrink === 'checking');
   const update = () => { sendBtn.disabled = (!ta.value.trim() && !state.pending.length) || checking(); laterBtn.disabled = sendBtn.disabled; };
@@ -8388,7 +8493,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     ].filter(Boolean) : [];
     return [
       canAttach ? { label: 'Upload a file', icon: 'file', action: () => fileIn.click() } : null,
-      canAttach ? { label: 'Create a poll', icon: 'check', action: () => openPollCreator((poll) => send('', { poll })) } : null,
+      canAttach ? { label: 'Create a poll', icon: 'chart', action: () => openPollCreator((poll) => send('', { poll })) } : null,
       canAttach && more.length ? '-' : null,
       ...more,
     ];
@@ -8410,20 +8515,38 @@ function createComposer({ id, key, threadId, placeholder }) {
   const slowNote = h('div', { class: 'slow-note', hidden: true });
   const disNote = h('div', { class: 'dis-note', hidden: true });
   let slowUntil = 0;
-  const startSlow = (secs) => {
+  // words: what the line says with the seconds left (a rate limit's "Slow down", rateLimited in deliver).
+  const startSlow = (secs, words = (left) => `Slowmode: you can send again in ${fmtDuration(left)}`) => {
     slowUntil = Date.now() + secs * 1000;
     const tick = () => {
       const left = Math.ceil((slowUntil - Date.now()) / 1000);
       if (left <= 0 || !document.body.contains(slowNote)) { slowUntil = 0; renderExtras(); return; }
-      slowNote.hidden = false; slowNote.textContent = `Slowmode: you can send again in ${fmtDuration(left)}`;
+      slowNote.hidden = false; slowNote.textContent = words(left);
       setTimeout(tick, 1000);
     };
     tick();
   };
+  // Offline: one quiet line above the box. Sending still works: what's sent waits and goes once it's back.
+  const offNote = h('div', { class: 'offline-note', role: 'status', hidden: !connDown() }, icon('globe'), h('span', null, 'Offline \u2014 messages will send when you\u2019re back'));
   // Slash commands (bots.js): the bar with usage and the encryption warning, and bot answers only you can see.
   const cmdBar = h('div', { class: 'cmd-bar', hidden: true });
   const ephBox = h('div', { class: 'eph-list' });
-  const el = h('div', { class: `composer-wrap cw-${id}` }, suggest, ephBox, cmdBar, extras, box, disNote, slowNote, typing);
+  const el = h('div', { class: `composer-wrap cw-${id}` }, suggest, ephBox, cmdBar, extras, offNote, box, disNote, slowNote, typing);
+  // How tall the message box is, for what floats above it (side panels at tablet sizes, ux-layout.css): --composer-h
+  // on #main, from the main box only.
+  if (id === 'main' && window.ResizeObserver) {
+    const ro = new ResizeObserver(() => {
+      if (!el.isConnected) { ro.disconnect(); return; } // (taken out of the page: another conversation's box took over)
+      const main = $('#main');
+      if (main) main.style.setProperty('--composer-h', Math.round(el.getBoundingClientRect().height) + 'px');
+    });
+    ro.observe(el);
+  }
+  // The keyboard coming up or going down changes what's visible, so the box's tallest size too (autosize).
+  if (window.visualViewport) {
+    const onView = () => { if (!ta.isConnected) { window.visualViewport.removeEventListener('resize', onView); return; } if (ta.value) autosize(); };
+    window.visualViewport.addEventListener('resize', onView);
+  }
   // Bots' commands work in text channels (not a group's chat, nor a voice channel's).
   const slashChannel = () => { const kk = key(); if (id !== 'main' || !kk || !kk.startsWith('c:')) return null; const s = serverOfChannel(kk.slice(2)); return s && !isGroup(s) && (channelById(kk.slice(2)) || {}).type === 'text' ? kk.slice(2) : null; };
   const renderCmdBar = () => {
@@ -8770,12 +8893,16 @@ function createComposer({ id, key, threadId, placeholder }) {
     if (m) { replaceMessageEl(m); ta.focus(); }
   }
   // A send that stopped gives its files back (always: the uploads that went up are kept for the next Send, p.sent),
-  // and its words unless something new was typed here meanwhile.
+  // and its words. Something new typed here meanwhile stays as it is: the words that didn't go come back on the
+  // lines above it (they were written first), so neither is lost.
   function takeBack({ files, text, link }) {
-    if (!ta.value.trim() && !(drafts.get(convId()) || '').trim()) {
-      ta.value = text; drafts.set(convId(), text); synced = text; autosize();
-      if (link && !state.link) state.link = link; // and its preview
+    const now = ta.value.trim() ? ta.value : drafts.get(convId()) || '';
+    if (text && text.trim() && !now.includes(text)) {
+      const both = now.trim() ? `${text}\n${now}` : text;
+      ta.value = both; drafts.set(convId(), both); synced = both; autosize();
+      if (now.trim()) toast('Your message that didn\u2019t send is back in the box, above what you typed.');
     }
+    if (link && !state.link && (!now.trim() || !text)) state.link = link; // and its preview
     // All of them, even past what one message takes: Send says so (send()), and nothing is dropped.
     state.pending = [...files.filter((p) => !state.pending.includes(p)), ...state.pending];
     // A video that was still being looked at when it was sent is looked at again.
@@ -8891,12 +9018,37 @@ function createComposer({ id, key, threadId, placeholder }) {
     // A video to make smaller starts in this tap: phones only let it play (to record it smaller) after one.
     for (const p of files) if (p.shrink && !p.session && !sentFresh(p)) p.session = startShrink(p.file);
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12)), (x) => x.toString(16).padStart(2, '0')).join('');
-    if (id === 'main' && !tid && !sendAt) showPendingSend(kk, nonce, poll ? `\uD83D\uDCCA ${poll.q}` : files.some((f) => f.voice) ? '\uD83C\uDFA4 Voice message' : text, files.some((f) => f.voice) ? 0 : files.length, replyTo);
     // The disappearing timer they wrote it under (the note above the box): a weaker one by the time it goes out asks
     // first. A scheduled message is encrypted now, for the timer in force now, like one sent now.
     const wrote = convSecs(kk);
-    queue = queue.then(() => underWay(deliver({ kk, tid, text, files, replyTo, nonce, poll, links, linkState, wrote, sendAt })));
+    const job = { kk, tid, text, files, replyTo, nonce, poll, links, linkState, wrote, sendAt };
+    const voiceMsg = files.some((f) => f.voice);
+    if (id === 'main' && !tid && !sendAt) {
+      const pic = files.find((f) => f.url && !f.voice);
+      const p = showPendingSend(kk, nonce, poll ? `\uD83D\uDCCA ${poll.q}` : voiceMsg ? '\uD83C\uDFA4 Voice message' : text, voiceMsg ? 0 : files.length, replyTo,
+        { names: voiceMsg ? [] : files.map((f) => f.file.name), thumb: pic ? pic.url : null, draft: !poll && !voiceMsg ? text : '' });
+      // Retry (a failed one, or the queue once the connection is back): the very same message, with the same nonce,
+      // so the server answers with the first one if that did get there (server/index.js sentBefore). It's encrypted
+      // again, so where it belongs inside it (binding.js) is as fresh as when it's first sent.
+      p.go = () => {
+        for (const f of files) if (f.shrink && !f.session && !sentFresh(f)) f.session = startShrink(f.file);
+        queue = queue.then(() => underWay(deliver(job)));
+        return queue;
+      };
+      p.discard = () => { if (files.length && !voiceMsg) giveBack(kk + (tid || ''), files, '', null); };
+    }
+    queue = queue.then(() => underWay(deliver(job)));
     return queue;
+  }
+  // Files and words that didn't go back to the box: this one if it still shows the conversation, else the one that
+  // shows it now or next (takeBack, renderExtras).
+  function giveBack(conv, files, text, link) {
+    const prev = givenBack.get(conv); // an earlier send there that stopped too, not picked up yet
+    givenBack.set(conv, prev ? { files: [...prev.files, ...files.filter((p) => !prev.files.includes(p))], text: [prev.text, text].filter((t) => t && t.trim()).join('\n'), link: prev.link || link }
+      : { files, text, link });
+    const here = ta.isConnected && convId() === conv ? null : Object.values(composers).find((c) => c && c.showing && c.showing() === conv);
+    if (here) here.renderExtras();
+    else if (ta.isConnected && convId() === conv) { renderExtras(); update(); }
   }
   // Send later: when, from the quick picks or a date and time; then it goes like a send, scheduled.
   function sendLater(anchor) {
@@ -8904,6 +9056,13 @@ function createComposer({ id, key, threadId, placeholder }) {
     SCHED.pickTime(anchor, (sendAt) => send(null, { sendAt }));
   }
   async function deliver({ kk, tid, text, files, replyTo, nonce, poll, links, linkState, wrote, sendAt }) {
+    // Sent again (Retry, or the queue once the connection is back) after it got there or was deleted meanwhile.
+    if (settledSends.has(nonce)) return;
+    // Its "sending…" copy in the chat, when it has one.
+    const pend = pendingSends.get(nonce);
+    // Behind messages here that wait for the connection (or for a rate limit): it waits with them, in order.
+    if (pend && sendsWaitingBefore(pend)) { setSendState(pend, 'waiting'); scheduleFlush(); return; }
+    if (pend && pend.state !== 'sending') setSendState(pend, 'sending');
     const bar = upStatus.querySelector('.bar');
     const totalBytes = files.reduce((a, p) => a + (p.file ? p.file.size : 0), 0);
     let retrying = null;
@@ -8914,6 +9073,7 @@ function createComposer({ id, key, threadId, placeholder }) {
       const what = files.length === 1 ? files[0].file.name : `${files.length} files`;
       const stay = files.length > MAX_FILES ? ' (keep Hearth on screen)' : ''; // a big send takes a while (keepAwake)
       if (!retrying) upText.textContent = shrunk ? `Uploading ${what} (${Math.round(f * 100)}%)${stay}` : `Uploading ${what} — ${fmtSize(Math.round(f * totalBytes))} of ${fmtSize(totalBytes)} (${Math.round(f * 100)}%)${stay}`;
+      if (pend && files.length && f < 1) sendProgress(pend, f); // and under its copy in the chat
     };
     const onStatus = ({ retrying: r, wait, rate, shrinking }) => {
       if (shrinking != null) {
@@ -8956,25 +9116,32 @@ function createComposer({ id, key, threadId, placeholder }) {
       // TypeError, or the server failing): then sending again uploads the files again, rather than share them with a
       // message that has them (the server links a file to the first message only). Anything refused before or by
       // the server (a changed key, too long, slow mode…) keeps them.
-      if (posting && (e instanceof TypeError || e.status >= 500)) files.forEach((p) => { delete p.sent; });
-      dropPendingSend(nonce);
+      if (posting && (e instanceof TypeError || e.network || e.status >= 500)) files.forEach((p) => { delete p.sent; });
       const wait = /in (\d+)s/.exec(e.message || '');
-      if (e.code === 'slowmode' && wait) startSlow(+wait[1]);
-      if (e.cancelled) toast('Upload cancelled. Your message and files are back in the box.');
-      else toast(e.message, 'error');
+      const secs = e.retryAfter || (wait ? +wait[1] : 0);
+      if (e.code === 'slowmode' && secs) startSlow(secs);
       // The password bar comes back if it was put off: this message needs it.
       if (e.code === 'need_password') { pqLater.clear(); if (composers.main) composers.main.renderExtras(); }
+      // A message with its copy in the chat stays there, never lost and never put back over what's typed now: it
+      // waits for the connection (no connection, or the live one is down) or a rate limit and then goes by itself,
+      // or says it wasn't sent, with Retry and Delete. Cancelling its upload, or choosing not to send it under a
+      // weaker disappearing timer, gives it back to the box as before.
+      if (pend && pendingSends.has(nonce) && !e.cancelled && e.code !== 'disappear_weaker') {
+        if (e.rateLimited || (e.code === 'slowmode' && secs)) {
+          holdSends(secs || 5);
+          if (e.rateLimited) slowDown(secs || 5);
+          setSendState(pend, 'waiting');
+        } else if (e.offline || (!e.status && (navigator.onLine === false || !socketUp()))) setSendState(pend, 'waiting');
+        else setSendState(pend, 'failed', e.network ? 'Couldn\u2019t reach the server' : e.message);
+        if (pend.state === 'waiting') scheduleFlush();
+        return;
+      }
+      dropPendingSend(nonce);
+      if (e.cancelled) toast('Upload cancelled. Your message and files are back in the box.');
+      else toast(e.message, 'error');
       // Give the files and words back so nothing is lost: to this box if it still shows the conversation, else to the
       // one that shows it now or next (takeBack, renderExtras).
-      if (!poll && !files.some((f) => f.voice)) {
-        const prev = givenBack.get(conv); // an earlier send there that stopped too, not picked up yet
-        const link = linkState && linkState.status === 'ready' ? linkState : null;
-        givenBack.set(conv, prev ? { files: [...prev.files, ...files.filter((p) => !prev.files.includes(p))], text: [prev.text, text].filter((t) => t && t.trim()).join('\n'), link: prev.link || link }
-          : { files, text, link });
-        const here = ta.isConnected && convId() === conv ? null : Object.values(composers).find((c) => c && c.showing && c.showing() === conv);
-        if (here) here.renderExtras();
-        else if (ta.isConnected && convId() === conv) { renderExtras(); update(); }
-      }
+      if (!poll && !files.some((f) => f.voice)) giveBack(conv, files, text, linkState && linkState.status === 'ready' ? linkState : null);
     } finally {
       if (uploading === ctl) uploading = null;
       const going = sendingUi.get(conv);
@@ -8984,7 +9151,8 @@ function createComposer({ id, key, threadId, placeholder }) {
     }
   }
   setTimeout(() => { autosize(); update(); renderEph(); }, 0);
-  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph, fitAttach, showing: () => (ta.isConnected ? convId() : null), keepDraft: () => { if (ta.isConnected && ta.value !== synced) keepDraft(); } };
+  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph, fitAttach, showing: () => (ta.isConnected ? convId() : null), keepDraft: () => { if (ta.isConnected && ta.value !== synced) keepDraft(); },
+    slowDown: (secs) => startSlow(secs, (left) => `Slow down \u2014 sending again in ${fmtDuration(left)}`) };
 }
 const fmtDuration = (sec) => (sec >= 3600 ? `${Math.round(sec / 3600)}h` : sec >= 60 ? `${Math.round(sec / 60)}m` : `${sec}s`);
 function placeholderFor(k) {
@@ -9270,26 +9438,53 @@ async function bindScheduled(item, sealed, key, ref, threadId) {
     return await api('PATCH', `/scheduled-messages/${item.id}`, { ...sealed, draft });
   } catch { return item; }
 }
-// "Sending…" copies of your own messages, shown until the real one arrives.
-const pendingSends = new Map(); // nonce -> { key, text, files, replyTo, el }
+// "Sending…" copies of your own messages, shown until the real one arrives. One that couldn't go stays, never lost:
+// state 'waiting' (no connection, or a rate limit: it goes by itself, in order, flushWaiting) or 'failed' (the
+// server turned it down, or never answered while the connection was up: Retry and Delete under it). They stay
+// across conversation switches (redrawn by renderMessages), and on a reload what they say goes into that
+// conversation's draft (pagehide below).
+const pendingSends = new Map(); // nonce -> { key, nonce, text, files, replyTo, names, thumb, draft, state, why, el, go, discard }
+// Nonces of sends that are done with (arrived, or deleted): a Retry or the queue that comes later sends nothing.
+const settledSends = new Set();
 function pendingEl(p) {
   const prevList = (S.msgs[p.key] || { list: [] }).list;
   const fake = { id: 'pending-' + p.nonce, authorId: S.me.id, createdAt: Date.now(), dec: { t: p.text, f: [] }, reactions: [], replyTo: null };
   let el;
   try { el = messageEl(fake, prevList[prevList.length - 1] || null, 'main'); } catch { el = h('div', { class: 'msg' }, h('div', { class: 'msg-gutter' }), h('div', { class: 'msg-body' }, p.text)); }
   el.classList.add('sending');
+  el.classList.toggle('failed', p.state === 'failed');
+  el.classList.toggle('waiting', p.state === 'waiting');
   el.removeAttribute('data-mid');
+  el.dataset.nonce = p.nonce;
   el.oncontextmenu = null;
-  if (p.files) el.append(h('div', { class: 'sending-note' }, `Uploading ${p.files} file${p.files === 1 ? '' : 's'}\u2026`));
+  // What's uploading, by name ("Uploading photo.png · 42%", sendProgress), with the picture when there is one.
+  if (p.files && p.state === 'sending') {
+    const what = p.names && p.names.length === 1 ? p.names[0] : `${p.files} file${p.files === 1 ? '' : 's'}`;
+    el.append(h('div', { class: 'sending-note' }, p.thumb ? h('img', { class: 'sending-thumb', src: p.thumb, alt: '' }) : null,
+      h('span', { class: 'sending-text' }, p.progress ? `Uploading ${what} \u00b7 ${Math.round(p.progress * 100)}%` : `Uploading ${what}\u2026`)));
+  }
+  if (p.state === 'waiting') {
+    el.append(h('div', { class: 'send-state send-waiting', role: 'status' }, icon('clock'),
+      h('span', null, Date.now() < sendHold ? 'Waiting to send \u00b7 too many at once' : 'Waiting for connection')));
+  } else if (p.state === 'failed') {
+    el.append(h('div', { class: 'send-state send-failed' },
+      h('span', { class: 'send-why', role: 'status' }, icon('info'), p.why ? `Not sent \u00b7 ${p.why}` : 'Not sent'),
+      h('button', { class: 'send-act send-retry', type: 'button', 'aria-label': 'Retry sending this message', onclick: () => retrySend(p) }, 'Retry'),
+      h('button', { class: 'send-act send-delete', type: 'button', 'aria-label': 'Delete this unsent message', onclick: () => deleteSend(p) }, 'Delete')));
+  }
   return el;
 }
-function showPendingSend(key, nonce, text, files, replyTo) {
-  const p = { key, nonce, text, files, replyTo };
+// opts: { names, thumb, draft }: the files' names and a picture for its note, and the words a reload keeps.
+function showPendingSend(key, nonce, text, files, replyTo, { names = [], thumb = null, draft = '' } = {}) {
+  const p = { key, nonce, text, files, replyTo, names, thumb, draft, state: 'sending' };
   pendingSends.set(nonce, p);
   const sc = $('#messages');
   if (sc && currentKey() === key) { p.el = pendingEl(p); sc.append(p.el); toNewest(sc); }
+  return p;
 }
 function dropPendingSend(nonce) {
+  settledSends.add(nonce);
+  if (settledSends.size > 1000) settledSends.delete(settledSends.values().next().value);
   const p = pendingSends.get(nonce);
   if (!p) return;
   pendingSends.delete(nonce);
@@ -9299,6 +9494,131 @@ function redrawPendingSends(key) {
   const sc = $('#messages');
   if (!sc) return;
   for (const p of pendingSends.values()) if (p.key === key) { p.el = pendingEl(p); sc.append(p.el); }
+}
+// Its copy in the chat says what's happening now. Keyboard focus on its Retry or Delete goes to the message box.
+function setSendState(p, state, why = null) {
+  p.state = state;
+  p.why = why;
+  if (state !== 'sending') p.progress = 0;
+  if (!p.el || !p.el.isConnected) return;
+  const had = p.el.contains(document.activeElement);
+  const el = pendingEl(p);
+  p.el.replaceWith(el);
+  p.el = el;
+  if (had) { const ta = $('#composer-input'); if (ta) ta.focus({ preventScroll: true }); }
+}
+function sendProgress(p, f) {
+  p.progress = f;
+  const t = p.el && p.el.querySelector('.sending-text');
+  if (!t) return;
+  const what = p.names && p.names.length === 1 ? p.names[0] : `${p.files} file${p.files === 1 ? '' : 's'}`;
+  t.textContent = `Uploading ${what} \u00b7 ${Math.round(f * 100)}%`;
+}
+function retrySend(p) {
+  if (!pendingSends.has(p.nonce) || !p.go) return;
+  setSendState(p, 'sending');
+  p.go();
+}
+// Deleting one that didn't go: its files (if it had any) go back to the box, as files are never dropped.
+function deleteSend(p) {
+  if (!pendingSends.has(p.nonce)) return;
+  const had = p.el && p.el.contains(document.activeElement);
+  dropPendingSend(p.nonce);
+  if (p.discard) p.discard();
+  if (had) { const ta = $('#composer-input'); if (ta) ta.focus({ preventScroll: true }); }
+}
+// Is an earlier message in the same conversation waiting? Then this one waits behind it, so they arrive in order.
+function sendsWaitingBefore(p) {
+  for (const q of pendingSends.values()) {
+    if (q === p) return false;
+    if (q.key === p.key && q.state === 'waiting') return true;
+  }
+  return false;
+}
+// A rate limit (429 rate_limited, or slow mode): nothing waiting goes before then.
+let sendHold = 0;
+const holdSends = (secs) => { sendHold = Math.max(sendHold, Date.now() + secs * 1000); };
+// "Slow down — sending again in 8s": one line above the box (the slow-mode line), instead of a toast per message.
+const slowDown = (secs) => { if (composers.main) composers.main.slowDown(secs); };
+const socketUp = () => !!socket && socket.connected;
+// Waiting messages go when the connection is back (the live connection connects, the browser goes online), when a
+// rate limit is over, and otherwise every so often (2 s, 4 s, 8 s… at most every 30 s) in case nothing says so.
+let flushTimer = 0;
+let flushTries = 0;
+let flushing = false;
+const anyWaiting = () => [...pendingSends.values()].some((p) => p.state === 'waiting');
+function scheduleFlush() {
+  clearTimeout(flushTimer);
+  if (!anyWaiting()) return;
+  const held = sendHold - Date.now();
+  const ms = held > 0 ? held + 100 : navigator.onLine === false ? 30000 : Math.min(30000, 2000 * 2 ** flushTries);
+  flushTimer = setTimeout(() => flushWaiting(), ms);
+}
+async function flushWaiting({ fresh = false } = {}) {
+  if (fresh) flushTries = 0;
+  clearTimeout(flushTimer);
+  if (flushing || !anyWaiting()) return;
+  if (navigator.onLine === false || Date.now() < sendHold) { scheduleFlush(); return; }
+  flushing = true;
+  try {
+    for (let guard = pendingSends.size + 5; guard > 0; guard--) {
+      const next = [...pendingSends.values()].find((p) => p.state === 'waiting');
+      if (!next) break;
+      if (!next.go) { setSendState(next, 'failed'); continue; }
+      setSendState(next, 'sending');
+      await next.go();
+      // Still can't go: the rest stay behind it.
+      if (pendingSends.has(next.nonce) && next.state === 'waiting') break;
+    }
+  } finally { flushing = false; }
+  if (anyWaiting()) { flushTries++; scheduleFlush(); } else flushTries = 0;
+}
+// The connection: the banner ("You're offline" without any connection, else "Reconnecting…"; on a phone a strip
+// under the header, ux-conversation.css) and the quiet line above every message box.
+let netDown = false;
+const connDown = () => netDown;
+function connUi(down = netDown) {
+  netDown = down;
+  const b = $('#conn-banner');
+  if (b) {
+    b.hidden = !down;
+    const t = b.querySelector('.conn-text');
+    if (t) t.textContent = navigator.onLine === false ? 'You\u2019re offline' : 'Reconnecting\u2026';
+  }
+  document.body.classList.toggle('conn-down', down);
+  $$('.offline-note').forEach((n) => { n.hidden = !down; });
+  // On a phone the strip goes right under whatever header the page has (a conversation's, with its Chat/Reels row,
+  // or a list page's), followed as you move between pages while it shows.
+  clearInterval(connPlaceTimer);
+  if (b) { b.style.top = ''; b.style.left = ''; }
+  if (down && b && isPhoneUI()) { placeConnBanner(b); connPlaceTimer = setInterval(() => placeConnBanner(b), 500); }
+}
+let connPlaceTimer = 0;
+function placeConnBanner(b) {
+  if (b.hidden || !isPhoneUI()) { clearInterval(connPlaceTimer); b.style.top = ''; b.style.left = ''; return; }
+  const shown = (x) => !x.checkVisibility || x.checkVisibility({ visibilityProperty: true, opacityProperty: true });
+  // (Beside the server bar on a list page: across the list only, so the server bar stays clear.)
+  const heads = $$('#main-head, #main > .conv-tabs, #sidebar-head, .m-page-head').filter(shown).map((x) => x.getBoundingClientRect())
+    .filter((r) => r.height > 0 && r.top >= 0 && r.top < window.innerHeight / 3 && r.right > 0 && r.left < window.innerWidth);
+  const low = heads.reduce((a, r) => (!a || r.bottom > a.bottom ? r : a), null);
+  b.style.top = low ? `${Math.round(low.bottom)}px` : '';
+  b.style.left = low ? `${Math.max(0, Math.round(low.left))}px` : '';
+  document.body.style.setProperty('--conn-bottom', `${Math.round(b.getBoundingClientRect().bottom)}px`);
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('offline', () => { if (S.me) connUi(true); });
+  // Back online: the live connection may never have noticed it was gone, so nothing else would say so.
+  window.addEventListener('online', () => { if (S.me) connUi(netDown && !socketUp()); flushWaiting({ fresh: true }); });
+  // Leaving or reloading: what didn't go is kept as that conversation's draft, above anything typed there.
+  window.addEventListener('pagehide', () => {
+    let any = false;
+    for (const p of pendingSends.values()) {
+      if (p.state === 'sending' || !p.draft || !p.draft.trim()) continue;
+      const now = drafts.get(p.key) || '';
+      if (!now.includes(p.draft)) { drafts.set(p.key, now.trim() ? `${p.draft}\n${now}` : p.draft); any = true; }
+    }
+    if (any) drafts.flush();
+  });
 }
 
 // ======================================================================= emoji + GIF pickers
@@ -9346,7 +9666,8 @@ function emojiPanel(onPick, { keepOpen = false } = {}) {
   });
   search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const first = grid.querySelector('.emoji-btn'); if (first) first.click(); } });
   drawAll();
-  setTimeout(() => search.focus(), 20);
+  // Not on a touch screen: the keyboard would come up over the emoji you're about to tap.
+  if (!isTouchUI()) setTimeout(() => search.focus(), 20);
   return h('div', { class: 'emoji-picker' }, h('div', { class: 'emoji-top' }, search), tabs, grid, preview);
 }
 

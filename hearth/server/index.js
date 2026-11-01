@@ -4100,12 +4100,25 @@ function requireCurrentEpoch(serverId, epoch) {
 }
 
 // The sender's app tags each message with a random nonce so it can swap its "sending…" copy for the
-// real one the moment it arrives. It's echoed back, never stored.
+// real one the moment it arrives. It's echoed back and never written to the database, but kept in memory for a few
+// minutes with the message's id: the app sends a message again with the same nonce when it never heard back (the
+// connection dropped on the way, it was offline), and if the first one did get here that one is the answer, not a
+// second copy (sentBefore).
+const NONCE_KEEP_MS = 15 * 60 * 1000;
+const sentNonces = new Map(); // `${authorId}|${nonce}` -> { id, at }
+const nonceOf = (body) => { const n = body && body.nonce; return typeof n === 'string' && /^[a-z0-9]{8,40}$/i.test(n) ? n : null; };
 function withNonce(msg, body) {
-  const n = body && body.nonce;
-  if (typeof n === 'string' && /^[a-z0-9]{8,40}$/i.test(n)) msg.nonce = n;
+  const n = nonceOf(body);
+  if (n) { msg.nonce = n; sentNonces.set(`${msg.authorId}|${n}`, { id: msg.id, at: now() }); }
   return msg;
 }
+// The id of the message this person already sent with this request's nonce, if it's still remembered.
+function sentBefore(userId, body) {
+  const n = nonceOf(body);
+  const hit = n && sentNonces.get(`${userId}|${n}`);
+  return hit && hit.at > now() - NONCE_KEEP_MS ? hit.id : null;
+}
+jobs.every('nonces.sweep', 60000, () => { const old = now() - NONCE_KEEP_MS; for (const [k, v] of sentNonces) if (v.at < old) sentNonces.delete(k); });
 // Channel messages are end-to-end encrypted by the sender. The server stores ciphertext only. Voice channels' chats
 // (v19) go the same way: same keys and epochs, same permissions (View Channel and Send Messages; Connect isn't needed
 // to chat), but no threads: a voice channel's chat stays one conversation next to the call.
@@ -4114,6 +4127,10 @@ api.post('/channels/:id/messages', auth, (req, res) => {
   const srvRow = serverOf(c);
   if (!hasChat(c, srvRow)) fail(400, c.type === 'voice' ? 'A group call has no chat of its own: write in the group.' : 'You can only send messages in text and voice channels.');
   if ((req.body || {}).threadId && c.type !== 'text') fail(400, 'Threads are only in text channels.');
+  // Sent again after the answer was lost: the message that got here the first time (see withNonce).
+  const again = sentBefore(req.userId, req.body);
+  const had = again && db.prepare('SELECT * FROM messages WHERE id = ? AND channel_id = ? AND author_id = ?').get(again, c.id, req.userId);
+  if (alive(had)) return res.json(msgFor(withNonce(serializeMessage(had, c), req.body), c.server_id, req.userId));
   limitMessages(req);
   const { ciphertext, epoch, files } = req.body || {};
   validCipher(ciphertext, req.userId);
@@ -4462,6 +4479,9 @@ api.get('/dms/:id/messages', auth, (req, res) => {
 
 api.post('/dms/:id/messages', auth, (req, res) => {
   const d = requireDm(req.params.id, req.userId);
+  const again = sentBefore(req.userId, req.body); // sent again after the answer was lost (see withNonce)
+  const had = again && db.prepare('SELECT * FROM dm_messages WHERE id = ? AND dm_id = ? AND author_id = ?').get(again, d.id, req.userId);
+  if (alive(had)) return res.json(withNonce(serializeDmMessage(had), req.body));
   limitMessages(req);
   if (isBlocked(d.user_a, d.user_b)) fail(403, 'You can\u2019t message this person.');
   // A deleted account keeps its public key (so old messages stay readable), but nobody can read new ones.
