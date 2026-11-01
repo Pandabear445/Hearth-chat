@@ -23,11 +23,17 @@ const where = (page, sel) => page.evaluate((s) => {
 const noSideScroll = (page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
 const panelHidden = (page) => page.evaluate(() => document.querySelector('#members').hidden);
 const SEND = '.cw-main .send-btn';
+// Alice as she is by now: the main flows rename her alice_w (her name is still alice when these run alone).
+async function aliceOn(t, name, device) {
+  const p = await t.open(name, device);
+  const [{ username }] = t.server.rows("SELECT username FROM users WHERE username IN ('alice_w', 'alice') ORDER BY username DESC");
+  await p.login(username, t.pw.alice);
+  return p;
+}
 
 // ------------------------------------------------------------------ a phone held sideways: dialogs fit
 async function sidewaysDialogs(t) {
-  const p = await t.open('alice-sideways', { ...PHONE, viewport: { width: 844, height: 390 } });
-  await p.login('alice', t.pw.alice);
+  const p = await aliceOn(t, 'alice-sideways', { ...PHONE, viewport: { width: 844, height: 390 } });
   await p.phoneHome();
   await p.$('#rail button[aria-label="Add a server"]').click();
   await p.$('.modal button.choice').first().click();
@@ -63,9 +69,11 @@ async function sidewaysDialogs(t) {
 
 // ------------------------------------------------------------------ laptops and narrow windows: the side panel
 async function sidePanel(t) {
-  const p = await t.open('alice-laptop-ux', { viewport: { width: 1024, height: 768 } });
+  const p = await aliceOn(t, 'alice-laptop-ux', { viewport: { width: 1024, height: 768 } });
   const { page } = p;
-  await p.login('alice', t.pw.alice);
+  // (An owner's announcement from an earlier flow floats over the top of the page on a computer, as it always has:
+  // put away, so what's checked here is the panel.)
+  if (await p.$('#announce button[aria-label="Dismiss"]').count()) await p.$('#announce button[aria-label="Dismiss"]').click();
   await p.$(`#rail button[aria-label="${SIDEWAYS}"]`).click();
   await p.openChannel('general');
   for (let i = 1; i <= 6; i++) await p.send(`Layout check ${i}`);
