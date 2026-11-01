@@ -22,6 +22,7 @@ import android.view.View;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.widget.Toast;
 
@@ -47,11 +48,18 @@ import com.getcapacitor.BridgeWebViewClient;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.ref.WeakReference;
+import java.net.ConnectException;
+import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
+import java.net.URL;
 import java.net.URLEncoder;
+import java.net.UnknownHostException;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -59,6 +67,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import javax.net.ssl.SSLException;
 
 /**
  * Hearth for Android: a web view showing your Hearth server, plus the few things a web view can't do alone:
@@ -216,6 +226,31 @@ public class MainActivity extends BridgeActivity {
         getBridge().getWebView().loadUrl(getBridge().getLocalUrl() + "/" + query);
     }
 
+    // The server didn't answer: the connect screen's "Can't reach" card, which keeps trying by itself. Only a code
+    // and the host travel (the card has the words for each code), never the web view's own error text.
+    private void showOffline(String reason, String url) {
+        Uri u = Uri.parse(url == null ? "" : url);
+        String host = u.getHost() == null ? "" : u.getHost() + (u.getPort() > 0 ? ":" + u.getPort() : "");
+        try {
+            showConnect("?offline=1&reason=" + URLEncoder.encode(reason, "UTF-8") + "&host=" + URLEncoder.encode(host, "UTF-8"));
+        } catch (Exception ignored) { }
+    }
+
+    // A web view error as Chromium's code name (ERR_INTERNET_DISCONNECTED), which is what its description holds
+    // ("net::ERR_..."); the error number's meaning when the description is something else.
+    static String reasonCode(int code, CharSequence description) {
+        String d = description == null ? "" : description.toString();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(ERR_[A-Z0-9_]{1,60})").matcher(d);
+        if (m.find()) return m.group(1);
+        switch (code) {
+            case -2: return "ERR_NAME_NOT_RESOLVED";     // ERROR_HOST_LOOKUP
+            case -6: return "ERR_CONNECTION_REFUSED";    // ERROR_CONNECT
+            case -8: return "ERR_TIMED_OUT";             // ERROR_TIMEOUT
+            case -11: return "ERR_SSL_PROTOCOL_ERROR";   // ERROR_FAILED_SSL_HANDSHAKE
+            default: return "ERR_FAILED";
+        }
+    }
+
     private class HearthClient extends BridgeWebViewClient {
         HearthClient(Bridge bridge) { super(bridge); }
 
@@ -261,8 +296,19 @@ public class MainActivity extends BridgeActivity {
             super.onReceivedError(view, request, error);
             if (!request.isForMainFrame()) return;
             if (originOf(request.getUrl().toString()).equals(localOrigin())) return;
-            String why = "Couldn't reach the server (" + error.getDescription() + "). Check the address and your connection.";
-            try { showConnect("?error=" + URLEncoder.encode(why, "UTF-8")); } catch (Exception ignored) { }
+            showOffline(reasonCode(error.getErrorCode(), error.getDescription()), request.getUrl().toString());
+        }
+
+        // The server being down behind a proxy (Caddy answers 502 while Hearth restarts) gets the same card, which
+        // loads the server again by itself once it's back (as the desktop app does).
+        @Override
+        public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
+            super.onReceivedHttpError(view, request, response);
+            if (!request.isForMainFrame() || response == null) return;
+            String url = request.getUrl().toString();
+            int status = response.getStatusCode();
+            if (!originOf(url).equals(serverOrigin()) || status < 502 || status > 524 || (status > 504 && status < 520)) return;
+            showOffline("HTTP_" + status, url);
         }
 
         @Override
@@ -292,7 +338,7 @@ public class MainActivity extends BridgeActivity {
                     .setNegativeButton("Cancel", (d, w) -> {
                         for (SslErrorHandler h : pendingSsl) h.cancel();
                         pendingSsl.clear();
-                        try { showConnect("?error=" + URLEncoder.encode("The server's certificate wasn't trusted.", "UTF-8")); } catch (Exception ignored) { }
+                        showOffline("CERT_UNTRUSTED", url);
                     })
                     .show();
         }
@@ -347,6 +393,14 @@ public class MainActivity extends BridgeActivity {
                 case "callStart": CallService.start(this, m.optString("title")); break;
                 case "callEnd": CallService.stop(this); break;
                 case "changeServer": showConnect("?change=1"); break;
+                case "probe": {
+                    // Only the connect screen checks an address before saving it (the server doesn't let other
+                    // pages read its /api/config, so the app asks).
+                    if (!from.equals(localOrigin())) break;
+                    String o = originOf(m.optString("origin"));
+                    probe(o, (r) -> reply.postMessage(r.toString()));
+                    break;
+                }
                 case "notify": notify(m.optString("title"), m.optString("body"), m.optString("tag")); break;
                 case "cancel": NotificationManagerCompat.from(this).cancel(m.optString("tag"), 1); break;
                 case "askNotify": askNotify(); break;
@@ -475,7 +529,7 @@ public class MainActivity extends BridgeActivity {
             intent.setData(null);
             if (invite == null) return;
             if (!serverOrigin().isEmpty() && !InviteLinks.forServer(invite, serverOrigin())) {
-                Toast.makeText(this, "This invite is for " + invite[0] + ". Switch to that server first (Settings \u2192 Apps & devices).", Toast.LENGTH_LONG).show();
+                askToSwitch(invite);
                 return;
             }
             pendingInvite = invite;
@@ -487,6 +541,82 @@ public class MainActivity extends BridgeActivity {
         if (tag == null) return;
         intent.removeExtra("hearthTag");
         toPage("hearth-notification-click", JSONObject.quote(tag));
+    }
+
+    // An invite for another Hearth server than this app's: offered, never done by itself. The other address is
+    // checked first (it must answer as a Hearth server), then it becomes the app's server and the invite opens.
+    private void askToSwitch(String[] invite) {
+        String newOrigin = InviteLinks.normalOrigin(invite[0]);
+        String host = Uri.parse(newOrigin).getHost();
+        String current = Uri.parse(serverOrigin()).getHost();
+        new AlertDialog.Builder(this)
+                .setTitle("Switch to " + host + " and join?")
+                .setMessage("This invite is for a different Hearth server than the one this app uses (" + current + "). Switching signs you in there instead; you can switch back in Settings \u2192 Apps & devices.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Switch and join", (d, w) -> probe(newOrigin, (r) -> {
+                    if (!r.optBoolean("ok")) {
+                        String e = r.optString("error");
+                        Toast.makeText(this, "NOT_HEARTH".equals(e)
+                                ? host + " isn't a Hearth server."
+                                : "Couldn't reach " + host + ". Check your connection and try the link again.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    setServerOrigin(newOrigin);
+                    getBridge().getWebView().loadUrl(InviteLinks.target(newOrigin, invite[1]));
+                }))
+                .show();
+    }
+
+    // ------------------------------------------------------------------ is it a Hearth server?
+    interface ProbeDone { void done(JSONObject result); }
+
+    // GET <origin>/api/config off the main thread (8 seconds at most): { ok, name } for a Hearth server, else
+    // { ok: false, error } with a code the connect screen explains (desktop main.js's probe). A certificate the
+    // phone doesn't trust counts as "there": the certificate question comes when the page loads.
+    private void probe(String origin, ProbeDone then) {
+        new Thread(() -> {
+            JSONObject r = new JSONObject();
+            HttpURLConnection c = null;
+            try {
+                if (!origin.startsWith("https://") && !origin.startsWith("http://")) throw new IllegalArgumentException();
+                c = (HttpURLConnection) new URL(origin + "/api/config").openConnection();
+                c.setConnectTimeout(8000);
+                c.setReadTimeout(8000);
+                c.setInstanceFollowRedirects(false);
+                c.setUseCaches(false);
+                c.setRequestProperty("Accept", "application/json");
+                int status = c.getResponseCode();
+                if (status != 200) {
+                    r.put("ok", false).put("error", status >= 300 && status < 400 ? "NOT_HEARTH" : "HTTP_" + status);
+                } else {
+                    String name = null;
+                    try (InputStream in = c.getInputStream()) {
+                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                        byte[] b = new byte[8192];
+                        int n;
+                        while ((n = in.read(b)) > 0 && buf.size() < 256 * 1024) buf.write(b, 0, n);
+                        Object v = new JSONObject(buf.toString("UTF-8")).opt("name");
+                        if (v instanceof String) name = (String) v;
+                    } catch (Exception notJson) { name = null; }
+                    if (name == null) r.put("ok", false).put("error", "NOT_HEARTH");
+                    else r.put("ok", true).put("name", name);
+                }
+            } catch (SSLException e) {
+                try { r.put("ok", true).put("cert", true); } catch (Exception ignored) { }
+            } catch (UnknownHostException e) {
+                try { r.put("ok", false).put("error", "ERR_NAME_NOT_RESOLVED"); } catch (Exception ignored) { }
+            } catch (SocketTimeoutException e) {
+                try { r.put("ok", false).put("error", "ERR_TIMED_OUT"); } catch (Exception ignored) { }
+            } catch (ConnectException e) {
+                try { r.put("ok", false).put("error", "ERR_CONNECTION_REFUSED"); } catch (Exception ignored) { }
+            } catch (Exception e) {
+                try { r.put("ok", false).put("error", "ERR_FAILED"); } catch (Exception ignored) { }
+            } finally {
+                if (c != null) c.disconnect();
+            }
+            try { r.put("type", "probe"); } catch (Exception ignored) { }
+            runOnUiThread(() -> then.done(r));
+        }).start();
     }
 
     // Opens one of the app's own addresses in the server's page: now if it's ready, else once it says hello.
