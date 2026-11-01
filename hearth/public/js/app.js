@@ -6515,8 +6515,9 @@ function fileIcon(type, name) {
 const goneText = 'This file is no longer available';
 async function downloadAttachment(m, f, btn) {
   if (btn && btn.disabled) return;
-  const label = btn && !btn.classList.contains('att-dl') ? btn.lastChild : null;
-  const before = label && label.nodeType === 3 ? label.textContent : null;
+  // (A file card's button says how far it's got in its label: on a phone the label only shows meanwhile, ux-layout.css.)
+  const label = btn && !btn.classList.contains('att-dl') ? btn.querySelector('.btn-label') || btn.lastChild : null;
+  const before = label && (label.nodeType === 3 || label.classList.contains('btn-label')) ? label.textContent : null;
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
   try {
     const enc = !!f.k || !!m.dmId;
@@ -6671,15 +6672,19 @@ function attachmentEl(f, m, { many = false, fi = 0 } = {}) {
     return holder;
   }
   // Anything the app can't show: a card with the name, size and kind of file. The whole card downloads it.
-  const btn = h('button', { class: 'btn ghost sm', type: 'button', onclick: (e) => { e.stopPropagation(); downloadAttachment(m, f, btn); } }, icon('download'), 'Download');
+  // On a phone its buttons are icons a finger's size (ux-layout.css), so each is named for the file it's about.
+  const btn = h('button', { class: 'btn ghost sm', type: 'button', 'aria-label': `Download ${f.name || 'file'}`, onclick: (e) => { e.stopPropagation(); downloadAttachment(m, f, btn); } },
+    icon('download'), h('span', { class: 'btn-label' }, 'Download'));
   // Only files stored as they are (older, unencrypted messages) have a link worth sharing: an encrypted file's
   // address leads to scrambled bytes, and its key is only in the message.
   const link = !enc && isUploadUrl(f.url)
-    ? h('button', { class: 'btn ghost sm', type: 'button', onclick: (e) => { e.stopPropagation(); copyText(new URL(f.url, location.origin).href); toast('Link copied.'); } }, icon('link'), 'Copy link') : null;
+    ? h('button', { class: 'btn ghost sm', type: 'button', 'aria-label': `Copy link to ${f.name || 'file'}`, onclick: (e) => { e.stopPropagation(); copyText(new URL(f.url, location.origin).href); toast('Link copied.'); } },
+      icon('link'), h('span', { class: 'btn-label' }, 'Copy link')) : null;
   return h('div', { class: `att-file${f.sp ? ' spoiler' : ''}`, title: `Download ${f.name || 'file'}`, onclick: () => downloadAttachment(m, f, btn) },
     h('span', { class: 'att-file-badge' }, icon(fileIcon(type, f.name || ''), 'ic'), h('span', null, ((f.name || '').split('.').pop() || 'file').slice(0, 4).toUpperCase())),
     h('div', { class: 'att-file-text' }, f.sp ? h('span', { class: 'att-spoiler-tag' }, icon('eyeOff', 'ic'), 'Spoiler') : null, h('span', { class: 'att-name', title: f.name }, f.name || 'file'),
-      h('span', { class: 'att-size' }, fmtSize(f.size || 0), h('span', { class: 'att-kind' }, typeLabel(type, f.name || '')), enc ? h('span', { class: 'att-enc' }, icon('lock', 'ic'), 'Encrypted') : null)),
+      // Each piece of the line on its own (ux-layout.css): a narrow card wraps between them, never inside "1.2 MB".
+      h('span', { class: 'att-size' }, h('span', { class: 'att-sz' }, fmtSize(f.size || 0)), h('span', { class: 'att-kind' }, typeLabel(type, f.name || '')), enc ? h('span', { class: 'att-enc' }, icon('lock', 'ic'), 'Encrypted') : null)),
     link, btn);
 }
 
@@ -7542,8 +7547,116 @@ function dmProfilePlace(el) {
   };
 }
 function panelHead(title, sub, extra, close = null) {
-  return h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, h('h2', null, title), sub ? h('span', null, sub) : null),
-    extra, close || ibtn('close', 'Close panel', () => (S.panel === 'thread' ? closeThread(true) : togglePanel(S.panel))));
+  const shut = close || ibtn('close', 'Close panel', () => (S.panel === 'thread' ? closeThread(true) : togglePanel(S.panel)));
+  shut.classList.add('panel-close');
+  // Where the panel covers the whole conversation (a window 761–900px wide, ux-layout.css), a Back arrow at its start
+  // takes the close button's place, as a phone's does: it does the same.
+  const back = ibtn('chevronLeft', 'Back to the conversation', () => shut.click(), { cls: 'panel-back' });
+  return h('div', { class: 'panel-head' }, back, h('div', { class: 'panel-title' }, h('h2', null, title), sub ? h('span', null, sub) : null),
+    extra, shut);
+}
+// ---- the side panel on a laptop or tablet (761–1240px wide, not the phone layout)
+// There it floats over the conversation rather than squeezing it (app.css, ux-layout.css). It sits between the conversation's
+// header and its message box, so the header's buttons (the one that closes it among them) and the box with its Send
+// button stay in reach; a see-through cover over the rest of the conversation closes it at a touch (the side view
+// excepted: it's there to be kept beside the chat), as Esc does. Below 901px there's no room for it beside anything,
+// so it takes the conversation's whole place, with a Back arrow, as on a phone. Wider windows dock it beside the chat
+// and the phone layout covers the screen with it, both as before.
+const panelFloats = () => !isPhoneLayout() && !matchMedia('(min-width: 1241px)').matches;
+const dock = { obs: null, watched: [], frame: 0 };
+// Set up once, as the app starts: the panel is placed again whenever it's shown, hidden or switched to something else,
+// whenever the conversation is drawn afresh (a new header and message box), and whenever the window is resized (or a
+// tablet turned) or the message box grows as you type.
+function wireDock() {
+  const el = $('#members');
+  const main = $('#main');
+  if (!el || !main || !window.MutationObserver) return;
+  const later = () => { if (!dock.frame) dock.frame = requestAnimationFrame(() => { dock.frame = 0; dockPanel(); }); };
+  // (Straight away, not a frame later: the panel is in place before it's first painted.)
+  new MutationObserver(() => dockPanel()).observe(el, { attributes: true, attributeFilter: ['hidden', 'data-mode'] });
+  new MutationObserver(() => dockPanel()).observe(main, { childList: true });
+  window.addEventListener('resize', later);
+  if (window.ResizeObserver) dock.obs = new ResizeObserver(later);
+  // On the window, so after globalKeys (on the document), which closes a thread, cancels a reply or an edit first: an
+  // Esc nothing else took closes the floating panel and hands the keyboard back to the header button that opened it.
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented || M.escBusy || !el.classList.contains('docked')) return;
+    if (document.querySelector('.modal-backdrop, .popover, .sheet-backdrop')) return;
+    e.preventDefault();
+    shutDockedPanel();
+  });
+}
+function dockPanel() {
+  const el = $('#members');
+  const app = $('#app');
+  const main = $('#main');
+  if (!el || !app || !main) return;
+  const on = !el.hidden && panelFloats();
+  el.classList.toggle('docked', on);
+  let scrim = app.querySelector(':scope > .panel-scrim');
+  const wantScrim = on && panelMode() !== 'side' && !matchMedia('(max-width: 900px)').matches;
+  if (!wantScrim && scrim && !scrim.classList.contains('held')) { scrim.remove(); scrim = null; }
+  if (dock.obs) {
+    const head = main.querySelector(':scope > #main-head');
+    const comp = main.querySelector('.composer-wrap.cw-main');
+    const now = on ? [main, head, comp].filter(Boolean) : [];
+    if (now.length !== dock.watched.length || now.some((n, i) => n !== dock.watched[i])) {
+      dock.obs.disconnect();
+      now.forEach((n) => dock.obs.observe(n));
+      dock.watched = now;
+    }
+  }
+  if (!on) return;
+  // Measured where they are, relative to #app (the panel's and the cover's containing block).
+  const a = app.getBoundingClientRect();
+  const m = main.getBoundingClientRect();
+  const head = main.querySelector(':scope > #main-head');
+  const comp = main.querySelector('.composer-wrap.cw-main');
+  const top = head && head.offsetParent ? head.getBoundingClientRect().bottom : m.top;
+  const bottom = comp && comp.offsetParent ? comp.getBoundingClientRect().top : m.bottom;
+  const set = (node, k, v) => { const px = `${Math.round(v)}px`; if (node.style.getPropertyValue(k) !== px) node.style.setProperty(k, px); };
+  set(el, '--dock-t', top - a.top);
+  set(el, '--dock-b', a.bottom - bottom);
+  set(el, '--main-t', m.top - a.top);
+  set(el, '--main-b', a.bottom - m.bottom);
+  set(el, '--main-l', m.left - a.left);
+  set(el, '--main-w', m.width);
+  if (!wantScrim) return;
+  if (!scrim) {
+    scrim = h('div', { class: 'panel-scrim', 'aria-hidden': 'true' });
+    // It closes the panel as the finger or button goes down, and stays until the click that follows has landed on it
+    // (a touch's comes a moment after the finger lifts), rather than on whatever was under it in the conversation.
+    let timer = 0;
+    const free = () => { clearTimeout(timer); if (!scrim.classList.contains('held')) return; scrim.classList.remove('held'); dockPanel(); };
+    scrim.addEventListener('pointerdown', (e) => {
+      if (e.button > 0) return;
+      e.preventDefault();
+      scrim.classList.add('held');
+      const later = () => { clearTimeout(timer); timer = setTimeout(free, 400); };
+      window.addEventListener('pointerup', later, { once: true });
+      window.addEventListener('pointercancel', later, { once: true });
+      shutDockedPanel(false);
+    });
+    scrim.addEventListener('click', () => setTimeout(free, 0));
+    // Files dragged in are for the conversation: the panel makes way, and they drop on the chat as usual.
+    scrim.addEventListener('dragenter', () => { scrim.classList.remove('held'); shutDockedPanel(false); });
+    app.append(scrim);
+  }
+  set(scrim, 'top', top - a.top);
+  set(scrim, 'height', bottom - top);
+  set(scrim, 'left', m.left - a.left);
+  set(scrim, 'width', m.width);
+}
+wireDock();
+// Closes the floating panel; with refocus, the keyboard goes back to the header button that's pressed for it (the
+// header is drawn again, so it's found by its place among the header's buttons).
+function shutDockedPanel(refocus = true) {
+  const btns = () => [...document.querySelectorAll('#main-head button')];
+  const pressed = btns().findIndex((b) => b.getAttribute('aria-pressed') === 'true' || b.getAttribute('aria-expanded') === 'true');
+  if (S.panel === 'thread') closeThread(true); else closePanel();
+  if (!refocus) return;
+  const b = pressed >= 0 ? btns()[pressed] : null;
+  if (b) b.focus({ preventScroll: true }); else $('#main').focus({ preventScroll: true });
 }
 // The chat beside a voice channel's call: the same conversation view as a text channel (messages, the composer, the
 // "New messages" line, picking messages to delete), in the side panel. Pinned messages open in its place.

@@ -3590,7 +3590,7 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
   .sheet-row.danger, .sheet-row.danger .ic { color: var(--danger); }
   .sheet-sep { height: 1px; margin: 4px 8px; background: var(--line); }
   .msg.pressed { background: var(--active); }
-  .sheet { max-height: calc(var(--app-h, 100dvh) - env(safe-area-inset-top) - 24px); }
+  .sheet { max-height: calc(min(var(--app-h, 100dvh), 100dvh) - env(safe-area-inset-top) - 24px); }
   html.kb-open .sheet-backdrop { bottom: auto; height: var(--app-h, 100%); }
   /* A menu as a sheet: its items a finger's height, the full width. */
   .sheet-menu { min-width: 0; max-width: none; width: auto; max-height: none; overflow: visible; padding: 2px 0 6px; border: 0; border-radius: 0; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
