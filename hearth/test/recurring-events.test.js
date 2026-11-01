@@ -252,8 +252,9 @@ test('when a time ends, the event moves to the next one: same local time, remind
   assert.equal((await as(dan, 'POST', `/events/${created.id}/rsvp`, { status: 'maybe' })).status, 200);
   // Last Friday's (local) 8 pm game night just ended.
   const w = R.wall(Date.now() - 3 * 3600000, NY);
-  let start = R.fromWall(w.y, w.mo, w.d, 20, 0, NY);
-  while (start + 2 * 3600000 > Date.now()) start -= DAY;
+  // (A day back on New York's clock, not 24 hours: across the clocks going back or forward that's 7 pm or 9 pm.)
+  let start;
+  for (let back = 0; !start || start + 2 * 3600000 > Date.now(); back++) start = R.fromWall(w.y, w.mo, w.d - back, 20, 0, NY);
   endNow(created.id, start);
   const sock = await srv.socket(cat.token);
   const updates = [];

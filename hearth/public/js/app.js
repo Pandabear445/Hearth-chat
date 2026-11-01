@@ -288,6 +288,10 @@ function bootFailed(e) {
 
 // Whatever goes wrong while starting, the page never stays on its loading screen (index.html #boot-splash): it says so.
 async function init() {
+  // Copies of messages' words kept in this browser (inbox, reminders) whose message's deadline has passed go first,
+  // whichever account they belong to and whether or not anyone signs in (usability.js), before anything that could
+  // stop the start part-way.
+  expireLocalCopies(Date.now());
   try { await bootUp(); } catch (e) { bootFailed(e); }
 }
 async function bootUp() {
@@ -296,9 +300,6 @@ async function bootUp() {
   const onMe = app.onMe;
   app.onMe = (u) => { onMe(u); securityChanged(); };
   app.securityTodo = () => securityTodo();
-  // Copies of messages' words kept in this browser (inbox, reminders) whose message's deadline has passed go now,
-  // whichever account they belong to and whether or not anyone signs in (usability.js).
-  expireLocalCopies(Date.now());
   applyAppearance();
   setupServiceWorker();
   trackViewport();
@@ -12054,7 +12055,7 @@ function showAppUpdate(version) {
   if (document.getElementById('update-pill')) return;
   const restart = async () => { if (voice && voice.channelId && !(await confirmDialog({ title: 'Restart now?', text: 'Restarting leaves your call. It takes a few seconds.', confirm: 'Restart' }))) return; installUpdate(); };
   const pill = h('div', { id: 'update-pill', class: 'update-pill', role: 'status' }, icon('download'),
-    h('span', { class: 'update-pill-text', title: version ? `Version ${version}` : null }, 'Update ready'),
+    h('span', { class: 'update-pill-text', title: version ? `The ${S.config.name || 'Hearth'} app ${version} is ready to install.` : null }, 'Update ready'),
     h('button', { class: 'btn primary sm', onclick: restart, 'aria-label': `Restart to install the ${S.config.name || 'Hearth'} app${version ? ` ${version}` : ''}` }, 'Restart'),
     ibtn('close', 'Later (restart from Settings \u2192 Apps & devices when you\u2019re ready)', () => pill.remove(), { cls: 'sm' }));
   const panel = $('#user-panel');
