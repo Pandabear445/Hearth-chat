@@ -1,2 +1,154 @@
 /* Hearth — first run, onboarding and app chrome.
    Loaded after app.css (index.html), so a rule here wins over app.css at equal specificity. */
+
+/* ------------------------------------------------------------------ first paint (index.html #boot-splash)
+   Drawn by the page before any script runs, so a slow connection shows Hearth at once instead of a blank screen.
+   Its own two colours (the theme isn't known yet): the device's light or dark, like the sign-in page. app.js removes
+   it once the sign-in screen or the app is drawn. */
+:root { --boot-bg: #100e16; --boot-ink: #ece8f4; --boot-muted: #a39cb5; --boot-flame: #f2a541; }
+@media (prefers-color-scheme: light) {
+  :root { --boot-bg: #f6f4f9; --boot-ink: #1d1a26; --boot-muted: #5d566e; --boot-flame: #b86b0a; }
+}
+#boot-splash {
+  position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  padding: 24px; background: var(--boot-bg); color: var(--boot-ink); text-align: center; font-family: var(--font);
+}
+#boot-splash .boot-mark { width: 56px; height: 56px; color: var(--boot-flame); animation: boot-glow 1.6s ease-in-out infinite alternate; }
+#boot-splash p { margin: 0; max-width: 34ch; }
+#boot-splash .boot-text { font-size: calc(15 / 16 * 1rem); font-weight: 600; color: var(--boot-muted); }
+/* Still here after a long while (the scripts didn't arrive, or this browser can't run them): say what to do. */
+#boot-splash .boot-slow { font-size: calc(14 / 16 * 1rem); color: var(--boot-muted); opacity: 0; animation: boot-late .3s ease 15s forwards; }
+#boot-splash.failed .boot-slow { display: none; }
+#boot-splash.failed .boot-text { color: var(--boot-ink); }
+#boot-splash .boot-noscript { font-size: calc(14 / 16 * 1rem); color: var(--boot-ink); }
+@keyframes boot-glow { from { opacity: .55; transform: scale(.96); } to { opacity: 1; transform: scale(1.04); } }
+@keyframes boot-late { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { #boot-splash .boot-mark { animation: none; } }
+
+/* ------------------------------------------------------------------ sign in / sign up */
+/* A password box with its show/hide button inside the right edge. */
+.pw-wrap { position: relative; display: block; }
+.pw-wrap > .input { width: 100%; padding-right: 48px; }
+.pw-eye {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%); width: 40px; height: 40px; border-radius: 10px;
+  display: grid; place-items: center; color: var(--muted);
+}
+.pw-eye:hover { color: var(--text); background: var(--hover); }
+.pw-eye[aria-pressed='true'] { color: var(--accent-ink, var(--accent)); }
+.pw-eye .ic { width: 18px; height: 18px; }
+.field > .field-label[for] { display: block; }
+/* (The Android app's "Server: host · Switch".) */
+.auth-server { margin: -12px 0 14px; text-align: center; font-size: calc(13.5 / 16 * 1rem); color: var(--text-2); }
+.auth-server .link-btn { min-height: 32px; padding: 0 4px; }
+/* The sign-up form's hints, tighter on a phone so the whole card still fits a 390x844 screen. */
+@media (max-width: 760px) {
+  #register-form { gap: 11px; }
+  #register-form .auth-sub { font-size: calc(13 / 16 * 1rem); }
+  /* (Signing up from an invite: its banner says what this is for, in the room the explanation took.) */
+  #register-form[data-invite] .auth-sub { display: none; }
+}
+
+/* ------------------------------------------------------------------ offers and tips (app.js offerCard)
+   A card, never half the screen wide (the old one was centred with a translate, which capped it at half the width)
+   and never over the message box. On a computer: under the header. On a phone: across the bottom, above the tab bar on
+   a list and above the message box in a conversation (--offer-lift, measured by app.js). */
+.update-bar, .push-offer { left: 12px; right: 12px; margin-inline: auto; width: fit-content; max-width: min(560px, calc(100vw - 24px)); transform: none; }
+.push-offer { top: calc(var(--head-h) + 12px); bottom: auto; flex-wrap: wrap; align-items: flex-start; padding: 12px 12px 12px 14px; row-gap: 8px; }
+.push-offer > .ic { margin-top: 2px; }
+.push-offer .offer-text { flex: 1 1 220px; min-width: 0; line-height: 1.4; }
+.push-offer .offer-actions { display: flex; gap: 8px; margin-left: auto; flex: none; }
+.push-offer .tip-steps { margin: 6px 0 0; padding-left: 20px; font-weight: 500; display: flex; flex-direction: column; gap: 4px; }
+.push-offer .ios-share { display: inline-grid; vertical-align: -3px; margin: 0 3px; color: var(--accent-ink, var(--accent)); }
+.push-offer .ios-share svg { width: 17px; height: 17px; }
+body.m-ui .update-bar, body.m-ui .push-offer {
+  left: calc(10px + env(safe-area-inset-left)); right: calc(10px + env(safe-area-inset-right)); width: auto; max-width: 560px; top: auto;
+  bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 10px); z-index: 28;
+}
+body.m-ui .push-offer { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 12px; padding: 14px; border-radius: 18px; }
+body.m-ui .push-offer .offer-actions { grid-column: 1 / -1; justify-content: flex-end; }
+body.m-ui .push-offer .offer-actions .btn { min-height: 44px; padding: 0 18px; }
+body.m-ui.m-list.m-call .push-offer { bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 80px); }
+body.m-ui.m-conv .update-bar, body.m-ui.m-conv .push-offer { bottom: max(var(--offer-lift, 88px), calc(env(safe-area-inset-bottom) + 72px)); }
+html.kb-open body.m-ui .push-offer { display: none; }
+
+/* The desktop app's update, ready: a pill above your name in the sidebar (app.js showAppUpdate). */
+.update-pill {
+  flex: none; display: flex; align-items: center; gap: 8px; margin: 0 8px 8px; padding: 6px 6px 6px 12px; border-radius: 999px;
+  background: rgb(var(--accent-rgb) / .12); border: 1px solid rgb(var(--accent-rgb) / .4); font-weight: 600; font-size: calc(13.5 / 16 * 1rem);
+}
+.update-pill > .ic { width: 16px; height: 16px; color: var(--accent-ink, var(--accent)); flex: none; }
+.update-pill-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.update-pill .btn { flex: none; }
+body.m-ui .update-pill { order: 1; margin: 0 16px 12px; min-height: 48px; }
+
+/* ------------------------------------------------------------------ Home: first run */
+.ob-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+/* "Secure your account" (app.js securityCard). */
+.secure-card {
+  display: flex; flex-direction: column; gap: 8px; max-width: 920px; padding: 14px 16px; border-radius: 16px;
+  background: rgb(var(--accent-rgb) / .08); border: 1px solid rgb(var(--accent-rgb) / .35);
+}
+.secure-head { display: flex; align-items: center; gap: 10px; }
+.secure-head > .ic { width: 20px; height: 20px; color: var(--accent-ink, var(--accent)); flex: none; }
+.secure-head h3 { flex: 1; font-size: calc(16 / 16 * 1rem); font-weight: 800; }
+.secure-text { margin: 0; color: var(--text-2); font-size: calc(14 / 16 * 1rem); }
+.secure-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 22px; }
+.secure-step { display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: calc(14.5 / 16 * 1rem); }
+.secure-step .link-btn { font-weight: 700; }
+.secure-step.done { color: var(--muted); }
+.secure-tick { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; flex: none; border: 2px solid var(--line-2); }
+.secure-step.done .secure-tick { background: var(--ok); border-color: var(--ok); color: var(--ok-ink); }
+.secure-tick .ic { width: 13px; height: 13px; }
+/* On a phone's Home list: one row, then its close button. */
+.secure-card.m-secure { flex-direction: row; align-items: center; gap: 0; margin: 0 4px 8px; padding: 0 4px 0 0; border-radius: 16px; }
+.secure-row { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; min-height: 60px; padding: 8px 6px 8px 14px; text-align: left; font-size: calc(16 / 16 * 1rem); font-weight: 600; }
+.secure-row > .ic { width: 22px; height: 22px; flex: none; color: var(--accent-ink, var(--accent)); }
+.secure-row .m-row-text > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-secure .secure-x { width: 44px; height: 44px; flex: none; }
+@media (max-width: 380px) { .m-secure .m-row-chev { display: none; } .secure-row { gap: 12px; } } /* (room for the words) */
+
+/* No servers yet: join, create or add a friend (app.js firstSteps). Tiles on a computer's Home. */
+.start-card { display: flex; flex-direction: column; gap: 10px; max-width: 920px; }
+.start-card h3 { font-size: calc(14 / 16 * 1rem); font-weight: 700; color: var(--text-2); }
+.start-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.start-item {
+  display: flex; align-items: center; gap: 14px; text-align: left; padding: 16px; min-height: 76px; border-radius: 14px;
+  background: var(--hover); border: 1px solid var(--line-2); transition: border-color var(--dur-1), background var(--dur-1);
+}
+.start-item:hover { border-color: var(--accent); background: rgb(var(--accent-rgb) / .06); }
+.start-item.primary { border-color: rgb(var(--accent-rgb) / .55); background: rgb(var(--accent-rgb) / .1); }
+.start-ic { width: 24px !important; height: 24px !important; color: var(--accent-ink, var(--accent)); flex: none; }
+.start-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.start-text strong { font-size: calc(15 / 16 * 1rem); }
+.start-text span { font-size: calc(13 / 16 * 1rem); color: var(--muted); }
+/* On a phone: a card at the bottom of Home's list, the first step filled in. */
+body.m-ui #sidebar-body:has(> .m-start) { display: flex; flex-direction: column; }
+body.m-ui .start-card.m-start { margin: auto 4px 8px; padding: 12px; gap: 8px; border-radius: 20px; background: rgb(var(--s2)); border: 1px solid var(--line); }
+body.m-ui .start-card.m-start h3 { font-size: calc(17 / 16 * 1rem); color: var(--text); padding: 0 4px; }
+body.m-ui .m-start .start-items { grid-template-columns: 1fr; gap: 8px; }
+body.m-ui .m-start .start-item { min-height: 52px; padding: 8px 14px; border-radius: 14px; }
+body.m-ui .m-start .start-item.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+body.m-ui .m-start .start-item.primary .start-ic { color: inherit; }
+body.m-ui .m-start .start-text strong { font-size: calc(15.5 / 16 * 1rem); line-height: 1.25; }
+body.m-ui .m-start .start-text span { display: none; } /* (one line each, so the card fits above the tab bar) */
+/* The server bar's + on a phone with no servers says what it's for. */
+.rail-add-label { display: none; }
+body.m-ui .rail-add-label {
+  display: block; width: 64px; margin: 4px auto 0; text-align: center; font-size: calc(11 / 16 * 1rem); font-weight: 600; line-height: 1.2; color: var(--text-2);
+}
+body.m-ui .rail-item:has(> .rail-add-label) { flex-direction: column; height: auto; }
+
+/* Home on a wide screen: centred, conversations beside friends and servers (one column below 1400px). */
+.home-cols, .home-col { display: flex; flex-direction: column; gap: 26px; min-width: 0; }
+body:not(.m-ui) .home-links { display: none; } /* (My Reels is in the sidebar on a computer) */
+@media (min-width: 1400px) {
+  body:not(.m-ui) .home-view > * { width: 100%; max-width: 1200px; margin-inline: auto; }
+  body:not(.m-ui) .home-cols { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 26px 40px; align-items: start; }
+  body:not(.m-ui) .home-cols .home-sec { max-width: none; }
+  body:not(.m-ui) .home-cols .conv-cards { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  body:not(.m-ui) .home-col-side .server-cards { grid-template-columns: 1fr; }
+}
+
+/* The new-message window with nobody to pick yet: add a friend in place. */
+.nc-empty { align-items: flex-start; }
+.nc-add { width: 100%; }

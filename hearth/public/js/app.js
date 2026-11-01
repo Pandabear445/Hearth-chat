@@ -61,6 +61,8 @@ import { bindNew, bindEdit, describe as describeBinding, createVersions, createC
 import { trackViewport } from './viewport.js';
 import { isPhone, isPhoneLayout, isTouchUI, onDeviceChange } from './device.js';
 import { createUpdater, underWay, jobsUnderWay } from './auto-update.js';
+// (ui.js's hideTip, when it has one: a tooltip shown before a view changed goes with it. See setView.)
+import * as UI from './ui.js';
 import { canShrink, startShrink, probe as probeVideo, plan as shrinkPlan, longestFitting, budgetFor, fitsText } from './video-shrink.js';
 import { touchGestures } from './viewer-touch.js';
 import { backStack, edgeSwipes } from './phone-nav.js';
@@ -271,7 +273,29 @@ export const app = {
 // ======================================================================= boot
 init();
 
+// The page's own loading screen, drawn before any script ran, goes once the sign-in screen or the app is drawn.
+function dropSplash() {
+  const el = document.getElementById('boot-splash');
+  if (el) el.remove();
+}
+function bootFailed(e) {
+  const el = document.getElementById('boot-splash');
+  if (!el || !$('#auth').hidden || !$('#app').hidden) return; // (something was drawn: its own errors say what happened)
+  el.classList.add('failed');
+  const t = el.querySelector('.boot-text');
+  if (t) t.textContent = `Hearth couldn\u2019t start${e && e.message ? `: ${e.message}` : '.'} Reload the page to try again.`;
+}
+
+// Whatever goes wrong while starting, the page never stays on its loading screen (index.html #boot-splash): it says so.
 async function init() {
+  try { await bootUp(); } catch (e) { bootFailed(e); }
+}
+async function bootUp() {
+  // Settings changes your own record through app.onMe (an email added, a recovery key made): the "Secure your
+  // account" card and the You tab's dot follow it.
+  const onMe = app.onMe;
+  app.onMe = (u) => { onMe(u); securityChanged(); };
+  app.securityTodo = () => securityTodo();
   // Copies of messages' words kept in this browser (inbox, reminders) whose message's deadline has passed go now,
   // whichever account they belong to and whether or not anyone signs in (usability.js).
   expireLocalCopies(Date.now());
@@ -336,16 +360,21 @@ function saveDeviceNote(username, note) {
 // Signed out with an invite link (kept from start-up until after signing in, when the join dialog opens): say what
 // it's for. The server's name only when it chose to show it in invite previews (server/invitepreview.js); otherwise,
 // or if the server can't be asked, "a server".
+// Someone new with an invite link (signing up is open, and nobody has signed in on this browser before) starts on the
+// sign-up form, headed "Join <server> on <instance>": joining is what they came for, and they have no account yet.
+// After signing up they're put in the server straight away (loadBootstrap). Anyone else starts on Log in, as before.
 function inviteBanner() {
   const box = $('#auth-invite');
   const code = sessionStorage.getItem('hearth.pendingInvite');
   box.hidden = !code;
   if (!code) return;
   const open = S.config.registrationOpen && !S.config.registrationRequiresCode;
+  const regForm = $('#register-form');
   const draw = (serverName) => {
+    if (regForm.dataset.invite) $('#register-title').textContent = `Join ${serverName || 'a server'} on ${S.config.name}`;
     clear(box).append(h('span', null, 'You’re invited to ', h('strong', null, serverName || 'a server'), ` on ${S.config.name}. `,
-      open ? 'Create an account or sign in to join.' : S.config.registrationRequiresCode ? 'Sign in to join, or create an account with a sign-up code from whoever invited you.' : 'Sign in to join.'),
-    open ? h('button', { type: 'button', class: 'link-btn auth-invite-new', onclick: () => { $('#login-form').hidden = true; $('#register-form').hidden = false; const u = $('#register-form [name=username]'); if (u) u.focus(); } }, 'Create an account') : null);
+      open ? (regForm.dataset.invite ? 'Create an account to join, or log in if you have one.' : 'Create an account or sign in to join.') : S.config.registrationRequiresCode ? 'Sign in to join, or create an account with a sign-up code from whoever invited you.' : 'Sign in to join.'),
+    open && !regForm.dataset.invite ? h('button', { type: 'button', class: 'link-btn auth-invite-new', onclick: () => { $('#login-form').hidden = true; regForm.hidden = false; const u = $('#register-form [name=username]'); if (u) u.focus(); } }, 'Create an account') : '');
   };
   draw(null);
   api('GET', `/invites/${encodeURIComponent(code)}/preview`)
@@ -357,11 +386,41 @@ function inviteBanner() {
 // harder robot check: solve a new one and try once more.
 const harderOnce = (attempt) => attempt().catch((ex) => (ex.code === 'captcha_harder' ? attempt() : Promise.reject(ex)));
 
+// Whether anyone has signed in on this browser before (the server's notes for this device, kept across log-outs).
+function signedInHereBefore() {
+  try { return Object.keys(JSON.parse(localStorage.getItem(DEVICE_NOTES) || '{}') || {}).length > 0; } catch { return false; }
+}
 function showSignIn() {
   $('#app').hidden = true;
   $('#auth').hidden = false;
+  dropSplash();
   const loginForm = $('#login-form');
   const regForm = $('#register-form');
+  // An invite link and no account here yet: the sign-up form first (see inviteBanner).
+  if (sessionStorage.getItem('hearth.pendingInvite') && S.config.registrationOpen && !S.config.registrationRequiresCode && !signedInHereBefore()) {
+    regForm.dataset.invite = '1';
+    loginForm.hidden = true;
+    regForm.hidden = false;
+  }
+  // The Android app, when it may use another server: which one this is, and a way to switch before signing in.
+  const serverLine = $('#auth-server');
+  if (androidApp.on && typeof androidApp.switchServer === 'function' && !androidApp.locked) {
+    clear(serverLine).append(h('span', null, 'Server: ', h('strong', null, location.host)), ' \u00b7 ',
+      h('button', { type: 'button', class: 'link-btn', onclick: () => androidApp.switchServer() }, 'Switch'));
+    serverLine.hidden = false;
+  }
+  // Show or hide what's typed in a password box (and, on sign-up, its confirmation with it).
+  for (const eye of $$('#auth .pw-eye')) {
+    if (eye.firstChild) continue;
+    const boxes = () => (eye.getAttribute('aria-controls') || '').split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean);
+    eye.append(icon('eye'));
+    eye.onclick = () => {
+      const show = eye.getAttribute('aria-pressed') !== 'true';
+      boxes().forEach((b) => { b.type = show ? 'text' : 'password'; });
+      eye.setAttribute('aria-pressed', String(show));
+      clear(eye).append(icon(show ? 'eyeOff' : 'eye'));
+    };
+  }
   const secure = !!(window.crypto && window.crypto.subtle);
   $('#insecure-warning').hidden = secure;
   $('#reg-code-field').hidden = !S.config.registrationRequiresCode;
@@ -383,8 +442,9 @@ function showSignIn() {
   const why = sessionStorage.getItem('hearth.signedOutWhy');
   if (why) { sessionStorage.removeItem('hearth.signedOutWhy'); loginForm.querySelector('.form-error').textContent = why; }
 
-  $('#to-register').onclick = (e) => { e.preventDefault(); loginForm.hidden = true; regForm.hidden = false; };
-  $('#to-login').onclick = (e) => { e.preventDefault(); regForm.hidden = true; loginForm.hidden = false; };
+  // (From the keyboard, on into the form that's now showing; a phone's keyboard doesn't pop up by itself.)
+  $('#to-register').onclick = (e) => { e.preventDefault(); loginForm.hidden = true; regForm.hidden = false; if (!isTouchUI()) regForm.username.focus(); };
+  $('#to-login').onclick = (e) => { e.preventDefault(); regForm.hidden = true; loginForm.hidden = false; if (!isTouchUI()) loginForm.username.focus(); };
 
   // Two-factor step: after a right password, the server asks for the app's code (or a backup code).
   const totpField = $('#totp-field');
@@ -403,6 +463,10 @@ function showSignIn() {
     const err = loginForm.querySelector('.form-error');
     err.textContent = '';
     [...loginForm.elements].forEach((x) => x.name && clearInvalid(x));
+    // The browser's own bubbles are off (novalidate): the same messages as everything else, under the form.
+    const fail = (input, text) => { err.textContent = text; markInvalid(input, err); input.focus(); };
+    if (!loginForm.username.value.trim()) return fail(loginForm.username, 'Enter your username.');
+    if (!loginForm.password.value) return fail(loginForm.password, 'Enter your password.');
     btn.disabled = true; btn.textContent = 'Unlocking…';
     try {
       const username = loginForm.username.value.trim();
@@ -458,8 +522,13 @@ function showSignIn() {
     const username = regForm.username.value.trim();
     const pw = regForm.password.value;
     const fail = (input, text) => { err.textContent = text; markInvalid(input, err); input.focus(); };
+    if (!username) return fail(regForm.username, 'Choose a username.');
+    if (/[^A-Za-z0-9_.]/.test(username)) return fail(regForm.username, 'Usernames can only use letters, numbers, _ and . (no spaces).');
+    if (username.length < 2) return fail(regForm.username, 'Usernames need at least 2 characters.');
     if (pw.length < 8) return fail(regForm.password, 'Use at least 8 characters for your password.');
     if (pw !== regForm.confirm.value) return fail(regForm.confirm, 'The passwords do not match.');
+    if (!$('#reg-code-field').hidden && regForm.code && !regForm.code.value.trim()) return fail(regForm.code, 'Enter the registration code from whoever runs this server.');
+    if (regForm.tos && !regForm.tos.checked) return fail(regForm.tos, 'Tick the box to agree to the Terms of Service.');
     btn.disabled = true; btn.textContent = 'Creating your keys…';
     try {
       const kdfSalt = E2EE.newKdfSalt();
@@ -472,6 +541,8 @@ function showSignIn() {
       const send = (c) => api('POST', '/auth/register', { captcha: c, ...body }).finally(() => regCap.reset());
       const res = await send(captcha).catch(async (ex) => (ex.code === 'captcha_harder' ? send(await regCap.token()) : Promise.reject(ex)));
       saveDeviceNote(username, res.device);
+      // Signed up through an invite link: joined at once when the app starts (no second "Join" step).
+      if (sessionStorage.getItem('hearth.pendingInvite')) sessionStorage.setItem('hearth.inviteAutoJoin', '1');
       await finishLogin(res, id.privateKey, { authKey, wrapKey, encPrivateKey: id.encPrivateKey, pqSeed: id.pqSeed });
     } catch (ex) {
       err.textContent = ex.message;
@@ -624,6 +695,7 @@ function showStartRefused(text) {
 let signedInAs = null;
 function startApp(account) {
   signedInAs = account;
+  dropSplash();
   // Desktop app: Ctrl+, (and the tray's "Settings…") open Settings.
   if (window.hearthDesktop && typeof window.hearthDesktop.onOpenSettings === 'function' && !window.__hearthSettingsHook) {
     window.__hearthSettingsHook = true;
@@ -1319,6 +1391,7 @@ function rememberE2eeSince(t) {
 }
 
 let clockWarned = false;
+let startedOnce = false; // loadBootstrap runs again after every reconnect: only the first one resumes the last view
 async function loadBootstrap() {
   // Read markers, notification preferences and saved ids come alongside, so unread badges are right at start.
   const extras = Promise.all(['/me/unread', '/me/notify', '/me/saved/ids'].map((p) => api('GET', p).catch(() => null)));
@@ -1381,16 +1454,22 @@ async function loadBootstrap() {
   Object.values(S.users).forEach((u) => sec.trust(u));
   for (const st of Object.values(b.keyStates || {})) await sec.applyState(st);
   LOOK.fromBootstrap(b.dms, b.servers); // (after the keys: a group chat's background opens with its group's)
+  // The first start of this page opens where you last were (a reload, the app opened again), when that's still there.
+  // An update's reload (restoreResume), an invite or a link this page was opened with still go first: they come later.
+  const resumed = !startedOnce && resumeLastView();
+  startedOnce = true;
   if (S.view.serverId && !S.servers.find((s) => s.id === S.view.serverId)) S.view = { type: 'home' };
   if (S.view.dmId && !S.dms.find((d) => d.id === S.view.dmId)) S.view = { type: 'home' };
   if (!S.view.serverId && !S.view.dmId && !['friends', 'saved', 'people', 'myreels'].includes(S.view.type)) S.view = { type: 'home' };
   if (reading && currentKey() === readingKey && !S.view.jumpTo) S.view.restoreAt = reading;
   applyUserState(await extras);
+  if (resumed) setUnreadMarker(); // (now that what's unread is known)
   const savedFilter = await filterList;
   if (savedFilter) await WF.apply(savedFilter, { quiet: true }).catch(() => {});
   const savedNames = await personalList;
   if (savedNames) await PN.apply(savedNames, { quiet: true }).catch(() => {});
   renderAll();
+  if (resumed) markRead(currentKey());
   loadPreviews();
   SCHED.load(); // your scheduled messages (after the keys above: some may need re-encrypting)
   if (!S.remindersOn) { S.remindersOn = true; startReminders(); }
@@ -1409,7 +1488,13 @@ async function loadBootstrap() {
   const invite = sessionStorage.getItem('hearth.pendingInvite');
   const share = sessionStorage.getItem('hearth.pendingShare');
   if (share !== null) { sessionStorage.removeItem('hearth.pendingShare'); openSharePicker(share); }
-  if (invite) { sessionStorage.removeItem('hearth.pendingInvite'); openJoinModal(invite); }
+  watchFirsts();
+  if (invite) {
+    sessionStorage.removeItem('hearth.pendingInvite');
+    // Just signed up through it: joined straight away, landing in the server (the Join window only if that fails).
+    if (sessionStorage.getItem('hearth.inviteAutoJoin')) { sessionStorage.removeItem('hearth.inviteAutoJoin'); joinInvite(invite).catch(() => openJoinModal(invite)); }
+    else openJoinModal(invite);
+  }
   else {
     showUpdateNotes(); // (every start and reconnect: a note published while this app was asleep or offline shows too)
     // A link this page was opened with (a tapped notification, an invite in the Android app) opens on the
@@ -2169,14 +2254,55 @@ function setView(v) {
   const panelEl = $('#members');
   if (panelEl) delete panelEl.dataset.key;
   if (v.type === 'channel') { const lc = new Map(Object.entries(P.lastChannel)); lc.set(v.serverId, v.channelId); P.lastChannel = Object.fromEntries(lc); }
-  // Where "New messages" goes: the read marker as it was when you opened the conversation.
+  setUnreadMarker();
+  rememberView();
+  // A tooltip shown for what was clicked doesn't stay over the next view (ui.js; a touch never leaves one behind).
+  if (typeof UI.hideTip === 'function') UI.hideTip();
+  renderAll();
+  markRead(currentKey());
+}
+// Where "New messages" goes: the read marker as it was when you opened the conversation.
+function setUnreadMarker() {
   const ck = currentKey();
   S.unreadMarker = ck && S.unread.has(ck) ? ck : null;
   // (A voice chat you never opened, that turned unread while you were in its call: from the last message before that.)
   S.markerId = S.unreadMarker ? S.lastRead[ck] || S.chatFloor[ck] || '0' : null;
   S.markerCount = S.unreadMarker ? S.unreadCounts && S.unreadCounts[ck] || 0 : 0;
-  renderAll();
-  markRead(currentKey());
+}
+// ---- where you were, for the next time this app opens (a reload, the desktop or phone app started again)
+// The conversation open (a channel, a voice channel's chat, a DM or group chat), per account on this device; anything
+// else (Home, Friends…) opens on Home as before. On a phone, a list you'd gone back to counts as Home: it opens on
+// the list, not pushed into the conversation you'd left.
+const lastViewKey = () => (S.me ? `hearth.last.${S.me.id}` : null);
+function rememberView() {
+  const k = lastViewKey();
+  if (!k) return;
+  const v = S.view;
+  const conv = (v.type === 'channel' || v.type === 'dm' || (v.type === 'voice' && v.chat)) && !(isPhoneUI() && M.level === 'list');
+  const keep = conv ? { type: v.type === 'dm' ? 'dm' : 'channel', serverId: v.serverId || null, channelId: v.channelId || null, dmId: v.dmId || null } : { type: 'home' };
+  try { localStorage.setItem(k, JSON.stringify(keep)); } catch { /* storage blocked: it opens on Home */ }
+}
+window.addEventListener('pagehide', () => rememberView());
+// Back where you were, if it's still there for you (a channel you can still see, a DM still in your list): the view
+// is set before the first drawing, so nothing else shows first. True when it did.
+function resumeLastView() {
+  const k = lastViewKey();
+  let r = null;
+  try { r = JSON.parse(localStorage.getItem(k) || 'null'); } catch { /* none */ }
+  if (!r || typeof r !== 'object' || S.view.type !== 'home') return false;
+  let v = null;
+  if (r.type === 'dm' && typeof r.dmId === 'string' && S.dms.some((d) => d.id === r.dmId)) v = { type: 'dm', dmId: r.dmId };
+  else if (r.type === 'channel' && typeof r.channelId === 'string') {
+    const s = serverOfChannel(r.channelId);
+    const c = s && channelById(r.channelId);
+    if (c && hasChat(c)) v = channelView(c.id, s.id);
+  }
+  if (!v) return false;
+  S.view = v;
+  if (S.panel === null && (v.type === 'channel' || v.type === 'dm')) S.panel = restingPanel(v);
+  // On a phone: opened in its tab, over its list, so Back goes to the list.
+  if (isPhoneUI()) phoneEnter(v);
+  return true;
 }
 function goHome() { setView({ type: 'home' }); }
 function goFriends(tab = 'online') { setView({ type: 'friends', tab }); }
@@ -2756,9 +2882,10 @@ function renderRail() {
   favServers.forEach((s) => rail.append(serverTile(s)));
   if (favServers.length) rail.append(h('div', { class: 'rail-sep thin', role: 'separator' }));
   folders.render(rail, serverTile);
-  rail.append(
-    tile({ label: 'Add a server', cls: 'add', onclick: openAddServer, oncontext: (e) => contextMenu(e, [{ label: 'Organize servers\u2026', icon: 'folder', action: () => folders.openOrganize() }]), content: icon('plus') }),
-  );
+  const add = tile({ label: 'Add a server', cls: 'add', onclick: openAddServer, oncontext: (e) => contextMenu(e, [{ label: 'Organize servers\u2026', icon: 'folder', action: () => folders.openOrganize() }]), content: icon('plus') });
+  // On a phone with no servers yet, the + says what it's for (its name is read out anyway: aria-label).
+  if (phone && !realServers().length) add.append(h('span', { class: 'rail-add-label', 'aria-hidden': 'true' }, 'Add a server'));
+  rail.append(add);
   updateTitle();
 }
 
@@ -2810,30 +2937,36 @@ function renderSidebar() {
     return;
   }
   if (mode === 'home') {
-    // Room on a phone for all of them, so nothing hides behind a "More".
+    // Room on a phone for all of them, so nothing hides behind a "More". The page is already called Home: the row for
+    // its overview (homeView) says what it opens. My Reels shows once it's been used on this device (it stays on
+    // the You page either way).
     body.append(...[
-      nav('Home', 'home', S.view.type === 'home', goHome),
+      securityCard({ phone: true }),
+      nav('Overview', 'home', S.view.type === 'home', goHome),
       nav('Friends', 'people', S.view.type === 'friends', () => goFriends(pending ? 'pending' : 'online'), pending),
       nav('Updates', 'rss', S.view.type === 'updates', () => setView({ type: 'updates' }), S.me.updatesUnread || 0),
       S.me.studyEnabled ? nav('Study', 'graduation', S.view.type === 'study', () => setView({ type: 'study' })) : null,
       nav('People', 'user', S.view.type === 'people', () => setView({ type: 'people' })),
       nav('Saved messages', 'bookmark', S.view.type === 'saved', () => setView({ type: 'saved' })),
-      nav('My Reels', 'play', S.view.type === 'myreels', () => setView({ type: 'myreels' })),
+      usedMyReels() ? nav('My Reels', 'play', S.view.type === 'myreels', () => setView({ type: 'myreels' })) : null,
+      // Nothing to show yet: how to get somewhere, at the bottom of the page where a thumb reaches.
+      firstSteps({ phone: true }),
     ].filter(Boolean));
     return;
   }
   body.append(
     nav('Home', 'home', S.view.type === 'home', goHome),
     nav('Friends', 'people', S.view.type === 'friends', () => goFriends(pending ? 'pending' : 'online'), pending),
+    nav('Saved messages', 'bookmark', S.view.type === 'saved', () => setView({ type: 'saved' })),
+    nav('My Reels', 'play', S.view.type === 'myreels', () => setView({ type: 'myreels' })),
   );
   // The less-used pages sit behind one "More" row so the sidebar stays about your conversations.
   const extras = [
     nav('Updates', 'rss', S.view.type === 'updates', () => setView({ type: 'updates' }), S.me.updatesUnread || 0),
     S.me.studyEnabled ? nav('Study', 'graduation', S.view.type === 'study', () => setView({ type: 'study' })) : null,
     nav('People', 'user', S.view.type === 'people', () => setView({ type: 'people' })),
-    nav('Saved messages', 'bookmark', S.view.type === 'saved', () => setView({ type: 'saved' })),
   ].filter(Boolean);
-  const extraActive = ['updates', 'study', 'people', 'saved'].includes(S.view.type);
+  const extraActive = ['updates', 'study', 'people'].includes(S.view.type);
   let moreOpen = extraActive;
   try { moreOpen = moreOpen || localStorage.getItem('hearth.navMore') === '1'; } catch { /* storage blocked */ }
   const moreBox = h('div', { class: 'nav-more', id: 'nav-more', hidden: !moreOpen }, extras);
@@ -3985,12 +4118,13 @@ function renderTabbarBadges() {
   for (const b of bar.querySelectorAll('.tab-btn')) {
     const t = b.dataset.tab;
     const c = count[t] || 0;
-    const dot = t === 'home' && !c && n.serverDot;
+    // (You: a dot while your account has no way back in yet, see securityCard.)
+    const dot = (t === 'home' && !c && n.serverDot) || (t === 'you' && securityNag());
     const badge = b.querySelector('.tab-badge');
     badge.hidden = !c && !dot;
     badge.classList.toggle('dot', !!dot);
     badge.textContent = c ? (c > 99 ? '99+' : String(c)) : '';
-    b.setAttribute('aria-label', TAB_LABEL[t] + (c ? `, ${c} ${t === 'inbox' ? 'new' : 'unread'}` : dot ? ', unread' : ''));
+    b.setAttribute('aria-label', TAB_LABEL[t] + (c ? `, ${c} ${t === 'inbox' ? 'new' : 'unread'}` : dot ? (t === 'you' ? ', secure your account' : ', unread') : ''));
   }
 }
 // The call you're in, wherever you are on a phone (the computer has it at the bottom of the sidebar): where it is
@@ -4564,11 +4698,88 @@ async function openSupport() {
         ...d.mine.map((p) => h('div', { class: 'kv' }, h('span', null, `${new Date(p.created_at).toLocaleDateString()} \u00b7 ${p.kind}`), h('b', null, money(p.amount_cents))))) : null),
   });
 }
+// ---- first run: what a new account needs (securing it, a server or a friend), on Home and the phone's Home list
+// What's still missing to get back into this account with its messages after a forgotten password: a confirmed email
+// (for the reset link) and a recovery key (to open the old messages). true = still to do. (Settings → Security's dot
+// reads it too: app.securityTodo.)
+function securityTodo() {
+  const me = S.me || {};
+  return { email: !(me.email && me.emailVerified), recovery: !me.hasRecovery };
+}
+const securityDismissKey = () => `hearth.secureCard.${S.me.id}`;
+function securityDismissed() { try { return localStorage.getItem(securityDismissKey()) === 'hidden'; } catch { return false; } }
+// Whether to ask (the card on Home, the dot on You): something is missing and the card wasn't put away.
+function securityNag() {
+  if (!S.me) return false;
+  const t = securityTodo();
+  return (t.email || t.recovery) && !securityDismissed();
+}
+// "Secure your account": both steps with a tick once done, each opening Settings → Security where it's done (that
+// tab's key is 'account'; focus says which part to show).
+function securityCard({ phone = false } = {}) {
+  if (!securityNag()) return null;
+  const t = securityTodo();
+  const step = (todo, label, focus) => h('li', { class: `secure-step${todo ? '' : ' done'}` },
+    h('span', { class: 'secure-tick', 'aria-hidden': 'true' }, todo ? null : icon('check')),
+    todo ? h('button', { class: 'link-btn', onclick: () => openSettings(app, 'account', { focus }) }, label) : h('span', null, label, h('span', { class: 'ob-sr' }, ' (done)')));
+  const hide = () => {
+    try { localStorage.setItem(securityDismissKey(), 'hidden'); } catch { /* shown again next time */ }
+    securityChanged();
+  };
+  // On a phone's list, one row (the list has to fit above the tab bar): what's left, opening Security.
+  if (phone) {
+    const left = [t.email ? 'Add an email' : null, t.recovery ? 'Save a recovery key' : null].filter(Boolean);
+    return h('div', { class: 'secure-card m-secure' },
+      h('button', { class: 'secure-row', onclick: () => openSettings(app, 'account', { focus: t.email ? 'email' : 'recovery' }) },
+        icon('shield'), h('span', { class: 'm-row-text' }, h('span', null, 'Secure your account'), h('small', null, left.join(' \u00b7 '))), icon('chevronRight', 'ic m-row-chev')),
+      ibtn('close', 'Hide this', hide, { cls: 'sm secure-x' }));
+  }
+  const title = 'secure-title';
+  return h('section', { class: 'secure-card', 'aria-labelledby': title },
+    h('div', { class: 'secure-head' }, icon('shield'), h('h3', { id: title }, 'Secure your account'),
+      ibtn('close', 'Hide this', hide, { cls: 'sm secure-x' })),
+    h('p', { class: 'secure-text' }, 'Forget your password and these get you back in, with your messages.'),
+    h('ul', { class: 'secure-steps' }, step(t.email, 'Add an email', 'email'), step(t.recovery, 'Save a recovery key', 'recovery')));
+}
+// Your account changed (or the card was put away): the card and the dot follow, wherever they're showing.
+function securityChanged() {
+  if (!S.me) return;
+  renderTabbarBadges();
+  if (isPhoneUI() && sidebarMode() === 'home') renderSidebar();
+  const card = $('#main .home-view .secure-card');
+  if (card || (S.view.type === 'home' && securityNag())) {
+    const next = securityCard();
+    if (card && next) card.replaceWith(next);
+    else if (card) card.remove();
+    else if (next) { const hero = $('#main .home-view .home-hero'); if (hero) hero.after(next); }
+  }
+}
+// My Reels has been opened or filled on this device (its sealed copy is kept here).
+function usedMyReels() {
+  try { return !!(S.me && localStorage.getItem(`hearth.myreels.${S.me.id}`)); } catch { return true; }
+}
+// No servers yet: the three ways in. On a phone a card at the bottom of Home's list (where a thumb is), on a computer
+// tiles on Home.
+function firstSteps({ phone = false } = {}) {
+  if (realServers().length) return null;
+  const item = (ic, title, sub, onclick, primary) => h('button', { class: `start-item${primary ? ' primary' : ''}`, onclick },
+    icon(ic, 'ic start-ic'), h('span', { class: 'start-text' }, h('strong', null, title), sub ? h('span', null, sub) : null));
+  return h('section', { class: `start-card${phone ? ' m-start' : ''}`, 'aria-labelledby': phone ? 'm-start-title' : 'start-title' },
+    h('h3', { id: phone ? 'm-start-title' : 'start-title' }, phone ? 'Get started' : 'Start here'),
+    h('div', { class: 'start-items' },
+      item('link', 'Join with an invite link', 'Paste the link a friend sent you.', () => openJoinModal(''), true),
+      item('plus', 'Create a server', 'A space for you and your friends.', () => openCreateServer()),
+      item('userPlus', 'Add a friend by username', 'Then message them directly.', () => goFriends('add'))));
+}
 function homeView() {
   const wrap = h('div', { class: 'home-view' });
   const hour = new Date().getHours();
   const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   wrap.append(h('div', { class: 'home-hero' }, h('h2', null, `${greet}, ${displayName(S.me)}`)));
+  const secure = securityCard();
+  if (secure) wrap.append(secure);
+  const start = firstSteps();
+  if (start) wrap.append(start);
 
   const convs = conversations();
   const favs = P.favorites;
@@ -4580,16 +4791,22 @@ function homeView() {
   const upcomingSlot = h('div', { hidden: true }); // no empty gap while it loads (or when there's nothing coming up)
   wrap.append(upcomingSlot);
   upcomingSection().then((sec) => { if (sec) upcomingSlot.replaceWith(sec); });
-  if (pinned.length) wrap.append(section('Pinned conversations', null, h('div', { class: 'conv-cards' }, pinned.map(convCard))));
+  // (A computer has My Reels in the sidebar; this button is for a phone, whose list shows it only once it's used.)
   wrap.append(h('div', { class: 'home-links' }, h('button', { class: 'btn ghost sm home-myreels', onclick: () => setView({ type: 'myreels' }) }, icon('play'), 'My Reels')));
-  wrap.append(section('Recent conversations', h('button', { class: 'link-btn', onclick: () => openNewConversation() }, 'New message'),
+  // Two columns on a wide screen (app.css / ux-onboarding.css): your conversations, and who and where you are. One
+  // after the other otherwise, in the same order.
+  const main = h('div', { class: 'home-col home-col-main' });
+  const side = h('div', { class: 'home-col home-col-side' });
+  wrap.append(h('div', { class: 'home-cols' }, main, side));
+  if (pinned.length) main.append(section('Pinned conversations', null, h('div', { class: 'conv-cards' }, pinned.map(convCard))));
+  main.append(section('Recent conversations', h('button', { class: 'link-btn', onclick: () => openNewConversation() }, 'New message'),
     convs.length ? h('div', { class: 'conv-cards' }, convs.filter((c) => !favs.includes(c.fav)).slice(0, 6).map(convCard))
       : h('p', { class: 'muted-p' }, 'No conversations yet.')));
 
-  wrap.append(onlineFriendsSection());
+  side.append(onlineFriendsSection());
 
   const servers = realServers();
-  wrap.append(section('Your servers', h('button', { class: 'link-btn', onclick: openAddServer }, 'Create or join'),
+  side.append(section('Your servers', h('button', { class: 'link-btn', onclick: openAddServer }, 'Create or join'),
     servers.length ? h('div', { class: 'server-cards' }, servers.map((s) => {
       const { unread, mentions } = serverUnread(s);
       return h('button', { class: `server-card${unread ? ' unread' : ''}`, onclick: () => openServer(s.id) },
@@ -4600,7 +4817,7 @@ function homeView() {
 
   const activity = P.inbox.slice(0, 5);
   if (activity.length) {
-    wrap.append(section('Recent activity', h('button', { class: 'link-btn', 'data-pop-anchor': '', onclick: (e) => openInbox(e.currentTarget) }, 'All notifications'),
+    main.append(section('Recent activity', h('button', { class: 'link-btn', 'data-pop-anchor': '', onclick: (e) => openInbox(e.currentTarget) }, 'All notifications'),
       h('div', { class: 'activity' }, activity.map((it) => h('button', { class: 'activity-row', onclick: () => (it.msgId ? jumpToMessageId(it.msgId) : goFriends('pending')) },
         icon(it.type === 'mention' ? 'at' : it.type === 'reply' ? 'reply' : 'userPlus', 'ic activity-ic'),
         h('span', { class: 'activity-text' }, it.title, it.text ? h('span', null, it.text) : null),
@@ -10911,21 +11128,36 @@ function parseInvite(v) {
   const m = String(v).trim().match(/(?:invite\/)?([A-Za-z0-9]{6,16})\/?$/);
   return m ? m[1] : '';
 }
+// Joins with an invite code and opens the server (signing up through an invite link: no Join window at all).
+async function joinInvite(code) {
+  const s = await api('POST', `/invites/${code}/join`);
+  if (!S.servers.find((x) => x.id === s.id)) S.servers.push(s);
+  if (s.keyState) await sec.applyState(s.keyState);
+  openServer(s.id);
+  firstHappened('server');
+  return s;
+}
 function openJoinModal(code) {
   const input = h('input', { class: 'input', placeholder: `${location.origin}/invite/abcd2345`, value: code ? `${location.origin}/invite/${code}` : '' });
   const preview = h('div', { class: 'invite-preview' });
+  let joinBtn = null;
   const look = async () => {
     clear(preview);
     const c = parseInvite(input.value);
-    if (!c) return;
+    if (!c) { if (joinBtn) joinBtn.textContent = 'Join server'; return; }
     try {
       const info = await api('GET', '/invites/' + c);
       preview.append(info.icon ? h('img', { src: info.icon, alt: '' }) : h('span', { class: 'ip-initial' }, [...info.name][0]),
         h('div', null, h('strong', null, info.name), h('span', null, `${info.memberCount} member${info.memberCount === 1 ? '' : 's'}${info.alreadyMember ? ' \u00b7 you\u2019re already in it' : ''}`)));
-    } catch (e) { preview.append(h('span', { class: 'bad' }, e.message)); }
+      // The button says where it takes you; opened from a link, it's what you came to press.
+      if (joinBtn) {
+        joinBtn.textContent = `Join ${info.name}`;
+        if (code && c === code && joinBtn.isConnected) joinBtn.focus({ preventScroll: true });
+      }
+    } catch (e) { preview.append(h('span', { class: 'bad' }, e.message)); if (joinBtn) joinBtn.textContent = 'Join server'; }
   };
   input.addEventListener('input', debounce(look, 300));
-  modal({
+  const mdl = modal({
     title: 'Join a server', size: 'sm',
     body: h('div', { class: 'stack' }, field('Invite link or code', input), preview,
       // In a browser on a computer: hand the invite to the installed desktop app instead.
@@ -10939,14 +11171,18 @@ function openJoinModal(code) {
       { label: 'Join server', kind: 'primary', action: async () => {
         const c = parseInvite(input.value);
         if (!c) throw new Error('Paste an invite link or code.');
-        const s = await api('POST', `/invites/${c}/join`);
-        if (!S.servers.find((x) => x.id === s.id)) S.servers.push(s);
-        if (s.keyState) await sec.applyState(s.keyState);
-        openServer(s.id);
+        await joinInvite(c);
       } },
     ],
   });
+  joinBtn = mdl.box.querySelector('.modal-foot .btn.primary');
   if (code) look();
+}
+// An address only reachable at home or on this computer: localhost, a private or link-local IP, a .local name.
+function privateOrigin(host) {
+  const hn = String(host || '').replace(/^\[|\]$/g, '').toLowerCase();
+  return hn === 'localhost' || hn.endsWith('.localhost') || hn.endsWith('.local') || hn === '::1' || /^f[cd][0-9a-f]{2}:/.test(hn) || /^fe80:/.test(hn)
+    || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hn);
 }
 // The invite dialog. welcome: 'created' or 'imported' right after making a server ("Your server is ready. Invite
 // your people."), with a ready-to-send message, and for an import an announcement to post on Discord. Share opens
@@ -10984,7 +11220,9 @@ function openInvite(server, { welcome } = {}) {
   // What the words promise follows how this instance lets new people in (open, sign-up code, or closed).
   const mode = signUpMode(S.config);
   const message = () => inviteMessage({ serverName: server.name, link, instance: S.config.name, mode });
-  const shareBtn = canShare({ desktop: !!window.hearthDesktop, android: androidApp.on }) ? h('button', { class: 'btn ghost sm invite-share', disabled: true, onclick: async () => {
+  // On a phone or tablet with a share sheet, sharing is what people do: Share is the big button, Copy the second.
+  const shareFirst = isTouchUI() && canShare({ desktop: !!window.hearthDesktop, android: androidApp.on });
+  const shareBtn = canShare({ desktop: !!window.hearthDesktop, android: androidApp.on }) ? h('button', { class: shareFirst ? 'btn primary block invite-share' : 'btn ghost sm invite-share', disabled: true, onclick: async () => {
     if (!link) return;
     try { await navigator.share({ title: server.name, text: inviteMessage({ serverName: server.name, link: null, instance: S.config.name, mode }), url: link }); } catch (e) { if (e && e.name !== 'AbortError') toast('Couldn’t open the share sheet. Copy the message instead.'); }
   } }, 'Share…') : null;
@@ -10997,12 +11235,16 @@ function openInvite(server, { welcome } = {}) {
     // A new server's welcome: back to the channel once it closes (the dialog that opened it is gone by then).
     onClose: welcome ? () => setTimeout(() => { if (document.activeElement === document.body) { const c = $('#composer-input'); if (c) c.focus({ preventScroll: true }); } }, 160) : undefined,
     body: h('div', { class: 'stack' },
-      h('p', { class: 'muted-p' }, 'Send this link to people. They need to be able to reach this computer or VPS.'),
+      // Whoever runs Hearth on their own computer or network is told the link only works where that's reachable;
+      // everyone else just what the link does.
+      h('p', { class: 'muted-p' }, ['owner', 'admin'].includes(S.me.staffRole) && privateOrigin(location.hostname)
+        ? 'Send this link to people. They need to be able to reach this computer or VPS.' : `Anyone with this link can join ${server.name}.`),
       // Always when new people need a sign-up code or can't sign up at all; otherwise only in the welcome.
       welcome || mode !== 'open' ? h('p', { class: `muted-p invite-signup invite-signup-${mode}` },
         joinNote({ serverName: server.name, instance: S.config.name, mode, manages: ['owner', 'admin'].includes(S.me.staffRole) })) : null,
-      h('div', { class: 'row gap' }, out, h('button', { class: 'btn primary', onclick: async (e) => { await copyText(out.value); e.target.textContent = 'Copied'; setTimeout(() => { e.target.textContent = 'Copy'; }, 1500); } }, 'Copy')),
-      h('div', { class: 'row gap invite-extras' }, ...extras),
+      h('div', { class: 'row gap' }, out, h('button', { class: `btn ${shareFirst ? 'ghost' : 'primary'}`, onclick: async (e) => { await copyText(out.value); e.target.textContent = 'Copied'; setTimeout(() => { e.target.textContent = 'Copy'; }, 1500); } }, 'Copy')),
+      shareFirst ? shareBtn : null,
+      h('div', { class: 'row gap invite-extras' }, ...extras.filter((b) => !shareFirst || b !== shareBtn)),
       welcome === 'imported' ? h('p', { class: 'field-hint' }, 'The announcement says when the link expires. Choose Never below if you’ll pin it there.') : null,
       h('div', { class: 'row gap' }, field('Expires after', expires), field('Max uses', uses)),
       can(server, PERMS.MANAGE_SERVER) ? h('p', { class: 'field-hint' }, 'See or revoke invite links in Server settings \u2192 Invites.') : null),
@@ -11704,12 +11946,35 @@ function openNewConversation(existingGroup = null, { group = false, preselect = 
     const others = known.filter((u) => !isFriend(u.id) && match(u)).sort(byName).slice(0, 40);
     if (friends.length) results.append(h('div', { class: 'list-label' }, `Friends — ${friends.length}`), ...friends.map(row));
     if (others.length) results.append(h('div', { class: 'list-label' }, 'From your servers'), ...others.map(row));
-    if (!friends.length && !others.length) results.append(h('p', { class: 'muted-p' }, q ? 'No one matches.' : 'Add some friends first (Friends → Add friend). You can also include anyone who shares a server with you.'));
+    if (!friends.length && !others.length) {
+      if (q || known.length || existingGroup) results.append(h('p', { class: 'muted-p' }, q ? 'No one matches.' : 'Add some friends first (Friends → Add friend). You can also include anyone who shares a server with you.'));
+      else results.append(addFriendHere()); // nobody to pick at all: no dead end, add someone right here
+    }
     nameField.hidden = !!existingGroup || !groupMode();
     hint.textContent = existingGroup ? `Pick people to add (room for ${room - picked.size} more).`
       : groupMode() ? `${picked.size ? `${picked.size + 1} people including you` : 'Pick the people to include'} — up to ${GROUP_MAX}. Everyone in the group can add more people later.`
         : 'Pick one person for a direct message, or several for a group chat.';
     startBtn.textContent = existingGroup ? 'Add' : groupMode() ? 'Create group chat' : 'Start';
+    startBtn.disabled = !picked.size; // (nothing to start until someone is picked)
+  };
+  // No friends and nobody from a server yet: "Add a friend" opens a username field in place. A request has to be
+  // accepted before you can message them, so this only sends it.
+  let adding = null;
+  const addFriendHere = () => {
+    if (adding) return adding;
+    const name = h('input', { class: 'input', placeholder: 'Their username', maxlength: '24', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': 'Username' });
+    const msg = h('p', { class: 'add-msg', role: 'status' });
+    const send = async () => {
+      const u = name.value.trim();
+      msg.className = 'add-msg';
+      if (!u) { msg.textContent = 'Type their username.'; msg.classList.add('bad'); name.focus(); return; }
+      try { await api('POST', '/friends', { username: u }); msg.textContent = `Friend request sent to ${u}. You can message them once they accept.`; msg.classList.add('ok'); name.value = ''; } catch (e) { msg.textContent = e.message; msg.classList.add('bad'); }
+    };
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
+    const field2 = h('div', { class: 'stack nc-add', hidden: true }, h('div', { class: 'add-row' }, name, h('button', { class: 'btn primary', onclick: send }, 'Send request')), msg);
+    const open = h('button', { class: 'btn primary nc-add-open', onclick: () => { open.hidden = true; field2.hidden = false; name.focus(); } }, icon('userPlus'), 'Add a friend');
+    adding = h('div', { class: 'stack nc-empty' }, h('p', { class: 'muted-p' }, 'You don\u2019t have anyone to message yet. Add a friend by their username, or join a server to meet people.'), open, field2);
+    return adding;
   };
   input.addEventListener('input', draw);
   let startBtn;
@@ -11782,14 +12047,18 @@ async function installApp() {
   installPrompt = null;
   return outcome === 'accepted';
 }
-// The desktop app downloaded an update from this server: offer to restart into it (never mid-call by itself).
+// The desktop app downloaded an update from this server: offer to restart into it (never mid-call by itself). A quiet
+// pill above your name in the sidebar, where it covers nothing (it used to float over the message box), until you
+// restart or put it away (then Settings → Apps & devices still has it).
 function showAppUpdate(version) {
-  if (document.querySelector('.update-bar.app-update')) return;
-  const bar = h('div', { class: 'update-bar app-update', role: 'status' }, icon('download'),
-    h('span', null, `The ${S.config.name || 'Hearth'} app ${version ? `${version} ` : ''}is ready to install.`),
-    h('button', { class: 'btn primary sm', onclick: async () => { if (voice && voice.channelId && !(await confirmDialog({ title: 'Restart now?', text: 'Restarting leaves your call. It takes a few seconds.', confirm: 'Restart' }))) return; installUpdate(); } }, 'Restart now'),
-    ibtn('close', 'Later (restart from Settings \u2192 Apps & devices when you\u2019re ready)', () => bar.remove(), { cls: 'sm' }));
-  document.body.append(bar);
+  if (document.getElementById('update-pill')) return;
+  const restart = async () => { if (voice && voice.channelId && !(await confirmDialog({ title: 'Restart now?', text: 'Restarting leaves your call. It takes a few seconds.', confirm: 'Restart' }))) return; installUpdate(); };
+  const pill = h('div', { id: 'update-pill', class: 'update-pill', role: 'status' }, icon('download'),
+    h('span', { class: 'update-pill-text', title: version ? `Version ${version}` : null }, 'Update ready'),
+    h('button', { class: 'btn primary sm', onclick: restart, 'aria-label': `Restart to install the ${S.config.name || 'Hearth'} app${version ? ` ${version}` : ''}` }, 'Restart'),
+    ibtn('close', 'Later (restart from Settings \u2192 Apps & devices when you\u2019re ready)', () => pill.remove(), { cls: 'sm' }));
+  const panel = $('#user-panel');
+  if (panel) panel.before(pill); else document.body.append(pill);
 }
 function setupServiceWorker() {
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
@@ -11965,17 +12234,67 @@ async function iosPushAtStart() {
   if (localStorage.getItem('hearth.push') !== null || iosApp.notify === 'denied' || document.querySelector('.push-offer, .update-bar')) return;
   offerPush();
 }
+// A card along the bottom of the screen (an offer, a tip): text, then its buttons. On a phone it sits above the tab
+// bar on a list, and above the message box in a conversation (offerLift); on a computer it floats under the header,
+// clear of the message box. ux-onboarding.css lays it out.
+function offerCard(cls, ic, text, ...buttons) {
+  const bar = h('div', { class: cls, role: 'status' }, icon(ic), h('div', { class: 'offer-text' }, text), h('div', { class: 'offer-actions' }, buttons));
+  document.body.append(bar);
+  offerLift();
+  return bar;
+}
+// How far up a card goes in a phone's conversation: above the message box, whatever its height.
+function offerLift() {
+  const box = isPhoneUI() && M.level === 'conv' && $('#main .composer');
+  const lift = box ? Math.max(0, Math.round(innerHeight - box.getBoundingClientRect().top)) + 8 : 0;
+  document.documentElement.style.setProperty('--offer-lift', `${lift}px`);
+}
+window.addEventListener('resize', () => { if (document.querySelector('.push-offer')) offerLift(); });
 // The one-time "Get notifications?" bar (Android app, and Hearth on an iPhone or iPad Home Screen).
 function offerPush() {
   const no = () => { localStorage.setItem('hearth.push', 'off'); bar.remove(); };
-  const bar = h('div', { class: 'push-offer', role: 'status' }, icon('bell'),
-    h('span', null, 'Get notifications when Hearth is closed?'),
+  const bar = offerCard('push-offer', 'bell', 'Get notifications when Hearth is closed?',
+    h('button', { class: 'btn ghost sm', onclick: no }, 'Not now'),
     h('button', { class: 'btn primary sm', onclick: async () => {
       bar.remove();
       try { await enablePush(); toast('Notifications are on, even when Hearth is closed.'); } catch (e) { if (e.code !== 'CANCELLED') toast(e.message, 'error'); }
-    } }, 'Turn on'),
-    h('button', { class: 'btn ghost sm', onclick: no }, 'Not now'));
-  document.body.append(bar);
+    } }, 'Turn on'));
+}
+// ---- the web's ask for notifications, at the moment they start to matter
+// A browser (not the phone or desktop apps, which ask in their own way) is asked once something happened that you'd
+// want to hear about: a DM you send, a friend request, a server you join (the first of these while the browser hasn't
+// been asked yet). Never at start-up, never twice in a visit, and "Not now" holds for a week.
+const ASK_LATER = 'hearth.notifyAsk';
+const ASK_WAIT = 7 * 24 * 60 * 60 * 1000;
+let askedThisVisit = false;
+function firstHappened(what) {
+  if (askedThisVisit || androidApp.on || iosApp.on || window.hearthDesktop || !('Notification' in window) || Notification.permission !== 'default') return;
+  if (localStorage.getItem('hearth.push') === 'off') return; // turned off on purpose in Settings
+  let later = 0;
+  try { later = Number(localStorage.getItem(ASK_LATER)) || 0; } catch { /* storage blocked */ }
+  if (later && Date.now() - later < ASK_WAIT) return;
+  if (document.querySelector('.push-offer')) return;
+  askedThisVisit = true;
+  const text = what === 'friend' ? 'Get notified about friend requests and messages?' : 'Get notified when someone messages you?';
+  const bar = offerCard('push-offer notify-ask', 'bell', text,
+    h('button', { class: 'btn ghost sm', onclick: () => { try { localStorage.setItem(ASK_LATER, String(Date.now())); } catch { /* asked again next visit */ } bar.remove(); } }, 'Not now'),
+    h('button', { class: 'btn primary sm', onclick: async () => {
+      bar.remove();
+      try {
+        if (app.push.supported()) { await enablePush(); toast('Notifications are on, even when Hearth is closed.'); }
+        else if ((await Notification.requestPermission()) === 'granted') toast('Notifications are on while Hearth is open.');
+      } catch (e) { if (e.code !== 'CANCELLED') toast(e.message, 'error'); }
+    } }, 'Turn on'));
+}
+// What counts as a first: watched on the live connection (it's said there whichever way it happened: this app, another
+// tab, the API), once per start.
+let firstsWatched = false;
+function watchFirsts() {
+  if (firstsWatched || !socket) return;
+  firstsWatched = true;
+  socket.on('dm:message', ({ message } = {}) => { if (S.me && message && message.authorId === S.me.id) firstHappened('dm'); });
+  socket.on('relationship:update', ({ relationship } = {}) => { if (relationship && relationship.direction === 'incoming' && !relationship.removed) firstHappened('friend'); });
+  socket.on('server:add', ({ server } = {}) => { if (server && server.kind !== 'group') firstHappened('server'); });
 }
 // iPhone and iPad: web push works only for Hearth opened from the Home Screen, on iOS 16.4 and newer. In Safari,
 // say so once; once it's on the Home Screen, offer notifications once, as the Android app does.
@@ -11988,10 +12307,14 @@ function applePushAtStart() {
     const v = iosVersion();
     if (localStorage.getItem('hearth.ios.homeTip') || (v && v < 16.04)) return;
     const done = () => { localStorage.setItem('hearth.ios.homeTip', 'seen'); bar.remove(); };
-    const bar = h('div', { class: 'push-offer', role: 'status' }, icon('bell'),
-      h('span', null, 'To get notifications on this ' + (/iPad|Macintosh/.test(navigator.userAgent) ? 'iPad' : 'iPhone') + ', add Hearth to your Home Screen: tap Share, then \u201cAdd to Home Screen\u201d, and open Hearth from there.'),
-      h('button', { class: 'btn ghost sm', onclick: done }, 'Got it'));
-    document.body.append(bar);
+    // Safari's own Share glyph (a box with an arrow out of it), so the step points at the button to look for.
+    const shareGlyph = h('span', { class: 'ios-share', 'aria-hidden': 'true', html: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m8 7 4-4 4 4"/><path d="M8 11H6v10h12V11h-2"/></svg>' });
+    const bar = offerCard('push-offer ios-tip', 'bell', h('div', null,
+      h('strong', null, `Get notifications on this ${/iPad|Macintosh/.test(navigator.userAgent) ? 'iPad' : 'iPhone'}`),
+      h('ol', { class: 'tip-steps' },
+        h('li', null, 'Tap ', shareGlyph, h('strong', null, 'Share'), ' in Safari.'),
+        h('li', null, 'Choose ', h('strong', null, '\u201cAdd to Home Screen\u201d'), ', then open Hearth from there.'))),
+    h('button', { class: 'btn ghost sm', onclick: done }, 'Got it'));
     return;
   }
   if (!app.push.supported() || localStorage.getItem('hearth.push') !== null || Notification.permission !== 'default') return;

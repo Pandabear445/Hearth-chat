@@ -1507,6 +1507,25 @@ app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
   res.send(SW_TEMPLATE.replace('__VERSION__', BUILD).replace("'__ASSETS__'", JSON.stringify(APP_ASSETS)));
 });
+// The app's modules, fetched in parallel as soon as the page arrives: without this the browser only finds each one
+// after the one importing it has loaded and been read, a dozen round trips deep on a slow connection (a long blank
+// screen on a first visit). Every module app.js loads up front, followed from it through their imports, and only
+// files in the offline list above (the same ones sw.js keeps). Modules loaded later on demand aren't fetched early.
+const MODULE_PRELOADS = (() => {
+  const offline = new Set(APP_ASSETS);
+  const seen = new Set();
+  const next = ['app.js'];
+  const IMPORT = /(?:^|[\s;])(?:import|export)\s[^'"`;]*?from\s*['"]\.\/([\w.-]+\.js)['"]|(?:^|[\s;])import\s*['"]\.\/([\w.-]+\.js)['"]/g;
+  while (next.length) {
+    const f = next.shift();
+    if (seen.has(f) || !offline.has(`/js/${f}`)) continue;
+    seen.add(f);
+    let src = '';
+    try { src = fs.readFileSync(path.join(PUBLIC_DIR, 'js', f), 'utf8'); } catch { continue; }
+    for (const m of src.matchAll(IMPORT)) next.push(m[1] || m[2]);
+  }
+  return [...seen].map((f) => `  <link rel="modulepreload" href="/js/${f}">`).join('\n');
+})();
 // The app's page carries the instance's name and tagline for link previews (server/invitepreview.js, set up below
 // with the other routes); it's answered here, before the static files.
 let appPage = null;
@@ -7398,7 +7417,7 @@ function publicOrigin() {
 }
 // Invite links that unfurl (server/invitepreview.js): /invite/<code> and /api/invites/:code/preview, before anyone
 // signs in. Nothing about a server unless it opted in, and never for a link that no longer works.
-const INVITE_CARDS = require('./invitepreview')({ app, api, db, now, brand, publicOrigin, countHit, limitNet, netOf, PUBLIC_DIR });
+const INVITE_CARDS = require('./invitepreview')({ app, api, db, now, brand, publicOrigin, countHit, limitNet, netOf, PUBLIC_DIR, pageHead: MODULE_PRELOADS });
 appPage = INVITE_CARDS.appPage;
 
 // ---------------------------------------------------------------- errors + SPA fallback

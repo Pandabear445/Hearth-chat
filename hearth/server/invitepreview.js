@@ -79,8 +79,10 @@ function inject(template, tags) {
   return TITLE.test(template) ? template.replace(TITLE, () => tags) : template.replace(/<head>/i, (m) => `${m}\n  ${tags}`);
 }
 
-module.exports = function setupInvitePreview({ app, api, db, now, brand, publicOrigin, countHit, limitNet, netOf, PUBLIC_DIR }) {
-  const TEMPLATE = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8'); // read once: updates restart Hearth
+// pageHead: more tags for the end of every page's <head> (server/index.js: the app's modules to start fetching early).
+module.exports = function setupInvitePreview({ app, api, db, now, brand, publicOrigin, countHit, limitNet, netOf, PUBLIC_DIR, pageHead = '' }) {
+  const RAW = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8'); // read once: updates restart Hearth
+  const TEMPLATE = pageHead ? RAW.replace(/<\/head>/i, () => `${pageHead}\n</head>`) : RAW;
   const peekKey = (req) => `invitepeek:net:${netOf(req.ip)}`;
 
   // The server's name and member count, only when it opted in and the link still works (as joining checks it).
