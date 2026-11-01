@@ -79,10 +79,11 @@ async function servers(t) {
   t.state.invite = await alice.inviteLink();
   check(t.state.invite === link, 'Reopening the invite dialog should hand back the same link.');
 
-  // Signed out, with the link: the sign-in screen says what it's for, without the server's name for now.
+  // Signed out, with the link: the sign-in screen says what it's for, without the server's name for now. Nobody has
+  // signed in on this browser, so it starts on the sign-up form.
   const visitor = await t.open('visitor');
   await visitor.page.goto(link);
-  await visitor.$('#login-form').waitFor();
+  await visitor.$('#register-form').waitFor();
   const banner = visitor.$('#auth-invite');
   await banner.filter({ hasText: 'You’re invited to a server on' }).waitFor();
   check(!(await banner.innerText()).includes(SERVER), 'The banner should not name a server that didn’t opt in.');
@@ -115,9 +116,8 @@ async function servers(t) {
   const html = await card();
   check(html.includes(`<meta property="og:title" content="Join ${SERVER} on `) && html.includes('2 members') && html.includes('<meta name="robots" content="noindex">'),
     'Once it opted in, the invite page should name the server and its member count, and stay out of search engines.');
-  // "Create an account" in the banner goes to the sign-up form.
-  await banner.locator('.auth-invite-new').click();
-  await visitor.$('#register-form:not([hidden])').waitFor();
+  // The sign-up form it starts on is headed with the server's name too.
+  await visitor.$('#register-title', { hasText: `Join ${SERVER} on ` }).waitFor();
   await visitor.close();
   delete t.people.visitor;
 }
@@ -1417,7 +1417,7 @@ async function videosIn(t) {
   await phone.noModals();
   // (Home's page: from Home's list on a phone.)
   await phone.phoneTab('home');
-  await phone.$('#sidebar-body .nav-row', { hasText: exact('Home') }).tap();
+  await phone.$('#sidebar-body .nav-row', { hasText: exact('Overview') }).tap();
   await page.locator('.home-myreels').tap();
   await page.locator('.reels-layer .reels-title', { hasText: 'My Reels' }).waitFor();
   await page.locator('.reels-top button[aria-label="Add a link"]').tap();
@@ -1787,8 +1787,8 @@ async function iPhoneNotifications(t) {
   await phone.context.addInitScript(fakeIPhone);
   const restart = async () => { await phone.page.reload(); await phone.waitApp(); await phone.page.waitForTimeout(400); };
   await restart();
-  // In Safari: push only works from the Home Screen, so the page says how, once.
-  const tip = phone.$('.push-offer', { hasText: 'add Hearth to your Home Screen' });
+  // In Safari: push only works from the Home Screen, so the page says how (two steps), once.
+  const tip = phone.$('.push-offer.ios-tip', { hasText: 'Add to Home Screen' });
   await tip.waitFor();
   check(/this iPhone/.test(await tip.textContent()), 'The tip should name the device.');
   await tip.locator('button', { hasText: 'Got it' }).click();

@@ -23,6 +23,15 @@
   <link rel="stylesheet" href="/css/ux-settings.css">
 </head>
 <body>
+  <!-- ============================== first paint: shown by the page itself, before any script has run (app.js removes it
+       once the sign-in screen or the app is drawn). HTML and CSS only (ux-onboarding.css), so the page's CSP is unchanged. -->
+  <div id="boot-splash" role="status" aria-live="polite">
+    <svg class="boot-mark" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12.8 1.6a1 1 0 0 0-1.6.6c-.5 2.9-2 4.6-3.6 6.3C6 10.2 4.5 12 4.5 15a7.5 7.5 0 0 0 15 0c0-2.4-1-4.4-2.2-6a1 1 0 0 0-1.7.4c-.2 1-.6 1.8-1.2 2.3.2-3.7-.9-7.3-1.6-10.1M12 21a3.5 3.5 0 0 1-3.5-3.5c0-1.8 1.4-3 2.5-4.4.3 1.2 1 2 2 2.2.2 0 .4 0 .5-.2 1.3 1 2 1.9 2 2.9A3.5 3.5 0 0 1 12 21"/></svg>
+    <p class="boot-text">Loading Hearth…</p>
+    <p class="boot-slow">This is taking longer than usual. Check your connection, or reload the page.</p>
+    <noscript><p class="boot-noscript">Hearth needs JavaScript. Turn it on for this site and reload.</p></noscript>
+  </div>
+
   <!-- ============================== sign in / sign up -->
   <div id="auth" hidden>
     <div class="auth-glow" aria-hidden="true"></div>
@@ -33,19 +42,21 @@
       </div>
       <p class="auth-tagline" data-instance-tagline hidden></p>
       <p id="auth-invite" class="auth-invite" role="status" hidden></p>
+      <p id="auth-server" class="auth-server" hidden></p>
 
       <p id="insecure-warning" class="auth-warn" hidden>
         This page was opened over plain http, so your browser blocks encryption and microphone access.
         Open it with <strong>https://</strong> instead (or on <strong>localhost</strong>).
       </p>
 
-      <form id="login-form" autocomplete="on">
+      <form id="login-form" autocomplete="on" novalidate>
         <h2>Welcome back</h2>
         <p class="auth-sub">Pull up a chair.</p>
         <label class="field"><span class="field-label">Username</span>
           <input class="input" name="username" autocomplete="username" required maxlength="24" autocapitalize="off" spellcheck="false"></label>
-        <label class="field"><span class="field-label">Password</span>
-          <input class="input" name="password" type="password" autocomplete="current-password" required></label>
+        <div class="field"><label class="field-label" for="login-password">Password</label>
+          <span class="pw-wrap"><input class="input" id="login-password" name="password" type="password" autocomplete="current-password" required>
+            <button type="button" class="pw-eye" aria-pressed="false" aria-label="Show password" aria-controls="login-password"></button></span></div>
         <label class="field" id="totp-field" hidden><span class="field-label" id="totp-label">Two-factor code</span>
           <input class="input" name="totp" inputmode="numeric" autocomplete="one-time-code" maxlength="12" autocapitalize="off" spellcheck="false">
           <span class="field-hint"><a href="#" id="totp-switch">Use a backup code instead</a></span></label>
@@ -55,16 +66,18 @@
         <p class="auth-switch">New here? <a href="#" id="to-register">Create an account</a></p>
       </form>
 
-      <form id="register-form" autocomplete="on" hidden>
-        <h2>Create your account</h2>
+      <form id="register-form" autocomplete="on" novalidate hidden>
+        <h2 id="register-title">Create your account</h2>
         <p class="auth-sub">Your password also locks your encryption key. After signing up, add an email and a recovery key in Settings so you can get back in if you forget it.</p>
         <label class="field"><span class="field-label">Username</span>
           <input class="input" name="username" autocomplete="username" required minlength="2" maxlength="24" pattern="[A-Za-z0-9_.]{2,24}" autocapitalize="off" spellcheck="false">
           <span class="field-hint">Letters, numbers, _ and . — you can set a fancy display name later.</span></label>
-        <label class="field"><span class="field-label">Password</span>
-          <input class="input" name="password" type="password" autocomplete="new-password" required minlength="8"></label>
+        <div class="field"><label class="field-label" for="register-password">Password</label>
+          <span class="pw-wrap"><input class="input" id="register-password" name="password" type="password" autocomplete="new-password" required minlength="8" aria-describedby="register-password-hint">
+            <button type="button" class="pw-eye" aria-pressed="false" aria-label="Show password" aria-controls="register-password register-confirm"></button></span>
+          <span class="field-hint" id="register-password-hint">At least 8 characters.</span></div>
         <label class="field"><span class="field-label">Confirm password</span>
-          <input class="input" name="confirm" type="password" autocomplete="new-password" required minlength="8"></label>
+          <input class="input" id="register-confirm" name="confirm" type="password" autocomplete="new-password" required minlength="8"></label>
         <label class="field" id="reg-code-field" hidden><span class="field-label">Registration code</span>
           <input class="input" name="code" autocomplete="off">
           <span class="field-hint">Ask whoever runs this server.</span></label>

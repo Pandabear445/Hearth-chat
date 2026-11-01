@@ -87,7 +87,7 @@ export async function phoneStaysPut(t) {
 
   // A channel made while the phone's list shows that server's channels (and something else is open): it's there.
   await phone.phoneTab('home');
-  await phone.$('#sidebar-body .nav-row', { hasText: exact('Home') }).tap();
+  await phone.$('#sidebar-body .nav-row', { hasText: exact('Overview') }).tap();
   await atLevel(page, 'conv');
   await phone.phoneBack();
   await phone.phoneServer(NAME);
