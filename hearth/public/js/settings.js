@@ -207,9 +207,11 @@ export function openSettings(app, tab = null, { focus = null } = {}) {
     if (phoneUI()) backBtn.focus({ preventScroll: true });
   };
 
-  const draw = () => {
-    stopMicTest();
+  // The frame around the page: the list or the side list, the phone's header, where the close button sits.
+  let drawnPhone = null;
+  const chrome = () => {
     const phone = phoneUI();
+    drawnPhone = phone;
     shell.dataset.page = phone ? page : 'page';
     shell.classList.toggle('set-stack', phone);
     // The close button sits in the phone's header bar, or in the corner of the page beside the list.
@@ -218,8 +220,12 @@ export function openSettings(app, tab = null, { focus = null } = {}) {
     backBtn.hidden = !(phone && page === 'page');
     backBtn.setAttribute('aria-label', deep ? 'Back' : 'Back to Settings');
     drawNav();
+  };
+  const draw = () => {
+    stopMicTest();
+    chrome();
     clear(content);
-    if (phone && page === 'list') { nav.scrollTop = 0; return; }
+    if (drawnPhone && page === 'list') { nav.scrollTop = 0; return; }
     const subs = SUBTABS[parentTab(current)];
     if (subs) {
       content.append(h('div', { class: 'set-subtabs', role: 'tablist' }, subs.map(([k, label]) => h('button', {
@@ -231,9 +237,13 @@ export function openSettings(app, tab = null, { focus = null } = {}) {
     content.scrollTop = 0;
   };
   draw();
-  // A phone turned sideways or a window crossing into the phone layout swaps the side list and the page stack.
-  // (app.js changes the body's class on the same change: drawn on the next frame, after it.)
-  stopWatching = onDeviceChange(() => requestAnimationFrame(() => { if (shell.isConnected) draw(); }));
+  // A window crossing into the phone layout or out of it swaps the side list and the page stack. The page that's
+  // open stays as it is (with any changes not saved yet); only the phone's list has no page to keep.
+  // (app.js changes the body's class on the same change: looked at on the next frame, after it.)
+  stopWatching = onDeviceChange(() => requestAnimationFrame(() => {
+    if (!shell.isConnected || phoneUI() === drawnPhone) return;
+    if (content.childElementCount) { page = 'page'; chrome(); } else draw();
+  }));
   if (focus) pointOut(content, focus);
 }
 
