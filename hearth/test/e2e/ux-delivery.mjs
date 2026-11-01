@@ -5,6 +5,9 @@ import { check, SERVER } from './flows.mjs';
 const DESK = { width: 1366, height: 768 };
 // Alice on a computer in SERVER's #general, nothing open over it.
 async function inGeneral(p, size = DESK) {
+  // (A side panel left open, such as the member list, would cover the whole chat on a phone: closed first.)
+  const close = p.$('#members button[aria-label="Close panel"]');
+  if (size.width <= 760 && await close.isVisible()) { await close.click(); await close.waitFor({ state: 'hidden' }); }
   await p.page.setViewportSize(size);
   for (let i = 0; i < 3 && await p.page.locator('.modal-backdrop, .popover').count(); i++) await p.page.keyboard.press('Escape');
   await p.railButton(SERVER);
@@ -39,7 +42,7 @@ async function failedSend(t) {
   await page.unroute('**/api/channels/*/messages', route);
   check(await alice.$('#composer-input').inputValue() === 'and then B', 'What was typed after a failed send stays as it was (nothing put over it).');
   check(await failed.locator('.send-why', { hasText: 'Not sent' }).count() === 1, 'The failed copy says Not sent.');
-  check(!(await page.locator('#toasts .toast-error').count()), 'A failed send says so on its copy, not in a toast.');
+  check(!(await page.locator('#toasts .toast', { hasText: /reach the server|offline|Failed to fetch/ }).count()), 'A send with no answer says so on its copy, not in a toast.');
   await failed.locator('button.send-retry').click();
   await alice.message(a).first().waitFor();
   check(!(await sentCopies(alice).count()), 'After Retry the message is sent and its copy is gone.');
@@ -74,8 +77,12 @@ async function burst(t) {
   const page = alice.page;
   await inGeneral(alice);
   const tag = Date.now().toString(36);
+  // (Toasts left from earlier flows go first; a warning about someone's changed key, which opening the channel can
+  // bring up again, isn't about sending.)
+  await page.waitForFunction(() => !document.querySelector('#toasts .toast'), null, { timeout: 10000 }).catch(() => {});
   let most = 0;
-  const watch = setInterval(() => { page.evaluate(() => document.querySelectorAll('#toasts .toast:not(.out)').length).then((n) => { most = Math.max(most, n); }).catch(() => {}); }, 150);
+  const count = () => [...document.querySelectorAll('#toasts .toast:not(.out)')].filter((x) => !/security key changed/.test(x.textContent)).length;
+  const watch = setInterval(() => { page.evaluate(count).then((n) => { most = Math.max(most, n); }).catch(() => {}); }, 150);
   try {
     for (let i = 1; i <= 32; i++) {
       await alice.$('#composer-input').fill(`burst ${tag} ${i}`);
@@ -99,6 +106,7 @@ async function phoneListMention(t) {
   await inGeneral(bob);
   await inGeneral(alice, { width: 390, height: 844 });
   await alice.page.waitForSelector('body.m-ui.m-conv');
+  // (A side panel open on the computer, such as the member list, covers the chat on a phone: closed first.)
   await alice.phoneBack();
   const text = `@${name} on the list ${Date.now()}`;
   await bob.send(text);

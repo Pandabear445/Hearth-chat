@@ -3488,7 +3488,9 @@ async function voiceChat(t) {
   await bob.send('during the call');
   await alice.$('#main-head button[aria-label="Show chat \u00b7 new messages"]').click();
   await alice.message('during the call').waitFor();
-  await alice.$('#unread-bar', { hasText: '1 new message since' }).waitFor();
+  // (1.44: the bar counts it, but stays out of the way while the "New messages" line itself is on screen.)
+  await alice.$('#unread-bar', { hasText: '1 new message since' }).waitFor({ state: 'attached' });
+  check(await alice.page.evaluate(() => document.querySelector('#unread-bar').hidden), 'The unread bar should stay hidden while the "New messages" line is on screen.');
   check(await alice.page.evaluate(() => { const d = document.querySelector('#new-div'); return !!(d && d.nextElementSibling && d.nextElementSibling.textContent.includes('during the call')); }),
     '"New messages" should sit right above the message said during the call.');
 

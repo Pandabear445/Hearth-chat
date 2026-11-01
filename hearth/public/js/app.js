@@ -9133,6 +9133,9 @@ function createComposer({ id, key, threadId, placeholder }) {
           setSendState(pend, 'waiting');
         } else if (e.offline || (!e.status && (navigator.onLine === false || !socketUp()))) setSendState(pend, 'waiting');
         else setSendState(pend, 'failed', e.network ? 'Couldn\u2019t reach the server' : e.message);
+        // Turned down (blocked, no permission, too long, a key this device doesn't have yet…) is said out loud once
+        // too; waiting, or no answer at all, only on its copy (a burst offline would otherwise be a stack of toasts).
+        if (pend.state === 'failed' && !e.network) toast(e.message, 'error');
         if (pend.state === 'waiting') scheduleFlush();
         return;
       }

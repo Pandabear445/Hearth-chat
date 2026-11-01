@@ -64,7 +64,9 @@ test('deliver: a failed send keeps its copy in the chat (failed or waiting), nev
   assert.match(kept, /e\.offline \|\| \(!e\.status && \(navigator\.onLine === false \|\| !socketUp\(\)\)\)/, 'offline, or the live connection is down: it waits');
   assert.match(kept, /e\.rateLimited/);
   assert.match(kept, /holdSends\(/);
-  assert.doesNotMatch(kept, /toast\(/, 'no toast for a kept one: its copy says so');
+  // A toast only for a refusal, never for waiting or no answer: its copy says so.
+  assert.equal((kept.match(/toast\(/g) || []).length, 1);
+  assert.match(kept, /if \(pend\.state === 'failed' && !e\.network\) toast\(e\.message, 'error'\);/);
   // Only a cancelled upload or a weaker timer turned down gives it back to the box (and drops the copy).
   assert.match(failing.slice(failing.indexOf('dropPendingSend(nonce);')), /if \(e\.cancelled\) toast\('Upload cancelled/);
   // A retry with the same nonce, after it's done with, sends nothing; one behind a waiting one waits.
