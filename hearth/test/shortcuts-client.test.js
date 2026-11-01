@@ -76,3 +76,44 @@ test('README lists the new keys', () => {
   assert.match(part, /Ctrl\/⌘ \+ \/\*\*/);
   assert.match(part, /Shift \+ Esc/);
 });
+
+// Alt+↑/↓ (app.js stepChannel), run on a stand-in sidebar: in a server the current channel is marked on its row
+// (.ch-row.active) and on its button (aria-current="page"), and voice channels are stepped over (landing on one would
+// join its call). With nothing current, ↓ goes to the first row and ↑ to the last.
+test('Alt+↑/↓ finds the channel you are in by aria-current, and skips voice channels', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'public', 'js', 'app.js'), 'utf8');
+  const start = src.indexOf('function stepChannel(dir) {');
+  const body = src.slice(start, src.indexOf('\n}\n', start) + 2);
+  const make = (rows) => {
+    const clicked = [];
+    const els = rows.map(({ id, type, current }) => {
+      const row = { classList: { contains: (c) => c === 'active' && !!current }, dataset: { cid: id } };
+      return {
+        id, classList: { contains: () => false },
+        getAttribute: (a) => (a === 'aria-current' && current ? 'page' : null),
+        closest: (sel) => (sel === '.ch-row' ? row : sel === '.ch-row.active' ? (current ? row : null) : null),
+        getClientRects: () => [1],
+        click() { clicked.push(id); },
+        type,
+      };
+    });
+    const step = new Function('$$', 'channelById', `${body}; return stepChannel;`)(() => els, (id) => els.find((e) => e.id === id));
+    return { step, clicked };
+  };
+  const list = (cur) => [{ id: 'general', type: 'text' }, { id: 'lounge', type: 'voice' }, { id: 'books', type: 'text' }].map((r) => ({ ...r, current: r.id === cur }));
+  let s = make(list('general'));
+  s.step(1);
+  assert.deepEqual(s.clicked, ['books'], 'down from #general skips the voice channel');
+  s = make(list('books'));
+  s.step(-1);
+  assert.deepEqual(s.clicked, ['general'], 'up from #books skips it too');
+  s = make(list('books'));
+  s.step(1);
+  assert.deepEqual(s.clicked, [], 'the last row stays put (nothing is clicked again)');
+  s = make(list(null));
+  s.step(1);
+  assert.deepEqual(s.clicked, ['general'], 'nothing current: down goes to the first');
+  s = make(list('lounge'));
+  s.step(-1);
+  assert.deepEqual(s.clicked, ['books'], 'in a voice room: up goes to the last text row');
+});

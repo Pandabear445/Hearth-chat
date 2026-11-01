@@ -268,7 +268,12 @@ export class Person {
     const m = this.message(text).first();
     await m.hover();
     await m.locator('button[aria-label="More actions"]').click();
-    await this.menuItem(action).click();
+    // Reminder times and the less used actions are behind a submenu row (Remind me ›, More ›).
+    // (Under Remind me, the time alone: "Remind me in 1 hour" is its "In 1 hour".)
+    const remind = /^Remind me (\w)(.*)$/.exec(action);
+    const sub = remind ? 'Remind me' : ['Add reaction', 'Forward'].includes(action) ? 'More' : null;
+    if (sub) await this.menuItem(sub).click();
+    await this.menuItem(remind ? remind[1].toUpperCase() + remind[2] : action).click();
   }
   // The "Confirm it's you" step before sensitive changes: the password, then the dialog's main button.
   async confirmPassword(title, password) {

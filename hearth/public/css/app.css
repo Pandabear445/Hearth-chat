@@ -3546,8 +3546,8 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
 /* The keyboard shortcuts sheet (Ctrl+/) */
 .sc-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 6px 24px; }
 .sc-group .set-h { margin: 4px 0 6px; }
-.sc-list { margin: 0; display: flex; flex-direction: column; gap: 6px; }
-.sc-row { display: grid; grid-template-columns: minmax(96px, auto) 1fr; gap: 10px; align-items: baseline; }
+.sc-list { margin: 0; display: grid; grid-template-columns: fit-content(9.5rem) minmax(0, 1fr); gap: 6px 12px; align-items: baseline; }
+.sc-row { display: contents; } /* (its keys and words line up in the list's two columns) */
 .sc-row dt { min-width: 0; }
 .sc-row dd { margin: 0; color: var(--text-2); font-size: calc(13.5 / 16 * 1rem); }
 .sc-combo { display: inline-flex; align-items: center; gap: 2px; }
@@ -3664,8 +3664,8 @@ html.lite { --island-shadow: 0 1px 0 rgb(255 255 255 / .03) inset; }
   .vm-speed::before { inset: -7px -4px; }
   .chip-x::before { inset: -8px; }
   .att-dl::before { inset: -4px; }
-  /* (Taller items: a long menu scrolls rather than running off a short screen.) */
-  .menu { max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; }
+  /* (A long menu scrolls rather than running off a short screen: on every pointer now, ux-menus.css .menu.) */
+  /* (moved to ux-menus.css) */
   /* 16px or more in text boxes: iOS zooms the page in when a smaller one gets focus. */
   input:where(:not([type=checkbox], [type=radio], [type=range], [type=color], [type=file])), textarea, select { font-size: max(16px, 1em); }
   .input.mono, .hex-in, .panel-search .input, .xp-input, .edit-input { font-size: calc(16 / 16 * 1rem); }
