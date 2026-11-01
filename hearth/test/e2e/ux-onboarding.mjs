@@ -1,9 +1,9 @@
 // First run, onboarding and the app's chrome (1.44, docs: the UX plan's WP-D), in the real app: the sign-up form's
 // messages, a new account's Home on a phone (how to start, above the tab bar), the iPhone tip, an invite link opened
 // signed out, reopening where you were, the desktop app's update, and "Secure your account".
-// Run after flows.mjs (run.mjs), with its people: alice signs in again. The new accounts here come from networks of
+// Run after flows.mjs (run.mjs), with its people: bob signs in again (his password never changes there). The new accounts here come from networks of
 // their own (x-forwarded-for, as flows.mjs's nova): the main flows use up the sign-ups one network gets in an hour.
-import { PHONE, exact } from './harness.mjs';
+import { PHONE, exact, newPassword } from './harness.mjs';
 import { check } from './flows.mjs';
 
 const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
@@ -28,7 +28,7 @@ const api = (p, method, url, body) => p.page.evaluate(async ([m, u, b]) => {
 
 // ------------------------------------------------------------------ the sign-up form, and a new account on a phone
 async function newOnPhone(t) {
-  t.pw.uxnew = t.pw.alice + 'u';
+  t.pw.uxnew = newPassword();
   const p = await t.open('uxnew', { ...PHONE, ...fresh(1) });
   const { page } = p;
   // The browser's own bubbles are off: the app says what's wrong, on the field it's about.
@@ -86,14 +86,14 @@ async function newOnPhone(t) {
 
 // ------------------------------------------------------------------ an invite link, signed out
 async function inviteSignUp(t) {
-  const alice = await t.open('alice-ux');
-  await alice.login('alice', t.pw.alice);
-  await alice.createServer(SERVER);
-  const sid = (await api(alice, 'GET', '/bootstrap')).servers.find((s) => s.name === SERVER).id;
-  const { code } = await api(alice, 'POST', `/servers/${sid}/invites`, { expiresHours: 24, maxUses: 0 });
+  const owner = await t.open('bob-ux');
+  await owner.login('bob', t.pw.bob);
+  await owner.createServer(SERVER);
+  const sid = (await api(owner, 'GET', '/bootstrap')).servers.find((s) => s.name === SERVER).id;
+  const { code } = await api(owner, 'POST', `/servers/${sid}/invites`, { expiresHours: 24, maxUses: 0 });
   t.state.uxInvite = code;
 
-  t.pw.ivy = t.pw.alice + 'i';
+  t.pw.ivy = newPassword();
   const ivy = await t.open('ivy', fresh(2));
   await ivy.page.goto(`${t.server.base}/invite/${code}`);
   // Nobody signed in here before: the sign-up form, headed with what it's for.
@@ -111,18 +111,18 @@ async function inviteSignUp(t) {
   await ivy.$('#sidebar-head .server-head-name', { hasText: exact(SERVER) }).waitFor();
   await ivy.$('#main-head h1', { hasText: exact('general') }).waitFor();
   check(!(await ivy.$('.modal').count()), 'Signing up through an invite should join at once, with no Join window.');
-  t.people['alice-ux'] = alice;
+  t.people['bob-ux'] = owner;
   t.people.ivy = ivy;
 }
 
 // ------------------------------------------------------------------ reopening where you were
 async function resume(t) {
-  const alice = t.people['alice-ux'];
-  await alice.$('#main-head h1', { hasText: exact('general') }).waitFor();
-  await alice.page.reload();
-  await alice.waitApp();
-  await alice.$('#sidebar-head .server-head-name', { hasText: exact(SERVER) }).waitFor();
-  await alice.$('#main-head h1', { hasText: exact('general') }).waitFor();
+  const owner = t.people['bob-ux'];
+  await owner.$('#main-head h1', { hasText: exact('general') }).waitFor();
+  await owner.page.reload();
+  await owner.waitApp();
+  await owner.$('#sidebar-head .server-head-name', { hasText: exact(SERVER) }).waitFor();
+  await owner.$('#main-head h1', { hasText: exact('general') }).waitFor();
 
   // A phone opens in the conversation, over its list: Back goes to the list.
   const phone = await t.open('ivy-phone', { ...PHONE, ...fresh(2) });
@@ -142,7 +142,7 @@ async function resume(t) {
 
 // ------------------------------------------------------------------ the desktop app's update
 async function desktopUpdate(t) {
-  const d = await t.open('alice-desktop', { viewport: { width: 1280, height: 820 } });
+  const d = await t.open('bob-desktop', { viewport: { width: 1280, height: 820 } });
   // The desktop app's bridge (desktop/preload.js), with an update downloaded and waiting.
   await d.context.addInitScript(() => {
     window.hearthDesktop = {
@@ -152,7 +152,7 @@ async function desktopUpdate(t) {
     };
   });
   await d.page.reload();
-  await d.login('alice', t.pw.alice);
+  await d.login('bob', t.pw.bob);
   await d.$('#rail button[aria-label^="' + SERVER + '"]').click();
   await d.$('#composer-input').waitFor();
   const pill = d.$('#sidebar #update-pill');
@@ -190,9 +190,9 @@ async function secureCard(t) {
   await ivy.$('#main .home-view').waitFor();
   check(!(await ivy.$('#main .secure-card').count()), 'A card put away should stay away.');
   await ivy.close();
-  await t.people['alice-ux'].close();
+  await t.people['bob-ux'].close();
   delete t.people.ivy;
-  delete t.people['alice-ux'];
+  delete t.people['bob-ux'];
 }
 
 export const FLOWS = [
