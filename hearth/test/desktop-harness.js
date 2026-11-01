@@ -2,8 +2,9 @@
 // of desktop/>`. This file runs first, then main.js. A fake Hearth server whose page is hostile (it refuses to be
 // unloaded, then keeps its main thread busy) checks that an old-style desktop capture ends after the person's
 // pick, that normal screen sharing carries on, and that a start page redirecting elsewhere doesn't leave an empty
-// window. Prints one line: RESULT {...}.
+// window, and that a certificate error on the connect screen is put into words (no raw code). Prints one line: RESULT {...}.
 const http = require('http');
+const path = require('path');
 const { app, shell, dialog, BrowserWindow } = require('electron');
 
 app.setPath('userData', process.env.HEARTH_UD);
@@ -94,6 +95,11 @@ const server = http.createServer((req, res) => {
   await js(w, `window.hearthDesktop.connect(${JSON.stringify(origin)})`).catch(() => {});
   out.redirectError = await until(() => (w.webContents.getURL().includes('error=') ? js(w, "document.getElementById('err').textContent") : null), 10000);
   out.redirectOpened = opened.slice(openedBefore);
+
+  // 4. A certificate the app doesn't trust: the connect screen says so in words, with "Review certificate"
+  await w.loadFile(path.join(app.getAppPath(), 'connect.html'), { query: { server: origin, name: 'Hearth', error: 'ERR_CERT_AUTHORITY_INVALID' } }).catch(() => {});
+  out.certText = await until(() => js(w, "document.getElementById('f').hidden ? null : document.getElementById('f').innerText"), 8000);
+  out.certButton = await js(w, "!document.getElementById('cert').hidden").catch(() => null);
 
   console.log(`RESULT ${JSON.stringify(out)}`);
   app.exit(0);

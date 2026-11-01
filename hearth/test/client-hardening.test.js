@@ -319,6 +319,10 @@ test('infra-2: in Electron, a hostile page can\'t keep an old-style desktop capt
     // a start page redirecting elsewhere: opened in the browser once, and the connect screen says why
     assert.deepEqual(r.redirectOpened, ['http://sso.example.invalid/login']);
     assert.match(r.redirectError || '', /sent the app on to sso\.example\.invalid/);
+    // a certificate error: the trust words and "Review certificate", never the raw code
+    assert.match(r.certText || '', /security certificate isn’t trusted/);
+    assert.doesNotMatch(r.certText || '', /ERR_CERT|-202/);
+    assert.equal(r.certButton, true);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 

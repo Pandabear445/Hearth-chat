@@ -8,51 +8,109 @@
   <style>
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
-    body { display: grid; place-items: center; padding: 20px; background: radial-gradient(70% 50% at 50% 0%, rgba(242,165,65,.18), transparent 70%), #100e16; color: #ede9f5; font: 16px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+    body { display: grid; place-items: center; padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); background: radial-gradient(70% 50% at 50% 0%, rgba(242,165,65,.18), transparent 70%), #100e16; color: #ede9f5; font: 16px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+    [hidden] { display: none !important; }
     .card { width: min(420px, 100%); padding: 28px 22px; border-radius: 22px; background: #1a1724; border: 1px solid rgba(255,255,255,.1); box-shadow: 0 20px 60px rgba(0,0,0,.5); }
     img { width: 60px; height: 60px; border-radius: 16px; }
-    h1 { font-size: 23px; margin: 14px 0 4px; }
+    h1 { font-size: 23px; margin: 14px 0 4px; overflow-wrap: anywhere; }
     p { margin: 0 0 18px; color: #b6afc6; font-size: 14.5px; }
     label { display: block; font-size: 13px; font-weight: 600; color: #b6afc6; margin-bottom: 6px; }
     input { width: 100%; height: 48px; padding: 0 14px; border-radius: 12px; border: 1px solid rgba(255,255,255,.14); background: #110f18; color: inherit; font: inherit; outline: none; }
     input:focus { border-color: #f2a541; box-shadow: 0 0 0 3px rgba(242,165,65,.18); }
     button { margin-top: 14px; width: 100%; height: 48px; border: 0; border-radius: 12px; background: #f2a541; color: #1a1407; font: 700 16px system-ui, sans-serif; }
+    button.ghost { background: rgba(255,255,255,.08); color: #ede9f5; font-weight: 600; }
+    button.link { background: none; color: #b6afc6; font-weight: 500; font-size: 14.5px; text-decoration: underline; text-underline-offset: 3px; }
     button:disabled { opacity: .6; }
-    .err { color: #ff7b8c; font-size: 14px; min-height: 20px; margin-top: 10px; }
+    button:focus-visible { outline: 2px solid #f2a541; outline-offset: 2px; }
+    .err { color: #ff7b8c; font-size: 14px; min-height: 20px; margin-top: 10px; overflow-wrap: anywhere; }
     .hint { font-size: 12.5px; color: #847c97; margin-top: 14px; }
     .links { font-size: 12.5px; margin-top: 10px; }
     .links a { color: #b6afc6; }
-    .loading { display: none; text-align: center; color: #b6afc6; }
-    body.auto .card { display: none; } body.auto .loading { display: block; }
+    /* "Retrying in 4s" with a dot that pulses while a try is under way (desktop connect.html's card) */
+    .status { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 12px 14px; border-radius: 12px; background: #110f18; border: 1px solid rgba(255,255,255,.08); font-size: 15px; color: #d8d2e4; }
+    .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: #f2a541; box-shadow: 0 0 0 0 rgba(242,165,65,.6); }
+    .trying .dot { animation: pulse 1s ease-out infinite; }
+    @keyframes pulse { to { box-shadow: 0 0 0 10px rgba(242,165,65,0); } }
+    .why { font-size: 14px; color: #b6afc6; margin-top: 12px; overflow-wrap: anywhere; }
+    /* Going straight to the saved server: the logo and one calm line, not the address form. */
+    .loading { text-align: center; color: #b6afc6; }
+    .loading .status { justify-content: center; background: none; border: 0; }
+    .loading button.link { width: auto; padding: 0 16px; }
+    .actions button + button { margin-top: 12px; }
+    /* Phone on its side (844x390): a smaller logo beside the title, and the "Can't reach" card fits without
+       scrolling, its two buttons side by side. (The address form still scrolls when the keyboard is up.) */
+    @media (max-height: 500px) and (min-width: 560px) {
+      body { padding-top: max(10px, env(safe-area-inset-top)); padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+      .card { width: min(600px, 100%); padding: 18px 22px; }
+      .card img { float: left; width: 40px; height: 40px; border-radius: 11px; margin-right: 14px; }
+      .card h1 { margin: 0 0 12px; line-height: 40px; font-size: 21px; }
+      .card > p { clear: both; margin-bottom: 12px; }
+      #offline .why { margin-top: 8px; }
+      #offline .actions { display: flex; gap: 12px; }
+      #offline .actions button { margin-top: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) { .trying .dot { animation: none; } }
   </style>
 </head>
 <body>
-  <div class="loading">Connecting…</div>
-  <form class="card" id="f">
+  <div class="loading" id="loading" hidden>
+    <img src="icon.png" alt="">
+    <div class="status trying" role="status" aria-live="polite"><span class="dot"></span><span id="loading-text">Connecting…</span></div>
+    <button id="loading-change" type="button" class="link" hidden>Change server</button>
+  </div>
+
+  <!-- Can't reach the server: tries again by itself (2s, 4s, 8s… up to a minute) and loads it when it answers. -->
+  <div class="card" id="offline" hidden>
+    <img src="icon.png" alt="">
+    <h1 id="off-title">Can’t reach your server</h1>
+    <p id="off-text">Hearth will connect again by itself as soon as the server answers.</p>
+    <div class="status" id="status" role="status" aria-live="polite"><span class="dot"></span><span id="status-text">Trying again…</span></div>
+    <div class="why" id="why"></div>
+    <div class="actions">
+      <button id="retry" type="button">Retry now</button>
+      <button id="change" type="button" class="ghost">Change server</button>
+    </div>
+  </div>
+
+  <form class="card" id="f" novalidate hidden>
     <img src="icon.png" alt="">
     <h1>Connect to your server</h1>
     <p>Enter the address of the Hearth server you use in your browser.</p>
     <label for="url">Server address</label>
-    <input id="url" placeholder="chat.example.com" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+    <input id="url" placeholder="chat.example.com" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" required>
     <button id="go" type="submit">Connect</button>
+    <button id="cancel" type="button" class="ghost" hidden>Cancel</button>
     <div class="err" id="err" role="alert"></div>
     <div class="hint">Your messages stay end-to-end encrypted. The app only talks to the server you enter. If your server uses a self-signed certificate (an IP address like 1.2.3.4:3000), the app asks you to confirm it once.</div>
     <!-- Opens in the browser (BridgePolicy.opensInBrowser); it never becomes the server. -->
     <div class="links"><a href="https://pandabear445.github.io/Hearth-chat/privacy.html">Privacy policy</a></div>
   </form>
   <script>
-    // First launch: type the server address. After that the app goes straight there. Comes back here
-    // with ?error=… when the server can't be reached, or ?change=1 from Settings → Apps → Switch server.
+    // First launch: type the server address. After that the app goes straight there. The app brings people back
+    // here with ?offline=1&reason=<code>&host=<host> when the server can't be reached (a code, never prose: the
+    // words are chosen here), or ?change=1 from Settings → Apps → Switch server.
     const KEY = 'hearth.server';
-    const err = document.getElementById('err');
-    const input = document.getElementById('url');
+    const $ = (id) => document.getElementById(id);
+    const err = $('err');
+    const input = $('url');
     const params = new URLSearchParams(location.search);
-    const norm = (v) => {
+    // "chat.example.com" -> "https://chat.example.com"; '' for anything that isn't a plain web address (spaces,
+    // "!!", a path-only typo). Only the origin is kept.
+    function norm(v) {
       v = String(v || '').trim();
-      if (!v) return '';
+      if (!v || /\s/.test(v)) return '';
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v) && !/^https?:\/\//i.test(v)) return ''; // ftp://, file://…
       if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
-      try { const u = new URL(v); return u.protocol === 'https:' || u.protocol === 'http:' ? u.origin : ''; } catch { return ''; }
-    };
+      let u;
+      try { u = new URL(v); } catch { return ''; }
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') return '';
+      if (u.username || u.password) return '';
+      const h = u.hostname;
+      const ip6 = /^\[[0-9a-f:.]+\]$/i.test(h);
+      if (!ip6 && !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.?$/i.test(h)) return '';
+      return u.origin;
+    }
+    const hostOf = (o) => { try { return new URL(o).host; } catch { return String(o || ''); } };
     // Tells the app which site is "yours" (it alone loads inside the app and gets notifications/downloads). The
     // iPhone app's bridge is window.HearthIOS (over webkit.messageHandlers.hearthIOS), the Android app's HearthAndroid.
     const tellApp = (origin) => new Promise((resolve) => {
@@ -65,34 +123,198 @@
       const r = A.postMessage(JSON.stringify({ type: 'setServer', origin }));
       if (r && typeof r.then === 'function') r.then(answer, () => {});
     });
+    // Any other question for the app: the answer of the given type, or null (no app, an older app, no answer in time).
+    const ask = (msg, type, ms) => new Promise((resolve) => {
+      const ios = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hearthIOS;
+      const A = ios ? window.HearthIOS : window.HearthAndroid;
+      if (!A) return resolve(null);
+      const done = setTimeout(() => resolve(null), ms);
+      const answer = (d) => { try { const o = typeof d === 'string' ? JSON.parse(d) : d; if (o && o.type === type) { clearTimeout(done); resolve(o); } } catch { /* ignore */ } };
+      A.onmessage = (e) => answer(e.data);
+      try { const r = A.postMessage(JSON.stringify(msg)); if (r && typeof r.then === 'function') r.then(answer, () => {}); } catch { clearTimeout(done); resolve(null); }
+    });
+
+    // ------------------------------------------------ what went wrong, in words (desktop connect.html's list)
+    const reasons = {
+      ERR_INTERNET_DISCONNECTED: 'You’re offline. Hearth connects again when your phone is back online.',
+      NSURLErrorNotConnectedToInternet: 'You’re offline. Hearth connects again when your phone is back online.',
+      NSURLErrorDataNotAllowed: 'Mobile data is off for Hearth, and there’s no Wi-Fi.',
+      NSURLErrorInternationalRoamingOff: 'You’re roaming with data roaming off.',
+      ERR_NAME_NOT_RESOLVED: 'The address couldn’t be found (DNS).',
+      ERR_NAME_RESOLUTION_FAILED: 'The address couldn’t be found (DNS).',
+      NSURLErrorCannotFindHost: 'The address couldn’t be found (DNS).',
+      NSURLErrorDNSLookupFailed: 'The address couldn’t be found (DNS).',
+      ERR_CONNECTION_REFUSED: 'The server isn’t accepting connections, it may be restarting.',
+      NSURLErrorCannotConnectToHost: 'The server isn’t accepting connections, it may be restarting.',
+      ERR_CONNECTION_TIMED_OUT: 'The server took too long to answer.',
+      ERR_TIMED_OUT: 'The server took too long to answer.',
+      NSURLErrorTimedOut: 'The server took too long to answer.',
+      ERR_NETWORK_CHANGED: 'Your network changed.',
+      ERR_ADDRESS_UNREACHABLE: 'The server can’t be reached from this network.',
+      ERR_CONNECTION_RESET: 'The connection was interrupted.',
+      ERR_CONNECTION_CLOSED: 'The connection was interrupted.',
+      NSURLErrorNetworkConnectionLost: 'The connection was interrupted.',
+      ERR_PROXY_CONNECTION_FAILED: 'Couldn’t connect through your proxy.',
+      ERR_TUNNEL_CONNECTION_FAILED: 'Couldn’t connect through your proxy or network filter.',
+      NSURLErrorBadServerResponse: 'The server sent an answer the app couldn’t read.',
+      NOT_HEARTH: 'Something answers at this address, but it isn’t a Hearth server.',
+    };
+    // Certificate problems don't fix themselves by trying again: the person looks at the certificate instead.
+    const isCert = (r) => /^(ERR_CERT_|ERR_SSL_|ERR_BAD_SSL|CERT_UNTRUSTED$|NSURLErrorServerCertificate|NSURLErrorSecureConnectionFailed|NSURLErrorClientCertificate)/.test(r);
+    const explain = (r) => {
+      r = String(r || '').replace(/^net::/, '');
+      const http = /^HTTP_(\d{3})$/.exec(r);
+      if (http) return +http[1] >= 500 ? `The server answered with error ${http[1]}, it’s probably restarting.` : `The server answered with error ${http[1]}.`;
+      if (isCert(r)) return 'The server’s security certificate isn’t trusted.';
+      return reasons[r] || 'Check your internet connection if this takes a while.';
+    };
+
+    let cfg = {};
+    let locked = false;
+    let saved = '';
+    const offline = params.get('offline') === '1' || (params.get('error') !== null);
+    const reason = String(params.get('reason') || '').replace(/^net::/, '').slice(0, 80);
+    const host = String(params.get('host') || '').slice(0, 260);
+
+    function show(which) {
+      for (const id of ['loading', 'offline', 'f']) $(id).hidden = id !== which;
+    }
+
+    // ------------------------------------------------ going to the server
+    let changeTimer = null;
     async function go(origin) {
-      const btn = document.getElementById('go');
+      stopRetrying();
+      const btn = $('go');
       btn.disabled = true; btn.textContent = 'Connecting…';
-      document.body.classList.add('auto');
+      $('loading-text').textContent = `Connecting to ${hostOf(origin)}…`;
+      $('loading-change').hidden = true;
+      show('loading');
+      // Still connecting after a while: a way out to another server (never in an app built for one server).
+      clearTimeout(changeTimer);
+      if (!locked) changeTimer = setTimeout(() => { $('loading-change').hidden = false; }, 6000);
+      try { sessionStorage.setItem('hearth.tryAt', String(Date.now())); } catch { /* ignore */ }
       localStorage.setItem(KEY, origin);
       await tellApp(origin);
       location.replace(origin + '/');
     }
-    document.getElementById('f').addEventListener('submit', (e) => {
+    $('loading-change').addEventListener('click', () => { clearTimeout(changeTimer); showForm(''); });
+
+    // ------------------------------------------------ the address form (first run, Change server)
+    function showForm(message, { cancel = false } = {}) {
+      stopRetrying();
+      show('f');
+      err.textContent = message || '';
+      $('go').disabled = false; $('go').textContent = 'Connect';
+      if (saved && !input.value) input.value = saved.replace(/^https:\/\//, '');
+      $('cancel').hidden = !(cancel && saved);
+      input.focus(); input.select();
+    }
+    $('cancel').addEventListener('click', () => go(saved));
+
+    // Before saving an address, the Android app asks it for /api/config (the server doesn't answer other sites'
+    // pages, so the app does it, MainActivity "probe"): only a Hearth server is saved. No app, or an older app
+    // that doesn't answer: straight on, as before.
+    async function check(origin) {
+      if (!window.HearthAndroid) return { ok: true };
+      const r = await ask({ type: 'probe', origin }, 'probe', 10000);
+      return r || { ok: true };
+    }
+    $('f').addEventListener('submit', async (e) => {
       e.preventDefault();
       const o = norm(input.value);
-      if (!o) { err.textContent = 'Enter an address like chat.example.com'; return; }
-      if (o.startsWith('http://') && !/^http:\/\/(localhost|127\.|10\.|192\.168\.)/.test(o)) { err.textContent = 'Use the https:// address — Hearth\u2019s encryption needs a secure connection.'; return; }
+      if (!input.value.trim()) { err.textContent = 'Enter an address like chat.example.com'; return; }
+      if (!o) { err.textContent = 'That doesn’t look like a web address. Enter one like chat.example.com'; return; }
+      if (o.startsWith('http://') && !/^http:\/\/(localhost|127\.|10\.|192\.168\.)/.test(o)) { err.textContent = 'Use the https:// address — Hearth’s encryption needs a secure connection.'; return; }
+      const btn = $('go');
+      btn.disabled = true; btn.textContent = 'Checking…';
+      err.textContent = '';
+      const r = await check(o);
+      if (!r.ok) {
+        btn.disabled = false; btn.textContent = 'Connect';
+        err.textContent = r.error === 'NOT_HEARTH' ? explain('NOT_HEARTH') : `Couldn’t connect to ${hostOf(o)}. ${explain(r.error)}`;
+        return;
+      }
       go(o);
     });
-    fetch('config.json').then((r) => r.json()).catch(() => ({})).then((cfg) => {
-      const fixed = cfg.lockServer ? norm(cfg.defaultServer) : '';
-      const saved = fixed || localStorage.getItem(KEY) || norm(cfg.defaultServer);
+
+    // ------------------------------------------------ can't reach the server: retry with backoff
+    // A try is a real load of the server (the app shows this page again if it fails, so certificates, proxies and
+    // the app's own checks all behave as on a normal start). How long to wait next is kept for this session, so
+    // the waits still grow across those reloads: 2s, 4s, 8s… up to 60s.
+    let delay = 2;
+    let timer = null;
+    let tick = null;
+    const store = (k, v) => { try { if (v === undefined) return sessionStorage.getItem(k); sessionStorage.setItem(k, String(v)); } catch { /* ignore */ } return null; };
+    function stopRetrying() { clearTimeout(timer); clearInterval(tick); timer = tick = null; }
+    function schedule() {
+      stopRetrying();
+      let left = delay;
+      const draw = () => { $('status').classList.remove('trying'); $('status-text').textContent = `Retrying in ${left}s`; };
+      draw();
+      tick = setInterval(() => { left = Math.max(0, left - 1); draw(); }, 1000);
+      timer = setTimeout(attempt, delay * 1000);
+    }
+    function attempt() {
+      if (!saved) return showForm('');
+      stopRetrying();
+      store('hearth.delay', Math.min(60, delay * 2));
+      $('status').classList.add('trying');
+      $('status-text').textContent = 'Trying again…';
+      $('retry').disabled = true;
+      try { sessionStorage.setItem('hearth.tryAt', String(Date.now())); } catch { /* ignore */ }
+      location.replace(saved + '/');
+    }
+    function showOffline() {
+      show('offline');
+      $('off-title').textContent = `Can’t reach ${host || hostOf(saved) || 'your server'}`;
+      $('why').textContent = explain(reason);
+      $('change').hidden = locked;
+      if (isCert(reason)) {
+        // Trying again by itself would only bring the certificate question back: the person asks for it.
+        $('retry').textContent = 'Review certificate';
+        $('off-text').textContent = 'Only trust the certificate if the server\u2019s owner confirms its fingerprint.';
+        $('status').hidden = true;
+        $('retry').focus();
+        return;
+      }
+      // Coming back from a try that failed a moment ago: keep the longer wait. A fresh failure starts at 2s.
+      const lastTry = +store('hearth.tryAt') || 0;
+      delay = Date.now() - lastTry < 90000 ? Math.max(2, Math.min(60, +store('hearth.delay') || 2)) : 2;
+      store('hearth.delay', delay);
+      schedule();
+    }
+    const now = () => { if (!$('offline').hidden && !isCert(reason)) { delay = 2; attempt(); } };
+    $('retry').addEventListener('click', () => { delay = 2; attempt(); });
+    $('change').addEventListener('click', () => showForm('', { cancel: true }));
+    // Back online, or the app came back to the front: try straight away.
+    window.addEventListener('online', now);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') now(); });
+
+    // ------------------------------------------------ start
+    Promise.all([
+      fetch('config.json').then((r) => r.json()).catch(() => ({})),
+      // The app's own record of the server wins (it can change without this page, e.g. "Switch and join").
+      ask({ type: 'hello', v: 1 }, 'info', 1500),
+    ]).then(([c, info]) => {
+      cfg = c || {};
+      locked = !!cfg.lockServer && !!norm(cfg.defaultServer);
+      const fixed = locked ? norm(cfg.defaultServer) : '';
+      const fromApp = info && norm(info.server);
+      if (fromApp && !fixed) { try { localStorage.setItem(KEY, fromApp); } catch { /* ignore */ } }
+      saved = fixed || fromApp || norm(localStorage.getItem(KEY)) || '';
       if (fixed) { input.value = fixed.replace(/^https:\/\//, ''); input.readOnly = true; }
-      if (params.get('error')) {
-        err.textContent = params.get('error');
-        if (saved) input.value = saved.replace(/^https:\/\//, '');
-        document.getElementById('go').textContent = 'Try again';
-      } else if (params.get('change')) {
-        if (saved) input.value = saved.replace(/^https:\/\//, '');
-        input.focus(); input.select();
-      } else if (saved) go(saved);
-      else input.focus();
+      if (offline && saved) showOffline();
+      else if (locked) go(fixed);
+      else if (params.get('change')) showForm('', { cancel: true });
+      else if (params.get('error') !== null) showForm('Couldn’t reach the server. Check the address and your connection.');
+      else if (saved) go(saved);
+      else {
+        // First run: the suggested server is filled in, but the person presses Connect (no silent connect).
+        const suggested = norm(cfg.defaultServer);
+        if (suggested) input.value = suggested.replace(/^https:\/\//, '');
+        showForm('');
+        if (suggested) $('go').focus();
+      }
     });
   </script>
 </body>

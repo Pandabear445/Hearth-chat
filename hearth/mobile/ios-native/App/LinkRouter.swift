@@ -27,12 +27,29 @@ final class LinkRouter: NSObject {
         guard let url = url, let invite = InviteLinks.parse(url.absoluteString) else { return false }
         let server = HearthViewController.serverOrigin
         if !server.isEmpty && !InviteLinks.forServer(invite, serverOrigin: server) {
-            page?.notice("This invite is for \(invite.origin). Switch to that server first (Settings \u{2192} Apps & devices).")
+            otherServer(invite)
             return true
         }
         pendingInvite = invite
         if pageReady { deliverInvite() }
         return true
+    }
+
+    /// An invite for another Hearth server: it opens in Safari, on that server's own site, if the person wants. (The
+    /// app stays on its own server: the wording doesn't suggest switching, which an app built for one server can't.)
+    /// Hearth just starting (a link that launched it): asked once its screen is up.
+    private func otherServer(_ invite: Invite, tries: Int = 0) {
+        guard let page = page, let top = page.topController(), page.view.window != nil else {
+            if tries < 10 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.otherServer(invite, tries: tries + 1) } }
+            return
+        }
+        guard let url = URL(string: InviteLinks.target(serverOrigin: invite.origin, code: invite.code)) else { return }
+        let host = url.host ?? invite.origin
+        let alert = UIAlertController(title: "This invite is for \(host)", message: "It\u{2019}s for a different Hearth server than the one this app uses. You can open it in Safari.", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Open in Safari", style: .default) { [weak page] _ in page?.openOutside(url) })
+        alert.preferredAction = alert.actions.last
+        top.present(alert, animated: true)
     }
 
     /// Opens one of the app's own addresses in the server's page: now if it's ready, else once it says hello.

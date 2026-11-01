@@ -11,6 +11,7 @@ const CONFIG = require('./hearth.config.json');
 const APP_NAME = CONFIG.appName || 'Hearth';
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
+const IS_LINUX = process.platform === 'linux';
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 let settings = {};
 try { settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) || {}; } catch { /* first run */ }
@@ -40,7 +41,9 @@ const onServerPage = () => !!(win && !win.isDestroyed() && isServer(win.webConte
 
 // ---------------------------------------------------------------- desktop settings (Settings → Apps & devices)
 const CAN_START_AT_LOGIN = IS_WIN || IS_MAC; // Linux desktops each do this differently
-const closeToTray = () => !IS_MAC && (settings.closeToTray ?? CONFIG.closeToTray ?? true);
+// Linux: off unless the person turns it on. Many Linux desktops show no tray icon at all, and a window that
+// closes into an invisible tray looks like the app hanging around for nothing (or quitting with no way back).
+const closeToTray = () => !IS_MAC && (settings.closeToTray ?? (IS_LINUX ? false : CONFIG.closeToTray ?? true));
 const startHidden = () => !settings.startVisible; // stored the old way so existing choices carry over
 const spellcheckOn = () => settings.spellcheck !== false;
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
@@ -265,8 +268,9 @@ function createWindow() {
   });
   win.webContents.on('did-fail-load', (e, code, desc, url, isMain) => {
     if (!isMain || code === -3) return; // -3: the load was replaced by another one
-    // Certificate problems keep the old screen: the certificate prompt (below) takes it from there.
-    if (code <= -200 && code > -300) loadConnect(`Couldn't reach ${url} (${desc}). Check the address and your connection.`);
+    // Certificate problems: the connect screen says the certificate isn't trusted, with "Review certificate" (the
+    // certificate prompt below takes it from there). Only the code goes to the page, which has the words for it.
+    if (code <= -200 && code > -300) loadConnect(String(desc || 'ERR_CERT_INVALID').replace(/^net::/, ''));
     else loadOffline(desc);
   });
 
@@ -285,13 +289,20 @@ function createWindow() {
     else if ((k === '0' || input.code === 'Numpad0') && !input.shift) { e.preventDefault(); setDesktopSetting('zoom', 1); }
   });
 
-  load();
+  load({ coldStart: true });
 }
 
-function load() {
+// Starting the app shows the "Connecting to <host>…" screen first (it draws at once, so the window can show
+// straight away instead of after the server's page is ready), then loads the server from there. A failure
+// lands on the "Can't reach" card or the connect form as before. Retry, Trust and Connect load the server directly.
+function load({ coldStart = false } = {}) {
   const origin = serverOrigin();
-  if (origin) win.loadURL(origin + '/');
-  else loadConnect();
+  if (!origin) return loadConnect();
+  if (!coldStart) return win.loadURL(origin + '/');
+  win.loadFile(CONNECT_FILE, { query: connectQuery({ connecting: '1' }) });
+  win.webContents.once('did-finish-load', () => {
+    if (win && !win.isDestroyed() && isConnectScreen(win.webContents.getURL()) && serverOrigin() === origin) win.loadURL(origin + '/');
+  });
 }
 function connectQuery(extra) {
   return { locked: CONFIG.lockServer ? '1' : '', name: APP_NAME, server: serverOrigin() || '', ...extra };
@@ -722,7 +733,9 @@ function refreshTrayMenu() {
 function trayHintOnce() {
   if (settings.trayHintShown) return;
   settings.trayHintShown = true; saveSettings();
-  const content = `${APP_NAME} is still running here so you keep getting messages. To quit, right-click this icon and choose Quit. You can change this in Settings → Apps & devices.`;
+  const content = IS_LINUX
+    ? `${APP_NAME} is still running so you keep getting messages. To open it again, click its tray icon or start ${APP_NAME} from your app launcher. To quit, right-click the tray icon and choose Quit. You can change this in Settings → Apps & devices.`
+    : `${APP_NAME} is still running here so you keep getting messages. To quit, right-click this icon and choose Quit. You can change this in Settings → Apps & devices.`;
   try {
     if (IS_WIN && tray) tray.displayBalloon({ iconType: 'info', title: `${APP_NAME} is still running`, content });
     else if (Notification.isSupported()) new Notification({ title: `${APP_NAME} is still running`, body: content, silent: true }).show();
@@ -809,17 +822,20 @@ async function probe(origin) {
   } catch (err) {
     const m = String(err && err.message);
     if (/CERT|certificate/i.test(m)) return { ok: true, cert: true };
-    return { ok: false, error: /timeout|abort/i.test(m) ? 'timed out' : m.replace(/^net::/, '') };
+    if (/timeout|abort/i.test(m)) return { ok: false, error: 'ERR_TIMED_OUT' };
+    const name = /(ERR_[A-Z0-9_]+)/.exec(m);
+    return { ok: false, error: name ? name[1] : 'ERR_FAILED' };
   }
 }
-// The connect screen checks that the address really is a Hearth server before saving it.
+// The connect screen checks that the address really is a Hearth server before saving it. A failure answers with
+// a code (ERR_NAME_NOT_RESOLVED, NOT_HEARTH, HTTP_404, BAD_ADDRESS…), which the screen puts into words.
 ipcMain.handle('connect', async (e, raw) => {
-  if (!fromConnectScreen(e)) return { ok: false, error: 'Not allowed.' };
-  if (CONFIG.lockServer) return { ok: false, error: 'This app only connects to its own server.' };
+  if (!fromConnectScreen(e)) return { ok: false, error: 'NOT_ALLOWED' };
+  if (CONFIG.lockServer) return { ok: false, error: 'LOCKED' };
   const origin = normalize(String(raw || '').trim());
-  if (!origin) return { ok: false, error: 'That doesn’t look like a web address.' };
+  if (!origin) return { ok: false, error: 'BAD_ADDRESS' };
   const r = await probe(origin);
-  if (!r.ok) return { ok: false, error: `Couldn’t find a Hearth server at ${origin}.` };
+  if (!r.ok) return { ok: false, error: r.error || 'ERR_FAILED', host: new URL(origin).host };
   settings.server = origin;
   saveSettings();
   load();
@@ -842,7 +858,12 @@ app.whenReady().then(() => {
   createWindow();
   buildTray();
   setupUpdates();
-  if (pendingLink) win.webContents.once('did-finish-load', () => { const l = pendingLink; pendingLink = ''; openLink(l); });
+  // A hearth:// link that started the app: opened once the server's page has loaded (not the connecting screen).
+  if (pendingLink) {
+    const wc = win.webContents;
+    const later = () => { if (!onServerPage()) return; wc.removeListener('did-finish-load', later); const l = pendingLink; pendingLink = ''; if (l) openLink(l); };
+    wc.on('did-finish-load', later);
+  }
   // Back from sleep or the lock screen: tell the page to reconnect right away instead of waiting.
   powerMonitor.on('resume', () => sendToPage('resume'));
   powerMonitor.on('unlock-screen', () => sendToPage('resume'));

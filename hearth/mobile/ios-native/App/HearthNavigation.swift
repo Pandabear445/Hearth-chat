@@ -81,7 +81,7 @@ final class HearthNavigation: NSObject, WKNavigationDelegate {
         capacitor?.webViewWebContentProcessDidTerminate(webView)
     }
 
-    // The server's page didn't load: the connect screen says why, and lets the person fix the address.
+    // The server's page didn't load: the connect screen's "Can't reach" card, which keeps trying by itself.
     private func failed(_ webView: WKWebView, _ error: Error) {
         let e = error as NSError
         // Not failures: a load replaced by another, or one this delegate cancelled (sent to Safari, a payment page).
@@ -92,7 +92,38 @@ final class HearthNavigation: NSObject, WKNavigationDelegate {
         let failing = (e.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? webView.url
         let o = originOf(failing)
         if o.isEmpty || o == vc.localOrigin { return }
-        vc.showConnectError("Couldn\u{2019}t reach the server (\(e.localizedDescription)). Check the address and your connection.")
+        showOffline(vc, reason: HearthNavigation.reasonName(e), url: failing)
+    }
+
+    /// Only a code and the host travel to the connect screen (it has the words for each code, and an app built for one
+    /// server never shows its address form), never the system's error text.
+    private func showOffline(_ vc: HearthViewController, reason: String, url: URL?) {
+        let host = (url?.host ?? "") + (url?.port.map { ":\($0)" } ?? "")
+        let enc = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "" }
+        vc.showConnect("?offline=1&reason=" + enc(reason) + "&host=" + enc(host))
+    }
+
+    /// An NSURLError as its name (NSURLErrorNotConnectedToInternet), the codes the connect screen explains.
+    static func reasonName(_ e: NSError) -> String {
+        guard e.domain == NSURLErrorDomain else { return e.domain == "WebKitErrorDomain" ? "WebKitError\(e.code)" : "ERR_FAILED" }
+        switch e.code {
+        case NSURLErrorNotConnectedToInternet: return "NSURLErrorNotConnectedToInternet"
+        case NSURLErrorDataNotAllowed: return "NSURLErrorDataNotAllowed"
+        case NSURLErrorInternationalRoamingOff: return "NSURLErrorInternationalRoamingOff"
+        case NSURLErrorTimedOut: return "NSURLErrorTimedOut"
+        case NSURLErrorCannotFindHost: return "NSURLErrorCannotFindHost"
+        case NSURLErrorDNSLookupFailed: return "NSURLErrorDNSLookupFailed"
+        case NSURLErrorCannotConnectToHost: return "NSURLErrorCannotConnectToHost"
+        case NSURLErrorNetworkConnectionLost: return "NSURLErrorNetworkConnectionLost"
+        case NSURLErrorBadServerResponse: return "NSURLErrorBadServerResponse"
+        case NSURLErrorSecureConnectionFailed: return "NSURLErrorSecureConnectionFailed"
+        case NSURLErrorServerCertificateUntrusted: return "NSURLErrorServerCertificateUntrusted"
+        case NSURLErrorServerCertificateHasBadDate: return "NSURLErrorServerCertificateHasBadDate"
+        case NSURLErrorServerCertificateHasUnknownRoot: return "NSURLErrorServerCertificateHasUnknownRoot"
+        case NSURLErrorServerCertificateNotYetValid: return "NSURLErrorServerCertificateNotYetValid"
+        case NSURLErrorClientCertificateRejected: return "NSURLErrorClientCertificateRejected"
+        default: return "NSURLError\(e.code)"
+        }
     }
 
     func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping @MainActor (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
@@ -148,7 +179,8 @@ final class HearthNavigation: NSObject, WKNavigationDelegate {
         let alert = UIAlertController(title: changed ? "Certificate changed" : "Unverified certificate", message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self, weak vc] _ in
             self?.finishTrust(.cancelAuthenticationChallenge, nil)
-            vc?.showConnectError("The server\u{2019}s certificate wasn\u{2019}t trusted.")
+            guard let self = self, let vc = vc else { return }
+            self.showOffline(vc, reason: "CERT_UNTRUSTED", url: URL(string: host))
         })
         alert.addAction(UIAlertAction(title: "Trust this certificate", style: changed ? .destructive : .default) { [weak self] _ in
             HearthViewController.group.set(fp, forKey: key)

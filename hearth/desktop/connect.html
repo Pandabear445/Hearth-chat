@@ -28,10 +28,20 @@
     .trying .dot { animation: pulse 1s ease-out infinite; }
     @keyframes pulse { to { box-shadow: 0 0 0 10px rgba(242,165,65,0); } }
     .why { font-size: 12.5px; color: #847c97; margin-top: 10px; overflow-wrap: anywhere; }
+    .connecting { text-align: center; }
+    .connecting .status { justify-content: center; background: none; border: 0; }
+    .connecting button.link { width: auto; padding: 4px 12px; }
     @media (prefers-reduced-motion: reduce) { .trying .dot { animation: none; } }
   </style>
 </head>
 <body>
+  <!-- Starting up: shows at once, while the server's page loads behind it (main.js load({ coldStart })). -->
+  <div class="card connecting" id="connecting" hidden>
+    <img src="build/icon.png" alt="">
+    <div class="status trying" role="status" aria-live="polite"><span class="dot"></span><span id="connecting-text">Connecting…</span></div>
+    <button id="connecting-change" type="button" class="link" hidden>Change server</button>
+  </div>
+
   <!-- Can't reach the server: keeps trying by itself (2s, 4s, 8s… up to 30s) and loads it when it answers. -->
   <div class="card" id="offline" hidden>
     <img src="build/icon.png" alt="">
@@ -51,6 +61,7 @@
     <input id="url" placeholder="chat.example.com" autocomplete="url" spellcheck="false" required>
     <button id="go" type="submit">Connect</button>
     <div class="err" id="err" role="alert"></div>
+    <button id="cert" type="button" class="ghost" hidden>Review certificate</button>
     <button id="back" type="button" class="link" hidden>Back</button>
     <div class="hint">Your messages stay end-to-end encrypted. The app only talks to the server you enter here.</div>
   </form>
@@ -61,14 +72,24 @@
     const locked = q.get('locked') === '1';
     const server = q.get('server') || '';
     const host = (() => { try { return new URL(server).host; } catch { return server; } })();
+    let slowTimer = null; // "Change server" on the connecting screen, after a while
     if (q.get('name')) $('title').textContent = `Connect to ${q.get('name')}`;
 
     // ------------------------------------------------ the server address form (first run, Change server)
+    // The error is a code from main.js (did-fail-load, connect) or a sentence it wrote (a redirect elsewhere).
+    // A code is put into words here; a certificate code gets "Review certificate", which loads the server again so
+    // the certificate prompt comes back.
+    const isCode = (e) => /^(net::)?[A-Z][A-Z0-9_]{2,60}$/.test(String(e || ''));
+    const isCert = (e) => /^(net::)?(ERR_CERT_|ERR_SSL_|ERR_BAD_SSL)/.test(String(e || ''));
     function showForm(error) {
       stopRetrying();
+      clearTimeout(slowTimer);
       $('offline').hidden = true;
+      $('connecting').hidden = true;
       $('f').hidden = false;
-      $('err').textContent = error || '';
+      $('cert').hidden = !(isCert(error) && server);
+      $('err').textContent = !error ? '' : isCert(error) ? explain(error)
+        : isCode(error) ? (host ? `Couldn’t connect to ${host}. ${explain(error)}` : explain(error)) : error;
       if (server && !$('url').value) $('url').value = server.replace(/^https:\/\//, '');
       $('url').readOnly = locked;
       $('back').hidden = !q.get('offline');
@@ -81,7 +102,19 @@
       btn.disabled = true; btn.textContent = 'Connecting…';
       // A build locked to one server can only try that server again.
       const r = locked ? await D.retryServer() : await D.connect($('url').value);
-      if (!r.ok) { $('err').textContent = locked ? `Couldn’t reach ${host}. ${explain(r.error)}` : r.error; btn.disabled = false; btn.textContent = 'Connect'; }
+      if (!r.ok) {
+        const to = locked ? host : (r.host || $('url').value.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, ''));
+        $('err').textContent = r.error === 'BAD_ADDRESS' || r.error === 'NOT_HEARTH' ? explain(r.error)
+          : locked ? `Couldn’t reach ${host}. ${explain(r.error)}` : `Couldn’t connect to ${to}. ${explain(r.error)}`;
+        $('cert').hidden = true;
+        btn.disabled = false; btn.textContent = 'Connect';
+      }
+    });
+    $('cert').addEventListener('click', async () => {
+      $('cert').disabled = true;
+      const r = await D.retryServer().catch(() => ({ ok: false }));
+      $('cert').disabled = false;
+      if (!r.ok) $('err').textContent = `Couldn’t reach ${host}. ${explain(r.error)}`;
     });
     $('back').addEventListener('click', showOffline);
 
@@ -105,7 +138,10 @@
       const http = /^HTTP_(\d{3})$/.exec(r);
       if (http) return +http[1] >= 500 ? `The server answered with error ${http[1]}, it\u2019s probably restarting.` : `The server answered with error ${http[1]}.`;
       if (r === 'NOT_HEARTH') return 'Something answers at this address, but it isn\u2019t a Hearth server.';
-      return reasons[r] || (r ? `Details: ${r}` : '');
+      if (r === 'BAD_ADDRESS') return 'That doesn\u2019t look like a web address. Enter one like chat.example.com';
+      if (r === 'LOCKED') return 'This app only connects to its own server.';
+      if (isCert(r)) return 'The server\u2019s security certificate isn\u2019t trusted.';
+      return reasons[r] || (r ? 'Check your internet connection and the address.' : '');
     };
     let delay = 2;      // seconds until the next try; doubles up to 30
     let timer = null;
@@ -149,7 +185,20 @@
     window.addEventListener('online', () => { if (!$('offline').hidden) { delay = 2; attempt(); } });
     if (D && D.onResume) D.onResume(() => { if (!$('offline').hidden) { delay = 2; attempt(); } });
 
-    if (q.get('offline') && server) {
+    // ------------------------------------------------ starting up
+    function showConnecting() {
+      $('f').hidden = true;
+      $('offline').hidden = true;
+      $('connecting').hidden = false;
+      $('connecting-text').textContent = `Connecting to ${host}…`;
+      // Still nothing after a while: a way to another server (never in a build locked to one).
+      if (!locked) slowTimer = setTimeout(() => { $('connecting-change').hidden = false; }, 8000);
+    }
+    $('connecting-change').addEventListener('click', () => showForm(''));
+
+    if (q.get('connecting') && server) {
+      showConnecting();
+    } else if (q.get('offline') && server) {
       $('off-title').textContent = `Can’t reach ${host}`;
       $('why').textContent = explain(q.get('reason'));
       $('change').hidden = locked;
