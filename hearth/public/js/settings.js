@@ -108,11 +108,12 @@ const tabLabel = (k) => TAB_GROUPS.flatMap(([, tabs]) => tabs).find(([key]) => k
 // The phone layout (app.js puts m-ui on the body; device.js has the same query).
 const phoneUI = () => document.body.classList.contains('m-ui');
 // What the Security row's dot means: an email and a recovery key, which get you back in if you forget your password.
-// app.securityTodo() says which are done; without it, the account says so itself.
+// app.securityTodo() says which are still to do (true = missing), so it's flipped here; without it, the account says so
+// itself.
 function securityDone(app) {
   const t = app.securityTodo ? app.securityTodo() : null;
   const me = app.S.me || {};
-  return t ? { email: !!t.email, recovery: !!t.recovery } : { email: !!me.email, recovery: !!me.hasRecovery };
+  return t ? { email: !t.email, recovery: !t.recovery } : { email: !!me.email, recovery: !!me.hasRecovery };
 }
 
 let micTest = null;
