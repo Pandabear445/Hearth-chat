@@ -1,2 +1,101 @@
 /* Hearth — settings, appearance and accessibility.
    Loaded after app.css (index.html), so a rule here wins over app.css at equal specificity. */
+
+/* ------------------------------------------------------------------ an accent you can read */
+/* appearance.js works out a lighter shade of a dark accent for text and the focus ring on the dark themes
+   (--accent-read, --focus-read; unset when the accent reads as it is). Fills and the light theme's own darker
+   ink are unchanged. */
+:root:not([data-theme='light']) {
+  --accent-ink: var(--accent-read, var(--accent));
+  --focus: var(--focus-read, var(--accent));
+}
+/* Links in messages are underlined, so they don't rely on colour alone to stand out from the text around them. */
+.msg-body a:not(.mention):not(.channel-mention), .embed a { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+/* ------------------------------------------------------------------ the side list (tablets and computers) */
+/* The groups only matter on a phone's list page; here their rows sit straight in the column as before. */
+.set-nav-group { display: contents; }
+.set-mhead { display: none; }
+.set-nav-text { min-width: 0; }
+/* Security, until the account has an email and a recovery key (the "Secure your account" card). */
+.set-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex: none; margin-left: auto; box-shadow: 0 0 0 2px rgb(var(--s1)); }
+/* Narrow windows and tablets held upright: a slimmer side list leaves the page room. */
+@media (max-width: 900px) {
+  .settings:not(.set-stack) { grid-template-columns: minmax(190px, 220px) minmax(0, 1fr); }
+  .settings:not(.set-stack) :is(.set-nav-btn, .set-nav-label, .set-nav-sep) { width: 100%; max-width: 210px; }
+}
+/* Profile: the form and the preview side by side only when the page is wide enough for both, wherever that page is
+   (an iPad upright, a half-screen window): otherwise the preview goes on top and the form gets the full width. */
+.set-content { container-type: inline-size; }
+@container (max-width: 820px) {
+  .set-profile { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .set-preview { position: static; order: -1; max-width: 420px; }
+}
+/* Pointed at from a link (openSettings' focus): a soft ring that fades. */
+.set-section.set-flash { animation: set-flash 2.4s var(--ease-out); border-radius: var(--r-lg); }
+@keyframes set-flash { 0%, 40% { box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / .45), 0 0 0 9px rgb(var(--accent-rgb) / .12); } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+/* ------------------------------------------------------------------ the phone: a list page and a section page */
+body.m-ui .settings.set-stack { display: flex; flex-direction: column; }
+body.m-ui .set-stack .set-mhead {
+  display: flex; align-items: center; gap: 4px; flex: none; min-height: 52px; padding: 4px 6px;
+  background: rgb(var(--s1)); border-bottom: 1px solid var(--line);
+}
+body.m-ui .set-stack .set-mhead .icon-btn { width: 44px; height: 44px; flex: none; }
+body.m-ui .set-stack .set-mtitle { flex: 1; min-width: 0; margin: 0 0 0 6px; font: 700 calc(17 / 16 * 1rem)/1.2 var(--font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.m-ui .set-stack .set-back:not([hidden]) + .set-mtitle { margin-left: 0; }
+/* The list's header is a page title, like the tab bar's pages (Home, You); a section's names the section, and the
+   section's own heading under it goes (it would say the same again). */
+body.m-ui .set-stack[data-page='list'] .set-mhead { min-height: 60px; padding: 8px 8px 4px 16px; border-bottom: 0; background: none; }
+body.m-ui .set-stack[data-page='list'] .set-mtitle { margin: 0; font: 800 calc(27 / 16 * 1rem)/1.15 var(--font-display); letter-spacing: -.025em; }
+body.m-ui .set-stack .set-content .set-title { display: none; }
+body.m-ui .set-stack .set-close { position: static; border-radius: 50%; background: rgb(var(--elev)); border: 1px solid var(--line-2); box-shadow: none; }
+body.m-ui .set-stack[data-page='list'] .set-main, body.m-ui .set-stack[data-page='page'] .set-nav { display: none; }
+body.m-ui .set-stack .set-main { flex: 1; min-height: 0; border: 0; box-shadow: none; }
+body.m-ui .set-stack .set-nav {
+  flex: 1; min-height: 0; flex-direction: column; align-items: stretch; gap: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 6px 14px calc(28px + env(safe-area-inset-bottom)); border: 0; border-radius: 0; box-shadow: none;
+}
+/* (Rows keep their height: the list scrolls rather than squeezing them.) */
+body.m-ui .set-stack .set-nav > * { flex-shrink: 0; }
+body.m-ui .set-stack .set-nav-label { width: auto; margin: 14px 0 0; padding: 0 6px 6px; }
+body.m-ui .set-stack .set-nav-group { display: flex; flex-direction: column; border-radius: var(--r-lg); background: rgb(var(--s2)); border: 1px solid var(--line); overflow: hidden; }
+body.m-ui .set-stack .set-nav-btn { width: auto; min-height: 52px; gap: 14px; padding: 0 12px 0 16px; border-radius: 0; color: var(--text); font-weight: 500; }
+body.m-ui .set-stack .set-nav-group .set-nav-btn + .set-nav-btn { box-shadow: inset 0 1px 0 var(--line); }
+body.m-ui .set-stack .set-nav-btn .ic { width: 20px; height: 20px; opacity: .85; }
+body.m-ui .set-stack .set-nav-text { flex: 1; }
+body.m-ui .set-stack .set-nav-btn .set-chev { width: 18px; height: 18px; color: var(--muted); }
+body.m-ui .set-stack .set-dot { margin-left: 0; }
+body.m-ui .set-stack .set-nav-sep { width: auto; height: 0; margin: 10px 0 0; background: none; }
+body.m-ui .set-stack .set-nav-btn.danger { justify-content: center; border-radius: var(--r-lg); background: rgb(var(--s2)); border: 1px solid var(--line); color: var(--danger); font-weight: 600; }
+
+/* ------------------------------------------------------------------ appearance */
+/* System's card: Light on the left, Dark on the right. */
+.tp-split { position: relative; height: 76px; border-radius: 10px; overflow: hidden; }
+.tp-half { position: absolute; inset: 0; }
+.tp-half .tp { height: 100%; border-radius: 0; }
+.tp-half.tp-dark { clip-path: inset(0 0 0 50%); }
+/* Message text at the size the slider is on. */
+.set-size-preview { margin: -4px 0 0; padding: 10px 14px; border-radius: var(--r-md); background: var(--hover); border: 1px solid var(--line); color: var(--msg-text); line-height: 1.375; }
+/* A switch the device has decided (Reduce motion): it reads as on, and the pointer doesn't suggest it can change. */
+.toggle-row.locked { cursor: default; }
+.toggle-row.locked .switch input { cursor: default; }
+.set-accent-note, .set-glass-hint { margin: -4px 0 0; }
+
+/* Notification sounds on a phone: the name and what it's for on one line, then Preview, the sound and Add your own
+   under it, the choice taking the width that's left. */
+body.m-ui .sound-row {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; grid-template-areas: 'text text text' 'play pick add';
+  align-items: center; gap: 6px 8px; padding: 10px 2px;
+}
+body.m-ui .sound-row > .toggle-text { grid-area: text; }
+body.m-ui .sound-row > .sound-play { grid-area: play; }
+body.m-ui .sound-row > .sound-pick { grid-area: pick; width: 100%; min-height: 44px; }
+body.m-ui .sound-row > .icon-btn:not(.sound-play) { grid-area: add; }
+body.m-ui .sound-row > .icon-btn { width: 44px; height: 44px; }
+
+/* ------------------------------------------------------------------ large text */
+/* Text size goes up to 150% (appearance.js). A few labels sit in boxes of a fixed size and would run into each
+   other or out of them there: they grow only as far as the box allows. */
+body.m-ui .tab-btn { font-size: min(calc(12 / 16 * 1rem), 3.5vw); white-space: nowrap; }
+body.m-ui .tab-badge { font-size: min(calc(11 / 16 * 1rem), 13px); }

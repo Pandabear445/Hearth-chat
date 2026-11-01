@@ -1790,13 +1790,10 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
   .home-view { padding: 18px 14px 30px; }
   .ss { grid-template-columns: 1fr; }
   .ss-nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
-  .settings { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); padding: 0; gap: 0; }
-  .set-nav { flex-direction: row; align-items: center; overflow-x: auto; padding: 10px 56px 10px 10px; border-radius: 0; }
+  /* (Settings is a list page and a section page here: ux-settings.css.) */
+  .settings { padding: 0; gap: 0; }
   .set-main { border-radius: 0; }
-  .set-nav-btn { width: auto; white-space: nowrap; flex: none; }
-  .set-nav-label, .set-nav-sep { display: none; }
   .set-content { padding: 20px 16px 140px; }
-  .set-close { top: 8px; right: 8px; position: fixed; background: rgb(var(--elev)); box-shadow: -14px 0 14px rgb(var(--s1)); }
   .set-profile { grid-template-columns: 1fr; }
   .set-preview { position: static; }
   .grid-2 { grid-template-columns: 1fr; }

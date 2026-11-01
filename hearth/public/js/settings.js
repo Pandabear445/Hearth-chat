@@ -7,6 +7,7 @@ import { profileCard, FONT_STACKS, cropStyle, customFxLayer, avatarEl, DECORATIO
 import { pageEditorTab } from './page.js';
 import { openCropper } from './cropper.js';
 import { modal, confirmDialog, field } from './ui.js';
+import { isTouchUI, onDeviceChange } from './device.js';
 import { runExport, EXPORT_LIMITS, quietNow } from './usability.js';
 import { androidApp } from './android.js';
 import { bookmarklet } from './share.js';
@@ -25,6 +26,7 @@ import { showCommand, relayStatus, relayBackupText } from './admin.js';
 import {
   THEMES, BACKGROUNDS, LAYOUT_PRESETS, DEFAULTS, UI_FONTS, CORNERS, loadAppearance, saveAppearance, resetAppearance, applyAppearance,
   gradientCss, canAnimate, isSolid, saveBgImage, loadBgImage, clearBgImage, exportAppearance, importAppearance,
+  SCALE_MIN, SCALE_MAX, GLASS_MIN, resolveTheme, readableAccent, luminance,
 } from './appearance.js';
 
 export { applyAppearance };
@@ -69,6 +71,8 @@ function toggle(label, checked, onChange, hint) {
 function section(title, ...kids) {
   return h('section', { class: 'set-section' }, title ? h('h3', { class: 'set-h' }, title) : null, kids);
 }
+// Names a section so openSettings(app, tab, { focus }) can scroll to it.
+const tagged = (el, name) => { el.dataset.sec = name; return el; };
 // A section that starts closed: for the extras most people set once (or never), so a page isn't a wall of options.
 function fold(title, hint, ...kids) {
   return h('details', { class: 'set-section set-fold' },
@@ -87,15 +91,29 @@ function privacyLink(cfg) {
 // Closely related pages share one entry and switch with tabs at the top (SUBTABS), which keeps the list short.
 const TAB_GROUPS = [
   ['Account', [['profile', 'Profile', 'user'], ['account', 'Security', 'lock'], ['privacy', 'Privacy & safety', 'shield'], ['study', 'Study tools', 'graduation']]],
-  ['App', [['appearance', 'Appearance', 'palette'], ['chat', 'Chat', 'message'], ['notifications', 'Notifications', 'bell'], ['voice', 'Voice & video', 'mic'], ['soundboard', 'Soundboard', 'music'], ['reels', 'Reels', 'play'], ['keybinds', 'Keybinds', 'monitor'], ['apps', 'Apps & devices', 'download']]],
+  ['App', [['appearance', 'Appearance', 'palette'], ['chat', 'Chat', 'message'], ['notifications', 'Notifications', 'bell'], ['voice', 'Voice & video', 'mic'], ['soundboard', 'Soundboard', 'music'], ['reels', 'Reels', 'play'], ['keybinds', 'Keybinds', 'monitor', 'keys'], ['apps', 'Apps & devices', 'download']]],
   ['Servers', [['servers', 'Server settings', 'gear'], ['host', 'Help host', 'globe'], ['instance', 'Instance', 'monitor', 'admin']]],
 ];
+// A phone's list puts Apps & devices in a group of its own, where people look for it on their phone's own Settings.
+const PHONE_GROUPS = [TAB_GROUPS[0], ['App', TAB_GROUPS[1][1].filter(([k]) => k !== 'apps')], ['Devices', TAB_GROUPS[1][1].filter(([k]) => k === 'apps')], TAB_GROUPS[2]];
 const SUBTABS = {
   profile: [['profile', 'Profile card'], ['page', 'Profile page'], ['activity', 'Games & music']],
   account: [['account', 'Security & storage'], ['storage', 'Storage'], ['sessions', 'Signed-in devices']],
   appearance: [['appearance', 'Theme'], ['layout', 'Layout']],
 };
 const parentTab = (k) => Object.keys(SUBTABS).find((p) => SUBTABS[p].some(([s]) => s === k)) || k;
+// Other names a section is opened by (the security card on Home asks for 'security').
+const TAB_ALIAS = { security: 'account' };
+const tabLabel = (k) => TAB_GROUPS.flatMap(([, tabs]) => tabs).find(([key]) => key === parentTab(k))?.[1] || 'Settings';
+// The phone layout (app.js puts m-ui on the body; device.js has the same query).
+const phoneUI = () => document.body.classList.contains('m-ui');
+// What the Security row's dot means: an email and a recovery key, which get you back in if you forget your password.
+// app.securityTodo() says which are done; without it, the account says so itself.
+function securityDone(app) {
+  const t = app.securityTodo ? app.securityTodo() : null;
+  const me = app.S.me || {};
+  return t ? { email: !!t.email, recovery: !!t.recovery } : { email: !!me.email, recovery: !!me.hasRecovery };
+}
 
 let micTest = null;
 function stopMicTest() {
@@ -106,32 +124,70 @@ function stopMicTest() {
   micTest = null;
 }
 
-export function openSettings(app, tab = 'profile') {
-  let current = tab;
+// tab: the section to open at (none: Profile, or on a phone the list of sections).
+// focus: a part of that section to scroll to and point out ('recovery' or 'email' on Security).
+export function openSettings(app, tab = null, { focus = null } = {}) {
+  tab = TAB_ALIAS[tab] || tab;
+  let current = tab || 'profile';
   let dirty = false;
+  // On a phone settings is a stack of two pages, like the phone's own Settings: the list of sections, and the one
+  // tapped, with a Back arrow (and the system Back, which closes the dialog's top layer: see backdrop._close below).
+  // Opened at a section (Edit profile, Theme and appearance, the security card), Back goes back to where that was,
+  // not to a list it never showed.
+  let page = tab ? 'page' : 'list';
+  const deep = !!tab;
   const nav = h('nav', { class: 'set-nav', 'aria-label': 'Settings sections' });
   const content = h('div', { class: 'set-content' });
-  const shell = h('div', { class: 'settings' }, nav, h('div', { class: 'set-main' },
-    h('button', { class: 'icon-btn set-close', 'aria-label': 'Close settings', onclick: () => tryClose() }, icon('close')),
-    content));
+  const closeBtn = h('button', { class: 'icon-btn set-close', 'aria-label': 'Close settings', onclick: () => tryClose() }, icon('close'));
+  const mtitle = h('h2', { class: 'set-mtitle' });
+  const backBtn = h('button', { class: 'icon-btn set-back', onclick: () => back() }, icon('chevronLeft'));
+  const mhead = h('div', { class: 'set-mhead' }, backBtn, mtitle);
+  const main = h('div', { class: 'set-main' }, content);
+  const shell = h('div', { class: 'settings' }, mhead, nav, main);
 
-  const m = modal({ size: 'full', className: 'settings-modal', label: 'Settings', body: shell, onClose: stopMicTest });
+  let stopWatching = () => {};
+  const m = modal({ size: 'full', className: 'settings-modal', label: 'Settings', body: shell, onClose: () => { stopMicTest(); stopWatching(); } });
+  // Esc, and Back on a phone (phone-nav.js closes the top dialog with this), go back a page before closing, and ask
+  // first about changes that aren't saved.
+  m.box.parentElement._close = () => back();
 
   async function tryClose() {
     if (dirty && !(await confirmDialog({ title: 'Discard changes?', text: 'You have changes that are not saved yet.', confirm: 'Discard', danger: true }))) return;
     dirty = false;
     m.close();
   }
+  async function back() {
+    if (!phoneUI() || page === 'list' || deep) return tryClose();
+    if (dirty && !(await confirmDialog({ title: 'Discard changes?', text: 'You have changes that are not saved yet.', confirm: 'Discard', danger: true }))) return;
+    dirty = false;
+    page = 'list';
+    draw();
+    // Back on the list, focus goes to the row of the page that was open.
+    const row = nav.querySelector(`.set-nav-btn[data-tab="${parentTab(current)}"]`);
+    if (row) row.focus({ preventScroll: false });
+  }
 
   const drawNav = () => {
     clear(nav);
-    TAB_GROUPS.forEach(([group, tabs]) => {
+    const phone = phoneUI();
+    const done = securityDone(app);
+    const todo = !done.email || !done.recovery;
+    (phone ? PHONE_GROUPS : TAB_GROUPS).forEach(([group, tabs]) => {
+      // (Keybinds are for a keyboard: a finger has none to bind.)
+      const shown = tabs.filter(([, , , who]) => (who !== 'admin' || app.S.me.instanceAdmin) && (who !== 'keys' || !isTouchUI()));
+      if (!shown.length) return;
       nav.append(h('div', { class: 'set-nav-label' }, group));
-      tabs.filter(([, , , who]) => who !== 'admin' || app.S.me.instanceAdmin).forEach(([k, label, ic]) => nav.append(h('button', {
-        class: `set-nav-btn${k === parentTab(current) ? ' active' : ''}`,
-        'aria-current': k === parentTab(current) ? 'page' : null,
-        onclick: () => go(k),
-      }, icon(ic), label)));
+      nav.append(h('div', { class: 'set-nav-group' }, shown.map(([k, label, ic]) => {
+        const here = !phone && k === parentTab(current);
+        const dot = k === 'account' && todo;
+        return h('button', {
+          class: `set-nav-btn${here ? ' active' : ''}`,
+          dataset: { tab: k },
+          'aria-current': here ? 'page' : null,
+          'aria-label': dot ? `${label}, ${!done.email && !done.recovery ? '2 steps' : '1 step'} to secure your account` : null,
+          onclick: () => go(k),
+        }, icon(ic), h('span', { class: 'set-nav-text' }, label), dot ? h('span', { class: 'set-dot', 'aria-hidden': 'true' }) : null, phone ? icon('chevronRight', 'ic set-chev') : null);
+      })));
     });
     nav.append(h('div', { class: 'set-nav-sep' }));
     nav.append(h('button', { class: 'set-nav-btn danger', onclick: async () => {
@@ -140,17 +196,30 @@ export function openSettings(app, tab = 'profile') {
   };
 
   const go = async (k) => {
-    if (k === current) return;
-    if (dirty && !(await confirmDialog({ title: 'Discard changes?', text: 'You have profile changes that are not saved yet.', confirm: 'Discard', danger: true }))) return;
-    dirty = false;
+    // On the phone's list every row opens its page, the one last open too.
+    if (k === current && !(phoneUI() && page === 'list')) return;
+    if (k !== current && dirty && !(await confirmDialog({ title: 'Discard changes?', text: 'You have profile changes that are not saved yet.', confirm: 'Discard', danger: true }))) return;
+    if (k !== current) dirty = false;
+    const fresh = k !== current || page === 'list';
     current = k;
-    draw();
+    page = 'page';
+    if (fresh) draw();
+    if (phoneUI()) backBtn.focus({ preventScroll: true });
   };
 
   const draw = () => {
     stopMicTest();
+    const phone = phoneUI();
+    shell.dataset.page = phone ? page : 'page';
+    shell.classList.toggle('set-stack', phone);
+    // The close button sits in the phone's header bar, or in the corner of the page beside the list.
+    if (phone) mhead.append(closeBtn); else main.prepend(closeBtn);
+    mtitle.textContent = phone && page === 'page' ? tabLabel(current) : 'Settings';
+    backBtn.hidden = !(phone && page === 'page');
+    backBtn.setAttribute('aria-label', deep ? 'Back' : 'Back to Settings');
     drawNav();
     clear(content);
+    if (phone && page === 'list') { nav.scrollTop = 0; return; }
     const subs = SUBTABS[parentTab(current)];
     if (subs) {
       content.append(h('div', { class: 'set-subtabs', role: 'tablist' }, subs.map(([k, label]) => h('button', {
@@ -158,10 +227,28 @@ export function openSettings(app, tab = 'profile') {
       }, label))));
     }
     const views = { soundboard: (a) => a.soundboard.editor(), study: studyTab, keybinds: keybindsTab, activity: activityTab, page: pageEditorTab, instance: instanceTab, apps: appsTab, layout: layoutTab, profile: profileTab, account: accountTab, storage: storageTab, sessions: sessionsTab, voice: voiceTab, appearance: appearanceTab, chat: chatTab, reels: reelsTab, notifications: notificationsTab, privacy: privacyTab, servers: serversTab, host: hostTab };
-    content.append(views[current](app, (d) => { dirty = d; }, go));
+    content.append((views[current] || profileTab)(app, (d) => { dirty = d; }, go));
     content.scrollTop = 0;
   };
   draw();
+  // A phone turned sideways or a window crossing into the phone layout swaps the side list and the page stack.
+  // (app.js changes the body's class on the same change: drawn on the next frame, after it.)
+  stopWatching = onDeviceChange(() => requestAnimationFrame(() => { if (shell.isConnected) draw(); }));
+  if (focus) pointOut(content, focus);
+}
+
+// Scrolls to one part of a settings page (a section marked data-sec) and highlights it for a moment, for a link
+// that sends someone to it (the "Secure your account" card: Save a recovery key).
+function pointOut(content, name) {
+  const el = content.querySelector(`[data-sec="${name}"]`);
+  if (!el) return;
+  setTimeout(() => {
+    el.scrollIntoView({ block: 'start', behavior: document.documentElement.classList.contains('reduce-motion') ? 'auto' : 'smooth' });
+    el.classList.add('set-flash');
+    setTimeout(() => el.classList.remove('set-flash'), 2400);
+    const first = el.querySelector('button:not([disabled]), input');
+    if (first) first.focus({ preventScroll: true });
+  }, 60);
 }
 
 // ------------------------------------------------------------------ profile tab
@@ -964,8 +1051,8 @@ function securitySections(app) {
   const drawAll = () => { drawEmail(); drawRec(); draw2fa(); };
   drawAll();
   return [
-    section('Email', emailBox),
-    section('Recovery key', recBox),
+    tagged(section('Email', emailBox), 'email'),
+    tagged(section('Recovery key', recBox), 'recovery'),
     section('Two-factor sign-in', tfaBox),
     section('Check my encryption', h('p', { class: 'muted-p' }, 'Runs every lock Hearth uses on this device — including that changed or forged messages are refused — and checks your own keys.'),
       h('div', null, h('button', { class: 'btn', onclick: (e) => runCheck(e.currentTarget) }, icon('shield'), 'Run the check')), checkBox),
@@ -1176,7 +1263,32 @@ function keybindsTab(app) {
 }
 
 // ------------------------------------------------------------------ appearance tab
-const ACCENTS = ['#f2a541', '#ef5466', '#ff7ab6', '#b07cff', '#5c8dff', '#38c6d9', '#3fcf83', '#c4e05a'];
+const ACCENTS = [['#f2a541', 'Amber'], ['#ef5466', 'Rose'], ['#ff7ab6', 'Pink'], ['#b07cff', 'Violet'], ['#5c8dff', 'Blue'], ['#38c6d9', 'Teal'], ['#3fcf83', 'Green'], ['#c4e05a', 'Lime']];
+
+// Arrow keys (and Home and End) move through a group of role=radio buttons and pick the one they land on, like
+// radio buttons; Tab goes in and out at the one picked (roving tabindex). Picking can redraw the page, so focus then
+// goes to the new copy of the group (found by its aria-label).
+function radioKeys(group) {
+  const radios = () => [...group.querySelectorAll('[role="radio"]')];
+  const list = radios();
+  const picked = list.find((r) => r.getAttribute('aria-checked') === 'true');
+  list.forEach((r) => r.setAttribute('tabindex', r === (picked || list[0]) ? '0' : '-1'));
+  group.addEventListener('keydown', (e) => {
+    const all = radios();
+    const i = all.indexOf(document.activeElement);
+    if (i < 0) return;
+    const next = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: all.length - 1 }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    const to = all[(next + all.length) % all.length];
+    const label = group.getAttribute('aria-label');
+    to.click();
+    const now = (group.isConnected ? group : document.querySelector(`[role="radiogroup"][aria-label="${label}"]`)) || group;
+    const target = now.querySelector('[aria-checked="true"]') || to;
+    target.focus();
+  });
+  return group;
+}
 
 function sliderRow(label, min, max, step, value, fmt, onInput) {
   const out = h('span', { class: 'counter' }, fmt(value));
@@ -1193,6 +1305,39 @@ function themePreview() {
     h('div', { class: 'tp-side' }, h('i'), h('i'), h('i')),
     h('div', { class: 'tp-main' }, h('i'), h('i'), h('i'), h('b')));
 }
+// System's card: the Light preview with the Dark one over its right half (ux-settings.css).
+function systemPreview() {
+  const half = (theme) => h('div', { class: `tp-half tp-${theme}`, dataset: { theme } }, themePreview());
+  return h('div', { class: 'tp-split', 'aria-hidden': 'true' }, half('light'), half('dark'));
+}
+// Whether a background is mostly light (true), mostly dark (false) or follows the theme (null). Pictures are
+// measured from a tiny copy of them; gradients from their colours.
+const BRIGHT = (hexes) => hexes.reduce((n, c) => n + luminance(c), 0) / hexes.length > 0.4;
+async function backgroundIsLight(a, imageUrl) {
+  if (a.bg.kind === 'gradient') return BRIGHT((a.bg.three ? a.bg.colors.slice(0, 3) : a.bg.colors.slice(0, 2)).filter((c) => /^#[0-9a-f]{6}$/i.test(c)));
+  if (a.bg.kind === 'preset') {
+    const p = BACKGROUNDS.find((x) => x.id === a.bg.preset);
+    return p && p.group === 'Bright gradients' ? true : p && p.group === 'Dark gradients' ? false : null;
+  }
+  if (a.bg.kind !== 'image' || !imageUrl) return null;
+  // (Measured once per picture: the slider asks again on every step.)
+  if (pictureLight.url === imageUrl) return pictureLight.light;
+  pictureLight = { url: imageUrl, light: null };
+  try {
+    const img = new Image();
+    img.src = imageUrl;
+    await img.decode();
+    const cv = h('canvas', { width: '8', height: '8' });
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, 8, 8);
+    const d = ctx.getImageData(0, 0, 8, 8).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += luminance([d[i], d[i + 1], d[i + 2]]);
+    pictureLight.light = sum / 64 > 0.4;
+    return pictureLight.light;
+  } catch { return null; }
+}
+let pictureLight = { url: null, light: null };
 
 function appearanceTab(app) {
   const a = loadAppearance();
@@ -1222,14 +1367,15 @@ function appearanceTab(app) {
 
   function themeSection() {
     return section('Theme',
-      h('p', { class: 'set-sub' }, 'Dark is the default. Your choice is saved on this device.'),
-      h('div', { class: 'theme-grid', role: 'radiogroup', 'aria-label': 'Theme' }, THEMES.map((t) => h('button', {
+      h('p', { class: 'set-sub' }, 'System is the default: light or dark, as your device is set. Your choice is saved on this device.'),
+      radioKeys(h('div', { class: 'theme-grid', role: 'radiogroup', 'aria-label': 'Theme' }, THEMES.map((t) => h('button', {
         class: `theme-card${a.theme === t.id ? ' active' : ''}`,
-        dataset: { theme: t.id },
+        // (System's card shows both halves; its frame takes the colours of the one in use now.)
+        dataset: { theme: t.id === 'system' ? resolveTheme('system') : t.id },
         role: 'radio',
         'aria-checked': String(a.theme === t.id),
         onclick: () => { a.theme = t.id; commit(true); },
-      }, themePreview(), h('span', { class: 'theme-name' }, h('strong', null, t.name), h('span', null, t.hint))))));
+      }, t.id === 'system' ? systemPreview() : themePreview(), h('span', { class: 'theme-name' }, h('strong', null, t.name), h('span', null, t.hint)))))));
   }
 
   function bgTile({ name, css, active, onclick, extraClass = '', content = null }) {
@@ -1315,31 +1461,59 @@ function appearanceTab(app) {
   function effectsSection() {
     if (isSolid(a)) return null;
     const animOk = canAnimate(a);
+    // Text on see-through panels over a background of the opposite brightness (a bright picture behind the dark
+    // theme) gets hard to read: said under the slider while that's the case.
+    const hint = h('p', { class: 'field-hint set-glass-hint', 'aria-live': 'polite' });
+    const drawHint = async () => {
+      const light = await backgroundIsLight(a, imageThumb);
+      const clash = light !== null && light !== (resolveTheme(a.theme) === 'light');
+      hint.textContent = clash && a.glass < 0.75 ? 'Lower opacity can make text hard to read on this background.' : '';
+      hint.hidden = !hint.textContent;
+    };
+    drawHint();
     return section('Background effects',
-      sliderRow('Panel opacity', 35, 100, 1, Math.round(a.glass * 100), (v) => `${v}%`, (v) => { a.glass = v / 100; commit(); }),
+      sliderRow('Panel opacity', Math.round(GLASS_MIN * 100), 100, 1, Math.round(a.glass * 100), (v) => `${v}%`, (v) => { a.glass = v / 100; commit(); drawHint(); }),
+      hint,
       sliderRow(a.theme === 'light' ? 'Fade background' : 'Darken background', 0, 80, 1, Math.round(a.dim * 100), (v) => `${v}%`, (v) => { a.dim = v / 100; commit(); }),
       a.bg.kind === 'image' ? sliderRow('Blur image', 0, 30, 1, a.imgBlur, (v) => `${v}px`, (v) => { a.imgBlur = v; commit(); }) : null,
       animOk ? toggle('Slowly move the background', !!a.bg.animate, (on) => { a.bg.animate = on; commit(); }, 'A gentle drift. Turned off automatically with Reduce motion.') : null);
   }
 
   function accentSection() {
-    const custom = colorInput(a.accent, (v) => { a.accent = v; commit(); drawSwatches(); }, 'Custom accent');
-    const swatches = h('div', { class: 'swatches' });
+    // Said when a dark accent's links and focus ring had to be made lighter to read on a dark theme (appearance.js).
+    const note = h('p', { class: 'field-hint set-accent-note', 'aria-live': 'polite' });
+    const drawNote = () => {
+      const r = readableAccent(a.accent, resolveTheme(a.theme));
+      note.textContent = r.adjusted ? 'Adjusted for readability: links and the focus ring use a lighter shade of it on this theme.' : '';
+      note.hidden = !r.adjusted;
+    };
+    const custom = colorInput(a.accent, (v) => { a.accent = v; commit(); drawSwatches(); drawNote(); }, 'Custom accent');
+    const swatches = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Accent color' });
     const drawSwatches = () => {
       clear(swatches);
-      ACCENTS.forEach((c) => swatches.append(h('button', {
+      ACCENTS.forEach(([c, name]) => swatches.append(h('button', {
+        type: 'button',
         class: `swatch${a.accent === c ? ' active' : ''}`,
         style: { background: c },
-        'aria-label': `Accent ${c}`,
+        role: 'radio',
+        'aria-checked': String(a.accent === c),
+        'aria-label': name,
+        'data-tip': name,
         onclick: () => {
           a.accent = c; commit();
           custom.querySelector('.color-in').value = c; custom.querySelector('.hex-in').value = c;
           drawSwatches();
+          drawNote();
         },
       })));
+      const list = [...swatches.children];
+      const picked = list.find((b) => b.getAttribute('aria-checked') === 'true');
+      list.forEach((b) => b.setAttribute('tabindex', b === (picked || list[0]) ? '0' : '-1'));
     };
     drawSwatches();
-    return section('Accent color', h('p', { class: 'set-sub' }, 'Buttons, highlights and the adaptive backgrounds use it.'), swatches, custom);
+    radioKeys(swatches);
+    drawNote();
+    return section('Accent color', h('p', { class: 'set-sub' }, 'Buttons, highlights and the adaptive backgrounds use it.'), swatches, custom, note);
   }
 
   function fontSection() {
@@ -1388,6 +1562,16 @@ function appearanceTab(app) {
         lookInput));
   }
 
+  // When the device itself asks for less motion, Hearth already follows it everywhere (app.css): the switch shows that,
+  // on and greyed out, rather than an off switch that seems to do nothing.
+  function reduceMotionRow() {
+    const os = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const row = toggle('Reduce motion', os || a.reduceMotion, (v) => { a.reduceMotion = v; commit(); },
+      os ? 'On because your device asks for less motion.' : 'Turns off animated rings, name effects, profile effects and moving backgrounds.');
+    if (os) { const input = row.querySelector('input'); input.disabled = true; row.classList.add('locked'); }
+    return row;
+  }
+
   function draw() {
     const top = root.closest('.set-content');
     const scroll = top ? top.scrollTop : 0;
@@ -1403,11 +1587,13 @@ function appearanceTab(app) {
         // (The app works out the open chat's background again: with this off it doesn't even download a picture.)
         toggle('Show backgrounds people set for chats', a.chatLooks !== false, (v) => { a.chatLooks = v; commit(); if (app && app.rerender) app.rerender(); }, 'Anyone in a DM or group chat can give it a background that everyone there sees. Turn this off to keep yours.')),
       section('Text and layout',
-        sliderRow('Text size', 85, 125, 5, a.scale, (v) => `${v}%`, (v) => { a.scale = v; commit(); }),
+        sliderRow('Text size', SCALE_MIN, SCALE_MAX, 5, a.scale, (v) => `${v}%`, (v) => { a.scale = v; commit(); }),
+        // The whole app follows the slider as it moves; this line, beside it, shows message text at the new size.
+        h('p', { class: 'set-size-preview msg-body', 'aria-hidden': 'true' }, 'The quick brown fox jumps over the lazy dog.'),
         h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Message density'),
           chips([['comfortable', 'Comfortable'], ['compact', 'Compact'], ['minimal', 'Minimal']], a.density || 'comfortable', (v) => { a.density = v; commit(); }),
           h('span', { class: 'field-hint' }, 'Comfortable has larger avatars and spacing. Compact fits more on screen. Minimal is dense and text-only.')),
-        toggle('Reduce motion', a.reduceMotion, (v) => { a.reduceMotion = v; commit(); }, 'Turns off animated rings, name effects, profile effects and moving backgrounds.')),
+        reduceMotionRow()),
       fontSection(),
       section('Performance',
         h('p', { class: 'set-sub' }, 'If Hearth feels slow or your fans spin up, turn this on. It switches off the frosted-glass blur, moving backgrounds and decorative animations (spinning rings, name and profile effects) on this device.'),
@@ -1437,9 +1623,11 @@ function appearanceTab(app) {
 // ------------------------------------------------------------------ notifications tab
 function notificationsTab(app) {
   const supported = 'Notification' in window;
+  // On a phone, or in the Android and iPhone apps, there's no desktop or browser tab to speak of.
+  const device = phoneUI() || androidApp.on || iosApp.on;
   const state = h('span', { class: 'field-hint' });
   const drawState = () => {
-    if (!supported) state.textContent = 'This browser does not support desktop notifications.';
+    if (!supported) state.textContent = device ? 'Notifications can’t be shown here.' : 'This browser does not support desktop notifications.';
     else if (Notification.permission === 'denied') state.textContent = 'Blocked in your browser settings. Allow notifications for this site to turn them on.';
     else if (Notification.permission === 'default') state.textContent = 'Your browser will ask for permission.';
     else state.textContent = 'Allowed.';
@@ -1447,12 +1635,12 @@ function notificationsTab(app) {
   drawState();
   return h('div', { class: 'set-form narrow' },
     h('h2', { class: 'set-title' }, 'Notifications'),
-    section('Desktop',
-      toggle('Desktop notifications', supported && localStorage.getItem('hearth.notify') !== 'off' && Notification.permission === 'granted', async (on) => {
+    section(device ? 'This device' : 'Desktop',
+      toggle(device ? 'Notifications on this device' : 'Desktop notifications', supported && localStorage.getItem('hearth.notify') !== 'off' && Notification.permission === 'granted', async (on) => {
         localStorage.setItem('hearth.notify', on ? 'on' : 'off');
         if (on && supported && Notification.permission === 'default') await Notification.requestPermission();
         drawState();
-      }, 'For DMs and @mentions while this tab is in the background. Do Not Disturb silences them.'),
+      }, device ? 'For DMs and @mentions while Hearth is open but you’re somewhere else. Do Not Disturb silences them.' : 'For DMs and @mentions while this tab is in the background. Do Not Disturb silences them.'),
       state),
     soundsSection(),
     quietHoursSection(app),
