@@ -14,6 +14,8 @@ const api = (p, method, url, body) => p.page.evaluate(async ([m, u, b]) => {
   if (!r.ok) throw new Error(`${m} ${u}: ${r.status} ${text}`);
   return text ? JSON.parse(text) : null;
 }, [method, url, body]);
+// Alice's username now (the main flows rename her: alice_w), from her own app when it's open.
+const aliceName = async (t) => (t.people.alice ? (await api(t.people.alice, 'GET', '/bootstrap')).me.username : 'alice');
 async function toServer(p) {
   await p.$(`#rail button[aria-label^="${SERVER}"]`).first().click();
   await p.page.locator('#sidebar-head .server-head-name', { hasText: exact(SERVER) }).waitFor();
@@ -33,7 +35,7 @@ async function channels(p) {
 async function desktopMenus(t) {
   const p = await t.open('alice-ux-menus', { viewport: { width: 1366, height: 768 } });
   const { page } = p;
-  await p.login('alice', t.pw.alice);
+  await p.login(await aliceName(t), t.pw.alice);
   await toServer(p);
   const { text } = await channels(p);
   await p.channelRow(text[0].name).waitFor();
@@ -93,7 +95,7 @@ async function desktopMenus(t) {
 async function tabletTouch(t) {
   const p = await t.open('alice-ux-ipad', TABLET);
   const { page } = p;
-  await p.login('alice', t.pw.alice);
+  await p.login(await aliceName(t), t.pw.alice);
   await toServer(p);
   const { text, voice } = await channels(p);
   await p.channelRow(voice.name).waitFor();
