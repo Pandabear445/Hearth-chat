@@ -2,7 +2,9 @@
 // Everything here is stored in this browser only (localStorage + IndexedDB for images).
 
 export const THEMES = [
-  { id: 'dark', name: 'Dark', hint: 'The default. Warm, soft dark.' },
+  // Not a set of colours of its own: Light or Dark, whichever the device is set to (and it follows when that changes).
+  { id: 'system', name: 'System', hint: 'The default. Light or dark, like your device.' },
+  { id: 'dark', name: 'Dark', hint: 'Warm, soft dark.' },
   { id: 'midnight', name: 'Midnight', hint: 'True black. Great on OLED screens.' },
   { id: 'dim', name: 'Dim', hint: 'Lower contrast slate for long nights.' },
   { id: 'ember', name: 'Ember', hint: 'Cozy brown dark, like the fireplace.' },
@@ -50,13 +52,13 @@ export const CORNERS = [['sharp', 'Sharp'], ['normal', 'Normal'], ['round', 'Rou
 
 const KEY = 'hearth.appearance';
 export const DEFAULTS = {
-  theme: 'dark',
+  theme: 'system', // (someone who picked a theme before 1.44 has it saved, and keeps it)
   accent: '#f2a541',
   scale: 100,
   density: 'comfortable', // comfortable | compact | minimal
   reduceMotion: false,
   bg: { kind: 'preset', preset: 'plain', colors: ['#7f00ff', '#e100ff', '#f2a541'], three: false, angle: 135, style: 'linear', animate: false },
-  glass: 0.82,
+  glass: 0.82, // panel opacity, GLASS_MIN to 1
   serverThemes: true, // let servers you visit apply their accent + background
   chatLooks: true, // show the backgrounds people set for DMs and group chats (chat-look.js)
   // Layout: the order of the four columns, where the server bar sits, sizes and panel style.
@@ -67,6 +69,14 @@ export const DEFAULTS = {
   corners: 'normal',
   performance: 'auto', // auto | on | off
 };
+// Text size (a percentage of the browser's own size): app.css gives every text size in rem, so this scales them all.
+// Past 150% the fixed-height parts (pills, badges, the tab bar) start to clip.
+export const SCALE_MIN = 85;
+export const SCALE_MAX = 150;
+// Panels any more see-through than this let a busy background swallow the text on them.
+export const GLASS_MIN = 0.6;
+const clampGlass = (g) => Math.min(1, Math.max(GLASS_MIN, +g || DEFAULTS.glass));
+
 // "Auto" turns performance mode on for clearly low-powered devices.
 export function lowPowerDevice() {
   const cores = navigator.hardwareConcurrency || 8;
@@ -79,6 +89,8 @@ export function loadAppearance() {
   try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { /* ignore */ }
   const a = { ...DEFAULTS, ...saved, bg: { ...DEFAULTS.bg, ...(saved.bg || {}) } };
   if (saved.compact && !saved.density) a.density = 'compact'; // older setting
+  // Panel opacity used to go down to 35%; a look saved that low comes up to the new floor.
+  if (typeof a.glass !== 'number' || a.glass < GLASS_MIN) a.glass = typeof a.glass === 'number' ? GLASS_MIN : DEFAULTS.glass;
   a.layout = { ...DEFAULTS.layout, ...(saved.layout || {}) };
   const valid = ['rail', 'sidebar', 'main', 'panel'];
   if (!Array.isArray(a.layout.order) || a.layout.order.length !== 4 || !valid.every((k) => a.layout.order.includes(k))) a.layout.order = [...DEFAULTS.layout.order];
@@ -142,13 +154,68 @@ export function hexToRgb(hex) {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
-function luminance(hex) {
-  const [r, g, b] = hexToRgb(hex).map((v) => {
+export function luminance(hex) {
+  const [r, g, b] = (typeof hex === 'string' ? hexToRgb(hex) : hex).map((v) => {
     const c = v / 255;
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
   });
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
+export const contrast = (a, b) => { const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+
+// ---------------------------------------------------------------- an accent you can read on a dark theme
+// A dark accent (navy, deep purple) is fine as a button's fill but disappears as link text or a focus ring on a dark
+// panel. So on the dark themes the text and ring versions (--accent-ink, --focus) are mixed toward white, a step at a
+// time, until they reach 4.5:1 (text) and 3:1 (the ring) on the lightest panel they sit on. Fills keep the accent as
+// chosen. The mix is the one CSS's color-mix(in oklab, …) makes, worked out here so the result can be measured.
+const toLin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+const toByte = (c) => Math.round(Math.min(1, Math.max(0, c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055)) * 255);
+function oklab(rgb) {
+  const [r, g, b] = rgb.map(toLin);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
+}
+function fromOklab([L, A, B]) {
+  const l = (L + 0.3963377774 * A + 0.2158037573 * B) ** 3;
+  const m = (L - 0.1055613458 * A - 0.0638541728 * B) ** 3;
+  const s = (L - 0.0894841775 * A - 1.2914855480 * B) ** 3;
+  return [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s].map(toByte);
+}
+const toHex = (rgb) => `#${rgb.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+// The lightest of each dark theme's panels (--s1, --s2 and --elev in app.css), where accent text is hardest to read.
+const PANELS = { dark: [30, 28, 41], midnight: [16, 16, 20], dim: [45, 49, 60], ember: [37, 27, 23] };
+// { ink, focus, adjusted }: the colours for text and the focus ring in this theme (null: the accent as it is).
+// The light theme darkens its own (app.css), so it gets nulls.
+export function readableAccent(accent, theme) {
+  const panel = PANELS[theme];
+  if (!panel || !HEX.test(accent || '')) return { ink: null, focus: null, adjusted: false };
+  const own = hexToRgb(accent);
+  const lab = oklab(own);
+  const white = oklab([255, 255, 255]);
+  const lift = (min) => {
+    if (contrast(own, panel) >= min) return null;
+    for (let x = 95; x >= 0; x -= 5) {
+      const rgb = fromOklab(lab.map((v, i) => (v * x + white[i] * (100 - x)) / 100));
+      if (contrast(rgb, panel) >= min) return toHex(rgb);
+    }
+    return '#ffffff';
+  };
+  const ink = lift(4.5);
+  const focus = lift(3);
+  return { ink, focus, adjusted: !!(ink || focus) };
+}
+
+// ---------------------------------------------------------------- the System theme
+const darkQuery = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
+// The theme that's painted: System becomes Light or Dark, like the device; an unknown one becomes Dark.
+export function resolveTheme(id) {
+  if (id === 'system') return darkQuery && !darkQuery.matches ? 'light' : 'dark';
+  return THEMES.some((t) => t.id === id) ? id : 'dark';
+}
+// The device switching between light and dark (by the clock, or by hand) repaints the app when it follows it.
+if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { if (loadAppearance().theme === 'system') applyAppearance(); });
 
 // Gradient angles go into CSS: always a whole number of degrees (a look saved before this check, or a
 // hand-made file, could hold any text there).
@@ -270,7 +337,8 @@ function serverBackgroundCss(b) {
 export function applyAppearance() {
   const a = loadAppearance();
   const root = document.documentElement;
-  root.dataset.theme = THEMES.some((t) => t.id === a.theme) ? a.theme : 'dark';
+  const theme = resolveTheme(a.theme);
+  root.dataset.theme = theme;
 
   const st = serverTheme && (serverTheme.chat ? a.chatLooks !== false : a.serverThemes !== false) ? serverTheme : null;
   const accent = st && HEX.test(st.accent || '') ? st.accent : HEX.test(a.accent) ? a.accent : DEFAULTS.accent;
@@ -278,7 +346,12 @@ export function applyAppearance() {
   root.style.setProperty('--accent', accent);
   root.style.setProperty('--accent-rgb', `${r} ${g} ${b}`);
   root.style.setProperty('--on-accent', luminance(accent) > 0.4 ? '#1a1407' : '#ffffff');
-  root.style.fontSize = `${Math.min(125, Math.max(85, +a.scale || 100))}%`;
+  // (ux-settings.css uses these for --accent-ink and --focus on the dark themes; none when the accent reads as it is.)
+  const read = readableAccent(accent, theme);
+  for (const [name, v] of [['--accent-read', read.ink], ['--focus-read', read.focus]]) {
+    if (v) root.style.setProperty(name, v); else root.style.removeProperty(name);
+  }
+  root.style.fontSize = `${Math.min(SCALE_MAX, Math.max(SCALE_MIN, +a.scale || 100))}%`;
   root.dataset.density = ['comfortable', 'compact', 'minimal'].includes(a.density) ? a.density : 'comfortable';
   root.classList.toggle('reduce-motion', !!a.reduceMotion);
   const font = UI_FONTS.find((f) => f.id === a.font);
@@ -290,7 +363,7 @@ export function applyAppearance() {
   applyLayout(root, a.layout);
   const solid = isSolid(a);
   root.classList.toggle('has-bg', !solid);
-  root.style.setProperty('--glass', solid ? '1' : String(Math.min(1, Math.max(0.35, +a.glass || 0.82))));
+  root.style.setProperty('--glass', solid ? '1' : String(clampGlass(a.glass)));
   root.style.setProperty('--img-blur', `${a.bg.kind === 'image' ? Math.min(30, Math.max(0, +a.imgBlur || 0)) : 0}px`);
   root.style.setProperty('--dim', String(solid ? 0 : Math.min(0.8, Math.max(0, +a.dim || 0))));
 
@@ -303,7 +376,7 @@ export function applyAppearance() {
     layer.classList.remove('animate');
     layer.style.background = sbg;
     root.classList.add('has-bg');
-    root.style.setProperty('--glass', String(Math.min(1, Math.max(0.35, +a.glass || 0.82))));
+    root.style.setProperty('--glass', String(clampGlass(a.glass)));
     root.style.setProperty('--dim', String(Math.min(0.8, Math.max(0, +(st.background.dim ?? 0.25)))));
     root.style.setProperty('--img-blur', '0px');
     imageToken++; // cancel any pending personal background image

@@ -77,3 +77,42 @@ export async function checkContrast(page) {
     return { theme: p.theme, fg: p.fg, bg: p.bg, use, min, ratio: Math.round(r * 100) / 100, ok: r >= min };
   });
 }
+
+// ------------------------------------------------------------------ the colours as applied (1.44)
+// The pairs above are each theme's own tokens. A person's accent and the System theme are applied to the page
+// itself by appearance.js (inline --accent and --accent-read/--focus-read, data-theme on <html>), so these are
+// painted from an element that inherits from <html> rather than one that sets a theme of its own.
+export const ACCENT_PAIRS = [
+  ['var(--accent-ink)', 'rgb(var(--s2))', 4.5, 'links on the chat area'],
+  ['var(--accent-ink)', 'rgb(var(--s1))', 4.5, 'links on panels'],
+  ['var(--accent-ink)', 'rgb(var(--elev))', 4.5, 'links in dialogs'],
+  ['var(--focus)', 'rgb(var(--s2))', 3, 'focus ring on the chat area'],
+  ['var(--focus)', 'rgb(var(--s1))', 3, 'focus ring on panels'],
+];
+export async function checkApplied(page, pairs = ACCENT_PAIRS) {
+  const painted = await page.evaluate((list) => {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 1;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px';
+    document.body.append(probe);
+    const pixel = (expr, under) => {
+      probe.style.color = '';
+      probe.style.color = expr;
+      ctx.clearRect(0, 0, 1, 1);
+      if (under) { ctx.fillStyle = `rgb(${under.join(' ')})`; ctx.fillRect(0, 0, 1, 1); }
+      ctx.fillStyle = getComputedStyle(probe).color;
+      ctx.fillRect(0, 0, 1, 1);
+      return [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+    };
+    const out = list.map(([fg, bg]) => { const rgbBg = pixel(bg, [0, 0, 0]); return { fg, bg, rgbBg, rgbFg: pixel(fg, rgbBg) }; });
+    probe.remove();
+    return out;
+  }, pairs);
+  return painted.map((p) => {
+    const [, , min, use] = pairs.find(([fg, bg]) => fg === p.fg && bg === p.bg);
+    const r = ratio(p.rgbFg, p.rgbBg);
+    return { use, min, ratio: Math.round(r * 100) / 100, ok: r >= min };
+  });
+}
