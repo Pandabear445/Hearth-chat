@@ -263,9 +263,11 @@ export function createReels(deps) {
     // Only a tap on the cover itself counts as the go-ahead ("Load when I tap"): not Back, +, or a swipe.
     st.cover.onclick = show ? () => { consented = true; drawCover(); players(); } : null;
     if (show) {
+      // "Click" with a mouse, "Tap" with a finger.
+      const verb = typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches ? ['Click', 'Clicking'] : ['Tap', 'Tapping'];
       add(st.cover, h('div', { class: 'reels-cover-in' },
-        h('strong', null, 'Tap to start watching'),
-        h('p', null, 'These videos load from TikTok and Instagram, which see your IP address (and may set cookies in their players). Tapping here lets every video in this tab, and other Reels tabs, load until you close Hearth.'),
+        h('strong', null, `${verb[0]} to start watching`),
+        h('p', null, `These videos load from TikTok and Instagram, which see your IP address (and may set cookies in their players). ${verb[1]} here lets every video in this tab, and other Reels tabs, load until you close Hearth.`),
         h('p', { class: 'muted-p' }, 'Short TikTok links are looked up by your Hearth server. Settings → Chat → TikTok and Instagram changes this.'),
         h('button', { class: 'btn primary', type: 'button' }, icon('play'), 'Start watching')));
     }

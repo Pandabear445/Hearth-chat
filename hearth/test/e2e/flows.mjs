@@ -1190,7 +1190,7 @@ async function reelsTab(t) {
   const asked0 = bobAsked.length;
   // Bob's tab: newest first, each video once, and nothing loads before his first tap ("Load when I tap").
   await bob.$('.conv-tab', { hasText: 'Reels' }).click();
-  await bob.$('.reels-cover', { hasText: 'Tap to start watching' }).waitFor();
+  await bob.$('.reels-cover', { hasText: /(Tap|Click) to start watching/ }).waitFor();
   await bob.page.waitForFunction(() => document.querySelectorAll('.reels-layer .reel-card').length === 3);
   await shot(bob, 'desktop-cover');
   check(bobAsked.length === asked0, `Nothing should load from TikTok or Instagram before the tap (got ${bobAsked.slice(asked0).join(', ')}).`);
@@ -2759,6 +2759,7 @@ async function disappearing(t) {
   }
   // Alice turns it on from the conversation's menu; turning it on asks first and says what it can't do.
   await alice.$('#main-head button[aria-label="More"]').click();
+  await alice.menuItem('Disappearing messages').click(); // (its times are a submenu)
   await alice.menuItem('5 seconds').click();
   const ask = await alice.dialog('Turn on disappearing messages?');
   check(/screenshot/.test(await ask.innerText()), 'Turning on disappearing messages should say people can still screenshot what they see.');
@@ -2828,6 +2829,7 @@ async function disappearing(t) {
   }
   // Turned off while bob's message is on its way: he wrote it expecting it to disappear, so it isn't sent unasked.
   await alice.$('#main-head button[aria-label="More"]').click();
+  await alice.menuItem('Disappearing messages').click();
   await alice.menuItem('1 hour').click();
   await (await alice.dialog('Turn on disappearing messages?')).locator('.modal-foot .btn.primary').click();
   await bob.$('.cw-main .dis-note', { hasText: 'New messages disappear after 1 hour.' }).waitFor();
@@ -2866,6 +2868,7 @@ async function disappearing(t) {
   // comes).
   for (const p of [alice, bob]) { await p.railButton(SERVER); await p.openChannel('general'); }
   await alice.$('#main-head button[aria-label="More"]').click();
+  await alice.menuItem('Disappearing messages').click(); // (its times are a submenu)
   await alice.menuItem('5 seconds').click();
   await (await alice.dialog('Turn on disappearing messages?')).locator('.modal-foot .btn.primary').click();
   await bob.$('#main-head button[aria-label="Disappearing messages: 5 seconds"]').waitFor();
@@ -3464,6 +3467,7 @@ async function voiceChat(t) {
   // Alice picks "All messages" for the Den's chat: from then on it counts for her (an unread dot and the sound).
   await alice.channelRow('Den').click({ button: 'right' });
   const saved = alice.page.waitForResponse((r) => r.url().includes('/api/me/notify/') && r.request().method() === 'PUT');
+  await alice.menuItem('Chat notifications').click(); // (its choices are a submenu)
   await alice.menuItem('All messages').click();
   await saved;
   await bob.channelRow('Den').click({ button: 'right' });
@@ -4638,7 +4642,8 @@ async function phoneMessageActions(t) {
     await touch('touchEnd');
     await sheet.waitFor();
   };
-  const row = (label) => sheet.locator('.sheet-row', { hasText: exact(label) });
+  // (A list row, or one of the four big buttons under the reactions, which show a short name: Edit, Copy, Delete.)
+  const row = (label) => sheet.locator('.sheet-row', { hasText: exact(label) }).or(sheet.locator(`.sheet-quick[aria-label="${label}"]`));
 
   // No hover toolbar on a touch screen; a quick tap opens nothing.
   check(await page.evaluate(() => [...document.querySelectorAll('#messages .msg-tools')].every((el) => getComputedStyle(el).display === 'none')), 'A touch screen should not show the hover toolbar.');
@@ -6099,6 +6104,8 @@ async function sideView(t) {
   await touch('touchEnd');
   const sheet = page.locator('.sheet-backdrop:not(.closing) .sheet');
   await sheet.waitFor();
+  // (In the sheet's short list, or behind its More….)
+  if (!(await sheet.locator('.sheet-row', { hasText: exact('Pin to side') }).count())) await sheet.locator('.sheet-row', { hasText: exact('More…') }).tap();
   await sheet.locator('.sheet-row', { hasText: exact('Pin to side') }).tap();
   await phone.$(`#members .sv-card[data-sid="${recipeId}"] .sv-text`).waitFor();
   await page.waitForFunction(() => { const r = document.querySelector('#members').getBoundingClientRect(); return r.left <= 1 && r.width >= innerWidth - 1; }, null, { timeout: 5000 })

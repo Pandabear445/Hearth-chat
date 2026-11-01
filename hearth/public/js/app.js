@@ -2589,12 +2589,17 @@ function openShortcuts() {
     actions: [{ label: 'Close', kind: 'primary' }],
   });
 }
-// Alt+↑/↓ moves through the channels of the current sidebar.
+// Alt+↑/↓ moves through the channels of the current sidebar (or its conversations). In a server the row you're on is
+// marked on the channel's row (.ch-row.active) and its button says aria-current; elsewhere the row itself is .active.
+// Voice channels are stepped over: landing on one would join its call. With nothing current (a voice room, Home),
+// ↓ goes to the first row and ↑ to the last.
 function stepChannel(dir) {
-  const rows = $$('#sidebar-body [data-nav]');
-  const i = rows.findIndex((r) => r.classList.contains('active'));
-  const next = rows[Math.max(0, Math.min(rows.length - 1, i + dir))];
-  if (next) next.click();
+  const voiceRow = (r) => { const row = r.closest('.ch-row'); return !!row && (channelById(row.dataset.cid) || {}).type === 'voice'; };
+  const rows = $$('#sidebar-body [data-nav]').filter((r) => r.getClientRects().length && !voiceRow(r));
+  if (!rows.length) return;
+  const i = rows.findIndex((r) => r.classList.contains('active') || r.getAttribute('aria-current') === 'page' || r.closest('.ch-row.active'));
+  const next = i < 0 ? rows[dir > 0 ? 0 : rows.length - 1] : rows[Math.max(0, Math.min(rows.length - 1, i + dir))];
+  if (next && next !== rows[i]) next.click();
 }
 
 // ======================================================================= render: shell
@@ -2933,7 +2938,7 @@ function dmMenuItems(d) {
     { label: fav ? 'Unpin conversation' : 'Pin conversation', icon: 'pin', action: () => toggleFavorite('d:' + d.id) },
     { label: 'Mark as read', icon: 'check', action: () => markConvRead('d:' + d.id) },
     ...notifyItems('d:' + d.id),
-    ...disappearItems('d:' + d.id),
+    ...disappearSub('d:' + d.id),
     '-',
     LOOK.menuItem('d:' + d.id), // "Chat background…" (none once they're blocked or their account is gone)
     { label: 'View profile', icon: 'user', action: () => openProfileModal(u.id) },
@@ -2946,7 +2951,7 @@ function groupMenuItems(g) {
   const fav = P.favorites.includes('g:' + g.id);
   return [
     { label: fav ? 'Unpin conversation' : 'Pin conversation', icon: 'pin', action: () => toggleFavorite('g:' + g.id) },
-    ...(c ? [{ label: 'Mark as read', icon: 'check', action: () => markConvRead('c:' + c.id) }, ...notifyItems('c:' + c.id), ...disappearItems('c:' + c.id), '-'] : []),
+    ...(c ? [{ label: 'Mark as read', icon: 'check', action: () => markConvRead('c:' + c.id) }, ...notifyItems('c:' + c.id), ...disappearSub('c:' + c.id), '-'] : []),
     { label: 'Rename group', icon: 'edit', action: () => renameGroup(g) },
     { label: 'Change group picture', icon: 'image', action: () => changeGroupIcon(g) },
     LOOK.menuItem('g:' + g.id), // "Chat background…"
@@ -2963,14 +2968,29 @@ function muteLeft(key) {
   if (p && p.muteUntil > Date.now()) return `until ${fmtStamp(p.muteUntil)}`;
   return p && p.level === 'none' ? 'until you turn it back on' : '';
 }
+// Muted: Unmute, with how long is left. Otherwise one "Mute ›" row with the times behind it (ui.js submenu), so a
+// conversation's menu stays short.
 function notifyItems(key) {
   if (isMuted(key) && S.notifyPrefs[key]) {
     const left = muteLeft(key);
     return [{ label: 'Unmute', icon: 'bell', hint: left, action: () => setNotify(key, S.notifyPrefs[key].level === 'none' ? 'default' : undefined, { muteUntil: null }) }];
   }
-  return [{ header: 'Mute' },
-    ...MUTE_FOR.map(([l, min]) => ({ label: l, icon: 'bellOff', action: () => setNotify(key, undefined, { muteUntil: Date.now() + min * 60000 }) })),
-    { label: 'Until I turn it back on', icon: 'bellOff', action: () => setNotify(key, 'muted') }];
+  return [{ label: 'Mute', icon: 'bellOff', submenu: () => [
+    ...MUTE_FOR.map(([l, min]) => ({ label: l, action: () => setNotify(key, undefined, { muteUntil: Date.now() + min * 60000 }) })),
+    { label: 'Until I turn it back on', action: () => setNotify(key, 'muted') }] }];
+}
+// A conversation's notification level, as its "Notifications ›" row shows it.
+const LEVEL_SHORT = { default: 'Default', all: 'All', mentions: '@mentions', muted: 'Nothing' };
+// Disappearing messages as one "Disappearing messages ›" row showing the timer, its choices behind it; people who can't
+// change it see what it is (disappearItems' heading).
+function disappearSub(key) {
+  const items = disappearItems(key).filter((it) => it !== '-');
+  if (!items.length || !mayChangeTimer(key)) return items;
+  return [{ label: 'Disappearing messages', icon: 'timer', value: disLabel(convSecs(key)), submenu: () => items.filter((it) => !it.header) }];
+}
+// A voice channel's call region as one row, the regions behind it.
+function regionSub(room) {
+  return { label: 'Call region', icon: 'globe', value: regionName(callRegion(room)), submenu: () => regionMenuItems(room).filter((it) => !it.header) };
 }
 
 // ---- server sidebar with categories
@@ -3081,16 +3101,19 @@ function channelMenuItems(c, server) {
   // A voice chat you don't follow has nothing to mark read unless it pinged you (that reads the pings and leaves it
   // unfollowed: see markConvRead).
   const markable = c.type === 'text' || (chat && (mentionsOf(k) > 0 || (S.unread.has(k) && chatCounts(c))));
+  // Everyday things first, each setting one row with its choices behind it (Notifications ›, Mute ›, Disappearing
+  // messages ›, Call region ›: ui.js submenus), then sharing and managing, and what deletes last.
   return [
     chat && c.type === 'voice' ? { label: S.view.type === 'voice' && S.view.channelId === c.id && S.view.chat ? 'Hide chat' : 'Open chat', icon: 'message', action: () => (S.view.type === 'voice' && S.view.channelId === c.id ? toggleVoiceChat() : openVoiceRoom(c.id, server.id, { chat: true })) } : null,
     markable ? { label: 'Mark as read', icon: 'check', action: () => markConvRead(k) } : null,
-    ...(c.type === 'voice' && callRegions().length ? [...regionMenuItems(c.id), '-'] : []),
-    chat ? { header: c.type === 'voice' ? 'Chat notifications' : 'Notifications' } : null,
-    ...(chat ? [['default', 'Use server default'], ['all', 'All messages'], ['mentions', 'Only @mentions'], ['muted', 'Nothing']].map(([v, l]) => ({ label: l, checked: lvl === v, action: () => setNotify(k, v) })) : []),
-    chat ? { label: 'Ignore @everyone and @here', checked: !!(pk && pk.suppressEveryone), action: () => setNotify(k, undefined, { suppressEveryone: !(pk && pk.suppressEveryone) }) } : null,
+    chat ? { label: c.type === 'voice' ? 'Chat notifications' : 'Notifications', icon: 'bell', value: LEVEL_SHORT[lvl], submenu: () => [
+      ...[['default', 'Use server default'], ['all', 'All messages'], ['mentions', 'Only @mentions'], ['muted', 'Nothing']].map(([v, l]) => ({ label: l, checked: lvl === v, action: () => setNotify(k, v) })),
+      '-',
+      { label: 'Ignore @everyone and @here', checked: !!(pk && pk.suppressEveryone), action: () => setNotify(k, undefined, { suppressEveryone: !(pk && pk.suppressEveryone) }) }] } : null,
     ...(chat ? notifyItems(k) : []),
     // A voice channel's chat disappears like a text channel's (the timer is the channel's).
-    ...(chat ? disappearItems(k) : []),
+    ...(chat ? disappearSub(k) : []),
+    c.type === 'voice' && callRegions().length ? regionSub(c.id) : null,
     '-',
     { label: 'Copy channel link', icon: 'link', action: () => { copyText(`${location.origin}/#c/${c.id}`); toast('Link copied.'); } },
     edit ? { label: 'Edit channel', icon: 'edit', action: () => openEditChannel(c) } : null,
@@ -3100,6 +3123,7 @@ function channelMenuItems(c, server) {
     roles && c.type === 'voice' && hasChat(c) ? { label: 'Make the chat read-only', icon: 'message', action: () => quickOverride(server, c, 'readonly') } : null,
     roles ? { label: 'Make private', icon: 'lock', action: () => quickOverride(server, c, 'private') } : null,
     ...channelMoveItems(server, c),
+    '-',
     hasChat(c) && canIn(c, PERMS.MANAGE_MESSAGES) ? { label: 'Delete recent messages\u2026', icon: 'trash', danger: true, action: () => openPurgeRecent(c) } : null,
     edit ? { label: 'Delete channel', icon: 'trash', danger: true, action: () => deleteChannel(c) } : null,
   ];
@@ -6062,68 +6086,112 @@ function messageMenuItems(m, ctx) {
   const server = m.serverId && S.servers.find((s) => s.id === m.serverId);
   // Pins are the channel's notice board: in servers they need Manage Messages, even for your own messages.
   const canPin = m.dmId || isGroup(server) || canModerate(m);
+  // (Under "Remind me", the times alone: "In 1 hour", "Tomorrow (9 am)".)
+  const reminders = (ok ? remindItems(m, keyOfMessage(m), quoteOf(m, m.dec && m.dec.p ? `Poll: ${m.dec.p.q}` : 'Attachment')).filter(Boolean) : [])
+    .map((it) => ({ ...it, label: it.label.replace(/^Remind me (\w)/, (_, c) => c.toUpperCase()) }));
+  // (Beside the message's hover toolbar; on a touch screen, which has none showing, beside the message itself.)
+  const react = { key: 'react', label: 'Add reaction', icon: 'smile', action: () => { const el = $(`[data-mid="${m.id}"] .msg-tools .tool:nth-child(2)`); emojiPicker((el && el.getClientRects().length ? el : $(`[data-mid="${m.id}"]`)) || $('#main'), (em) => react(m, em)); } };
+  const forward = ok ? { key: 'forward', label: 'Forward', icon: 'forward', action: () => openForward(m) } : null;
+  // What's done most first (Reply, Edit, Thread, Copy), then keeping and sharing it (the reminder times behind one
+  // "Remind me ›" row), then what deletes or reports, last. Add reaction and Forward wait behind More ›: the hover
+  // toolbar has reactions, and the phone's sheet its row of them. Each item has a key, for the phone's sheet.
   return [
-    // (Beside the message's hover toolbar; on a touch screen, which has none showing, beside the message itself.)
-    { key: 'react', label: 'Add reaction', icon: 'smile', action: () => { const el = $(`[data-mid="${m.id}"] .msg-tools .tool:nth-child(2)`); emojiPicker((el && el.getClientRects().length ? el : $(`[data-mid="${m.id}"]`)) || $('#main'), (em) => react(m, em)); } },
     ok ? { key: 'reply', label: 'Reply', icon: 'reply', action: () => startReply(m, ctx) } : null,
+    mine && ok ? { key: 'edit', label: 'Edit message', icon: 'edit', hint: '\u2191', action: () => { S.editing = m.id; replaceMessageEl(m); } } : null,
     ok && threadable(m) && ctx === 'main' ? { key: 'thread', label: m.threadCount ? 'Open thread' : 'Reply in thread', icon: 'thread', action: () => openThread(m) } : null,
-    ok ? { label: 'Forward', icon: 'forward', action: () => openForward(m) } : null,
-    '-',
-    canPin ? { label: m.pinnedAt ? 'Unpin message' : 'Pin message', icon: 'pin', action: () => togglePin(m) } : null,
-    ok ? { label: saved ? 'Remove from saved' : 'Save message', icon: 'bookmark', action: () => toggleSaved(m) } : null,
-    SIDE.menuItemFor(m), // Pin to side (side-view.js): beside the chat, wherever you go next
-    ctx === 'main' ? { label: 'Mark unread', icon: 'eye', action: () => markUnread(keyOfMessage(m), m.id) } : null,
-    ...(ok ? remindItems(m, keyOfMessage(m), quoteOf(m, m.dec && m.dec.p ? `Poll: ${m.dec.p.q}` : 'Attachment')).map((it) => it && { ...it, key: 'remind' }) : []),
-    '-',
     // Not while the word filter hides or blurs it: Show first.
     ok && textOf(m) && !veiled(m) ? { key: 'copy', label: 'Copy text', icon: 'copy', action: () => { copyText(textOf(m)); toast('Copied.'); } } : null,
-    { label: 'Copy message link', icon: 'link', action: () => { copyText(messageLink(m)); toast('Message link copied. It only works for people who can see this conversation.'); } },
-    mine && ok ? { key: 'edit', label: 'Edit message', icon: 'edit', hint: '\u2191', action: () => { S.editing = m.id; replaceMessageEl(m); } } : null,
-    mine || canModerate(m) ? { label: 'Delete message', icon: 'trash', danger: true, action: () => deleteMessage(m) } : null,
-    canModerate(m) && ctx === 'main' && !m.threadId && !S.select && !tooOldForBulk(m) ? { label: 'Select messages to delete\u2026', icon: 'check', action: () => startSelect(m) } : null,
-    !mine && readable(m) ? { label: 'Report message', icon: 'shield', danger: true, action: () => openReport({ message: m, ctx }) } : null,
+    '-',
+    reminders.length ? { key: 'remind', label: 'Remind me', icon: 'bell', submenu: () => reminders } : null,
+    ok ? { key: 'save', label: saved ? 'Remove from saved' : 'Save message', icon: 'bookmark', action: () => toggleSaved(m) } : null,
+    canPin ? { key: 'pin', label: m.pinnedAt ? 'Unpin message' : 'Pin message', icon: 'pin', action: () => togglePin(m) } : null,
+    SIDE.menuItemFor(m), // Pin to side (side-view.js): beside the chat, wherever you go next
+    { key: 'link', label: 'Copy message link', icon: 'link', action: () => { copyText(messageLink(m)); toast('Message link copied. It only works for people who can see this conversation.'); } },
+    ctx === 'main' ? { key: 'unread', label: 'Mark unread', icon: 'eye', action: () => markUnread(keyOfMessage(m), m.id) } : null,
+    { key: 'more', label: 'More', icon: 'more', submenu: () => [react, forward].filter(Boolean), parts: [react, forward].filter(Boolean) },
+    '-',
+    mine || canModerate(m) ? { key: 'delete', label: 'Delete message', icon: 'trash', danger: true, action: () => deleteMessage(m) } : null,
+    canModerate(m) && ctx === 'main' && !m.threadId && !S.select && !tooOldForBulk(m) ? { key: 'select', label: 'Select messages to delete\u2026', icon: 'check', action: () => startSelect(m) } : null,
+    !mine && readable(m) ? { key: 'report', label: 'Report message', icon: 'shield', danger: true, action: () => openReport({ message: m, ctx }) } : null,
   ];
 }
 const messageLink = (m) => `${location.origin}/#m/${m.id}`;
 
 // ---- a message's actions on a touch screen
-// There's no hover there, so a long press on a message opens its actions in a sheet from the bottom of the screen:
-// the quick reactions, then what its ⋯ menu offers (messageMenuItems, so the same permissions), everyday ones
-// first and the ones that delete or report last. Several reminder times wait behind one "Remind me…" row, so the
-// list stays short. target: what the finger was on (a link adds Copy link).
+// There's no hover there, so a long press on a message opens its actions in a sheet from the bottom of the screen
+// (messageMenuItems, so the same permissions): the quick reactions; four big buttons for what's done most (Reply;
+// Edit on your own, Thread on others'; Copy; Delete on your own, Report on others'); a short list (up to five:
+// Thread or Edit, Save, Remind me ›, Pin, Mark unread, then whatever comes next); and More…, a second page of the
+// sheet with the rest, what deletes last. No higher than 70% of the screen, and the message pressed is scrolled into
+// sight above it. target: what the finger was on (a link adds Copy link to the list).
+const SHEET_LIST_MAX = 5;
 function messageSheet(m, ctx, el, target) {
-  const all = messageMenuItems(m, ctx);
-  const pick = all.find((it) => it && it.key === 'react');
-  const first = ['reply', 'thread', 'copy', 'edit'].map((k) => all.find((it) => it && it.key === k)).filter(Boolean);
-  const last = all.filter((it) => it && it !== '-' && it.danger);
-  const reminders = all.filter((it) => it && it.key === 'remind');
-  const remind = reminders.length > 1 ? { label: 'Remind me\u2026', icon: 'bell', more: reminders } : null;
-  // The rest keep the menu's own groups.
-  const groups = [first, []];
-  for (const it of all) {
-    if (it === '-') groups.push([]);
-    else if (remind && it === reminders[0]) groups[groups.length - 1].push(remind);
-    else if (it && it !== pick && !(remind && reminders.includes(it)) && !first.includes(it) && !last.includes(it)) groups[groups.length - 1].push(it);
-  }
-  groups.push(last);
-  // The browser's own menu for a link (which would offer this) doesn't open over the sheet.
+  const top = messageMenuItems(m, ctx).filter((it) => it && it !== '-');
+  const more = top.find((it) => it.key === 'more');
+  const all = [...top.filter((it) => it !== more), ...(more ? more.parts : [])];
+  const by = (k) => all.find((it) => it.key === k) || null;
+  const mine = m.authorId === S.me.id;
+  const pick = by('react'); // (the + after the quick reactions)
+  const flat = all.filter((it) => it !== pick);
+  const quick = [by('reply'), mine ? by('edit') : by('thread'), by('copy'), mine ? by('delete') : by('report')].filter(Boolean);
+  // (Short names on the big buttons; screen readers get the whole one.)
+  const SHORT = { reply: 'Reply', edit: 'Edit', thread: 'Thread', copy: 'Copy', delete: 'Delete', report: 'Report' };
+  const rest = flat.filter((it) => !quick.includes(it));
   const a = target && target.closest && target.closest('a[href]:not(.mention)');
-  if (a && /^https?:/i.test(a.href)) first.unshift({ label: 'Copy link', icon: 'link', action: () => { copyText(a.href); toast('Link copied.'); } });
+  const linkCopy = a && /^https?:/i.test(a.href) ? { label: 'Copy link', icon: 'link', action: () => { copyText(a.href); toast('Link copied.'); } } : null;
+  const order = ['thread', 'edit', 'save', 'remind', 'pin', 'unread', 'side', 'link', 'forward'];
+  const listed = [linkCopy, ...order.map((k) => rest.find((it) => it.key === k && !it.danger))].filter(Boolean).slice(0, SHEET_LIST_MAX);
+  // Everything else, in the menu's order with what deletes last.
+  const others = rest.filter((it) => !listed.includes(it));
+  const overflow = [...others.filter((it) => !it.danger && it.key !== 'select'), ...others.filter((it) => it.danger || it.key === 'select')];
   const mineR = (e) => (m.reactions || []).some((r) => r.emoji === e && r.userIds.includes(S.me.id));
   let sh = null;
   const run = (fn) => () => { sh.close(); fn(); };
-  // (Remind me… opens a second sheet in this one's place: the message stays marked, and focus goes back to it after.)
-  const open = (content, label) => { sh = sheet(content, { label, returnTo: el, onClose: ({ replaced }) => { if (!replaced) el.classList.remove('pressed'); } }); };
+  // A row with more behind it (Remind me ›, More…) shows them as a second page of the same sheet.
   const rows = (list) => list.map((it) => h('button', {
-    class: `sheet-row${it.danger ? ' danger' : ''}`, 'aria-haspopup': it.more ? 'dialog' : null, 'aria-expanded': it.more ? 'false' : null,
-    onclick: it.more ? () => open(h('div', { class: 'sheet-list' }, rows(it.more)), 'Remind me') : run(it.action),
-  }, icon(it.icon), h('span', null, it.label)));
+    class: `sheet-row${it.danger ? ' danger' : ''}`, 'aria-haspopup': it.submenu || it.page ? 'menu' : null,
+    onclick: it.submenu ? () => sh.push(h('div', { class: 'sheet-list' }, rows(it.submenu())), it.label) : it.page ? () => sh.push(h('div', { class: 'sheet-list' }, rows(it.page)), it.label) : run(it.action),
+  }, icon(it.icon || 'bell'), h('span', null, it.label), it.submenu || it.page ? icon('chevronRight', 'ic sheet-row-sub') : null));
   const reacts = h('div', { class: 'sheet-reacts', role: 'group', 'aria-label': 'Quick reactions' },
     QUICK_REACTIONS.map((e) => h('button', { class: `sheet-react${mineR(e) ? ' mine' : ''}`, 'aria-label': `React with ${e}`, 'aria-pressed': String(mineR(e)), onclick: run(() => react(m, e)) }, e)),
     pick ? h('button', { class: 'sheet-react more', 'aria-label': 'More reactions', onclick: run(pick.action) }, icon('plus')) : null);
-  const list = h('div', { class: 'sheet-list' }, groups.filter((g) => g.length).map((g, i) => [i ? h('div', { class: 'sheet-sep', role: 'separator' }) : null, rows(g)]));
+  const quicks = quick.length ? h('div', { class: 'sheet-quicks', role: 'group', 'aria-label': 'Main actions' }, quick.map((it) => h('button', {
+    class: `sheet-quick${it.danger ? ' danger' : ''}`, 'aria-label': it.label, onclick: run(it.action),
+  }, icon(it.icon), h('span', { 'aria-hidden': 'true' }, SHORT[it.key] || it.label)))) : null;
+  const list = h('div', { class: 'sheet-list' }, rows([...listed, ...(overflow.length ? [{ label: 'More\u2026', icon: 'more', page: overflow }] : [])]));
   el.classList.add('pressed');
-  open([reacts, list], 'Message actions');
+  let undo = null;
+  let gone = false;
+  sh = sheet([reacts, quicks, list], { label: 'Message actions', returnTo: el, onClose: () => { gone = true; el.classList.remove('pressed'); if (undo) undo(); } });
+  sh.box.classList.add('msg-sheet');
+  keepAboveSheet(el, sh.box).then((fn) => { if (fn && gone) fn(); else undo = fn; });
+}
+// The message pressed stays in sight: if the sheet would cover it, the list scrolls it up to just above the sheet (as
+// much of it as fits, from its top). A conversation too short to scroll that far gets room at its bottom while the
+// sheet is open; what it resolves to takes that room away again.
+function keepAboveSheet(el, box) {
+  return new Promise((resolve) => requestAnimationFrame(() => {
+    let sc = el.parentElement;
+    while (sc && sc !== document.body && !/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) sc = sc.parentElement;
+    if (!sc || sc === document.body || !el.isConnected) return resolve(null);
+    const room = (window.visualViewport ? visualViewport.height : innerHeight) - box.offsetHeight - 8;
+    const r = el.getBoundingClientRect();
+    if (r.bottom <= room) return resolve(null);
+    const scTop = sc.getBoundingClientRect().top;
+    const by = Math.min(r.bottom - room, Math.max(0, r.top - scTop - 8));
+    // (Where the list's content ends, inside it: below that, a short conversation has only empty room, not scroll.)
+    const last = sc.lastElementChild;
+    const end = (last ? last.getBoundingClientRect().bottom - scTop : 0) + sc.scrollTop;
+    const need = sc.scrollTop + sc.clientHeight + by - end;
+    let undo = null;
+    if (need > parseFloat(getComputedStyle(sc).paddingBottom)) {
+      const was = sc.style.paddingBottom;
+      sc.style.paddingBottom = `${need}px`;
+      undo = () => { sc.style.paddingBottom = was; };
+    }
+    sc.scrollTop += by;
+    resolve(undo);
+  }));
 }
 // A finger held still on a message for a moment opens that sheet, with a short buzz where the phone can. Moving the
 // finger (a scroll, a swipe), a second finger or lifting it first cancels it, so taps on links, pictures, mentions and
@@ -9614,7 +9682,7 @@ function openSearch({ scope = null } = {}) {
   // Disappearing messages that go while this is open: forget the decrypted copies found so far, too.
   const onExpired = (ids) => { for (const sc of scans.values()) for (const id of ids) sc.items.delete(id); ids.forEach((id) => gone.add(id)); if (!closed) draw(); };
   expiryListeners.add(onExpired);
-  const input = h('input', { class: 'search-main', placeholder: scope ? 'Search this conversation' : 'Search messages, people, channels, servers', 'aria-label': 'Search', autocomplete: 'off', spellcheck: 'false', 'aria-controls': 'search-results', 'aria-autocomplete': 'list' });
+  const input = h('input', { class: 'search-main', placeholder: scope ? 'Search this conversation' : 'Search messages, people, channels, servers', 'aria-label': 'Search', autocomplete: 'off', spellcheck: 'false', enterkeyhint: 'search', 'aria-controls': 'search-results', 'aria-autocomplete': 'list' });
   const chipsEl = h('div', { class: 'search-chips' });
   const noteEl = h('div', { class: 'search-note', 'aria-live': 'polite' });
   const tabsEl = h('div', { class: 'seg', role: 'tablist' });
@@ -10004,6 +10072,9 @@ function openSearch({ scope = null } = {}) {
     if (e.key === 'Enter') {
       e.preventDefault();
       if (input.value !== q.text) { selId = null; draw(); } // don't act on results from before the last keystroke
+      // On a touch screen Enter (the keyboard's Search key) means "done typing": the keyboard goes away and the
+      // results stay, to be tapped. With a keyboard and mouse it opens the highlighted one.
+      if (isTouchUI()) { searchHistory.add(input.value); input.blur(); return; }
       if (rows[sel]) rows[sel].action(); else searchHistory.add(input.value);
     }
   });
@@ -10309,8 +10380,12 @@ function serverMenuItems(server) {
   const fav = P.favorites.includes('s:' + server.id);
   const sp = S.notifyPrefs['s:' + server.id];
   const lvl = sp && sp.level !== 'default' ? (sp.level === 'none' ? 'muted' : sp.level) : 'all';
+  // Mark as read and Invite first; the notification settings are two rows with their choices behind them (ui.js
+  // submenus).
   return [
+    { label: 'Mark server as read', icon: 'check', action: () => markServerRead(server) },
     can(server, PERMS.CREATE_INVITE) ? { label: 'Invite people', icon: 'userPlus', action: () => openInvite(server) } : null,
+    '-',
     canManageServer(server) ? { label: 'Server settings', icon: 'gear', action: () => openServerSettings(server) } : null,
     canManageServer(server) && can(server, PERMS.MANAGE_ROLES) ? { label: 'Roles', icon: 'shield', action: () => openServerSettings(server, 'roles') } : null,
     { label: 'Members', icon: 'people', action: () => { if (S.view.serverId !== server.id) openServer(server.id); S.panel = 'members'; S.thread = null; delete composers.thread; P.showMembers = true; renderAll(); } },
@@ -10320,15 +10395,15 @@ function serverMenuItems(server) {
     { label: fav ? 'Remove from favorites' : 'Add to favorites', icon: 'star', action: () => toggleFavorite('s:' + server.id) },
     ...folders.serverMenuExtras(server),
     '-',
-    { header: 'Notifications' },
-    ...[['all', 'All messages'], ['mentions', 'Only @mentions'], ['muted', 'Nothing']].map(([v, l]) => ({ label: l, checked: lvl === v, action: () => setNotify('s:' + server.id, v === 'all' ? 'default' : v) })),
-    { label: 'Ignore @everyone and @here', checked: !!(sp && sp.suppressEveryone), action: () => setNotify('s:' + server.id, undefined, { suppressEveryone: !(sp && sp.suppressEveryone) }) },
+    { label: 'Notifications', icon: 'bell', value: LEVEL_SHORT[lvl], submenu: () => [
+      ...[['all', 'All messages'], ['mentions', 'Only @mentions'], ['muted', 'Nothing']].map(([v, l]) => ({ label: l, checked: lvl === v, action: () => setNotify('s:' + server.id, v === 'all' ? 'default' : v) })),
+      '-',
+      { label: 'Ignore @everyone and @here', checked: !!(sp && sp.suppressEveryone), action: () => setNotify('s:' + server.id, undefined, { suppressEveryone: !(sp && sp.suppressEveryone) }) }] },
     ...notifyItems('s:' + server.id),
     '-',
     admin ? { label: 'Create channel', icon: 'plus', action: () => openCreateChannel(server, 'text') } : null,
     admin ? { label: 'Create category', icon: 'folderPlus', action: () => openCreateCategory(server) } : null,
     { label: 'Encryption details', icon: 'lock', action: () => openServerSecurity(server) },
-    { label: 'Mark server as read', icon: 'check', action: () => markServerRead(server) },
     !isOwner(server) ? '-' : null,
     !isOwner(server) ? { label: 'Leave server', icon: 'logout', danger: true, action: () => leaveServer(server) } : null,
   ];

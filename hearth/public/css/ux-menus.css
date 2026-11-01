@@ -1,2 +1,61 @@
 /* Hearth — menus, touch input and keyboard.
    Loaded after app.css (index.html), so a rule here wins over app.css at equal specificity. */
+
+/* ------------------------------------------------------------------ menus on every pointer
+   A long menu scrolls inside itself rather than running off a short screen, with a mouse as with a finger (ui.js
+   popover places it so it fits), and scrolling it never scrolls the conversation behind it. */
+.menu { max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; overscroll-behavior: contain; }
+/* (A menu in a sheet scrolls with the sheet.) */
+.sheet .menu.sheet-menu { max-height: none; overflow: visible; }
+
+/* Submenus (ui.js menuEl's submenu rows): the row says what's chosen and has a › ; its choices open beside the menu
+   (a flyout in the same popup), or on a sheet as a second page with a Back row. */
+.menu-item.has-sub { padding-right: 6px; }
+.menu-value { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12.5 / 16 * 1rem); color: var(--muted); }
+.menu-sub { width: 15px !important; height: 15px !important; flex: none; opacity: .6; }
+.menu-item.sub-open { background: var(--hover); color: var(--text); }
+.popover > .menu-flyout { position: absolute; min-width: 200px; animation: pop .12s var(--ease-out); }
+.sheet-menu .menu-value { font-size: calc(14 / 16 * 1rem); }
+.sheet-menu .menu-sub { width: 18px !important; height: 18px !important; }
+.sheet-back {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 0 12px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--line); font-size: calc(16 / 16 * 1rem); font-weight: 700; color: var(--text); text-align: left;
+}
+.sheet-back .ic { width: 20px; height: 20px; flex: none; color: var(--text-2); }
+.sheet-back:focus-visible { background: var(--active); }
+
+/* ------------------------------------------------------------------ a message's sheet (app.js messageSheet)
+   The quick reactions, then four big buttons for what's done most (Reply, Edit or Thread, Copy, Delete or Report), a
+   short list, and More… for the rest. No higher than 70% of the screen, so the message pressed stays in sight above. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px), (pointer: coarse) {
+  .sheet.msg-sheet { max-height: min(70vh, calc(var(--app-h, 100vh) - 24px)); max-height: min(70dvh, calc(var(--app-h, 100dvh) - 24px)); }
+  .sheet-quicks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 2px 4px 10px; margin-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .sheet-quick {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-width: 0; min-height: 64px; padding: 6px 4px;
+    border-radius: 14px; background: var(--hover); color: var(--text); font-size: calc(13 / 16 * 1rem); font-weight: 600;
+  }
+  .sheet-quick span:last-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sheet-quick .ic { width: 22px; height: 22px; color: var(--text-2); }
+  .sheet-quick:active, .sheet-quick:focus-visible { background: var(--active); }
+  .sheet-quick.danger, .sheet-quick.danger .ic { color: var(--danger); }
+  .sheet-row .sheet-row-sub { margin-left: auto; width: 18px; height: 18px; opacity: .7; }
+}
+
+/* ------------------------------------------------------------------ touch screens: rows held for their menu
+   A finger held on a channel, a conversation, a person or a server opens its menu (ui.js): the browser's own
+   text selection and link callout stay out of the way. The channel gear shows without a hover. */
+@media (pointer: coarse) {
+  .ch-gear { opacity: .75; }
+  :is(.ch-row, [data-nav], .member, .rail-btn, .dm-row, .conv-card, .cat-toggle) { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+}
+
+/* ------------------------------------------------------------------ search on touch screens
+   Enter there puts the keyboard away and leaves the results (app.js openSearch): no arrow and Enter hints. */
+body.m-ui .search-keys, body.m-ui .search-bar kbd { display: none !important; }
+@media (pointer: coarse) {
+  .search-keys, .search-bar kbd { display: none !important; }
+}
+
+/* ------------------------------------------------------------------ the shortcuts sheet (Ctrl+/)
+   Wide enough for two groups side by side with their keys in one column and what they do in the other (.sc-list). */
+.modal.shortcuts-modal { max-width: 720px; }

@@ -45,8 +45,11 @@ export function quietFocus(el) {
 // Whether the last thing done was a key press (or a finger, pen or mouse): a sheet opened from the keyboard gives focus
 // back as dialogs do, one opened with a finger quietly.
 let byKeys = false;
+// And which kind of pointer went down last ('mouse', 'touch' or 'pen'): tooltips and hover-opened submenus are for
+// a mouse only.
+let lastPointer = 'mouse';
 document.addEventListener('keydown', () => { byKeys = true; }, true);
-document.addEventListener('pointerdown', () => { byKeys = false; }, true);
+document.addEventListener('pointerdown', (e) => { byKeys = false; lastPointer = e.pointerType || 'mouse'; }, true);
 
 export function closePopover() {
   if (!openPop) return;
@@ -88,6 +91,14 @@ export function popover(anchor, content, { side = 'right', align = 'start', clas
     // Tab leaves a menu (like a native one); other popups keep focus inside until Esc.
     if (isMenu) { e.preventDefault(); closePopover(); restoreFocus(pop._anchor, pop._returnTo); } else trapTab(e, pop);
   });
+  // The wheel over a popup scrolls the popup (a long menu), never the conversation or the page behind it.
+  pop.addEventListener('wheel', (e) => {
+    const box = e.target.closest && e.target.closest('.menu, .popover');
+    if (!box || box.scrollHeight <= box.clientHeight) { e.preventDefault(); return; }
+    const atTop = box.scrollTop <= 0 && e.deltaY < 0;
+    const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 1 && e.deltaY > 0;
+    if (atTop || atEnd) e.preventDefault();
+  }, { passive: false });
   layer().append(pop);
   openPop = pop;
   const r = anchor.getBoundingClientRect();
@@ -131,6 +142,9 @@ function menuSemantics(el) {
     if (!btns.length) return;
     const i = btns.indexOf(document.activeElement);
     let next = null;
+    // A row with a submenu: → (or Enter, a click) opens it, its first item focused (subFlyout, below; a sheet's page).
+    const at = btns[i];
+    if (e.key === 'ArrowRight' && at && at._openSub) { e.preventDefault(); e.stopPropagation(); at._openSub({ focus: true }); return; }
     if (e.key === 'ArrowDown') next = btns[(i + 1) % btns.length];
     else if (e.key === 'ArrowUp') next = btns[(i - 1 + btns.length) % btns.length];
     else if (e.key === 'Home') next = btns[0];
@@ -146,11 +160,27 @@ function menuSemantics(el) {
 }
 
 // Menu items: { label, icon, hint, danger, action } | '-' (separator) | { header: 'Text' }
+//   | { label, icon, value, submenu: () => items }: a row that opens more choices (Notifications ›, Mute ›…), showing
+//     the one in force (value). Beside the menu on a desktop or tablet (a flyout: subFlyout); on a sheet, a second
+//     page of the sheet with a Back row (sheetMenu). Long menus stay short this way.
 // done: what picking one puts away first (the popup, or the sheet it's in).
-function menuEl(items, done = closePopover) {
-  const el = h('div', { class: 'menu', role: 'menu' }, items.filter(Boolean).map((it) => {
+// openSub(row, item, { focus }): how a submenu opens here (the flyout, unless the sheet passes its own).
+function menuEl(items, done = closePopover, openSub = subFlyout) {
+  const list = items.filter(Boolean);
+  // (Separators only between things: a group that came out empty leaves none at the top, the bottom or twice.)
+  const tidy = list.filter((it, i) => it !== '-' || (i > 0 && list[i - 1] !== '-' && i < list.length - 1));
+  const el = h('div', { class: 'menu', role: 'menu' }, tidy.map((it) => {
     if (it === '-') return h('div', { class: 'menu-sep', role: 'separator' });
     if (it.header) return h('div', { class: 'menu-header', role: 'presentation' }, it.header);
+    if (it.submenu) {
+      const row = h('button', {
+        class: 'menu-item has-sub', role: 'menuitem', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+        onclick: () => row._openSub({ focus: byKeys || !matchMedia('(hover: hover)').matches }),
+      }, it.icon ? icon(it.icon, 'ic menu-ic') : null, h('span', { class: 'menu-label' }, it.label),
+      it.value ? h('span', { class: 'menu-value' }, it.value) : null, icon('chevronRight', 'ic menu-sub'));
+      row._openSub = (o = {}) => openSub(row, it, o);
+      return row;
+    }
     return h('button', {
       class: `menu-item${it.danger ? ' danger' : ''}${it.checked ? ' checked' : ''}`,
       role: it.checked !== undefined ? 'menuitemradio' : 'menuitem',
@@ -160,7 +190,77 @@ function menuEl(items, done = closePopover) {
     it.checked ? icon('check', 'ic menu-check') : it.hint ? h('span', { class: 'menu-hint' }, it.hint) : null);
   }));
   menuSemantics(el);
+  if (openSub === subFlyout) hoverSubmenus(el);
   return el;
+}
+
+// ---- submenus beside a menu (desktops and tablets)
+// The flyout sits inside the popup (so a click in it is a click inside, and closing the popup takes it too), to the
+// right of its row, or to the left where there's no room. Hovering a row opens its flyout after a moment, and another
+// row closes it; → or Enter opens it from the keyboard with its first item focused, ← or Esc closes it and puts focus
+// back on its row.
+const SUB_HOVER_MS = 150;
+function closeFlyout(menuBox, { refocus = false } = {}) {
+  const fly = menuBox && menuBox._fly;
+  if (!fly) return;
+  menuBox._fly = null;
+  fly.remove();
+  fly._row.setAttribute('aria-expanded', 'false');
+  fly._row.classList.remove('sub-open');
+  if (refocus) fly._row.focus({ preventScroll: true });
+}
+function subFlyout(row, it, { focus = false } = {}) {
+  const parent = row.closest('.menu');
+  const pop = row.closest('.popover');
+  if (!parent || !pop) return;
+  if (parent._fly && parent._fly._row === row) {
+    if (focus) { const f = parent._fly.querySelector('.menu-item:not(:disabled)'); if (f) f.focus({ preventScroll: true }); }
+    return;
+  }
+  closeFlyout(parent);
+  const sub = menuEl(it.submenu() || []);
+  sub.classList.add('menu-flyout');
+  sub.setAttribute('aria-label', it.label);
+  sub._row = row;
+  parent._fly = sub;
+  row.setAttribute('aria-expanded', 'true');
+  row.classList.add('sub-open');
+  sub.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFlyout(parent, { refocus: true }); }
+  });
+  sub.addEventListener('mouseenter', () => clearTimeout(parent._hoverT));
+  pop.append(sub);
+  // Viewport coordinates, then made relative to the popup it sits in (position: absolute there).
+  const r = row.getBoundingClientRect();
+  const pr = parent.getBoundingClientRect();
+  const box = pop.getBoundingClientRect();
+  const w = sub.offsetWidth;
+  const ht = sub.offsetHeight;
+  let x = pr.right - 4;
+  if (x + w > innerWidth - 8) x = Math.max(8, pr.left - w + 4);
+  const y = Math.max(8, Math.min(r.top - 6, innerHeight - ht - 8));
+  sub.style.left = `${x - box.left}px`;
+  sub.style.top = `${y - box.top}px`;
+  if (focus) { const f = sub.querySelector('.menu-item:not(:disabled)'); if (f) f.focus({ preventScroll: true }); }
+}
+// Hover: a submenu row opens its flyout after a moment; any other row of the same menu closes it after the same
+// moment (moving the pointer across to the flyout passes over nothing else, and entering it keeps it).
+function hoverSubmenus(el) {
+  el.addEventListener('mouseover', (e) => {
+    if (lastPointer !== 'mouse') return;
+    const row = e.target.closest && e.target.closest('.menu-item');
+    if (!row || row.parentElement !== el) return;
+    clearTimeout(el._hoverT);
+    if (el._fly && el._fly._row === row) return;
+    el._hoverT = setTimeout(() => {
+      if (!el.isConnected) return;
+      if (row._openSub) row._openSub({ focus: false });
+      else closeFlyout(el);
+    }, SUB_HOVER_MS);
+  });
+  el.addEventListener('mouseleave', () => clearTimeout(el._hoverT));
+  // Arrowing to another row of this menu puts an open flyout away.
+  el.addEventListener('focusin', (e) => { if (el._fly && e.target !== el._fly._row && e.target.parentElement === el) closeFlyout(el); });
 }
 
 // In the phone layout a menu is a sheet from the bottom of the screen, its items a finger's height apart (sheetMenu);
@@ -211,20 +311,56 @@ export function sheet(content, { label = 'Actions', returnTo = null, onClose } =
     if (onClose) onClose({ replaced });
     if (hadFocus && !replaced) (keys ? restoreFocus : restoreQuietly)(returnTo, opener);
   }
-  backdrop._close = close;
+  // Pages: push(content, label) shows more choices in the same sheet (a submenu, the message sheet's More…), with a
+  // Back row at the top; Back, Esc and the back gesture go back a page before they close the sheet. (Something
+  // replacing the sheet, or picking an item, still closes it at once: close() itself.)
+  const pages = [];
+  const content_ = () => [...box.childNodes].filter((n) => !(n.classList && n.classList.contains('sheet-grip')));
+  function push(next, title) {
+    pages.push({ kids: content_(), label: box.getAttribute('aria-label'), from: document.activeElement });
+    for (const n of content_()) n.remove();
+    const back = h('button', { class: 'sheet-back', 'aria-label': `Back to ${box.getAttribute('aria-label')}`, onclick: () => pop() }, icon('chevronLeft'), h('span', null, title));
+    box.append(back, ...[next].flat());
+    box.setAttribute('aria-label', title);
+    box.scrollTop = 0;
+    requestAnimationFrame(() => {
+      if (closed) return;
+      const first = box.querySelector('.menu-item:not(:disabled), .sheet-row, .sheet-quick') || back;
+      (keys ? (el) => el.focus({ preventScroll: true }) : quietFocus)(first);
+    });
+  }
+  function pop() {
+    const was = pages.pop();
+    if (!was) return;
+    for (const n of content_()) n.remove();
+    box.append(...was.kids);
+    box.setAttribute('aria-label', was.label);
+    const to = stillThere([was.from]);
+    if (to) (keys ? (el) => el.focus({ preventScroll: true }) : quietFocus)(to);
+    else box.focus({ preventScroll: true });
+  }
+  // (With no argument: Esc, Back. With one: replaced by another sheet, which closes it outright.)
+  backdrop._close = (o) => (pages.length && !o ? pop() : close(o));
   box.addEventListener('keydown', (e) => trapTab(e, box));
   swipeToClose(box, close);
   layer().append(backdrop);
   openSheet = backdrop;
   // The sheet itself takes focus, so screen readers start at its name.
   requestAnimationFrame(() => { if (!closed && !box.contains(document.activeElement)) box.focus({ preventScroll: true }); });
-  return { close: () => close(), box };
+  return { close: () => close(), box, push, back: pop };
 }
 // A menu as a bottom sheet: the same items (or a .menu built by hand, the status menu) and the same arrow keys, each
 // item putting the sheet away as it's picked. A menu opened from one of them takes its place.
+// A submenu row pushes its choices as a second page of the sheet, with a Back row (sheet().push).
 export function sheetMenu(items, { label = 'Options', returnTo = null } = {}) {
   let sh = null;
-  const el = Array.isArray(items) ? menuEl(items, () => { closePopover(); if (sh) sh.close(); }) : items;
+  const done = () => { closePopover(); if (sh) sh.close(); };
+  const page = (list) => {
+    const m = menuEl(list, done, (row, it) => sh.push(page(it.submenu() || []), it.label));
+    m.classList.add('sheet-menu');
+    return m;
+  };
+  const el = Array.isArray(items) ? page(items) : items;
   el.classList.add('sheet-menu');
   menuSemantics(el);
   sh = sheet(el, { label, returnTo });
@@ -265,10 +401,14 @@ function swipeToClose(box, close) {
   box.addEventListener('touchend', end);
   box.addEventListener('touchcancel', end);
 }
-// Tooltips for anything with data-tip (icon buttons). Shown on hover and keyboard focus.
+// Tooltips for anything with data-tip (icon buttons). Shown on hover with a mouse and on keyboard focus; never from a
+// finger or a pen: a tap makes the browser report a hover too, which would leave a tip standing over the screen until
+// the next tap (lastPointer, from the pointer that went down last). hideTip is also called when the view changes
+// (app.js setView), so a tip never outlives the screen it was for.
 let tipEl = null;
 let tipTimer = 0;
-function hideTip() { clearTimeout(tipTimer); if (tipEl) { tipEl.remove(); tipEl = null; } }
+export function hideTip() { clearTimeout(tipTimer); if (tipEl) { tipEl.remove(); tipEl = null; } }
+const noHover = () => typeof matchMedia === 'function' && matchMedia('(hover: none)').matches;
 function showTip(target) {
   hideTip();
   const text = target.dataset.tip;
@@ -291,14 +431,75 @@ function showTip(target) {
 }
 document.addEventListener('mouseover', (e) => {
   const t = e.target.closest('[data-tip]');
-  if (t) showTip(t); else hideTip();
+  if (!t || lastPointer === 'touch' || lastPointer === 'pen' || noHover()) { hideTip(); return; }
+  showTip(t);
 });
 document.addEventListener('focusin', (e) => {
   const t = e.target.closest && e.target.closest('[data-tip]');
   if (t && t.matches(':focus-visible')) showTip(t); else hideTip();
 });
 document.addEventListener('mousedown', hideTip, true);
+document.addEventListener('pointerup', hideTip, true);
 document.addEventListener('scroll', hideTip, true);
+
+// ---- long press on a row (touch screens)
+// Channels, conversations, people, the server bar and the nav rows have their menus on a right-click (their own
+// oncontextmenu, which opens a sheet on a touch screen: contextMenu above). iOS never reports a long press as one, so
+// a finger held still on such a row for a moment sends it one, at the finger, with a short buzz. The tap that ends the
+// press doesn't also go through, so holding a voice channel never joins its call. Android does report one itself:
+// whichever comes first opens the menu, once. Messages have their own long press (app.js initLongPress).
+const ROW_PRESS = '.ch-row, [data-nav], .member, .rail-btn, .dm-row, .conv-card, .cat-toggle';
+const ROW_PRESS_MS = 450;
+let rowPress = null; // { el, target, x, y, timer, done }
+let eatClick = null; // { el, until }: the click that the lift after a long press would make on that row
+const endRowPress = () => { if (rowPress && !rowPress.done) clearTimeout(rowPress.timer); };
+document.addEventListener('touchstart', (e) => {
+  endRowPress();
+  rowPress = null;
+  if (e.touches.length !== 1 || !isTouchUI() || !e.target.closest) return;
+  const el = e.target.closest(ROW_PRESS);
+  if (!el || e.target.closest('.msg, input, textarea, select, [contenteditable="true"]')) return;
+  const t = e.touches[0];
+  const p = { el, target: e.target, x: t.clientX, y: t.clientY, done: false };
+  p.timer = setTimeout(() => {
+    if (rowPress !== p || p.done || !p.target.isConnected) return;
+    p.done = true;
+    try { if (navigator.vibrate) navigator.vibrate(10); } catch { /* not allowed here */ }
+    p.target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y, button: 2 }));
+  }, ROW_PRESS_MS);
+  rowPress = p;
+}, { passive: true, capture: true });
+document.addEventListener('touchmove', (e) => {
+  if (!rowPress || rowPress.done) return;
+  const t = e.touches[0];
+  if (e.touches.length > 1 || Math.hypot(t.clientX - rowPress.x, t.clientY - rowPress.y) > 10) { endRowPress(); rowPress = null; }
+}, { passive: true, capture: true });
+document.addEventListener('touchend', (e) => {
+  const p = rowPress;
+  endRowPress();
+  rowPress = null;
+  if (!p || !p.done) return;
+  // The press opened a menu: the lift isn't a tap on the row (nor on the sheet that's now under the finger).
+  if (e.cancelable) e.preventDefault();
+  eatClick = { el: p.el, until: Date.now() + 700 };
+}, { passive: false, capture: true });
+document.addEventListener('touchcancel', () => { endRowPress(); rowPress = null; }, { passive: true, capture: true });
+document.addEventListener('scroll', () => { if (rowPress && !rowPress.done) { endRowPress(); rowPress = null; } }, { passive: true, capture: true });
+document.addEventListener('click', (e) => {
+  const eat = eatClick;
+  if (!eat || Date.now() > eat.until || !eat.el.contains(e.target)) return;
+  eatClick = null;
+  e.preventDefault();
+  e.stopPropagation();
+}, true);
+// Android's own long-press right-click: the first one wins. Ours already opened the menu: the browser's is dropped.
+// The browser's came first: ours is called off.
+document.addEventListener('contextmenu', (e) => {
+  if (!e.isTrusted || !rowPress) return;
+  if (rowPress.done) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+  clearTimeout(rowPress.timer);
+  rowPress.done = true;
+}, true);
 
 // Icon-only button with a tooltip and an accessible label.
 export function ibtn(name, label, onclick, { cls = '', side, active = false, attrs = {} } = {}) {
