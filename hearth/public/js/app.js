@@ -3992,7 +3992,13 @@ function renderYouPage(head, body) {
   head.append(phonePageHead('You'));
   const row = (label, ic, onclick, sub) => h('button', { class: 'nav-row m-you-row', 'data-nav': '', dataset: { navKey: 'y:' + label }, onclick }, icon(ic),
     h('span', { class: 'm-row-text' }, h('span', null, label), sub ? h('small', null, sub) : null), icon('chevronRight', 'ic m-row-chev'));
+  // The You tab's dot (securityNag) points here: the same row as on Home, first, until it's done or put away there.
+  const t = securityTodo();
+  const left = [t.email ? 'Add an email' : null, t.recovery ? 'Save a recovery key' : null].filter(Boolean);
+  const secure = securityNag() ? row('Secure your account', 'shield', () => openSettings(app, 'account', { focus: t.email ? 'email' : 'recovery' }), left.join(' \u00b7 ')) : null;
+  if (secure) secure.classList.add('m-you-secure');
   body.append(
+    ...(secure ? [secure, h('div', { class: 'm-sep', role: 'separator' })] : []),
     row('Set your status', 'smile', (e) => statusMenu(e.currentTarget), STATUS_LABEL[S.me.status] || 'Online'),
     row('Edit profile', 'edit', () => openSettings(app, 'profile')),
     row('Theme and appearance', 'palette', () => openSettings(app, 'appearance')),
@@ -4016,6 +4022,8 @@ function phoneShell() {
   if (flipped) fitAnnouncement(); // (a strip on a phone, floating on a computer)
   b.classList.toggle('m-list', on && !conv);
   b.classList.toggle('m-conv', conv);
+  // A card along the bottom goes above the message box in a conversation, down to the tab bar on a list.
+  if (was !== conv && document.querySelector('.push-offer')) offerLift();
   if (on) b.dataset.mtab = M.tab; else delete b.dataset.mtab;
   const bar = $('#tabbar');
   if (bar) bar.hidden = !on || conv || !S.me;
@@ -4314,7 +4322,7 @@ function phoneNav() {
       { open: () => !!popup(), close: closePopover }, // (a menu can sit on the picture viewer: its More)
       { open: () => !!viewer(), close: () => viewer()._close() },
       { open: () => !!actions(), close: () => actions()._close() },
-      { open: () => !!dialog(), close: () => dialog()._close() },
+      { open: () => !!dialog(), close: () => (dialog()._back ? dialog()._back() : dialog()._close()) },
       { open: () => !!underWay(true), close: () => underWay(true)._cancel() },
       // Beside the chat on a wider screen, the side panel is part of the page rather than something on top of it.
       { open: () => isPhoneLayout() && !!panelMode(), close: closePanel },
@@ -4746,7 +4754,7 @@ function securityCard({ phone = false } = {}) {
 function securityChanged() {
   if (!S.me) return;
   renderTabbarBadges();
-  if (isPhoneUI() && sidebarMode() === 'home') renderSidebar();
+  if (isPhoneUI() && (sidebarMode() === 'home' || sidebarMode() === 'you')) renderSidebar();
   const card = $('#main .home-view .secure-card');
   if (card || (S.view.type === 'home' && securityNag())) {
     const next = securityCard();
@@ -6399,7 +6407,7 @@ function messageMenuItems(m, ctx) {
   const reminders = (ok ? remindItems(m, keyOfMessage(m), quoteOf(m, m.dec && m.dec.p ? `Poll: ${m.dec.p.q}` : 'Attachment')).filter(Boolean) : [])
     .map((it) => ({ ...it, label: it.label.replace(/^Remind me (\w)/, (_, c) => c.toUpperCase()) }));
   // (Beside the message's hover toolbar; on a touch screen, which has none showing, beside the message itself.)
-  const react = { key: 'react', label: 'Add reaction', icon: 'smile', action: () => { const el = $(`[data-mid="${m.id}"] .msg-tools .tool:nth-child(2)`); emojiPicker((el && el.getClientRects().length ? el : $(`[data-mid="${m.id}"]`)) || $('#main'), (em) => react(m, em)); } };
+  const reactItem = { key: 'react', label: 'Add reaction', icon: 'smile', action: () => { const el = $(`[data-mid="${m.id}"] .msg-tools .tool:nth-child(2)`); emojiPicker((el && el.getClientRects().length ? el : $(`[data-mid="${m.id}"]`)) || $('#main'), (em) => react(m, em)); } };
   const forward = ok ? { key: 'forward', label: 'Forward', icon: 'forward', action: () => openForward(m) } : null;
   // What's done most first (Reply, Edit, Thread, Copy), then keeping and sharing it (the reminder times behind one
   // "Remind me ›" row), then what deletes or reports, last. Add reaction and Forward wait behind More ›: the hover
@@ -6417,7 +6425,7 @@ function messageMenuItems(m, ctx) {
     SIDE.menuItemFor(m), // Pin to side (side-view.js): beside the chat, wherever you go next
     { key: 'link', label: 'Copy message link', icon: 'link', action: () => { copyText(messageLink(m)); toast('Message link copied. It only works for people who can see this conversation.'); } },
     ctx === 'main' ? { key: 'unread', label: 'Mark unread', icon: 'eye', action: () => markUnread(keyOfMessage(m), m.id) } : null,
-    { key: 'more', label: 'More', icon: 'more', submenu: () => [react, forward].filter(Boolean), parts: [react, forward].filter(Boolean) },
+    { key: 'more', label: 'More', icon: 'more', submenu: () => [reactItem, forward].filter(Boolean), parts: [reactItem, forward].filter(Boolean) },
     '-',
     mine || canModerate(m) ? { key: 'delete', label: 'Delete message', icon: 'trash', danger: true, action: () => deleteMessage(m) } : null,
     canModerate(m) && ctx === 'main' && !m.threadId && !S.select && !tooOldForBulk(m) ? { key: 'select', label: 'Select messages to delete\u2026', icon: 'check', action: () => startSelect(m) } : null,
@@ -8559,6 +8567,10 @@ function onThreadCount(rootId, channelId, count, lastAt) {
 
 // ======================================================================= composer
 const composers = {};
+// The keyboard coming up or going down changes what's visible, so the box's tallest size too (autosize). One listener
+// for the boxes in use, not one per box: a new main box is made for every conversation, and a listener each would
+// keep every old box alive for as long as the page is open.
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => { for (const c of Object.values(composers)) c.fit(); });
 // Scheduled messages, "Send later" (scheduled.js): your list, the bar above the composer, and re-encrypting the ones
 // the server holds because a key changed after you wrote them.
 const SCHED = createScheduled({
@@ -8943,13 +8955,9 @@ function createComposer({ id, key, threadId, placeholder }) {
       if (!el.isConnected) { ro.disconnect(); return; } // (taken out of the page: another conversation's box took over)
       const main = $('#main');
       if (main) main.style.setProperty('--composer-h', Math.round(el.getBoundingClientRect().height) + 'px');
+      if (document.querySelector('.push-offer')) offerLift(); // (a card above it stays above it as it grows)
     });
     ro.observe(el);
-  }
-  // The keyboard coming up or going down changes what's visible, so the box's tallest size too (autosize).
-  if (window.visualViewport) {
-    const onView = () => { if (!ta.isConnected) { window.visualViewport.removeEventListener('resize', onView); return; } if (ta.value) autosize(); };
-    window.visualViewport.addEventListener('resize', onView);
   }
   // Bots' commands work in text channels (not a group's chat, nor a voice channel's).
   const slashChannel = () => { const kk = key(); if (id !== 'main' || !kk || !kk.startsWith('c:')) return null; const s = serverOfChannel(kk.slice(2)); return s && !isGroup(s) && (channelById(kk.slice(2)) || {}).type === 'text' ? kk.slice(2) : null; };
@@ -9537,6 +9545,9 @@ function createComposer({ id, key, threadId, placeholder }) {
           setSendState(pend, 'waiting');
         } else if (e.offline || (!e.status && (navigator.onLine === false || !socketUp()))) setSendState(pend, 'waiting');
         else setSendState(pend, 'failed', e.network ? 'Couldn\u2019t reach the server' : e.message);
+        // No answer while the connection was up: the server may have it already (pagehide keeps no draft of it), and
+        // still may after a later try fails some other way.
+        pend.maybeSent = pend.maybeSent || (pend.state === 'failed' && !!e.network);
         // Turned down (blocked, no permission, too long, a key this device doesn't have yet…) is said out loud once
         // too; waiting, or no answer at all, only on its copy (a burst offline would otherwise be a stack of toasts).
         if (pend.state === 'failed' && !e.network) toast(e.message, 'error');
@@ -9558,7 +9569,7 @@ function createComposer({ id, key, threadId, placeholder }) {
     }
   }
   setTimeout(() => { autosize(); update(); renderEph(); }, 0);
-  return { el, state, focus: () => ta.focus(), addFiles, setReply, renderExtras, send, renderEph, fitAttach, showing: () => (ta.isConnected ? convId() : null), keepDraft: () => { if (ta.isConnected && ta.value !== synced) keepDraft(); },
+  return { el, state, focus: () => ta.focus(), fit: () => { if (ta.isConnected && ta.value) autosize(); }, addFiles, setReply, renderExtras, send, renderEph, fitAttach, showing: () => (ta.isConnected ? convId() : null), keepDraft: () => { if (ta.isConnected && ta.value !== synced) keepDraft(); },
     slowDown: (secs) => startSlow(secs, (left) => `Slow down \u2014 sending again in ${fmtDuration(left)}`) };
 }
 const fmtDuration = (sec) => (sec >= 3600 ? `${Math.round(sec / 3600)}h` : sec >= 60 ? `${Math.round(sec / 60)}m` : `${sec}s`);
@@ -10016,11 +10027,15 @@ if (typeof window !== 'undefined') {
   window.addEventListener('offline', () => { if (S.me) connUi(true); });
   // Back online: the live connection may never have noticed it was gone, so nothing else would say so.
   window.addEventListener('online', () => { if (S.me) connUi(netDown && !socketUp()); flushWaiting({ fresh: true }); });
-  // Leaving or reloading: what didn't go is kept as that conversation's draft, above anything typed there.
-  window.addEventListener('pagehide', () => {
+  // Leaving or reloading: what didn't go is kept as that conversation's draft, above anything typed there. Not when
+  // the page is only put away whole (persisted: the back/forward cache), since then its sends are still queued and go
+  // when it's shown again, and a draft of the same words would be sent twice. Nor a send that got no answer while the
+  // connection was up: the server may already have it, and a draft carries no nonce for its repeat check to catch.
+  window.addEventListener('pagehide', (e) => {
+    if (e.persisted) return;
     let any = false;
     for (const p of pendingSends.values()) {
-      if (p.state === 'sending' || !p.draft || !p.draft.trim()) continue;
+      if (p.state === 'sending' || p.maybeSent || !p.draft || !p.draft.trim()) continue;
       const now = drafts.get(p.key) || '';
       if (!now.includes(p.draft)) { drafts.set(p.key, now.trim() ? `${p.draft}\n${now}` : p.draft); any = true; }
     }
@@ -12249,9 +12264,11 @@ function offerCard(cls, ic, text, ...buttons) {
   offerLift();
   return bar;
 }
-// How far up a card goes in a phone's conversation: above the message box, whatever its height.
+// How far up a card goes in a phone's conversation: above the message box and what sits on it (an invite nudge, the
+// offline line), whatever their height. Measured again as the box grows and as the phone moves between a list and a
+// conversation (phoneShell), since the conversation is often still being laid out when the card comes.
 function offerLift() {
-  const box = isPhoneUI() && M.level === 'conv' && $('#main .composer');
+  const box = isPhoneUI() && M.level === 'conv' && $('#main .composer-wrap.cw-main');
   const lift = box ? Math.max(0, Math.round(innerHeight - box.getBoundingClientRect().top)) + 8 : 0;
   document.documentElement.style.setProperty('--offer-lift', `${lift}px`);
 }

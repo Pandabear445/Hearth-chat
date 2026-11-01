@@ -68,7 +68,21 @@ test('a long menu scrolls on every pointer: the .menu max-height rule is outside
 });
 
 test('the wheel over a popup scrolls the popup, never the chat behind it', () => {
-  assert.match(fnSource(ui, 'popover'), /addEventListener\('wheel'[\s\S]{0,400}preventDefault\(\)[\s\S]{0,40}passive: false/);
+  const wheel = /addEventListener\('wheel'[\s\S]*?passive: false/.exec(fnSource(ui, 'popover'));
+  assert.ok(wheel, 'popover() listens for the wheel, not passively');
+  assert.match(wheel[0], /preventDefault\(\)/);
+  // The box it lets scroll is whichever one inside the popup can (an emoji grid, the inbox list), not the popup
+  // itself, which doesn't scroll: otherwise the wheel would scroll nothing in a picker.
+  assert.match(wheel[0], /overflowY/);
+  assert.doesNotMatch(wheel[0], /closest\('\.menu, \.popover'\)/);
+});
+
+test('no local name in messageMenuItems hides a function its items call (react: Add reaction ran the menu item)', () => {
+  const body = fnSource(app, 'messageMenuItems');
+  for (const [, name] of body.matchAll(/^\s+(?:const|let) (\w+) =/gm)) {
+    assert.ok(!new RegExp(`\\nfunction ${name}\\(|\\nasync function ${name}\\(`).test(app), `the local ${name} hides app.js's function ${name}`);
+  }
+  assert.match(body, /emojiPicker\([\s\S]*?\(em\) => react\(m, em\)\)/);
 });
 
 test('ui.js menus have submenu rows: a flyout beside the menu, a page on a sheet, with the right roles and keys', () => {

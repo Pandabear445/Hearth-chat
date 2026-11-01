@@ -108,7 +108,12 @@ test('waiting sends go in order when the connection is back, and a reload keeps 
   assert.match(flush, /if \(pendingSends\.has\(next\.nonce\) && next\.state === 'waiting'\) break;/, 'the rest stay behind one that still can’t go');
   assert.match(app, /window\.addEventListener\('online', \(\) => \{[^\n]*flushWaiting\(\{ fresh: true \}\)/);
   assert.match(app, /connUi\(false\);\n {6}\/\/ Messages that waited for the connection go now, in order \(flushWaiting\)\.\n {6}flushWaiting\(\{ fresh: true \}\);/);
-  assert.match(app, /window\.addEventListener\('pagehide', \(\) => \{[\s\S]{0,400}drafts\.set\(p\.key/);
+  assert.match(app, /window\.addEventListener\('pagehide', \(e\) => \{[\s\S]{0,400}drafts\.set\(p\.key/);
+  // Never twice: no drafts when the page is only put away (the back/forward cache keeps its queued sends), and none
+  // of a send that got no answer while connected (the server may have it; a draft has no nonce to catch a repeat).
+  assert.match(app, /window\.addEventListener\('pagehide', \(e\) => \{\n\s+if \(e\.persisted\) return;/);
+  assert.match(app, /if \(p\.state === 'sending' \|\| p\.maybeSent \|\|/);
+  assert.match(app, /pend\.maybeSent = pend\.maybeSent \|\| \(pend\.state === 'failed' && !!e\.network\);/);
   // The copy's own words: Waiting for connection, and Not sent with Retry and Delete as named buttons.
   const el = fn(app, 'pendingEl');
   assert.match(el, /'Waiting for connection'/);
@@ -167,7 +172,9 @@ test('touch: no emoji-search focus (the keyboard would cover the emoji); editing
 test('the phone composer is capped by what’s visible; --composer-h for what floats above it', () => {
   assert.match(app, /const seen = isPhoneUI\(\) \? Math\.round\(\(\(window\.visualViewport && window\.visualViewport\.height\) \|\| window\.innerHeight\) \* 0\.3\) : 260;/);
   assert.match(app, /Math\.min\(ta\.scrollHeight, 260, Math\.max\(seen, 44\)\)/);
-  assert.match(app, /window\.visualViewport\.addEventListener\('resize', onView\)/);
+  // One listener for the boxes in use (composers), not one per box that would keep every old box alive.
+  assert.match(app, /window\.visualViewport\.addEventListener\('resize', \(\) => \{ for \(const c of Object\.values\(composers\)\) c\.fit\(\); \}\)/);
+  assert.equal((app.match(/visualViewport\.addEventListener\('resize'/g) || []).length, 1);
   assert.match(app, /main\.style\.setProperty\('--composer-h', /);
 });
 

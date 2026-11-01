@@ -71,7 +71,9 @@ document.addEventListener('keydown', (e) => {
   if (openSheet) { openSheet._close(); e.stopPropagation(); return; }
   const modals = document.querySelectorAll('.modal-backdrop:not(.closing)');
   const top = modals[modals.length - 1];
-  if (top && top._close) top._close();
+  // (_back: a dialog with pages of its own, Settings on a phone, goes back one before it closes.)
+  if (top && top._back) top._back();
+  else if (top && top._close) top._close();
 });
 
 // Position `content` next to `anchor`. side: 'right' | 'left' | 'top' | 'bottom'
@@ -92,9 +94,16 @@ export function popover(anchor, content, { side = 'right', align = 'start', clas
     if (isMenu) { e.preventDefault(); closePopover(); restoreFocus(pop._anchor, pop._returnTo); } else trapTab(e, pop);
   });
   // The wheel over a popup scrolls the popup (a long menu), never the conversation or the page behind it.
+  // The box it scrolls is the nearest one inside the popup that can (an emoji or GIF grid, the inbox list, a long
+  // menu); only with none, or that one already at the end the wheel is going toward, is the wheel stopped here.
   pop.addEventListener('wheel', (e) => {
-    const box = e.target.closest && e.target.closest('.menu, .popover');
-    if (!box || box.scrollHeight <= box.clientHeight) { e.preventDefault(); return; }
+    let box = null;
+    for (let el = e.target; el && el.nodeType === 1 && pop.contains(el); el = el.parentElement) {
+      const oy = getComputedStyle(el).overflowY;
+      if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 1) { box = el; break; }
+      if (el === pop) break;
+    }
+    if (!box) { e.preventDefault(); return; }
     const atTop = box.scrollTop <= 0 && e.deltaY < 0;
     const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 1 && e.deltaY > 0;
     if (atTop || atEnd) e.preventDefault();

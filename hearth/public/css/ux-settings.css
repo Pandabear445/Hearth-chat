@@ -67,6 +67,10 @@ body.m-ui .set-stack .set-nav-text { flex: 1; }
 body.m-ui .set-stack .set-nav-btn .set-chev { width: 18px; height: 18px; color: var(--muted); }
 body.m-ui .set-stack .set-dot { margin-left: 0; }
 body.m-ui .set-stack .set-nav-sep { width: auto; height: 0; margin: 10px 0 0; background: none; }
+/* A page's tabs (Security's three, Profile's three) across the full width in equal parts, a long name on two lines
+   inside its own part, rather than wrapping into a second row of a box that doesn't fill the width. */
+body.m-ui .set-stack .set-subtabs:not(.admin-subtabs) { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); width: auto; margin-right: 0; }
+body.m-ui .set-stack .set-subtabs:not(.admin-subtabs) .set-subtab { min-height: 44px; padding: 6px 8px; text-align: center; line-height: 1.2; overflow-wrap: anywhere; }
 body.m-ui .set-stack .set-nav-btn.danger { justify-content: center; border-radius: var(--r-lg); background: rgb(var(--s2)); border: 1px solid var(--line); color: var(--danger); font-weight: 600; }
 
 /* ------------------------------------------------------------------ appearance */

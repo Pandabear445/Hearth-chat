@@ -69,6 +69,16 @@ body.m-ui #conn-banner {
 }
 body.m-ui #conn-banner .spinner { width: 12px; height: 12px; }
 body.m-ui.conn-down #toasts { top: calc(var(--conn-bottom, calc(70px + env(safe-area-inset-top))) + 8px); }
+/* The unread bar moves down by the strip's height too, so the strip never covers "3 new · Jump · Mark as read". (A
+   margin, so the top a call above the chat gives it, placeUnreadBar, still counts.) */
+body.m-ui.conn-down .unread-bar { margin-top: 28px; }
+/* In a conversation, toasts sit below its Chat | Reels row (the header, 4px, then the row's 50px), not over it. */
+body.m-ui.m-conv:not(.conn-down):has(#main > .conv-tabs) #toasts { top: calc(env(safe-area-inset-top) + var(--head-h) + 4px + 50px + 8px); }
+/* (Sideways the row sits inside the header, and with the keyboard up it's hidden: under the header is enough.) */
+@media (pointer: coarse) and (max-height: 500px) {
+  body.m-ui.m-conv:not(.conn-down):has(#main > .conv-tabs) #toasts { top: calc(env(safe-area-inset-top) + var(--head-h) + 12px); }
+}
+html.kb-open body.m-ui.m-conv:not(.conn-down):has(#main > .conv-tabs) #toasts { top: calc(env(safe-area-inset-top) + var(--head-h) + 12px); }
 
 /* A touch tablet (not the phone layout): Retry and Delete still big enough for a finger. */
 @media (pointer: coarse) {

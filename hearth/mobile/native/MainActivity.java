@@ -188,6 +188,8 @@ public class MainActivity extends BridgeActivity {
     // The one place the saved server changes. Leaving a server removes this phone's push registration for it
     // (the old server would otherwise keep a working address for this phone), and ends a call there.
     private void setServerOrigin(String o) {
+        String locked = lockedServer();
+        if (locked != null && !locked.equals(o)) return; // (a build for one server only ever uses that one)
         String old = serverOrigin();
         if (!o.equals(old)) {
             HearthPush.unregister(this, PushPolicy.instanceFor(old));
@@ -195,6 +197,24 @@ public class MainActivity extends BridgeActivity {
         }
         prefs.edit().putString("server", o).apply();
         listen();
+    }
+
+    // An app built for one server (www/config.json lockServer, set in CI from HEARTH_SERVER): that server's origin,
+    // else null. Read from the bundled page's config, as iOS's HearthViewController.lockedServer does.
+    private String lockedServerCache;
+    private boolean lockedServerRead;
+    private String lockedServer() {
+        if (lockedServerRead) return lockedServerCache;
+        lockedServerRead = true;
+        try (InputStream in = getAssets().open("public/config.json")) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+            JSONObject cfg = new JSONObject(out.toString("UTF-8"));
+            String o = originOf(cfg.optString("defaultServer"));
+            if (cfg.optBoolean("lockServer") && (o.startsWith("https://") || o.startsWith("http://"))) lockedServerCache = o;
+        } catch (Exception ignored) { } // (no config: not locked)
+        return lockedServerCache;
     }
 
     private static String originOf(String url) {
@@ -545,10 +565,27 @@ public class MainActivity extends BridgeActivity {
 
     // An invite for another Hearth server than this app's: offered, never done by itself. The other address is
     // checked first (it must answer as a Hearth server), then it becomes the app's server and the invite opens.
+    // A build for one server never switches: the invite can open in the browser instead (as on iOS).
     private void askToSwitch(String[] invite) {
         String newOrigin = InviteLinks.normalOrigin(invite[0]);
         String host = Uri.parse(newOrigin).getHost();
         String current = Uri.parse(serverOrigin()).getHost();
+        if (lockedServer() != null) {
+            Uri target = Uri.parse(InviteLinks.target(newOrigin, invite[1]));
+            new AlertDialog.Builder(this)
+                    .setTitle("This invite is for " + host)
+                    .setMessage("It\u2019s for a different Hearth server than the one this app uses. You can open it in your browser.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Open in browser", (d, w) -> {
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW, target).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                        } catch (ActivityNotFoundException e) {
+                            Toast.makeText(this, "No app can open this link", Toast.LENGTH_SHORT).show();
+                        }
+                    })
+                    .show();
+            return;
+        }
         new AlertDialog.Builder(this)
                 .setTitle("Switch to " + host + " and join?")
                 .setMessage("This invite is for a different Hearth server than the one this app uses (" + current + "). Switching signs you in there instead; you can switch back in Settings \u2192 Apps & devices.")

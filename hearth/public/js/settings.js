@@ -132,7 +132,7 @@ export function openSettings(app, tab = null, { focus = null } = {}) {
   let current = tab || 'profile';
   let dirty = false;
   // On a phone settings is a stack of two pages, like the phone's own Settings: the list of sections, and the one
-  // tapped, with a Back arrow (and the system Back, which closes the dialog's top layer: see backdrop._close below).
+  // tapped, with a Back arrow (and the system Back, which takes the dialog's top layer back: see backdrop._back below).
   // Opened at a section (Edit profile, Theme and appearance, the security card), Back goes back to where that was,
   // not to a list it never showed.
   let page = tab ? 'page' : 'list';
@@ -148,9 +148,10 @@ export function openSettings(app, tab = null, { focus = null } = {}) {
 
   let stopWatching = () => {};
   const m = modal({ size: 'full', className: 'settings-modal', label: 'Settings', body: shell, onClose: () => { stopMicTest(); stopWatching(); } });
-  // Esc, and Back on a phone (phone-nav.js closes the top dialog with this), go back a page before closing, and ask
-  // first about changes that aren't saved.
-  m.box.parentElement._close = () => back();
+  // Esc, and Back on a phone (app.js's back stack takes the top dialog back with this), go back a page before closing,
+  // and ask first about changes that aren't saved. _close stays a real close, for what closes Settings to open
+  // something else (a server's Manage, a profile card's mutual servers).
+  m.box.parentElement._back = () => back();
 
   async function tryClose() {
     if (dirty && !(await confirmDialog({ title: 'Discard changes?', text: 'You have changes that are not saved yet.', confirm: 'Discard', danger: true }))) return;

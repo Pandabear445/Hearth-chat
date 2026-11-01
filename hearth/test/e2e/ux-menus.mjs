@@ -78,6 +78,24 @@ async function desktopMenus(t) {
   await page.keyboard.press('Escape');
   await page.waitForSelector('.popover', { state: 'detached' });
 
+  // The message menu's More › Add reaction: the picked emoji is added to the message (the phone sheet's "+" runs the
+  // same item).
+  const said = `wheel and react ${Date.now()}`;
+  await p.send(said);
+  await p.messageAction(said, 'Add reaction');
+  await p.$('.popover .emoji-grid .emoji-btn').first().waitFor();
+  // The wheel over the emoji grid scrolls the grid (the popup around it doesn't scroll, so it mustn't stop the wheel).
+  const grid = p.$('.popover .emoji-grid');
+  const gb = await grid.boundingBox();
+  await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2);
+  await page.mouse.wheel(0, 400);
+  await page.waitForFunction(() => document.querySelector('.popover .emoji-grid').scrollTop > 0, null, { timeout: 3000 })
+    .catch(() => check(false, 'The mouse wheel over the emoji picker should scroll its grid.'));
+  await grid.evaluate((el) => { el.scrollTop = 0; });
+  await p.$('.popover .emoji-grid .emoji-btn').first().click();
+  await p.message(said).first().locator('.reactions .reaction:not(.add-r)').first().waitFor({ timeout: 5000 })
+    .catch(() => check(false, 'More › Add reaction should add the picked emoji to the message.'));
+
   // Alt+↓ goes to the next text channel (the one you're in is found by its aria-current).
   await p.$('#composer-input').click();
   await page.keyboard.press('Alt+ArrowDown');
@@ -148,6 +166,6 @@ async function tabletTouch(t) {
 }
 
 export const FLOWS = [
-  ['ux menus: at 1366x768 a channel’s ⋯ menu fits, Notifications › opens and closes from the keyboard, Alt+↓ moves to the next text channel', desktopMenus],
+  ['ux menus: at 1366x768 a channel’s ⋯ menu fits, Notifications › opens and closes from the keyboard, More › Add reaction adds one, the wheel scrolls the emoji grid, Alt+↓ moves to the next text channel', desktopMenus],
   ['ux menus: on a touch tablet a held channel opens its menu as a sheet (a submenu is a page), a held voice channel never joins, taps leave no tooltip', tabletTouch],
 ];

@@ -131,8 +131,12 @@ test('phone settings: a list page, then a section page with Back; Keybinds hidde
   const s = read('public', 'js', 'settings.js');
   const open = s.slice(s.indexOf('export function openSettings('), s.indexOf('\nfunction pointOut('));
   assert.match(open, /let page = tab \? 'page' : 'list';/);
-  // Esc and the system Back (phone-nav.js closes the top dialog with _close) go back a page first.
-  assert.match(open, /m\.box\.parentElement\._close = \(\) => back\(\);/);
+  // Esc and the system Back go back a page first (_back, which ui.js's Esc and app.js's back stack try before
+  // _close); _close stays a real close, for a server's Manage and a profile card's mutual servers.
+  assert.match(open, /m\.box\.parentElement\._back = \(\) => back\(\);/);
+  assert.doesNotMatch(open, /parentElement\._close = /);
+  assert.match(read('public/js/ui.js'), /if \(top && top\._back\) top\._back\(\);\n\s+else if \(top && top\._close\) top\._close\(\);/);
+  assert.match(read('public/js/app.js'), /close: \(\) => \(dialog\(\)\._back \? dialog\(\)\._back\(\) : dialog\(\)\._close\(\)\)/);
   assert.match(open, /if \(!phoneUI\(\) \|\| page === 'list' \|\| deep\) return tryClose\(\);/);
   assert.match(open, /\(who !== 'keys' \|\| !isTouchUI\(\)\)/);
   assert.match(s, /\['keybinds', 'Keybinds', 'monitor', 'keys'\]/);

@@ -72,8 +72,10 @@ body.m-ui .att-file > .btn.busy .btn-label { display: inline; }
 /* ------------------------------------------------------------------ room for a finger */
 /* Touch screens: small buttons answer a touch around them (40px) while looking the same. */
 @media (pointer: coarse) {
-  #sidebar .icon-btn.sm, .invite-nudge-x, .head-badge { position: relative; }
-  #sidebar .icon-btn.sm::before, .invite-nudge-x::before, .head-badge::before { content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 40px); height: max(100%, 40px); transform: translate(-50%, -50%); }
+  #sidebar .icon-btn.sm, .invite-nudge-x, .head-badge, .secure-x { position: relative; }
+  #sidebar .icon-btn.sm::before, .invite-nudge-x::before, .head-badge::before, .secure-x::before { content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 40px); height: max(100%, 40px); transform: translate(-50%, -50%); }
+  /* Home's text buttons (the security card's steps, a section's "All friends"): a finger's height, not a line's. */
+  .secure-step .link-btn, .home-sec-head .link-btn { min-height: 40px; }
   .conv-tab { min-height: 40px; }
   /* No keyboard to press Ctrl K with. */
   .find-btn kbd, .kbd-hint, kbd.hint { display: none; }

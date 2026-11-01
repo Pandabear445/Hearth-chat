@@ -120,8 +120,11 @@ test('the side panel on laptops and tablets docks between header and composer, a
 });
 
 test('touch targets: small sidebar and header buttons answer a 40px touch; phones get 44px', () => {
-  assert.match(mediaOf(css, '#sidebar .icon-btn.sm::before, .invite-nudge-x::before, .head-badge::before'), /pointer:\s*coarse/);
-  assert.match(rule(css, '#sidebar .icon-btn.sm::before, .invite-nudge-x::before, .head-badge::before'), /max\(100%, 40px\)/);
+  const sel = '#sidebar .icon-btn.sm::before, .invite-nudge-x::before, .head-badge::before, .secure-x::before';
+  assert.match(mediaOf(css, sel), /pointer:\s*coarse/);
+  assert.match(rule(css, sel), /max\(100%, 40px\)/);
+  // Home's text buttons on a touch screen: the security card's steps, a section's "All friends".
+  assert.match(rule(css, '.secure-step .link-btn, .home-sec-head .link-btn'), /min-height:\s*40px/);
   assert.match(rule(css, 'body.m-ui .conv-tab'), /min-height:\s*44px/);
 });
 

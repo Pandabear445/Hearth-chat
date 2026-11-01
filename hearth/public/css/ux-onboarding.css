@@ -16,13 +16,15 @@
 #boot-splash .boot-mark { width: 56px; height: 56px; color: var(--boot-flame); animation: boot-glow 1.6s ease-in-out infinite alternate; }
 #boot-splash p { margin: 0; max-width: 34ch; }
 #boot-splash .boot-text { font-size: calc(15 / 16 * 1rem); font-weight: 600; color: var(--boot-muted); }
-/* Still here after a long while (the scripts didn't arrive, or this browser can't run them): say what to do. */
-#boot-splash .boot-slow { font-size: calc(14 / 16 * 1rem); color: var(--boot-muted); opacity: 0; animation: boot-late .3s ease 15s forwards; }
+/* Still here after a long while (the scripts didn't arrive, or this browser can't run them): say what to do. Hidden
+   with visibility too until then, not only faded out: a screen reader would otherwise find "taking longer than usual"
+   in the splash's status line from the first moment of a quick start. */
+#boot-splash .boot-slow { font-size: calc(14 / 16 * 1rem); color: var(--boot-muted); opacity: 0; visibility: hidden; animation: boot-late .3s ease 15s forwards; }
 #boot-splash.failed .boot-slow { display: none; }
 #boot-splash.failed .boot-text { color: var(--boot-ink); }
 #boot-splash .boot-noscript { font-size: calc(14 / 16 * 1rem); color: var(--boot-ink); }
 @keyframes boot-glow { from { opacity: .55; transform: scale(.96); } to { opacity: 1; transform: scale(1.04); } }
-@keyframes boot-late { to { opacity: 1; } }
+@keyframes boot-late { from { visibility: visible; } to { opacity: 1; visibility: visible; } }
 @media (prefers-reduced-motion: reduce) { #boot-splash .boot-mark { animation: none; } }
 
 /* ------------------------------------------------------------------ sign in / sign up */
@@ -103,8 +105,12 @@ body.m-ui .update-pill { order: 1; margin: 0 16px 12px; min-height: 48px; }
 .secure-card.m-secure { flex-direction: row; align-items: center; gap: 0; margin: 0 4px 8px; padding: 0 4px 0 0; border-radius: 16px; }
 .secure-row { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; min-height: 60px; padding: 8px 6px 8px 14px; text-align: left; font-size: calc(16 / 16 * 1rem); font-weight: 600; }
 .secure-row > .ic { width: 22px; height: 22px; flex: none; color: var(--accent-ink, var(--accent)); }
-.secure-row .m-row-text > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The words wrap rather than end in "…": cut short (a narrow phone, a bigger text size) the row no longer said what it
+   was for. */
+.secure-row .m-row-text > * { white-space: normal; overflow-wrap: anywhere; }
 .m-secure .secure-x { width: 44px; height: 44px; flex: none; }
+/* The same ask on the phone's You page, where the You tab's dot leads (app.js renderYouPage). */
+.m-you-secure > .ic:first-child { color: var(--accent-ink, var(--accent)); }
 @media (max-width: 380px) { .m-secure .m-row-chev { display: none; } .secure-row { gap: 12px; } } /* (room for the words) */
 
 /* No servers yet: join, create or add a friend (app.js firstSteps). Tiles on a computer's Home. */
