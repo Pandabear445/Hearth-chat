@@ -51,6 +51,21 @@ if (typeof window !== 'undefined' && window.addEventListener) {
   });
 }
 
+// A request that never got an answer (fetch's TypeError "Failed to fetch": no connection, the server down, the
+// connection dropped on the way) as an error people can read. offline: this device has no connection at all, so
+// what's being sent waits for it to come back (app.js deliver). network: no answer either way, so the server may or
+// may not have it. Errors that are already this shape (or a cancelled request) pass through as they are.
+export function netError(e) {
+  if (!e || e.network || e.name === 'AbortError') return e;
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  const out = new Error(offline ? 'You\u2019re offline. Check your connection.' : 'Can\u2019t reach the server. Trying again\u2026');
+  out.network = true;
+  out.offline = offline;
+  out.status = 0;
+  out.cause = e;
+  return out;
+}
+
 export async function api(method, path, body) {
   const opts = { method, headers: {} };
   if (token) opts.headers.Authorization = 'Bearer ' + token;
@@ -59,7 +74,8 @@ export async function api(method, path, body) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
   }
-  const r = await fetch('/api' + path, opts);
+  let r;
+  try { r = await fetch('/api' + path, opts); } catch (e) { throw netError(e); }
   let data = {};
   try { data = await r.json(); } catch { /* empty body */ }
   if (!r.ok) {
@@ -68,6 +84,7 @@ export async function api(method, path, body) {
     e.code = data.code;
     e.codeUsed = data.codeUsed === true; // turned down after a two-factor code was checked: that code is spent
     e.retryAfter = Number(r.headers.get('Retry-After')) || 0; // seconds, on 429
+    e.rateLimited = r.status === 429 && data.code === 'rate_limited'; // too many at once: try again after retryAfter
     e.body = data; // the whole answer, for refusals that say what is there now (chat-look.js: 409 stale_look)
     throw e;
   }
@@ -87,7 +104,7 @@ export function upload(path, formData, onProgress) {
       if (xhr.status >= 200 && xhr.status < 300) resolve(data);
       else reject(new Error(data.error || `Upload failed (${xhr.status})`));
     };
-    xhr.onerror = () => reject(new Error('Upload failed. Check your connection.'));
+    xhr.onerror = () => reject(netError(new TypeError('Upload failed. Check your connection.')));
     xhr.send(formData);
   });
 }

@@ -84,16 +84,31 @@ export function fmtSize(n) {
 // ------------------------------------------------------------ toasts
 // #toasts is a polite live region, so screen readers read each toast once; errors use role=alert so
 // they're read straight away. Pointing at or focusing a toast keeps it up until you move away.
+// The same words again while that toast is still up don't stack another one: it counts them ("×7") and stays up
+// for the full time again. (A string only: a toast built from elements is always its own.)
 export function toast(message, kind = 'info') {
   const host = document.getElementById('toasts');
+  const same = typeof message === 'string' && [...host.children].find((t) => t._text === message && t._kind === kind && !t.classList.contains('out'));
+  if (same) { same._again(); return; }
   const el = h('div', { class: `toast toast-${kind}`, role: kind === 'error' ? 'alert' : null }, message);
+  el._text = typeof message === 'string' ? message : null;
+  el._kind = kind;
   host.append(el);
   let timers = [];
-  const schedule = (ms) => { timers = [setTimeout(() => el.classList.add('out'), ms), setTimeout(() => el.remove(), ms + 500)]; };
+  let count = 1;
+  const ms = kind === 'error' ? 6000 : 3800;
+  const schedule = (t) => { timers.forEach(clearTimeout); timers = [setTimeout(() => el.classList.add('out'), t), setTimeout(() => el.remove(), t + 500)]; };
   const hold = () => { timers.forEach(clearTimeout); el.classList.remove('out'); };
+  el._again = () => {
+    count += 1;
+    let badge = el.querySelector('.toast-count');
+    if (!badge) { badge = h('span', { class: 'toast-count', 'aria-hidden': 'true' }); el.append(badge); }
+    badge.textContent = `\u00d7${count}`;
+    if (!el.matches(':hover')) schedule(ms);
+  };
   el.addEventListener('mouseenter', hold);
   el.addEventListener('mouseleave', () => schedule(1500));
-  schedule(kind === 'error' ? 6000 : 3800);
+  schedule(ms);
 }
 
 // Sounds live in sounds.js (distinct, meaningful sounds with per-sound settings).

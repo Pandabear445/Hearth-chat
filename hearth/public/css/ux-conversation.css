@@ -1,2 +1,76 @@
 /* Hearth — the conversation and message delivery.
    Loaded after app.css (index.html), so a rule here wins over app.css at equal specificity. */
+
+/* A message that couldn't go yet stays in the chat (app.js pendingEl): "Waiting for connection", or "Not sent" with
+   Retry and Delete. Readable at full strength, unlike one still sending. On a desktop the two are links in its
+   footer; on a phone, chips a finger can hit (44px). */
+.msg.sending.failed, .msg.sending.waiting { opacity: 1; }
+.msg.sending.waiting .msg-body, .msg.sending.failed .msg-body { opacity: .7; }
+.msg.sending.failed { box-shadow: inset 2px 0 0 var(--danger); }
+.send-state {
+  grid-column: 2; grid-row: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 2px;
+  font-size: calc(12.5 / 16 * 1rem); color: var(--muted);
+}
+.send-state .ic { width: 14px; height: 14px; flex: none; }
+.send-failed { color: var(--danger); }
+.send-why { min-width: 0; display: inline-flex; align-items: center; gap: 6px; }
+.send-act {
+  color: var(--accent-ink, var(--accent)); font-weight: 600; text-decoration: underline; text-underline-offset: 2px;
+  padding: 2px 4px; border-radius: 6px;
+}
+.send-act:hover { background: var(--active); }
+.send-delete { color: var(--text-2); }
+body.m-ui .send-state { gap: 8px; margin-top: 6px; }
+body.m-ui .send-why { flex-basis: 100%; }
+body.m-ui .send-act {
+  min-height: 44px; min-width: 88px; padding: 0 16px; border-radius: 999px; text-decoration: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgb(var(--elev)); border: 1px solid var(--line-2);
+}
+
+/* Uploading: its name and how far, in the message column, with the picture. */
+.sending-note { grid-row: 3; display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.sending-thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; flex: none; }
+.sending-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Offline: a quiet line above the message box (role=status). */
+.offline-note {
+  display: flex; align-items: center; gap: 6px; padding: 0 4px 6px;
+  font-size: calc(12.5 / 16 * 1rem); color: var(--muted);
+}
+.offline-note[hidden] { display: none; }
+.offline-note .ic { width: 14px; height: 14px; }
+
+/* The same toast again counts instead of stacking (util.js toast). */
+.toast-count {
+  display: inline-block; margin-left: 8px; padding: 0 7px; border-radius: 999px;
+  background: rgb(var(--text-rgb) / .12); font-size: calc(12 / 16 * 1rem); font-weight: 700; vertical-align: 1px;
+}
+
+/* Older messages loading at the top. */
+.older-skeleton { padding: 12px 20px 4px; gap: 18px; }
+
+/* The unread bar: "3 new" on a phone, with buttons a finger can hit. */
+.unread-count { display: none; }
+body.m-ui .unread-bar button { min-height: 44px; }
+body.m-ui .unread-jump .unread-text { display: none; }
+body.m-ui .unread-count { display: inline; }
+
+/* Editing on a touch screen: Cancel and Save buttons under the box instead of the Esc/Enter hint. */
+.edit-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.edit-btns .btn { min-height: 44px; min-width: 88px; }
+
+/* On a phone, the connection banner is a strip across the top under the header rather than a pill over the title,
+   and toasts sit below it while it shows. */
+body.m-ui #conn-banner {
+  top: calc(env(safe-area-inset-top) + var(--head-h) + 4px); left: 0; right: 0; transform: none;
+  height: 28px; padding: 0 12px; justify-content: center; border-radius: 0; border-width: 0 0 1px;
+  font-size: calc(12.5 / 16 * 1rem); box-shadow: none;
+}
+body.m-ui #conn-banner .spinner { width: 12px; height: 12px; }
+body.m-ui.conn-down #toasts { top: calc(var(--conn-bottom, calc(70px + env(safe-area-inset-top))) + 8px); }
+
+/* A touch tablet (not the phone layout): Retry and Delete still big enough for a finger. */
+@media (pointer: coarse) {
+  body:not(.m-ui) .send-act { min-height: 40px; padding: 0 12px; display: inline-flex; align-items: center; }
+}
