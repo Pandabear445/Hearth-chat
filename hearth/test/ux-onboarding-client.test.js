@@ -153,3 +153,13 @@ test('the invite window: the VPS line only for whoever runs it on a private addr
   for (const h of ['localhost', '127.0.0.1', '192.168.1.20', '10.0.0.5', '172.20.1.1', 'hearth.local', '[::1]']) assert.equal(check(h), true, h);
   for (const h of ['chat.example.com', '172.32.0.1', '8.8.8.8', '100.64.0.1']) assert.equal(check(h), false, h);
 });
+
+test('Forgot your password: says it needs a confirmed email, and points accounts without one to the owner', () => {
+  const f = fn('openForgot');
+  // Before anyone presses Send, not only in the toast after.
+  assert.match(f, /only works if your account has a confirmed email address/);
+  assert.match(f, /No email on your account\? Ask the owner of \$\{location\.host\} to send you a reset link instead\./);
+  assert.match(f, /toast\('If that account has a confirmed email, a reset link is on its way\.[^']*Ask the server\\u2019s owner for a reset link\.'\)/);
+  // Still the same request for every account, so the answer never tells whether an account has an email.
+  assert.match(f, /api\('POST', '\/auth\/forgot', \{ login: input\.value\.trim\(\), captcha: await cap\.token\(\) \}\)/);
+});

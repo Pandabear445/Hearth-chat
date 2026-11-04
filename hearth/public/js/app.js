@@ -558,11 +558,17 @@ function openForgot(prefill) {
   const input = h('input', { class: 'input', value: prefill || '', placeholder: 'Username or email', autocomplete: 'username', autocapitalize: 'off', spellcheck: 'false' });
   const cap = captchaWidget('login'); // the same robot check as signing in
   modal({ title: 'Reset your password', size: 'sm',
-    body: h('div', { class: 'stack' }, h('p', { class: 'muted-p' }, 'We\u2019ll email a reset link to the address on your account (if it has a confirmed one).'), field('Username or email', input), cap.el),
+    // Says up front that it needs a confirmed email: an account without one would otherwise wait for an email that
+    // never comes (the server can't say whether an account has one, or anyone could find out). The owner's reset
+    // link (Admin \u2192 Users) is the way back for those.
+    body: h('div', { class: 'stack' },
+      h('p', { class: 'muted-p' }, 'Reset links go by email, so this only works if your account has a confirmed email address.'),
+      field('Username or email', input),
+      h('p', { class: 'field-hint' }, `No email on your account? Ask the owner of ${location.host} to send you a reset link instead.`), cap.el),
     actions: [{ label: 'Cancel' }, { label: 'Send reset link', kind: 'primary', action: async () => {
       if (!input.value.trim()) throw new Error('Enter your username or email.');
       await harderOnce(async () => api('POST', '/auth/forgot', { login: input.value.trim(), captcha: await cap.token() }).finally(() => cap.reset()));
-      toast('If that account has a confirmed email, a reset link is on its way. Check your inbox (and spam).');
+      toast('If that account has a confirmed email, a reset link is on its way. Check your inbox (and spam). Nothing after a few minutes? Ask the server\u2019s owner for a reset link.');
     } }] });
   cap.start(); // solving starts right away, so it's usually done by the time the name is typed
 }
