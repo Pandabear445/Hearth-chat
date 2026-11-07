@@ -1,4 +1,4 @@
-// The owner's contact email (Admin > Owner): public in /api/config so people who can't get back in by themselves (an
+// The owner's contact email (Admin → Owner): public in /api/config so people who can't get back in by themselves (an
 // account with no email gets no reset link) know where to write. Changing it needs the password, like the donation
 // link: a stolen session mustn't be able to send those people somewhere else. CONTACT_EMAIL in .env is the default.
 const { test, before, after } = require('node:test');
@@ -41,17 +41,31 @@ test('saving other owner settings, or the same address again, needs no password'
 });
 
 test('only an email address is taken', async () => {
-  for (const bad of ['not an email', 'a@b', '<x@y.test>', 'x@y.test\nBcc: z@w.test', 'javascript:alert(1)@x.test', `${'a'.repeat(65)}@x.test`]) {
+  // Nothing that means something in a mailto: link (? # & % = /) either: the address goes into one as it is.
+  for (const bad of ['not an email', 'a@b', '<x@y.test>', 'x@y.test\nBcc: z@w.test', 'javascript:alert(1)@x.test', `${'a'.repeat(65)}@x.test`,
+    'help?bcc=other%40evil.test@example.test', 'help#desk@x.test', 'a&b@x.test', 'a/b@x.test']) {
     const r = await as(owner, 'PUT', '/admin/owner', { contactEmail: bad, authKey: owner.authKey });
     assert.equal(r.status, 400, bad);
   }
   assert.equal((await config()).contactEmail, 'owner@hearth.example.test');
 });
 
+test('a suspended account is told where to ask about it', async () => {
+  const u = await srv.register('suspended' + hex(3));
+  srv.sql('UPDATE users SET suspended_at = ?, suspend_reason = ? WHERE id = ?', Date.now(), 'spam', u.id);
+  const r = await srv.login(u);
+  assert.equal(r.status, 403);
+  assert.equal(r.json.error, 'This account is suspended: spam. Questions? Email owner@hearth.example.test.');
+});
+
 test('clearing it hides it, and CONTACT_EMAIL doesn’t come back', async () => {
   assert.equal((await as(owner, 'PUT', '/admin/owner', { contactEmail: '', authKey: owner.authKey })).status, 200);
   assert.equal((await config()).contactEmail, null);
   assert.equal((await as(owner, 'GET', '/admin/owner')).json.contactEmail, null);
+  // …and the suspension message goes back to how it was.
+  const u = await srv.register('quiet' + hex(3));
+  srv.sql('UPDATE users SET suspended_at = ? WHERE id = ?', Date.now(), u.id);
+  assert.equal((await srv.login(u)).json.error, 'This account is suspended.');
 });
 
 test('the app shows it where people who can’t get in look: Forgot your password, and Settings > Security', () => {

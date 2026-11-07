@@ -178,7 +178,7 @@ test('play-4: /api/config gives privacyUrl only for an https PRIVACY_URL, and th
   const settings = read('public', 'js', 'settings.js');
   assert.match(fnSource(settings, 'privacyLink'), /typeof url === 'string' && \/\^https:\\\/\\\/\/i\.test\(url\) \? h\('a', \{ href: url, target: '_blank', rel: 'noopener noreferrer' \}, 'Privacy policy'\) : null/);
   const account = fnSource(settings, 'accountTab');
-  assert.match(account.slice(account.indexOf("section('Delete account'")), /privacyLink\(S\.config\) \? h\('p', \{ class: 'field-hint' \}, 'How this server handles your data: ', privacyLink\(S\.config\)\) : null\),\n {2}\);/);
+  assert.match(account.slice(account.indexOf("section('Delete account'")), /privacyLink\(S\.config\) \? h\('p', \{ class: 'field-hint' \}, 'How this server handles your data: ', privacyLink\(S\.config\)\) : null,\n {6}contactLink\(S\.config\) \? [^\n]+ : null\),\n {2}\);/);
   assert.match(fnSource(settings, 'appsTab'), /privacyLink\(cfg\) \? section\('Privacy', /);
   // Documented for operators.
   assert.match(read('.env.example'), /^# PRIVACY_URL=https:\/\//m);

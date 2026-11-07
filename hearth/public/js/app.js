@@ -553,7 +553,7 @@ function showSignIn() {
   };
 }
 
-// What to do without an email on the account: write to the owner's contact email (Admin > Owner) when there is one.
+// What to do without an email on the account: write to the owner's contact email (Admin → Owner) when there is one.
 function noEmailHelp() {
   const to = S.config.contactEmail;
   return to ? ['No email on your account? Email the owner at ', h('a', { href: `mailto:${to}?subject=${encodeURIComponent(`Reset link for my ${S.config.name || 'Hearth'} account`)}` }, to), ' for a reset link instead.']

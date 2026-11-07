@@ -1693,7 +1693,8 @@ function secEvent(type, ip, detail = '') {
   if (ALERTS) ALERTS.countSecurity(type);
 }
 const maintenance = () => getSetting('maintenance') || '';
-const suspendedMsg = (row) => `This account is suspended${row.suspended_until ? ` until ${new Date(row.suspended_until).toUTCString().replace(/:\d\d GMT$/, ' UTC')}` : ''}${row.suspend_reason ? `: ${row.suspend_reason}` : '.'}`;
+// With the owner's contact email (Admin → Owner), it also says where to ask about it.
+const suspendedMsg = (row) => `This account is suspended${row.suspended_until ? ` until ${new Date(row.suspended_until).toUTCString().replace(/:\d\d GMT$/, ' UTC')}` : ''}${row.suspend_reason ? `: ${row.suspend_reason}` : '.'}${contactEmail() ? `${row.suspend_reason && !/[.!?]$/.test(row.suspend_reason) ? '.' : ''} Questions? Email ${contactEmail()}.` : ''}`;
 // True while the account is suspended. A timed suspension that has run out is lifted here, on first use.
 function stillSuspended(row) {
   if (!row || !row.suspended_at) return false;
@@ -2202,7 +2203,7 @@ api.get('/config', (req, res) => {
     registrationRequiresCode: regMode() === 'code',
     termsVersion: termsInfo().version || 0,
     privacyUrl: PRIVACY_URL,
-    contactEmail: contactEmail(), // the owner's, for people who can't get back in by themselves (Admin > Owner)
+    contactEmail: contactEmail(), // the owner's, for people who can't get back in by themselves (Admin → Owner)
     gifsEnabled: true, // the server's own library always works
     gifLibraryOnly: !gifKey(),
     gifProvider: gifProvider(),
@@ -7029,14 +7030,18 @@ api.delete('/admin/users/:id/comments', auth, staffOnly, (req, res) => {
 // ---------------------------------------------------------------- owner tools
 // Branding, feature switches, funding, backups and server health.
 const brand = () => ({ name: (getSetting('brandName') || INSTANCE_NAME).slice(0, 40), tagline: (getSetting('brandTagline') || '').slice(0, 140) });
-// The owner's contact email (Admin > Owner): public on purpose. It's how someone who can't get back in by themselves
+// The owner's contact email (Admin → Owner): public on purpose. It's how someone who can't get back in by themselves
 // (no email on their account, so no reset link) reaches whoever can make them one. CONTACT_EMAIL in .env is the
 // starting value; clearing it in Admin stores '' so the .env value doesn't come back.
-const CONTACT_RE = /^[^\s@<>()[\]\\,;:"]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$/;
+// Plainer than the account email check: it goes into mailto: links as it is, so no ? # & % = / in the local part.
+const CONTACT_RE = /^[A-Za-z0-9._+'-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$/;
 const contactEmail = () => {
   const v = String(getSetting('contactEmail') ?? process.env.CONTACT_EMAIL ?? '').trim();
   return CONTACT_RE.test(v) ? v : null;
 };
+if (getSetting('contactEmail') === undefined && String(process.env.CONTACT_EMAIL || '').trim() && !contactEmail()) {
+  log.warn('config', 'contact_email_ignored', { msg: 'CONTACT_EMAIL must be a plain email address (like admin@example.com); it is ignored.' });
+}
 // linkPreviews: members may ask this server to fetch a page for a preview card (server/linkpreview.js).
 const FEATURE_DEFAULTS = { customCss: true, comments: true, watch: true, gifs: true, linkPreviews: process.env.LINK_PREVIEWS !== 'false', createServers: 'everyone', createBots: 'admins' };
 function features() {
@@ -7172,7 +7177,6 @@ api.put('/admin/owner', auth, ownerOnly, wrap(async (req, res) => {
   if (contact && !CONTACT_RE.test(contact)) fail(400, 'That doesn’t look like an email address.');
   const contactChanged = contact !== null && (contact || null) !== contactEmail();
   if (urlChanged || fewerBackups || contactChanged) await stepUp(req, b);
-  if (contactChanged) setSetting('contactEmail', contact);
   if (b.brand) {
     checkWords(b.brand.name, b.brand.tagline);
     if (b.brand.name !== undefined) setSetting('brandName', String(b.brand.name).trim().slice(0, 40) || null);
@@ -7191,6 +7195,8 @@ api.put('/admin/owner', auth, ownerOnly, wrap(async (req, res) => {
     setSetting('funding', JSON.stringify({ enabled: !!f.enabled, url: String(f.url || '').slice(0, 300), monthly: Math.max(0, Math.min(1e6, +f.monthly || 0)), raised: Math.max(0, Math.min(1e6, +f.raised || 0)),
       currency: /^[A-Z]{3}$/.test(f.currency) ? f.currency : 'USD', note: String(f.note || '').slice(0, 300) }));
   }
+  // Saved once every check above has passed, so a refused request changes nothing (and a change is always logged below).
+  if (contactChanged) setSetting('contactEmail', contact);
   if (b.supporterQuotaMb !== undefined) setSetting('supporterQuotaMb', String(Math.max(0, Math.min(1e6, Math.round(+b.supporterQuotaMb) || 0))));
   if (nextBackup) setSetting('autoBackup', JSON.stringify(nextBackup));
   const what = Object.keys(b).filter((k) => !['authKey', 'totp', 'backupCode'].includes(k) && (k !== 'contactEmail' || contactChanged)).map((k) => (k === 'funding' && urlChanged ? 'funding (donation link changed)'

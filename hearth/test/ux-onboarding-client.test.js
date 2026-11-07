@@ -160,7 +160,7 @@ test('Forgot your password: says it needs a confirmed email, and points accounts
   assert.match(f, /only works if your account has a confirmed email address/);
   assert.match(f, /h\('p', \{ class: 'field-hint' \}, \.\.\.noEmailHelp\(\)\)/);
   assert.match(f, /Nothing after a few minutes\? \$\{S\.config\.contactEmail \? `Email \$\{S\.config\.contactEmail\} for a reset link\.` : 'Ask the server\\u2019s owner for a reset link\.'\}/);
-  // With the owner's contact email (Admin > Owner) the hint links to it; without, it names this server.
+  // With the owner's contact email (Admin → Owner) the hint links to it; without, it names this server.
   const help = fn('noEmailHelp');
   assert.match(help, /No email on your account\? Email the owner at /);
   assert.match(help, /`No email on your account\? Ask the owner of \$\{location\.host\} to send you a reset link instead\.`/);

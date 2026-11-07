@@ -85,7 +85,7 @@ function privacyLink(cfg) {
   const url = cfg && cfg.privacyUrl;
   return typeof url === 'string' && /^https:\/\//i.test(url) ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, 'Privacy policy') : null;
 }
-// The owner's contact email (Admin > Owner), when they set one.
+// The owner's contact email (Admin → Owner), when they set one.
 function contactLink(cfg) {
   const to = cfg && cfg.contactEmail;
   return typeof to === 'string' && to.includes('@') ? h('a', { href: `mailto:${to}` }, to) : null;

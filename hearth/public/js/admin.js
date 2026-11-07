@@ -1177,7 +1177,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       h('div', { class: 'grid-2' }, field('Server name', name, 'Shown in the browser tab, on the login screen and in installed apps.'), field('Tagline', tagline, 'One line under the name on the login screen.')),
       h('div', { class: 'row gap' }, h('button', { class: 'btn primary', onclick: () => save({ brand: { name: name.value, tagline: tagline.value } }) }, 'Save')),
       // Public: people are told to write here to get back into an account, so changing it needs the password.
-      field('Contact email', contact, 'Public. Shown in Forgot your password and in Settings > Security, for people who can\u2019t get back in by themselves (an account with no email can only be reset with a link you make in Users). Use an address you check.'),
+      field('Contact email', contact, 'Public. Shown in \u201cForgot your password?\u201d and in Settings \u2192 Security, for people who can\u2019t get back in by themselves (an account with no email can only be reset with a link you make in Users). Use an address you check.'),
       h('div', { class: 'row gap' }, h('button', { class: 'btn primary', onclick: () => (contact.value.trim() === (o.contactEmail || '') ? toast('Nothing changed.')
         : saveConfirmed({ contactEmail: contact.value.trim() }, { title: 'Confirm the contact email', text: 'People who can\u2019t sign in are told to write to this address, so changing it needs your password.' })) }, 'Save contact email')),
 
