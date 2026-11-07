@@ -1106,6 +1106,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       : save(patch);
     const name = h('input', { class: 'input', maxlength: '40', value: o.brand.name });
     const tagline = h('input', { class: 'input', maxlength: '140', value: o.brand.tagline, placeholder: 'e.g. Our little corner of the internet' });
+    const contact = h('input', { class: 'input', type: 'email', maxlength: '254', autocomplete: 'email', value: o.contactEmail || '', placeholder: 'e.g. admin@example.com' });
     const sw = (label, key, hint) => h('label', { class: 'toggle-row' }, h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, label), hint ? h('span', { class: 'field-hint' }, hint) : null),
       h('span', { class: 'switch' }, h('input', { type: 'checkbox', checked: !!o.features[key], onchange: (e) => save({ features: { [key]: e.target.checked } }) }), h('span', { class: 'switch-track' })));
     const F = o.funding;
@@ -1175,6 +1176,10 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       h('div', { class: 'admin-head' }, h('h3', null, 'Name and welcome')),
       h('div', { class: 'grid-2' }, field('Server name', name, 'Shown in the browser tab, on the login screen and in installed apps.'), field('Tagline', tagline, 'One line under the name on the login screen.')),
       h('div', { class: 'row gap' }, h('button', { class: 'btn primary', onclick: () => save({ brand: { name: name.value, tagline: tagline.value } }) }, 'Save')),
+      // Public: people are told to write here to get back into an account, so changing it needs the password.
+      field('Contact email', contact, 'Public. Shown in Forgot your password and in Settings > Security, for people who can\u2019t get back in by themselves (an account with no email can only be reset with a link you make in Users). Use an address you check.'),
+      h('div', { class: 'row gap' }, h('button', { class: 'btn primary', onclick: () => (contact.value.trim() === (o.contactEmail || '') ? toast('Nothing changed.')
+        : saveConfirmed({ contactEmail: contact.value.trim() }, { title: 'Confirm the contact email', text: 'People who can\u2019t sign in are told to write to this address, so changing it needs your password.' })) }, 'Save contact email')),
 
       h('div', { class: 'admin-head' }, h('h3', null, 'Features')),
       h('p', { class: 'field-hint' }, 'Turn whole features on or off for everyone. Nothing is deleted when you turn something off.'),

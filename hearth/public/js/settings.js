@@ -85,6 +85,11 @@ function privacyLink(cfg) {
   const url = cfg && cfg.privacyUrl;
   return typeof url === 'string' && /^https:\/\//i.test(url) ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, 'Privacy policy') : null;
 }
+// The owner's contact email (Admin > Owner), when they set one.
+function contactLink(cfg) {
+  const to = cfg && cfg.contactEmail;
+  return typeof to === 'string' && to.includes('@') ? h('a', { href: `mailto:${to}` }, to) : null;
+}
 
 // ------------------------------------------------------------------ the modal
 // Grouped like most chat apps so people can find things: [group label, [[key, label, icon], ...]]
@@ -729,7 +734,8 @@ function accountTab(app, setDirty, go) {
     section('Delete account',
       h('p', { class: 'muted-p' }, 'Erases your private keys, email, profile, pictures and friends, takes you out of every server, and signs out every device. Messages you sent stay where they are (still encrypted, readable by the people who could read them before) and show “Deleted user”. This can’t be undone.'),
       h('div', null, h('button', { class: 'btn danger', onclick: () => deleteAccount(app).catch(quiet) }, 'Delete my account')),
-      privacyLink(S.config) ? h('p', { class: 'field-hint' }, 'How this server handles your data: ', privacyLink(S.config)) : null),
+      privacyLink(S.config) ? h('p', { class: 'field-hint' }, 'How this server handles your data: ', privacyLink(S.config)) : null,
+      contactLink(S.config) ? h('p', { class: 'field-hint' }, 'Questions, or someone can\u2019t get into their account? Email the owner: ', contactLink(S.config)) : null),
   );
 }
 async function deleteAccount(app) {

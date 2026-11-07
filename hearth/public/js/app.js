@@ -553,6 +553,12 @@ function showSignIn() {
   };
 }
 
+// What to do without an email on the account: write to the owner's contact email (Admin > Owner) when there is one.
+function noEmailHelp() {
+  const to = S.config.contactEmail;
+  return to ? ['No email on your account? Email the owner at ', h('a', { href: `mailto:${to}?subject=${encodeURIComponent(`Reset link for my ${S.config.name || 'Hearth'} account`)}` }, to), ' for a reset link instead.']
+    : [`No email on your account? Ask the owner of ${location.host} to send you a reset link instead.`];
+}
 // "Forgot your password?": a reset link goes to the account's verified email.
 function openForgot(prefill) {
   const input = h('input', { class: 'input', value: prefill || '', placeholder: 'Username or email', autocomplete: 'username', autocapitalize: 'off', spellcheck: 'false' });
@@ -564,11 +570,11 @@ function openForgot(prefill) {
     body: h('div', { class: 'stack' },
       h('p', { class: 'muted-p' }, 'Reset links go by email, so this only works if your account has a confirmed email address.'),
       field('Username or email', input),
-      h('p', { class: 'field-hint' }, `No email on your account? Ask the owner of ${location.host} to send you a reset link instead.`), cap.el),
+      h('p', { class: 'field-hint' }, ...noEmailHelp()), cap.el),
     actions: [{ label: 'Cancel' }, { label: 'Send reset link', kind: 'primary', action: async () => {
       if (!input.value.trim()) throw new Error('Enter your username or email.');
       await harderOnce(async () => api('POST', '/auth/forgot', { login: input.value.trim(), captcha: await cap.token() }).finally(() => cap.reset()));
-      toast('If that account has a confirmed email, a reset link is on its way. Check your inbox (and spam). Nothing after a few minutes? Ask the server\u2019s owner for a reset link.');
+      toast(`If that account has a confirmed email, a reset link is on its way. Check your inbox (and spam). Nothing after a few minutes? ${S.config.contactEmail ? `Email ${S.config.contactEmail} for a reset link.` : 'Ask the server\u2019s owner for a reset link.'}`);
     } }] });
   cap.start(); // solving starts right away, so it's usually done by the time the name is typed
 }

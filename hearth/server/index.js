@@ -2202,6 +2202,7 @@ api.get('/config', (req, res) => {
     registrationRequiresCode: regMode() === 'code',
     termsVersion: termsInfo().version || 0,
     privacyUrl: PRIVACY_URL,
+    contactEmail: contactEmail(), // the owner's, for people who can't get back in by themselves (Admin > Owner)
     gifsEnabled: true, // the server's own library always works
     gifLibraryOnly: !gifKey(),
     gifProvider: gifProvider(),
@@ -7028,6 +7029,14 @@ api.delete('/admin/users/:id/comments', auth, staffOnly, (req, res) => {
 // ---------------------------------------------------------------- owner tools
 // Branding, feature switches, funding, backups and server health.
 const brand = () => ({ name: (getSetting('brandName') || INSTANCE_NAME).slice(0, 40), tagline: (getSetting('brandTagline') || '').slice(0, 140) });
+// The owner's contact email (Admin > Owner): public on purpose. It's how someone who can't get back in by themselves
+// (no email on their account, so no reset link) reaches whoever can make them one. CONTACT_EMAIL in .env is the
+// starting value; clearing it in Admin stores '' so the .env value doesn't come back.
+const CONTACT_RE = /^[^\s@<>()[\]\\,;:"]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$/;
+const contactEmail = () => {
+  const v = String(getSetting('contactEmail') ?? process.env.CONTACT_EMAIL ?? '').trim();
+  return CONTACT_RE.test(v) ? v : null;
+};
 // linkPreviews: members may ask this server to fetch a page for a preview card (server/linkpreview.js).
 const FEATURE_DEFAULTS = { customCss: true, comments: true, watch: true, gifs: true, linkPreviews: process.env.LINK_PREVIEWS !== 'false', createServers: 'everyone', createBots: 'admins' };
 function features() {
@@ -7143,7 +7152,7 @@ function health() {
   return h;
 }
 api.get('/admin/owner', auth, ownerOnly, (req, res) => {
-  res.json({ brand: brand(), features: features(), funding: funding(), supporterQuotaMb: +(getSetting('supporterQuotaMb') || 0),
+  res.json({ brand: brand(), contactEmail: contactEmail(), features: features(), funding: funding(), supporterQuotaMb: +(getSetting('supporterQuotaMb') || 0),
     supporters: db.prepare('SELECT id FROM users WHERE supporter = 1').all().map((r) => brief(r.id)), ...backupInfo(), autoBackup: autoBackup() });
 });
 // The donation link is where supporters' money goes, and fewer (or no) automatic backups means older ones get
@@ -7157,7 +7166,13 @@ api.put('/admin/owner', auth, ownerOnly, wrap(async (req, res) => {
   const was = autoBackup();
   const nextBackup = b.autoBackup ? { enabled: !!b.autoBackup.enabled, keep: Math.max(1, Math.min(60, Math.round(+b.autoBackup.keep) || 7)) } : null;
   const fewerBackups = !!nextBackup && ((was.enabled && !nextBackup.enabled) || nextBackup.keep < was.keep);
-  if (urlChanged || fewerBackups) await stepUp(req, b);
+  // A new contact email needs the password too: people are told to write there to get back into their account, so a
+  // stolen session mustn't be able to point them somewhere else.
+  const contact = b.contactEmail !== undefined ? String(b.contactEmail || '').trim() : null;
+  if (contact && !CONTACT_RE.test(contact)) fail(400, 'That doesn’t look like an email address.');
+  const contactChanged = contact !== null && (contact || null) !== contactEmail();
+  if (urlChanged || fewerBackups || contactChanged) await stepUp(req, b);
+  if (contactChanged) setSetting('contactEmail', contact);
   if (b.brand) {
     checkWords(b.brand.name, b.brand.tagline);
     if (b.brand.name !== undefined) setSetting('brandName', String(b.brand.name).trim().slice(0, 40) || null);
@@ -7178,10 +7193,10 @@ api.put('/admin/owner', auth, ownerOnly, wrap(async (req, res) => {
   }
   if (b.supporterQuotaMb !== undefined) setSetting('supporterQuotaMb', String(Math.max(0, Math.min(1e6, Math.round(+b.supporterQuotaMb) || 0))));
   if (nextBackup) setSetting('autoBackup', JSON.stringify(nextBackup));
-  const what = Object.keys(b).filter((k) => !['authKey', 'totp', 'backupCode'].includes(k)).map((k) => (k === 'funding' && urlChanged ? 'funding (donation link changed)'
+  const what = Object.keys(b).filter((k) => !['authKey', 'totp', 'backupCode'].includes(k) && (k !== 'contactEmail' || contactChanged)).map((k) => (k === 'funding' && urlChanged ? 'funding (donation link changed)'
     : k === 'autoBackup' ? `autoBackup (${was.enabled ? 'on' : 'off'}, keep ${was.keep} → ${nextBackup.enabled ? 'on' : 'off'}, keep ${nextBackup.keep})` : k));
   adminLog(req, 'owner_settings', null, what.join(', '));
-  io.emit('config:update', { name: brand().name, tagline: brand().tagline, features: features(), funding: fundingPublic() });
+  io.emit('config:update', { name: brand().name, tagline: brand().tagline, contactEmail: contactEmail(), features: features(), funding: fundingPublic() });
   res.json({ ok: true });
 }));
 // Backups, two kinds:
