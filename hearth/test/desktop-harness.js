@@ -5,7 +5,7 @@
 // window, and that a certificate error on the connect screen is put into words (no raw code). Prints one line: RESULT {...}.
 const http = require('http');
 const path = require('path');
-const { app, shell, dialog, BrowserWindow } = require('electron');
+const { app, shell, dialog, BaseWindow, BrowserWindow } = require('electron');
 
 app.setPath('userData', process.env.HEARTH_UD);
 const opened = [];
@@ -46,9 +46,11 @@ const server = http.createServer((req, res) => {
   await app.whenReady();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const main = () => BrowserWindow.getAllWindows().find((x) => !x.getParentWindow());
+  // The main window is a BaseWindow (title bar strip + page); its page is the first view in it.
+  const main = () => BaseWindow.getAllWindows().find((x) => !x.getParentWindow());
   const pickerWin = () => BrowserWindow.getAllWindows().find((x) => x.getParentWindow() && x.isVisible());
-  const js = (w, code) => w.webContents.executeJavaScript(code, true);
+  const wcOf = (w) => w.webContents || w.contentView.children[0].webContents;
+  const js = (w, code) => wcOf(w).executeJavaScript(code, true);
   const pick = async () => {
     const p = await until(pickerWin, 15000);
     if (!p) return false;
@@ -56,10 +58,10 @@ const server = http.createServer((req, res) => {
     return true;
   };
 
-  await until(() => main() && main().webContents.getURL().startsWith('file:'), 20000);
+  await until(() => main() && wcOf(main()).getURL().startsWith('file:'), 20000);
   const w = main();
   out.connect = !!(await js(w, `window.hearthDesktop.connect(${JSON.stringify(origin)})`)).ok;
-  out.onServer = !!(await until(() => w.webContents.getURL() === `${origin}/`));
+  out.onServer = !!(await until(() => wcOf(w).getURL() === `${origin}/`));
 
   // 1. Screen sharing the normal way (getDisplayMedia): the person picks, the page carries on sharing
   await js(w, 'document.body.click(); window.marker = 1; 1');
@@ -89,15 +91,15 @@ const server = http.createServer((req, res) => {
   // 3. "Change server…" from a page that refuses to unload, then a start page that redirects to another site
   await until(() => js(w, 'document.body.click(); 1'), 5000);
   await js(w, 'window.hearthDesktop.changeServer(); 1').catch(() => {});
-  out.changeServer = !!(await until(() => w.webContents.getURL().startsWith('file:'), 8000));
+  out.changeServer = !!(await until(() => wcOf(w).getURL().startsWith('file:'), 8000));
   redirect = true;
   const openedBefore = opened.length;
   await js(w, `window.hearthDesktop.connect(${JSON.stringify(origin)})`).catch(() => {});
-  out.redirectError = await until(() => (w.webContents.getURL().includes('error=') ? js(w, "document.getElementById('err').textContent") : null), 10000);
+  out.redirectError = await until(() => (wcOf(w).getURL().includes('error=') ? js(w, "document.getElementById('err').textContent") : null), 10000);
   out.redirectOpened = opened.slice(openedBefore);
 
   // 4. A certificate the app doesn't trust: the connect screen says so in words, with "Review certificate"
-  await w.loadFile(path.join(app.getAppPath(), 'connect.html'), { query: { server: origin, name: 'Hearth', error: 'ERR_CERT_AUTHORITY_INVALID' } }).catch(() => {});
+  await wcOf(w).loadFile(path.join(app.getAppPath(), 'connect.html'), { query: { server: origin, name: 'Hearth', error: 'ERR_CERT_AUTHORITY_INVALID' } }).catch(() => {});
   out.certText = await until(() => js(w, "document.getElementById('f').hidden ? null : document.getElementById('f').innerText"), 8000);
   out.certButton = await js(w, "!document.getElementById('cert').hidden").catch(() => null);
 

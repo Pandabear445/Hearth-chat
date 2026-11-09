@@ -205,7 +205,7 @@ test('xss-4/infra-6: main.js uses exact checks everywhere and handles redirects'
   assert.match(main, /const fromConnectScreen = \(e\) => fromMainWindow\(e\) && isConnectScreen\(/);
   assert.match(main, /isServerUrl\(request\.securityOrigin, origin\)/, 'screen-share requests: exact origin');
   const pkg = JSON.parse(read('desktop', 'package.json'));
-  for (const f of ['origin.js', 'permissions.js', 'update-verify.js', 'picker.html', 'picker-preload.js']) assert.ok(pkg.build.files.includes(f), `${f} is packaged`);
+  for (const f of ['origin.js', 'permissions.js', 'update-verify.js', 'picker.html', 'picker-preload.js', 'titlebar.html', 'titlebar.js', 'titlebar-preload.js']) assert.ok(pkg.build.files.includes(f), `${f} is packaged`);
 });
 
 // ------------------------------------------------------------------ infra-2: permissions + screen picker
@@ -254,7 +254,7 @@ test('infra-2: the screen list goes to the app\'s own picker window, never to th
   const restart = main.slice(main.indexOf('function restartPage'), main.indexOf('async function chooseScreen'));
   assert.match(restart, /wc\.once\('render-process-gone', again\)[\s\S]*wc\.forcefullyCrashRenderer\(\)/, 'stops the renderer, reloads once it is gone');
   assert.match(restart, /wc\.reload\(\)/);
-  assert.match(main, /win\.webContents\.on\('will-prevent-unload', \(e\) => e\.preventDefault\(\)\)/, 'a "Leave site?" handler can\'t cancel a reload, close or quit');
+  assert.match(main, /page\.on\('will-prevent-unload', \(e\) => e\.preventDefault\(\)\)/, 'a "Leave site?" handler can\'t cancel a reload, close or quit');
   assert.doesNotMatch(main, /send\('screen-pick'/, 'no window list or previews sent to the page');
   assert.doesNotMatch(main, /'screen-picked'/, 'the page can\'t answer for the person');
   assert.match(main, /preload: path\.join\(__dirname, 'picker-preload\.js'\)/);
