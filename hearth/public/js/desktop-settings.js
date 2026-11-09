@@ -1,4 +1,4 @@
-// Settings → Apps & devices → "Desktop app": the Hearth desktop app's own settings (start with the computer,
+// Settings → Apps & devices → "Desktop app": the Cindrly desktop app's own settings (start with the computer,
 // tray, zoom, graphics, updates, server; its spell checker is in Settings → Chat → Spelling). Only shown inside the
 // desktop app (window.hearthDesktop).
 // The app keeps these itself (settings.json on the computer, see desktop/main.js), not the server.
@@ -43,7 +43,7 @@ export function desktopSettingsSection({ h, section, toggle, field, toast }) {
     switch (update.state) {
       case 'checking': return 'Checking…';
       case 'none': return 'You have the latest version.';
-      case 'downloading': return `Downloading version ${update.version || 'update'}${update.percent ? ` (${update.percent}%)` : ''}… Hearth asks to restart when it’s ready.`;
+      case 'downloading': return `Downloading version ${update.version || 'update'}${update.percent ? ` (${update.percent}%)` : ''}… Cindrly asks to restart when it’s ready.`;
       case 'ready': return `Version ${update.version} is ready to install.`;
       default: return update.message || 'Couldn’t check for updates right now.';
     }
@@ -74,16 +74,16 @@ export function desktopSettingsSection({ h, section, toggle, field, toast }) {
 
     // Starting and closing
     if (sup.startAtLogin) {
-      body.append(toggle('Start Hearth when I log in', s.startAtLogin, (v) => set('startAtLogin', v),
-        'Hearth opens with your computer so you don’t miss messages.'));
+      body.append(toggle('Start Cindrly when I log in', s.startAtLogin, (v) => set('startAtLogin', v),
+        'Cindrly opens with your computer so you don’t miss messages.'));
       if (s.startAtLogin) {
         body.append(toggle('Start minimised in the tray', s.startHidden, (v) => set('startHidden', v),
-          'When it starts with your computer, Hearth waits in the tray instead of opening its window.'));
+          'When it starts with your computer, Cindrly waits in the tray instead of opening its window.'));
       }
     }
     if (sup.closeToTray) {
       body.append(toggle('Keep running in the tray when closed', s.closeToTray, (v) => set('closeToTray', v),
-        'Closing the window keeps Hearth running, so messages and calls still reach you. Quit from the tray icon.'));
+        'Closing the window keeps Cindrly running, so messages and calls still reach you. Quit from the tray icon.'));
     }
     // (Its spell checker is switched in Settings → Chat → Spelling: one switch for it, settings.js spellingSection.)
 
@@ -97,10 +97,10 @@ export function desktopSettingsSection({ h, section, toggle, field, toast }) {
 
     // Graphics
     body.append(toggle('Hardware acceleration', s.hardwareAcceleration, (v) => set('hardwareAcceleration', v),
-      'Uses your graphics card to draw Hearth smoothly. Turn it off only if the window flickers, stays black or video looks broken. Takes effect after a restart.'));
+      'Uses your graphics card to draw Cindrly smoothly. Turn it off only if the window flickers, stays black or video looks broken. Takes effect after a restart.'));
     if (restartNeeded || s.hardwareAcceleration !== s.hardwareAccelerationActive) {
       body.append(h('div', { class: 'row', style: { gap: '10px', flexWrap: 'wrap' } },
-        h('span', { class: 'muted-p' }, 'Restart Hearth to apply this.'),
+        h('span', { class: 'muted-p' }, 'Restart Cindrly to apply this.'),
         h('button', { class: 'btn sm primary', type: 'button', onclick: () => D.restart() }, 'Restart now')));
     }
 
@@ -122,19 +122,19 @@ export function desktopSettingsSection({ h, section, toggle, field, toast }) {
       }, 'Check for updates'));
     }
     body.append(h('div', { class: 'stack tight' },
-      h('span', { class: 'toggle-label' }, `Hearth for ${isMac ? 'Mac' : D.platform === 'win32' ? 'Windows' : 'Linux'} · version ${s.version}`),
-      sup.updates || ready ? null : h('span', { class: 'field-hint' }, isMac ? 'Get new versions from your server’s download page.' : 'In the installed app, Hearth downloads updates and asks before installing them.'),
+      h('span', { class: 'toggle-label' }, `Cindrly for ${isMac ? 'Mac' : D.platform === 'win32' ? 'Windows' : 'Linux'} · version ${s.version}`),
+      sup.updates || ready ? null : h('span', { class: 'field-hint' }, isMac ? 'Get new versions from your server’s download page.' : 'In the installed app, Cindrly downloads updates and asks before installing them.'),
       // Newer apps say whether they check the publisher's signature on updates (older ones don't report it).
       sup.updates && 'updatesSigned' in s ? h('span', { class: 'field-hint' }, s.updatesSigned
-        ? 'Hearth only installs updates signed by its publisher, and asks you first.'
-        : 'This copy of Hearth can’t verify who made an update, so it asks you before installing one.') : null,
+        ? 'Cindrly only installs updates signed by its publisher, and asks you first.'
+        : 'This copy of Cindrly can’t verify who made an update, so it asks you before installing one.') : null,
       buttons.childNodes.length ? buttons : null,
       status.textContent ? status : null));
 
     // Server
     body.append(h('div', { class: 'stack tight' },
       h('span', { class: 'toggle-label' }, 'Server'),
-      h('span', { class: 'field-hint' }, s.serverLocked ? `This app is set up for ${hostOf(s.server)}.` : `Connected to ${hostOf(s.server)}. Switch to another Hearth server (you can come back any time).`),
+      h('span', { class: 'field-hint' }, s.serverLocked ? `This app is set up for ${hostOf(s.server)}.` : `Connected to ${hostOf(s.server)}. Switch to another Cindrly server (you can come back any time).`),
       s.serverLocked ? null : h('div', null, h('button', { class: 'btn sm ghost', type: 'button', onclick: () => D.changeServer() }, 'Change server…'))));
   }
 
@@ -150,7 +150,7 @@ export function desktopSettingsSection({ h, section, toggle, field, toast }) {
 
   D.getDesktopSettings().then((next) => { s = next; draw(); }).catch(() => {
     empty(body);
-    body.append(h('p', { class: 'muted-p' }, 'Update the Hearth desktop app to change its settings here.'));
+    body.append(h('p', { class: 'muted-p' }, 'Update the Cindrly desktop app to change its settings here.'));
   });
   return root;
 }

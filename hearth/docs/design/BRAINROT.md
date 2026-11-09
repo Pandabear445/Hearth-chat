@@ -75,7 +75,7 @@ and `.wt`), `app.js` (`callBrainrot`, the call's round button), `server/reels.js
   turned on, the audio context is suspended whenever nothing can play (sounds off, the page hidden, no gameplay
   running).
 - One `requestAnimationFrame` loop per surface, **only while it's on screen**: an `IntersectionObserver` on the
-  gameplay and `visibilitychange` stop it (another tab of Hearth, another app, scrolled away, a mini player, full
+  gameplay and `visibilitychange` stop it (another tab of Cindrly, another app, scrolled away, a mini player, full
   screen). The background video is paused the same way.
 - The games are fixed-step simulations (60 steps a second whatever the display's rate; after a pause, at most a
   quarter of a second is caught up), each frame a few dozen filled polygons: about 1 ms a frame for both games on a
@@ -93,7 +93,7 @@ and `.wt`), `app.js` (`callBrainrot`, the call's round button), `server/reels.js
 - The games load nothing. "Your own background" accepts only a YouTube video link (`youtube.com`, `youtu.be`,
   `youtube-nocookie.com`, the same id rules as link previews); it's kept on this device only. It loads only after a
   tap on a cover saying it comes from YouTube (youtube-nocookie.com), which sees your IP address; that tap counts
-  until Hearth is closed or reloaded. The player is watch together's YouTube adapter in background mode (`inert`, so nothing in it takes focus):
+  until Cindrly is closed or reloaded. The player is watch together's YouTube adapter in background mode (`inert`, so nothing in it takes focus):
   `youtube-nocookie.com/embed/<id>?…&mute=1&loop=1&controls=0…`, sandboxed with only `allow-scripts
   allow-same-origin` (no popups, no full screen, no top navigation), `tabindex=-1`, no pointer events, and its
   commands only go to YouTube's origin.

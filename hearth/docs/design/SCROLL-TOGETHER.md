@@ -52,7 +52,7 @@ Settings → Chat → TikTok and Instagram applies:
 
 - **Load when I tap** (default): a cover says the videos load from TikTok and Instagram, which see your IP address,
   and that short links are looked up by your server. **A tap on that cover** lets every video in the tab, and in
-  other Reels tabs, load **until you close or reload Hearth**: you don't tap each video. Nothing else counts as
+  other Reels tabs, load **until you close or reload Cindrly**: you don't tap each video. Nothing else counts as
   that tap (not Back, +, or starting a swipe).
 - **Always load**: no cover.
 - **Just show the link**: cards with the link only, never a player.
@@ -115,9 +115,9 @@ Copying links by hand is the slow way. Faster ones, all ending in an ordinary en
 
 | From | How | Where it lands |
 |---|---|---|
-| **The Android app** | Share → Hearth on a TikTok or Instagram video (an `ACTION_SEND text/plain` intent filter) | the share picker |
-| **Chrome on Android**, Hearth installed as a web app | Share → Hearth (the manifest's `share_target`: `GET /share?url=&text=&title=`) | the share picker |
-| **A computer** | the **Send to Hearth** bookmarklet (Settings → Reels): opens `/share?url=<the page you're on>` | the share picker |
+| **The Android app** | Share → Cindrly on a TikTok or Instagram video (an `ACTION_SEND text/plain` intent filter) | the share picker |
+| **Chrome on Android**, Cindrly installed as a web app | Share → Cindrly (the manifest's `share_target`: `GET /share?url=&text=&title=`) | the share picker |
+| **A computer** | the **Send to Cindrly** bookmarklet (Settings → Reels): opens `/share?url=<the page you're on>` | the share picker |
 | **Any Reels tab** | Ctrl/⌘+V anywhere (not in a text box), or drop a link on it | added after 4 s, with **Undo** (leaving the tab first cancels it) |
 | **The desktop app** | when the tab opens, a TikTok/Instagram link you copied is *offered* ("Add the TikTok video you copied?"), only if clipboard reading was already allowed for this server, at most once every 10 minutes | the tab |
 | **Your TikTok/Instagram data download** | Settings → Reels → Import (or Import on a Reels tab / My Reels) | My Reels, or a conversation |
@@ -129,7 +129,7 @@ shares, and there's no native iOS app. Copy the link and paste it on a Reels tab
 
 `/share` is the app's own page; it takes the link out of `url`, `text` or `title` (share sheets use any of them),
 keeps only a TikTok or Instagram link (`share.js`, social.js's rules) in social.js's own form, puts the address bar
-back to `/`, and (after sign-in, if needed) shows **Share to Hearth**: My Reels first, then the conversations you used
+back to `/`, and (after sign-in, if needed) shows **Share to Cindrly**: My Reels first, then the conversations you used
 recently, then your DMs, group chats and the channels you may post in, with search. Nothing is sent until you pick
 one; then the link goes as an ordinary encrypted message (with a preview card if "When I send a link" is Always) and
 that conversation's Reels tab opens. Anything else that arrives (another app's junk, a link to another site, a
@@ -137,11 +137,11 @@ broken address) shows "Nothing to share" and sends nothing.
 
 The Android app (`mobile/native/ShareLinks.java`) takes only an https link on TikTok's or Instagram's own names
 (no user name, password or other port, a plain path) from the shared text, and hands only that, quoted, to the
-server's page (`hearth-share`, or `/share?url=` for an older page), which checks it again. Any app can send Hearth
+server's page (`hearth-share`, or `/share?url=` for an older page), which checks it again. Any app can send Cindrly
 anything; the worst it can do is open the picker with a TikTok or Instagram link in it.
 
 The bookmarklet is `javascript:void(window.open("https://<server>/share?url="+encodeURIComponent(location.href),'_blank','noopener'))`:
-it reads the page's address and opens a Hearth tab. It adds nothing to the page and reads nothing else.
+it reads the page's address and opens a Cindrly tab. It adds nothing to the page and reads nothing else.
 
 ### Importing liked and saved videos
 

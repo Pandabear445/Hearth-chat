@@ -3,7 +3,7 @@ import WebKit
 import Capacitor
 import HearthKit
 
-/// Hearth for iPhone: a web view showing your Hearth server, plus the few things a web view can't do alone (the
+/// Cindrly for iPhone: a web view showing your Cindrly server, plus the few things a web view can't do alone (the
 /// iPhone counterpart of mobile/native/MainActivity.java):
 ///  - notifications while the app is open (HearthNotificationsNative) and while it's closed, through Apple's push
 ///    service with the real text decrypted on the phone (HearthPushNative, NotificationService)
@@ -59,7 +59,7 @@ final class HearthViewController: CAPBridgeViewController {
         messages = bridgeHandler
         content.addScriptMessageHandler(bridgeHandler, contentWorld: .page, name: "hearthIOS")
         // Capacitor's own bridge (its built-in plugins: HTTP without CORS, cookies, the web view's base path) answers
-        // any frame on any page. Hearth's pages don't use it, so only the connect screen's main frame reaches it.
+        // any frame on any page. Cindrly's pages don't use it, so only the connect screen's main frame reaches it.
         let capacitor = web.navigationDelegate as? WebViewDelegationHandler
         content.removeScriptMessageHandler(forName: "bridge")
         let gate = CapacitorGate()
@@ -67,7 +67,7 @@ final class HearthViewController: CAPBridgeViewController {
         gate.capacitor = capacitor
         content.add(gate, name: "bridge")
 
-        // Capacitor would open a server chosen at run time in Safari: Hearth decides which pages load, and hands
+        // Capacitor would open a server chosen at run time in Safari: Cindrly decides which pages load, and hands
         // everything else (its loading state, the JS bridge reset) on to Capacitor's own delegate.
         let nav = HearthNavigation(controller: self, capacitor: capacitor)
         navigation = nav
@@ -82,7 +82,7 @@ final class HearthViewController: CAPBridgeViewController {
         #if DEBUG
         web.isInspectable = true
         #endif
-        // Hearth's dark background, so the first load doesn't flash white.
+        // Cindrly's dark background, so the first load doesn't flash white.
         let dark = UIColor(red: 0x10 / 255.0, green: 0x0E / 255.0, blue: 0x16 / 255.0, alpha: 1)
         web.backgroundColor = dark
         web.scrollView.backgroundColor = dark
@@ -161,7 +161,7 @@ final class HearthViewController: CAPBridgeViewController {
         webView?.load(URLRequest(url: url))
     }
 
-    /// A link that leaves Hearth: Safari (or the app for mail and phone links). Never a payment page.
+    /// A link that leaves Cindrly: Safari (or the app for mail and phone links). Never a payment page.
     func openOutside(_ url: URL) {
         if BridgePolicy.isPaymentPage(url) { notice("Payments aren\u{2019}t available in the iPhone app."); return }
         guard let scheme = url.scheme?.lowercased(), ["https", "http", "mailto", "tel"].contains(scheme) else { return }

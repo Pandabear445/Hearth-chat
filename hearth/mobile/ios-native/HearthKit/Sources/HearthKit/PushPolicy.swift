@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// The rules for notifications that arrive while Hearth is closed. A port of mobile/native/PushPolicy.java; keep the
+/// The rules for notifications that arrive while Cindrly is closed. A port of mobile/native/PushPolicy.java; keep the
 /// two the same (test/ios-shell.test.js compares the OPEN pattern).
 ///
 /// A notification only ever opens an address inside the app (never another site), each server gets its own push

@@ -4,7 +4,7 @@ import HearthKit
 
 /// Notifications the open page posts (its window.Notification, ios.js), and what happens when any notification is
 /// shown or tapped. The page's own are keyed by their tag, so a newer one for the same conversation replaces the
-/// last and "cancel" removes it. Notifications from the server while Hearth is closed come through Apple's push
+/// last and "cancel" removes it. Notifications from the server while Cindrly is closed come through Apple's push
 /// service and the notification extension (NotificationService); tapping one opens the place it's about.
 /// AppDelegate makes this the notification center's delegate at launch, before any tap can arrive.
 @MainActor
@@ -89,7 +89,7 @@ final class HearthNotificationsNative: NSObject, UNUserNotificationCenterDelegat
     }
 
     // A tap: one the page posted goes back to it (its onclick); one from the server opens the place it's about, now
-    // if the page is ready, else once it says hello (only Hearth's own links, PushPolicy.safeOpenPath).
+    // if the page is ready, else once it says hello (only Cindrly's own links, PushPolicy.safeOpenPath).
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         defer { completionHandler() }
         guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
@@ -101,8 +101,8 @@ final class HearthNotificationsNative: NSObject, UNUserNotificationCenterDelegat
         LinkRouter.shared.open(info["url"] as? String)
     }
 
-    // ------------------------------------------------------------------ Hearth comes on screen
-    // A call rang while Hearth was in the background or closed, and Hearth was opened some other way than its
+    // ------------------------------------------------------------------ Cindrly comes on screen
+    // A call rang while Cindrly was in the background or closed, and Cindrly was opened some other way than its
     // notification (the Home Screen, the app switcher): the ring's notification goes, and the app goes to the call
     // as a tap would (the page shows its own ring card if the call is still on). Missed calls and messages stay.
     func sceneDidBecomeActive() {
@@ -125,7 +125,7 @@ final class HearthNotificationsNative: NSObject, UNUserNotificationCenterDelegat
             let open = path
             DispatchQueue.main.async { if let open = open { LinkRouter.shared.open(open) } }
         }
-        // Notifications turned on or off in Settings while Hearth was away: the page's shim and push state follow.
+        // Notifications turned on or off in Settings while Cindrly was away: the page's shim and push state follow.
         announce(force: false)
         HearthPushNative.shared.sceneDidBecomeActive()
     }

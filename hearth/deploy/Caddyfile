@@ -3,23 +3,23 @@
 chat.example.com {
 	encode gzip
 
-	# Hearth already sends its own security headers (Content-Security-Policy, X-Frame-Options, nosniff,
+	# Cindrly already sends its own security headers (Content-Security-Policy, X-Frame-Options, nosniff,
 	# Referrer-Policy, Permissions-Policy, Cross-Origin-Opener-Policy and HSTS), so Caddy doesn't repeat them.
 	# Don't announce the proxy software.
 	header {
 		-Server
 		-Via
 	}
-	# "?" = only if Hearth didn't send one (a backstop, e.g. for error pages while Hearth restarts).
+	# "?" = only if Cindrly didn't send one (a backstop, e.g. for error pages while Cindrly restarts).
 	# Keep each "?" header on its own line: several in one block only apply when all of them are missing.
 	header ?Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	header ?X-Content-Type-Options "nosniff"
 
-	# No request size limit here on purpose: uploads can be hundreds of MB, and Hearth enforces the limits
+	# No request size limit here on purpose: uploads can be hundreds of MB, and Cindrly enforces the limits
 	# you set in Admin → Storage & limits itself.
 
 	reverse_proxy hearth:3000 {
-		# While Hearth restarts (updates take a second or two), hold requests and retry
+		# While Cindrly restarts (updates take a second or two), hold requests and retry
 		# instead of showing visitors an error page.
 		lb_try_duration 30s
 		lb_try_interval 250ms

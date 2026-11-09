@@ -60,7 +60,7 @@ module.exports = function setupDiscovery(ctx) {
     const about = body.discoverAbout !== undefined ? cleanAbout(body.discoverAbout) : was.about;
     const tags = body.discoverTags !== undefined ? cleanTags(body.discoverTags) : was.tags;
     if (on && !about) fail(400, 'Add a short description so people know what this server is about.', 'about_required');
-    // Everyone on this Hearth can read a listing, so the instance's word filter applies to all of it.
+    // Everyone on this Cindrly can read a listing, so the instance's word filter applies to all of it.
     if (on) checkWords(name, about, tags);
     const changes = [];
     if (on !== was.on) changes.push('discoverable');

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <title>Hearth</title>
+  <title>Cindrly</title>
   <style>
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
@@ -65,7 +65,7 @@
   <div class="card" id="offline" hidden>
     <img src="icon.png" alt="">
     <h1 id="off-title">Can’t reach your server</h1>
-    <p id="off-text">Hearth will connect again by itself as soon as the server answers.</p>
+    <p id="off-text">Cindrly will connect again by itself as soon as the server answers.</p>
     <div class="status" id="status" role="status" aria-live="polite"><span class="dot"></span><span id="status-text" aria-hidden="true">Trying again…</span><span class="sr" id="status-sr">Trying again…</span></div>
     <div class="why" id="why"></div>
     <div class="actions">
@@ -77,7 +77,7 @@
   <form class="card" id="f" novalidate hidden>
     <img src="icon.png" alt="">
     <h1>Connect to your server</h1>
-    <p>Enter the address of the Hearth server you use in your browser.</p>
+    <p>Enter the address of the Cindrly server you use in your browser.</p>
     <label for="url">Server address</label>
     <input id="url" placeholder="chat.example.com" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" required>
     <button id="go" type="submit">Connect</button>
@@ -138,9 +138,9 @@
 
     // ------------------------------------------------ what went wrong, in words (desktop connect.html's list)
     const reasons = {
-      ERR_INTERNET_DISCONNECTED: 'You’re offline. Hearth connects again when your phone is back online.',
-      NSURLErrorNotConnectedToInternet: 'You’re offline. Hearth connects again when your phone is back online.',
-      NSURLErrorDataNotAllowed: 'Mobile data is off for Hearth, and there’s no Wi-Fi.',
+      ERR_INTERNET_DISCONNECTED: 'You’re offline. Cindrly connects again when your phone is back online.',
+      NSURLErrorNotConnectedToInternet: 'You’re offline. Cindrly connects again when your phone is back online.',
+      NSURLErrorDataNotAllowed: 'Mobile data is off for Cindrly, and there’s no Wi-Fi.',
       NSURLErrorInternationalRoamingOff: 'You’re roaming with data roaming off.',
       ERR_NAME_NOT_RESOLVED: 'The address couldn’t be found (DNS).',
       ERR_NAME_RESOLUTION_FAILED: 'The address couldn’t be found (DNS).',
@@ -159,7 +159,7 @@
       ERR_PROXY_CONNECTION_FAILED: 'Couldn’t connect through your proxy.',
       ERR_TUNNEL_CONNECTION_FAILED: 'Couldn’t connect through your proxy or network filter.',
       NSURLErrorBadServerResponse: 'The server sent an answer the app couldn’t read.',
-      NOT_HEARTH: 'Something answers at this address, but it isn’t a Hearth server.',
+      NOT_HEARTH: 'Something answers at this address, but it isn’t a Cindrly server.',
     };
     // Certificate problems don't fix themselves by trying again: the person looks at the certificate instead.
     const isCert = (r) => /^(ERR_CERT_|ERR_SSL_|ERR_BAD_SSL|CERT_UNTRUSTED$|NSURLErrorServerCertificate|NSURLErrorSecureConnectionFailed|NSURLErrorClientCertificate)/.test(r);
@@ -214,7 +214,7 @@
     $('cancel').addEventListener('click', () => go(saved));
 
     // Before saving an address, the Android app asks it for /api/config (the server doesn't answer other sites'
-    // pages, so the app does it, MainActivity "probe"): only a Hearth server is saved. No app, or an older app
+    // pages, so the app does it, MainActivity "probe"): only a Cindrly server is saved. No app, or an older app
     // that doesn't answer: straight on, as before.
     async function check(origin) {
       if (!window.HearthAndroid) return { ok: true };
@@ -226,7 +226,7 @@
       const o = norm(input.value);
       if (!input.value.trim()) { err.textContent = 'Enter an address like chat.example.com'; return; }
       if (!o) { err.textContent = 'That doesn’t look like a web address. Enter one like chat.example.com'; return; }
-      if (o.startsWith('http://') && !/^http:\/\/(localhost|127\.|10\.|192\.168\.)/.test(o)) { err.textContent = 'Use the https:// address — Hearth’s encryption needs a secure connection.'; return; }
+      if (o.startsWith('http://') && !/^http:\/\/(localhost|127\.|10\.|192\.168\.)/.test(o)) { err.textContent = 'Use the https:// address — Cindrly’s encryption needs a secure connection.'; return; }
       const btn = $('go');
       btn.disabled = true; btn.textContent = 'Checking…';
       err.textContent = '';

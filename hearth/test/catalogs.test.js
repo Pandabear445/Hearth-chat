@@ -388,7 +388,7 @@ test('landing site: sitemap, robots.txt, canonical links, structured data, the c
   // Structured data on the home page.
   const ld = JSON.parse(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(siteFile('index.html'))[1]);
   assert.ok(ld['@type'].includes('SoftwareApplication'));
-  assert.equal(ld.name, 'Hearth');
+  assert.equal(ld.name, 'Cindrly');
   assert.equal(ld.applicationCategory, 'CommunicationApplication');
   assert.equal(ld.offers.price, '0');
   assert.equal(ld.license, 'https://opensource.org/licenses/MIT');
@@ -420,7 +420,7 @@ test('landing site: sitemap, robots.txt, canonical links, structured data, the c
   // On a phone the table turns into one card per row (no sideways scrolling), and every cell says which side it is.
   assert.match(cmp, /@media \(max-width: 720px\) \{\s*\.compare-table, \.compare-table tbody, \.compare-table tr, \.compare-table th, \.compare-table td \{ display: block;/);
   const cells = [...cmp.matchAll(/<td\b([^>]*)>/g)].map((m) => m[1]);
-  assert.ok(cells.length >= 20 && cells.every((a) => /data-label="(Hearth|Discord)"/.test(a)), 'every cell is labelled');
+  assert.ok(cells.length >= 20 && cells.every((a) => /data-label="(Cindrly|Discord)"/.test(a)), 'every cell is labelled');
 });
 
 // The pages Google Play's reviewers read. They name menus, buttons and numbers from the app, so those are checked
@@ -436,9 +436,9 @@ test('landing site: the privacy policy, account deletion and child safety pages'
   const privacy = siteFile('privacy.html');
   const del = siteFile('delete-account.html');
   const kids = siteFile('child-safety.html');
-  assert.equal(titleOf(privacy), 'Hearth Privacy Policy');
-  assert.equal(titleOf(del), 'Delete your Hearth account');
-  assert.equal(titleOf(kids), 'Hearth child safety standards');
+  assert.equal(titleOf(privacy), 'Cindrly Privacy Policy');
+  assert.equal(titleOf(del), 'Delete your Cindrly account');
+  assert.equal(titleOf(kids), 'Cindrly child safety standards');
   for (const [f, html] of [['privacy.html', privacy], ['delete-account.html', del], ['child-safety.html', kids]]) {
     assert.match(html, /<a href="mailto:[^"]+">/, `${f}: an address to write to`);
     assert.match(html, /cindrly\.com/, `${f}: says which server it covers`);
@@ -451,7 +451,7 @@ test('landing site: the privacy policy, account deletion and child safety pages'
   assert.match(kids, /NCMEC/);
   // The minimum age matches the default terms.
   assert.match(read('server/index.js'), /You must be old enough to use online services where you live \(at least 13\)/);
-  for (const [f, html] of [['privacy.html', privacy], ['child-safety.html', kids]]) assert.match(html, /You must be 13 or older to use Hearth/, f);
+  for (const [f, html] of [['privacy.html', privacy], ['child-safety.html', kids]]) assert.match(html, /You must be 13 or older to use Cindrly/, f);
   // The way to delete an account in the app (Settings → Security → Security & storage → Delete account).
   const settings = read('public/js/settings.js');
   assert.ok(settings.includes("['account', 'Security', 'lock']") && settings.includes("['account', 'Security & storage']"), 'Settings → Security');

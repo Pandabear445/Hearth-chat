@@ -5,7 +5,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * One decrypted push from the Hearth server: { title, body, tag, url, at, generic?, _ }. Plain Java, so it's
+ * One decrypted push from the Cindrly server: { title, body, tag, url, at, generic?, _ }. Plain Java, so it's
  * tested on any JVM (org.json is only a stub outside a phone).
  *
  * Strict: anything that isn't a JSON object of at most 4096 bytes with a valid tag is dropped. Unknown keys are

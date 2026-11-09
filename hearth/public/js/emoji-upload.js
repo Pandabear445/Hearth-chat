@@ -113,7 +113,7 @@ export async function prepareEmoji(file) {
   const ext = { png: 'png', gif: 'gif', jpeg: 'jpg', webp: 'webp' }[info.type];
   if (info.animated) {
     if (fits) return file.size > STORED_MAX ? { error: `It’s ${sizeLabel(file.size)}. Animated emoji can be up to ${sizeLabel(STORED_MAX)}: try a shorter one.` } : { blob: file, filename: `emoji.${ext}`, width: info.width, height: info.height, animated: true, note: 'Animated' };
-    if (info.type !== 'gif') return { error: `This animated ${info.type === 'png' ? 'PNG' : 'WebP'} is ${info.width}×${info.height}. Animated emoji are up to ${EMOJI_PX}×${EMOJI_PX}: shrink it first, or use a GIF (Hearth shrinks GIFs for you).` };
+    if (info.type !== 'gif') return { error: `This animated ${info.type === 'png' ? 'PNG' : 'WebP'} is ${info.width}×${info.height}. Animated emoji are up to ${EMOJI_PX}×${EMOJI_PX}: shrink it first, or use a GIF (Cindrly shrinks GIFs for you).` };
     return { blob: file, filename: 'emoji.gif', width: target.width, height: target.height, was: { width: info.width, height: info.height }, animated: true, note: `Animated: shrunk to ${target.width}×${target.height} when it’s uploaded` };
   }
   if (fits && file.size <= STORED_MAX) return { blob: file, filename: `emoji.${ext}`, width: info.width, height: info.height, animated: false };

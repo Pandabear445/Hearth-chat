@@ -1,4 +1,4 @@
-# Dependabot: opens pull requests when Hearth's dependencies, the CI actions or the Docker base image have updates.
+# Dependabot: opens pull requests when Cindrly's dependencies, the CI actions or the Docker base image have updates.
 # Minor and patch updates are grouped into one PR per ecosystem per week; major updates come one by one (they may
 # need code changes). Security fixes arrive as soon as they're published (when Dependabot security updates are on:
 # Settings → Code security).

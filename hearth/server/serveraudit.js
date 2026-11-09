@@ -128,7 +128,7 @@ module.exports = function setupServerAudit(ctx) {
   // A channel as entries keep it: its name then, and whether some members couldn't see it (then only people who
   // can see it now, or Administrators once it's gone, read the name).
   const channelRef = (s, c) => (c ? { id: c.id, name: c.name, ...(perms.restricted(s, c) ? { private: true } : {}) } : null);
-  // Adds an entry. server: a servers row or id; actorId: who did it (null: Hearth itself, or instance staff, which
+  // Adds an entry. server: a servers row or id; actorId: who did it (null: Cindrly itself, or instance staff, which
   // the detail says with staff: true); targetId: the person, role, channel, emoji, invite code or webhook it was done
   // to; channelId: the channel it happened in, if any. Group chats have no audit log. A failure here is logged and
   // swallowed: what it records has already happened, and the person doing it shouldn't see an error for that.

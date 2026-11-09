@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Adds Hearth's own parts to the Android project that `npx cap add android` generates (there's no committed
-// android/ folder; the "Hearth apps" workflow builds it fresh every time):
+// Adds Cindrly's own parts to the Android project that `npx cap add android` generates (there's no committed
+// android/ folder; the "Cindrly apps" workflow builds it fresh every time):
 //   - the UnifiedPush library, at an exact version (notifications while the app is closed);
 //   - HearthPushService (unexported, only the library's PUSH_EVENT reaches it) and CallService (a foreground
 //     service of type "microphone" that keeps a call going with the screen locked), with the permissions
@@ -66,7 +66,7 @@ function inviteFilters(server) {
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="hearth" android:host="invite" />
             </intent-filter>
-            <!-- Share → Hearth: a TikTok or Instagram link from another app (ShareLinks.java) -->
+            <!-- Share → Cindrly: a TikTok or Instagram link from another app (ShareLinks.java) -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -85,7 +85,7 @@ function inviteFilters(server) {
   return out.join('');
 }
 
-// The generated AndroidManifest.xml with Hearth's additions. Throws if it doesn't look like Capacitor's template
+// The generated AndroidManifest.xml with Cindrly's additions. Throws if it doesn't look like Capacitor's template
 // or was patched already (so a changed template fails the build instead of shipping without push).
 function patchManifest(xml, { server = '' } = {}) {
   if (xml.includes(MARK)) throw new Error('AndroidManifest.xml is already patched');

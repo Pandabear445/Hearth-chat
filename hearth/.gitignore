@@ -16,7 +16,7 @@ data-backup*/
 *.pfx
 *.keystore
 *.jks
-# Databases and backups (Hearth backups: *.hbk)
+# Databases and backups (Cindrly backups: *.hbk)
 *.db
 *.db-wal
 *.db-shm
@@ -30,7 +30,7 @@ data-backup*/
 hearth-update-*.zip
 hearth-update-*.zip.sha256
 hearth-update-*.zip.sig
-# What copies of the old update tools (no longer part of Hearth) wrote next to themselves: a server's address and
+# What copies of the old update tools (no longer part of Cindrly) wrote next to themselves: a server's address and
 # its update log. Never commit them.
 hearth-update.json
 last-update-log.txt

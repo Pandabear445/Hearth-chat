@@ -6,17 +6,17 @@
 //   In a browser: a key, a click, a scroll, a touch or the pointer moving in this page counts as use, and so does
 //   the page coming back into view.
 //   In the desktop app: any input on the computer counts (the system's idle time, through the desktop bridge), so
-//   playing a game or working in another app with Hearth in the background isn't being away.
-//   In the Android app: like a browser, input in Hearth itself. Going to the background reports nothing by itself
+//   playing a game or working in another app with Cindrly in the background isn't being away.
+//   In the Android app: like a browser, input in Cindrly itself. Going to the background reports nothing by itself
 //   (Away still comes only after the person's time), and nothing the app itself hands the page (a push, a
-//   notification's Hang up, an invite, a tapped notification) counts as input; opening Hearth again does, since
+//   notification's Hang up, an invite, a tapped notification) counts as input; opening Cindrly again does, since
 //   the page comes back into view. A call keeps going in the background (android.js callState) and counts.
 //   All: being in a call counts (talking, or watching someone's screen without touching anything), and so does
 //   input in the Study page, whose frame of its own tells this page it's in use (recall-host.js calls used()).
 // It checks every 15 seconds, and says it's back on the first input after being idle, so coming back is instant.
 // Nothing is worked out or sent while the status isn't Online (minutes() is 0 then).
 // Only "idle" or "in use" is ever sent, never what was typed or clicked. It's sent as it happens, though, so the
-// server (and everyone who sees the dot change) can tell roughly when someone stopped and started using Hearth.
+// server (and everyone who sees the dot change) can tell roughly when someone stopped and started using Cindrly.
 const CHECK_MS = 15000;
 const INPUTS = ['keydown', 'pointerdown', 'pointermove', 'wheel', 'touchstart'];
 

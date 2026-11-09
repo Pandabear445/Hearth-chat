@@ -2,7 +2,7 @@
   "name": "hearth-mobile",
   "version": "1.0.0",
   "private": true,
-  "description": "Hearth for Android and iPhone: opens your Hearth server in an app, with microphone, camera and file access.",
+  "description": "Cindrly for Android and iPhone: opens your Cindrly server in an app, with microphone, camera and file access.",
   "scripts": {
     "android:add": "cap add android",
     "android:sync": "cap sync android",

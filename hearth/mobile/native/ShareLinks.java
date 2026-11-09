@@ -7,7 +7,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Links shared to the app (Share → Hearth, ACTION_SEND text/plain): the first TikTok or Instagram link in what was
+ * Links shared to the app (Share → Cindrly, ACTION_SEND text/plain): the first TikTok or Instagram link in what was
  * shared, or null. Plain Java, tested on any JVM.
  *
  * Any app can send anything, so what's shared is untrusted: only an https link on TikTok's or Instagram's own names

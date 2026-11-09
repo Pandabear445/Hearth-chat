@@ -133,7 +133,7 @@ const ms = (x) => `${x.toFixed(1)} ms`;
     }
     console.log('one click: 5 pages of 200, scope=all'.padEnd(46), '1000'.padStart(7), ms(pct(clicks, 50)).padStart(10), ms(pct(clicks, 95)).padStart(10));
 
-    // The plans of the exact statements server/search.js runs, without statistics (Hearth never runs ANALYZE)
+    // The plans of the exact statements server/search.js runs, without statistics (Cindrly never runs ANALYZE)
     // and with them.
     const { SQL } = require(path.join(__dirname, '..', 'server', 'search'));
     const plans = (label) => {

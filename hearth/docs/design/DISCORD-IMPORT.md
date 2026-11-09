@@ -1,32 +1,32 @@
 # Design: Import from Discord (structure, then emoji, then history)
 
-Status: proposal for a builder agent. Target: Hearth 1.28.x (`package.json` says 1.28.2; docs/ARCHITECTURE.md still says 1.27.1), schema 18 → 19.
+Status: proposal for a builder agent. Target: Cindrly 1.28.x (`package.json` says 1.28.2; docs/ARCHITECTURE.md still says 1.27.1), schema 18 → 19.
 
 **Built so far:** phase 1, paste path only (`server/discordmap.js`, `server/imports.js`, `public/js/discord-import.js`; user guide in [../IMPORT.md](../IMPORT.md)). Where it differs from this design, and why:
-- Hearth 1.29 has Mute Members, Move Members and View Audit Log (each server's own audit log), so Discord's map to
+- Cindrly 1.29 has Mute Members, Move Members and View Audit Log (each server's own audit log), so Discord's map to
   them. The sample's Moderator becomes 919088, not 1584, and View Audit Log is no longer in its "can't bring" list.
-- A Discord bit that a broader Hearth bit covers isn't reported as lost when the role has that bit: Pin Messages and Bypass Slowmode (Manage messages), Timeout Members (Kick), Manage Events and Manage Webhooks (Manage server or channels), Create Expressions (Manage emoji).
+- A Discord bit that a broader Cindrly bit covers isn't reported as lost when the role has that bit: Pin Messages and Bypass Slowmode (Manage messages), Timeout Members (Kick), Manage Events and Manage Webhooks (Manage server or channels), Create Expressions (Manage emoji).
 - Use External Emoji is allowed anyway, so it isn't "lost" either.
-- Create Events is "widened": in Hearth anyone who can post makes events. So the sample's @everyone has one widened warning.
+- Create Events is "widened": in Cindrly anyone who can post makes events. So the sample's @everyone has one widened warning.
 - `invite_override_dropped` became the general note `dropped:<DISCORD_BIT>`, which also covers Mute Members and other server-wide bits in overrides.
 - The tables are a `// v19 (discord import)` block: schema 19 is unreleased and ships them with the rest of 1.29. `messages.import_id` waits for phase 3.
-- Since then Hearth has per-server nicknames (`server/nicknames.js`): Change Nickname and Manage Nicknames map to
-  Hearth's (server-wide only, as in Discord) and are no longer "can't bring". The sample's @everyone is therefore
-  `1147343` (Hearth's `DEFAULT_EVERYONE`, which now has Change Nickname), not `98767`, and Change Nickname is no
+- Since then Cindrly has per-server nicknames (`server/nicknames.js`): Change Nickname and Manage Nicknames map to
+  Cindrly's (server-wide only, as in Discord) and are no longer "can't bring". The sample's @everyone is therefore
+  `1147343` (Cindrly's `DEFAULT_EVERYONE`, which now has Change Nickname), not `98767`, and Change Nickname is no
   longer in its lost list. An @everyone with Manage Nicknames or View Audit Log gets the `everyone_manage` warning,
   like Kick. The rows below that say otherwise (the lost-bits list, the @everyone value, the test names and
   Appendix A) are superseded by this.
-- There is no `features.discordImport` switch, since Hearth doesn't contact Discord. "Who can create servers" governs imports.
+- There is no `features.discordImport` switch, since Cindrly doesn't contact Discord. "Who can create servers" governs imports.
 - Too many channels or categories is a `problems` entry: the preview still shows everything so people can untick, and create refuses.
 - Real Discord category names win over the "Text" and "Voice" groups for uncategorised channels (those become "Text (2)").
 - Names lose control and text-direction characters.
-- "Never grant more" holds where Hearth can express it; where it can't, the preview lists it as widened. Besides the
-  bits Hearth can't withhold, that covers what a Hearth permission bundles that the role lacked (Kick → Timeout
+- "Never grant more" holds where Cindrly can express it; where it can't, the preview lists it as widened. Besides the
+  bits Cindrly can't withhold, that covers what a Cindrly permission bundles that the role lacked (Kick → Timeout
   Members; Manage channels or server → Manage Webhooks and Manage Events; Manage messages → Pin Messages and Bypass
-  Slowmode; Manage channels in a channel → Bypass Slowmode), per-channel denies of what Hearth only has server-wide
+  Slowmode; Manage channels in a channel → Bypass Slowmode), per-channel denies of what Cindrly only has server-wide
   (Create Invite, Mute Members) or of those bundled bits, and overrides cut by a limit that denied something.
 - Manage Channel, Manage Permissions or Embed Links granted in one channel to a role (or @everyone) without it
-  server-wide is reported as `dropped:` (the override stays; Hearth honours it only with the server-wide
+  server-wide is reported as `dropped:` (the override stays; Cindrly honours it only with the server-wide
   permission, and for Embed Links readers' apps check Show link previews server-wide).
 - Stage speakers: Discord lets someone speak on a stage unasked only with Mute Members there (the rule for
   unsuppressing yourself), so a role gets Speak on an imported stage only if, after that stage's own overrides, it
@@ -45,7 +45,7 @@ Paths are relative to `hearth/`. Every code reference below was checked against 
 
 | Phase | What | Where it runs | E2EE impact | Effort |
 |---|---|---|---|---|
-| 1 | Create a **new** Hearth server from a Discord server template: roles (colour, hoist, mentionable, unicode icon, position, permissions), categories, text/voice channels (topic, slowmode, position), @everyone and role channel overrides | Mapping is a pure function on the server (`server/discordmap.js`). The template comes from a server-side fetch of the template link through `netguard`, from JSON pasted by the user, or from a JSON file | None. Structure is server-visible metadata, as it is today when made by hand | M |
+| 1 | Create a **new** Cindrly server from a Discord server template: roles (colour, hoist, mentionable, unicode icon, position, permissions), categories, text/voice channels (topic, slowmode, position), @everyone and role channel overrides | Mapping is a pure function on the server (`server/discordmap.js`). The template comes from a server-side fetch of the template link through `netguard`, from JSON pasted by the user, or from a JSON file | None. Structure is server-visible metadata, as it is today when made by hand | M |
 | 2 | Custom emoji (and the server icon) from Discord's CDN, or from image files the user uploads | Server-side fetch with a strict host and path allow-list, or the existing upload route | None. Emoji and icons are public pictures (SECURITY.md §1) | S |
 | 3 | Message history from a DiscordChatExporter (DCE) JSON export | **Only on the importer's device**: parse, transform, encrypt with the server's current group key, sign as the importer, upload in batches | Ciphertext only on the server. Each message is labelled "Imported from Discord by @importer · original author not verified" | L |
 
@@ -55,9 +55,9 @@ Paths are relative to `hearth/`. Every code reference below was checked against 
 
 ### Goals
 1. A community moving from Discord gets its server skeleton in one step: roles, permissions, categories, channels and private-channel setup. A link or paste, a preview, then Create.
-2. Be honest about what doesn't carry over. Show a per-item report **before** anything is created: dropped permissions, permissions Hearth can't restrict, renamed channels, skipped channel types.
-3. Never grant more than Discord did. Where the mapping is lossy it errs toward *less* access, and every case where Hearth must allow more (a capability Hearth can't restrict) is a warning.
-4. Phase 2: bring custom emoji (≤ 200, Hearth's limit) and the server icon.
+2. Be honest about what doesn't carry over. Show a per-item report **before** anything is created: dropped permissions, permissions Cindrly can't restrict, renamed channels, skipped channel types.
+3. Never grant more than Discord did. Where the mapping is lossy it errs toward *less* access, and every case where Cindrly must allow more (a capability Cindrly can't restrict) is a warning.
+4. Phase 2: bring custom emoji (≤ 200, Cindrly's limit) and the server icon.
 5. Phase 3: bring readable channel history without weakening E2EE.
    - The server never sees plaintext.
    - History is encrypted on the importer's device under the server key.
@@ -66,9 +66,9 @@ Paths are relative to `hearth/`. Every code reference below was checked against 
    - It can be undone.
 
 ### Non-goals
-- Importing into an **existing** Hearth server in phase 1. That adds role and permission-escalation questions; only new servers are created.
+- Importing into an **existing** Cindrly server in phase 1. That adds role and permission-escalation questions; only new servers are created.
 - Members, member↔role assignments, bans, invites, webhooks, bots and integrations, AutoMod, onboarding, scheduled events, stickers, soundboard, forum tags, voice bitrate and user limits, NSFW flags, verification levels.
-- Any Discord **user token** handling. Hearth never asks for, stores or forwards a Discord token.
+- Any Discord **user token** handling. Cindrly never asks for, stores or forwards a Discord token.
 - A live bridge or sync. NEXT.md lists bridges as not recommended, because a bridge must decrypt.
 - DM or group-DM history import.
 - Re-uploading Discord **attachments** in phase 3 MVP. They are listed by name and size; actual upload is a 3b option.
@@ -91,7 +91,7 @@ Paths are relative to `hearth/`. Every code reference below was checked against 
   - No per-route number is documented, and Discord says not to hard-code limits. Parse `X-RateLimit-*` and honour `Retry-After` / `retry_after` on 429.
   - Global: 50 requests per second, applied per IP when there is no `Authorization` header.
   - **Invalid request limit:** 10,000 requests per 10 minutes per IP, counting 401, 403 and 429 responses. Exceeding it gets a temporary Cloudflare ban.
-  - Source: [Rate Limits](https://docs.discord.com/developers/topics/rate-limits). Hearth must therefore cache, rate-limit itself instance-wide, and back off on 429.
+  - Source: [Rate Limits](https://docs.discord.com/developers/topics/rate-limits). Cindrly must therefore cache, rate-limit itself instance-wide, and back off on 429.
 - **User-Agent:** must be `DiscordBot ($url, $versionNumber)`, or Cloudflare may block the request ([Reference › User Agent](https://docs.discord.com/developers/reference), [source](https://github.com/discord/discord-api-docs/blob/main/developers/reference.mdx)).
 - **Error code:** `10057 Unknown guild template` ([Opcodes and Status Codes](https://docs.discord.com/developers/topics/opcodes-and-status-codes)).
 - **API versions:** v10 and v9 are "Available"; v8 and below are deprecated ([Reference](https://docs.discord.com/developers/reference)). Use v10.
@@ -116,19 +116,19 @@ Paths are relative to `hearth/`. Every code reference below was checked against 
 - **What a template copies:** Discord's support article says templates copy categories, channels, roles and permissions, not members, messages or emoji ([Server Templates](https://support.discord.com/hc/en-us/articles/360041033511), seen only as a search snippet, unverified).
   - Prior art: Root's importer maps "Permission overwrites" to channel role permissions and doesn't import members ([Root docs](https://support.rootapp.com/docs/leader/community/import-discord-template), search snippet only).
 
-### 2.2 Discord permission resolution (identical to Hearth's)
+### 2.2 Discord permission resolution (identical to Cindrly's)
 
 Discord applies these in order: @everyone base, then role bases ORed, then ADMINISTRATOR short-circuit, then the @everyone overwrite (deny then allow), then all role overwrites aggregated (deny then allow), then the member overwrite ([Permissions › Permission Overwrites](https://docs.discord.com/developers/topics/permissions)).
 
-`baseFrom` and `channelFrom` in `server/perms.js` implement **the same algorithm**: @everyone override, aggregated held-role overrides, member override, and `VIEW_CHANNEL` gating. So bit-for-bit translation of overwrites keeps semantics, apart from the bits Hearth doesn't have.
+`baseFrom` and `channelFrom` in `server/perms.js` implement **the same algorithm**: @everyone override, aggregated held-role overrides, member override, and `VIEW_CHANNEL` gating. So bit-for-bit translation of overwrites keeps semantics, apart from the bits Cindrly doesn't have.
 
 ### 2.3 Channel types ([Channel resource](https://docs.discord.com/developers/resources/channel))
 
-| # | Discord | Hearth |
+| # | Discord | Cindrly |
 |---|---|---|
 | 0 | GUILD_TEXT | text |
 | 2 | GUILD_VOICE | voice |
-| 4 | GUILD_CATEGORY | the `channels.category` string (Hearth has no category rows) |
+| 4 | GUILD_CATEGORY | the `channels.category` string (Cindrly has no category rows) |
 | 5 | GUILD_ANNOUNCEMENT | text (follow and publish not supported; noted) |
 | 13 | GUILD_STAGE_VOICE | voice, @everyone denied SPEAK, stage moderators allowed (NEXT.md "A basic stage: listen-only voice through the Speak permission") |
 | 15 / 16 | GUILD_FORUM / GUILD_MEDIA | text (posts can come later via history import as threads; tags dropped) |
@@ -148,7 +148,7 @@ From [Opcodes and Status Codes](https://docs.discord.com/developers/topics/opcod
 
 - Custom emoji markup is `<:NAME:ID>` and `<a:NAME:ID>`. The CDN path is `https://cdn.discordapp.com/emojis/{emoji_id}.png` (PNG, JPEG, WebP or GIF; WebP recommended). Source: [Reference › Message formatting / Image formatting](https://docs.discord.com/developers/reference).
 - The server icon is `icons/{guild_id}/{guild_icon}.png` on the same CDN; animated hashes start with `a_` (same page).
-- Hearth's own custom emoji token is the **same syntax** (`CUSTOM_EMOJI = /<(a?):([A-Za-z0-9_]{2,32}):([a-z0-9]{6,40})>/g` in `public/js/markdown.js`). Discord snowflakes match `[a-z0-9]{6,40}`, so an unmapped Discord token just renders as `:name:` (no lookup hit).
+- Cindrly's own custom emoji token is the **same syntax** (`CUSTOM_EMOJI = /<(a?):([A-Za-z0-9_]{2,32}):([a-z0-9]{6,40})>/g` in `public/js/markdown.js`). Discord snowflakes match `[a-z0-9]{6,40}`, so an unmapped Discord token just renders as `:name:` (no lookup hit).
 
 ### 2.6 DiscordChatExporter (DCE) JSON
 
@@ -159,7 +159,7 @@ From [JsonMessageWriter.cs](https://github.com/Tyrrrz/DiscordChatExporter/blob/m
 - **`type`** is the `MessageKind` name: `Default`, `RecipientAdd`, `RecipientRemove`, `Call`, `ChannelNameChange`, `ChannelIconChange`, `ChannelPinnedMessage`, `GuildMemberJoin`, `ThreadCreated`, `Reply`, `ThreadStarterMessage`, `PollResult` ([MessageKind.cs](https://github.com/Tyrrrz/DiscordChatExporter/blob/master/DiscordChatExporter.Core/Discord/Data/MessageKind.cs)).
 - **`channel.type`** is the `ChannelKind` name (`GuildTextChat`, `GuildVoiceChat`, `GuildCategory`, `GuildNews`, `GuildNewsThread`, `GuildPublicThread`, `GuildPrivateThread`, `GuildStageVoice`, `GuildDirectory`, `GuildForum`, `DirectTextChat`, `DirectGroupTextChat`) ([ChannelKind.cs](https://github.com/Tyrrrz/DiscordChatExporter/blob/master/DiscordChatExporter.Core/Discord/Data/ChannelKind.cs)).
 - **Markdown formatting:** by default `content` is "plain-text formatted": custom emoji become `:name:`, user mentions `@DisplayName`, channels `#name` (plus ` [voice]`), roles `@RoleName`, timestamps formatted ([PlainTextMarkdownVisitor.cs](https://github.com/Tyrrrz/DiscordChatExporter/blob/master/DiscordChatExporter.Core/Exporting/PlainTextMarkdownVisitor.cs)). With markdown formatting off, raw `<@id>` tokens remain. The parser must handle both.
-- **ToS:** DCE's README warns that "automating user accounts is against Discord TOS and may result in you getting banned" ([Readme](https://github.com/Tyrrrz/DiscordChatExporter/blob/master/Readme.md)). Its token guide links Discord's [automated user accounts article](https://support.discord.com/hc/en-us/articles/115002192352) ([Token-and-IDs.md](https://github.com/Tyrrrz/DiscordChatExporter/blob/master/.docs/Token-and-IDs.md)). Hearth's docs must recommend a **bot token** export, made by the server's admins.
+- **ToS:** DCE's README warns that "automating user accounts is against Discord TOS and may result in you getting banned" ([Readme](https://github.com/Tyrrrz/DiscordChatExporter/blob/master/Readme.md)). Its token guide links Discord's [automated user accounts article](https://support.discord.com/hc/en-us/articles/115002192352) ([Token-and-IDs.md](https://github.com/Tyrrrz/DiscordChatExporter/blob/master/.docs/Token-and-IDs.md)). Cindrly's docs must recommend a **bot token** export, made by the server's admins.
 - **Attachment URLs** are signed and expire (`?ex=…&is=…&hm=…`, [Reference](https://docs.discord.com/developers/reference)). They can't be fetched later, which is another reason attachments are not imported in MVP.
 
 ---
@@ -169,10 +169,10 @@ From [JsonMessageWriter.cs](https://github.com/Tyrrrz/DiscordChatExporter/blob/m
 ### Phase 1 (structure)
 - Roles, channel names, topics, categories and overrides are already server-readable metadata (ARCHITECTURE.md §3 "Structure … none" encrypted). The import adds no new class of data.
 - **Server-side link fetch:**
-  - Discord learns the Hearth instance's IP, the template code and the time.
+  - Discord learns the Cindrly instance's IP, the template code and the time.
   - The request carries no user identifiers, no cookies and no token.
   - The User-Agent must **not** contain the instance's `PUBLIC_URL` (privacy). Use a fixed project URL (§13, open question 5).
-- **Paste path:** Hearth never contacts Discord. The user's own browser does, when they open the API link. The owner can force this with `features.discordImport = 'paste'`.
+- **Paste path:** Cindrly never contacts Discord. The user's own browser does, when they open the API link. The owner can force this with `features.discordImport = 'paste'`.
 - **SSRF:** the fetch goes through `netguard.request` (SECURITY.md row 31). Only `https://discord.com/api/v10/guilds/templates/<code>` is allowed (the `allowUrl` hook), with `maxRedirects: 0`, a 1 MB cap and a 10 s deadline.
 - **Escalation:** the importer becomes the owner of a **new** server, where owners have `ALL` anyway. The import grants nothing beyond what Discord granted (§5.3). Nobody but the importer is a member at creation.
 
@@ -184,18 +184,18 @@ From [JsonMessageWriter.cs](https://github.com/Tyrrrz/DiscordChatExporter/blob/m
 - **Plaintext never leaves the device.** The DCE file is read with `File.text()` in the importer's app, transformed by a pure function, encrypted by `E2EE.encryptGroup` (via `sec.encryptChannel` in `public/js/secure.js`) under the server's **current epoch key**, and signed with the importer's ECDSA key.
 - **What readers can verify.** The `c2:` format binds channel, epoch and *author = importer* in the AAD (`hearth-c2|channelId|epoch|authorId`) and signs the whole thing. Readers can therefore verify that **the importer posted this into this channel**, and nothing more:
   - The original author's name, the original time, reactions and pin state are inside the ciphertext, so the server can't change them.
-  - But the **importer** could have written anything. Hence the mandatory label: **"Imported from Discord by @importer · original author not verified"**. It never links to a Hearth profile, never shows a Hearth avatar, and never pings.
+  - But the **importer** could have written anything. Hence the mandatory label: **"Imported from Discord by @importer · original author not verified"**. It never links to a Cindrly profile, never shows a Cindrly avatar, and never pings.
 - **The server still learns:**
   - that an import happened, by whom, into which channels, and how many messages;
   - each message's claimed original timestamp (stored in `created_at` and encoded into the message id for ordering), padded size, and reply and thread structure;
   - opaque per-message source tags (HMACs, not Discord ids; §7.4).
   - It can't read text, author names, attachments' names, or reactions.
-- **Newcomers after a key change can't read imported history.** Hearth hands later joiners only the *current* epoch ("Only the current key is ever handed out later (keys/share)", the comment in `openGroup`, `public/js/secure.js`).
+- **Newcomers after a key change can't read imported history.** Cindrly hands later joiners only the *current* epoch ("Only the current key is ever handed out later (keys/share)", the comment in `openGroup`, `public/js/secure.js`).
   - Imported messages are encrypted under the epoch current at import time. Members present then, and anyone who joins before the next rotation, can read them.
   - After the next rotation (any member leaving, `removeMember` in `server/index.js` sets `needs_rotation`), new joiners see "Sent before you joined. Only members who had the key then can read it."
-  - This matches Hearth's existing semantics and is documented as a limit. Phase **3b** (optional, §7.10) proposes per-import "history keys" that are re-shared to newcomers.
+  - This matches Cindrly's existing semantics and is documented as a limit. Phase **3b** (optional, §7.10) proposes per-import "history keys" that are re-shared to newcomers.
 - **Private channels.** Imported history in a private channel is protected exactly like other private-channel messages: by the shared server key plus the server's access checks (SECURITY.md §4, "Private channels share the server's key").
-- **Consent and privacy of third parties.** An export contains other people's messages. The UI requires the importer to confirm the community agreed, and the docs say so. Hearth can't verify consent.
+- **Consent and privacy of third parties.** An export contains other people's messages. The UI requires the importer to confirm the community agreed, and the docs say so. Cindrly can't verify consent.
 - **No pings or pushes.** The import route never calls `notifyChannelMessage`, `USE.recordMentions` or `BOTS.event('message.created')`.
 - **Malicious export files.**
   - Everything is parsed defensively, rendered through `md()` (escape-first, `public/js/markdown.js`) or text nodes, with length caps.
@@ -211,8 +211,8 @@ New SECURITY.md contract rows are in §11.
 | Option | How | Pros | Cons | Decision |
 |---|---|---|---|---|
 | A. Server fetch of template link | `POST /api/imports/discord/preview {link}` → `netguard.request` | One paste, works on phones | Instance IP talks to Discord. Depends on unauthenticated access (unverified). Instance-wide Discord rate limits | **Default** (`features.discordImport = 'on'`) |
-| B. Paste or upload JSON in the browser | User opens `https://discord.com/api/v10/guilds/templates/<code>` in their browser, copies the JSON, pastes it (or saves it and uploads the `.json`) | Hearth never contacts Discord | Fiddly on mobile. Also depends on unauthenticated access | Always available; the only path when `'paste'` |
-| C. Local bot script | `scripts/discord-structure-export.js` (new, no dependencies): the owner runs it on their own computer with their **own bot token**. It calls `GET /guilds/{id}`, `/roles`, `/channels` and writes template-shaped JSON (real snowflake ids) | Works even if template GET needs auth. Exact `position`s. Hearth never sees the token | Needs a Discord bot in the source server | Ship as the documented fallback; the mapper accepts its output |
+| B. Paste or upload JSON in the browser | User opens `https://discord.com/api/v10/guilds/templates/<code>` in their browser, copies the JSON, pastes it (or saves it and uploads the `.json`) | Cindrly never contacts Discord | Fiddly on mobile. Also depends on unauthenticated access | Always available; the only path when `'paste'` |
+| C. Local bot script | `scripts/discord-structure-export.js` (new, no dependencies): the owner runs it on their own computer with their **own bot token**. It calls `GET /guilds/{id}`, `/roles`, `/channels` and writes template-shaped JSON (real snowflake ids) | Works even if template GET needs auth. Exact `position`s. Cindrly never sees the token | Needs a Discord bot in the source server | Ship as the documented fallback; the mapper accepts its output |
 
 - The browser can't fetch Discord itself: `cspFor` restricts `connect-src` to `'self'` (ARCHITECTURE.md §2, point 5). Pasting is the only browser path.
 - **Mapping always runs on the server** (`server/discordmap.js`, pure, CommonJS). It runs for preview and again for create, so the server never trusts a client-built plan.
@@ -250,7 +250,7 @@ CREATE TABLE IF NOT EXISTS import_map (
   import_id TEXT NOT NULL REFERENCES server_imports(id) ON DELETE CASCADE,
   kind TEXT NOT NULL CHECK (kind IN ('role','channel','emoji','message')),
   source_id TEXT NOT NULL,    -- template placeholder key, Discord emoji id, or opaque message source tag (§7.4)
-  target_id TEXT NOT NULL,    -- Hearth role / channel / emoji / message id
+  target_id TEXT NOT NULL,    -- Cindrly role / channel / emoji / message id
   PRIMARY KEY (import_id, kind, source_id)
 );
 CREATE INDEX IF NOT EXISTS idx_import_map_target ON import_map(kind, target_id);
@@ -305,33 +305,33 @@ planFromTemplate(guild, opts) -> Plan
 }
 ```
 
-### 5.3 Permission mapping (Discord → Hearth bits in `server/perms.js` `PERMS`)
+### 5.3 Permission mapping (Discord → Cindrly bits in `server/perms.js` `PERMS`)
 
 Rule:
-- **Role base permissions:** a Hearth bit is set iff **all** of its Discord source bits are set.
+- **Role base permissions:** a Cindrly bit is set iff **all** of its Discord source bits are set.
 - **Overwrites:**
-  - Hearth `allow` needs **all** sources in `allow`.
-  - Hearth `deny` needs **any** source in `deny`.
+  - Cindrly `allow` needs **all** sources in `allow`.
+  - Cindrly `deny` needs **any** source in `deny`.
   - Then `allow &= CHANNEL_SCOPED; deny &= CHANNEL_SCOPED & ~allow`, as `PUT /channels/:id/overrides` does.
 - This never grants more than Discord did.
 
-| Hearth bit (`server/perms.js`) | Discord source bit(s) | Notes |
+| Cindrly bit (`server/perms.js`) | Discord source bit(s) | Notes |
 |---|---|---|
 | VIEW_CHANNEL `1<<0` | VIEW_CHANNEL `1<<10` | |
-| SEND_MESSAGES `1<<1` | SEND_MESSAGES `1<<11` | Hearth also gates thread replies on SEND (`POST /channels/:id/messages`) |
+| SEND_MESSAGES `1<<1` | SEND_MESSAGES `1<<11` | Cindrly also gates thread replies on SEND (`POST /channels/:id/messages`) |
 | ADD_REACTIONS `1<<2` | ADD_REACTIONS `1<<6` | |
 | ATTACH_FILES `1<<3` | ATTACH_FILES `1<<15` | |
 | MENTION_EVERYONE `1<<4` | MENTION_EVERYONE `1<<17` | |
-| MANAGE_MESSAGES `1<<5` | MANAGE_MESSAGES `1<<13` | Hearth's also pins and bypasses slowmode. Discord PIN_MESSAGES / BYPASS_SLOWMODE alone don't map (listed as lost) |
+| MANAGE_MESSAGES `1<<5` | MANAGE_MESSAGES `1<<13` | Cindrly's also pins and bypasses slowmode. Discord PIN_MESSAGES / BYPASS_SLOWMODE alone don't map (listed as lost) |
 | CONNECT `1<<6` | CONNECT `1<<20` | |
 | SPEAK `1<<7` | SPEAK `1<<21` | |
 | CREATE_INVITE `1<<8` | CREATE_INSTANT_INVITE `1<<0` | Roles only. Not in `CHANNEL_SCOPED`, so channel overwrites of it are dropped (note `invite_override_dropped`) |
-| KICK_MEMBERS `1<<9` | KICK_MEMBERS `1<<1` | Hearth timeouts need Kick. Discord MODERATE_MEMBERS alone is lost |
+| KICK_MEMBERS `1<<9` | KICK_MEMBERS `1<<1` | Cindrly timeouts need Kick. Discord MODERATE_MEMBERS alone is lost |
 | BAN_MEMBERS `1<<10` | BAN_MEMBERS `1<<2` | |
 | MANAGE_CHANNELS `1<<11` | MANAGE_CHANNELS `1<<4` | |
-| MANAGE_ROLES `1<<12` | MANAGE_ROLES `1<<28` | Per channel = "Manage Permissions", same as Hearth |
+| MANAGE_ROLES `1<<12` | MANAGE_ROLES `1<<28` | Per channel = "Manage Permissions", same as Cindrly |
 | MANAGE_SERVER `1<<13` | MANAGE_GUILD `1<<5` | |
-| MANAGE_EMOJIS `1<<14` | MANAGE_GUILD_EXPRESSIONS `1<<30` | CREATE_GUILD_EXPRESSIONS `1<<43` alone is lost (Hearth's bit also deletes others' emoji) |
+| MANAGE_EMOJIS `1<<14` | MANAGE_GUILD_EXPRESSIONS `1<<30` | CREATE_GUILD_EXPRESSIONS `1<<43` alone is lost (Cindrly's bit also deletes others' emoji) |
 | CREATE_THREADS `1<<15` | SEND_MESSAGES_IN_THREADS `1<<38` **and** CREATE_PUBLIC_THREADS `1<<35` | Composite |
 | EMBED_LINKS `1<<16` | EMBED_LINKS `1<<14` | |
 | ADMINISTRATOR `1<<30` | ADMINISTRATOR `1<<3` | On @everyone: `dangerous`. Create refuses unless `allowEveryoneAdmin: true` |
@@ -339,27 +339,27 @@ Rule:
 Unmappable Discord bits (listed per role in `lost`; source of the bit list: [Permissions](https://docs.discord.com/developers/topics/permissions)):
 - VIEW_AUDIT_LOG (1<<7); PRIORITY_SPEAKER (8); SEND_TTS_MESSAGES (12); VIEW_GUILD_INSIGHTS (19).
 - MUTE_MEMBERS (22), DEAFEN_MEMBERS (23), MOVE_MEMBERS (24). NEXT.md pick #4 (moderator toolkit) could map these later.
-- CHANGE_NICKNAME (26), MANAGE_NICKNAMES (27). Hearth has no per-server nicknames. (Superseded: it has them now, and both map; see "Built so far".)
+- CHANGE_NICKNAME (26), MANAGE_NICKNAMES (27). Cindrly has no per-server nicknames. (Superseded: it has them now, and both map; see "Built so far".)
 - MANAGE_WEBHOOKS (29); REQUEST_TO_SPEAK (32); MANAGE_EVENTS (33); MANAGE_THREADS (34); CREATE_PRIVATE_THREADS (36); USE_EXTERNAL_STICKERS (37); MODERATE_MEMBERS (40); VIEW_CREATOR_MONETIZATION_ANALYTICS (41); USE_SOUNDBOARD (42); CREATE_GUILD_EXPRESSIONS (43); CREATE_EVENTS (44); USE_EXTERNAL_SOUNDS (45); SET_VOICE_CHANNEL_STATUS (48); USE_EXTERNAL_APPS (50); PIN_MESSAGES (51); BYPASS_SLOWMODE (52).
-- In Hearth, events are managed with Manage Server or Manage Channels (the events route around `server/index.js:4677`). So MANAGE_EVENTS is lost unless the role also has those.
+- In Cindrly, events are managed with Manage Server or Manage Channels (the events route around `server/index.js:4677`). So MANAGE_EVENTS is lost unless the role also has those.
 
-**Widened:** Discord can withhold these but Hearth can't. A warning appears when @everyone lacks one, or when any overwrite *denies* one:
-- `READ_MESSAGE_HISTORY` (Hearth: anyone who can view a channel reads all of its history). **This is the important one.**
+**Widened:** Discord can withhold these but Cindrly can't. A warning appears when @everyone lacks one, or when any overwrite *denies* one:
+- `READ_MESSAGE_HISTORY` (Cindrly: anyone who can view a channel reads all of its history). **This is the important one.**
 - `STREAM` (screen share in calls).
 - `USE_VAD`.
 - `USE_APPLICATION_COMMANDS` (bot slash commands).
 - `USE_EMBEDDED_ACTIVITIES` (watch together).
-- `SEND_VOICE_MESSAGES`, `SEND_POLLS` (inside ciphertext in Hearth; gated only by Send/Attach).
-- USE_EXTERNAL_EMOJIS is also widened (Hearth lets custom emoji from every server be used anywhere), but it is harmless, so it is listed as lost-but-harmless rather than a warning.
+- `SEND_VOICE_MESSAGES`, `SEND_POLLS` (inside ciphertext in Cindrly; gated only by Send/Attach).
+- USE_EXTERNAL_EMOJIS is also widened (Cindrly lets custom emoji from every server be used anywhere), but it is harmless, so it is listed as lost-but-harmless rather than a warning.
 
 ### 5.4 Roles
 
-- **@everyone** is `guild.roles[0]`, or for C-script input the role whose id equals the guild id. Its permissions go to the `roles` row with `id = server.id` (Hearth's @everyone convention: the `POST /servers` route in `server/index.js`).
-  - For the sample template the mapping yields `98767`, exactly Hearth's `DEFAULT_EVERYONE`. (Now `1147343`, with Change Nickname; see "Built so far".)
+- **@everyone** is `guild.roles[0]`, or for C-script input the role whose id equals the guild id. Its permissions go to the `roles` row with `id = server.id` (Cindrly's @everyone convention: the `POST /servers` route in `server/index.js`).
+  - For the sample template the mapping yields `98767`, exactly Cindrly's `DEFAULT_EVERYONE`. (Now `1147343`, with Change Nickname; see "Built so far".)
 - **Other roles:**
   - Sorted by `position` if every role has a numeric one, else by array index, ties by index.
-  - Hearth `position` = 1..n in that order (@everyone stays 0). The owner is above everyone via `perms.top` → `Infinity`.
-  - **Cap 99** (Hearth refuses a 101st role in `POST /servers/:id/roles`). Overflow drops the *lowest* roles, reports them (`reason: 'limit'`), and drops overrides that target them (`overwrite_role_missing`). The preview lets the user untick roles instead.
+  - Cindrly `position` = 1..n in that order (@everyone stays 0). The owner is above everyone via `perms.top` → `Infinity`.
+  - **Cap 99** (Cindrly refuses a 101st role in `POST /servers/:id/roles`). Overflow drops the *lowest* roles, reports them (`reason: 'limit'`), and drops overrides that target them (`overwrite_role_missing`). The preview lets the user untick roles instead.
   - Skip *managed* roles: `managed === true`, or `tags` with `bot_id`, `integration_id`, `premium_subscriber` or `subscription_listing_id`. Reason `managed`.
 - **Fields:**
   - `name`: trim, 32 chars (as in `POST /servers/:id/roles`). Empty becomes `role`. A non-everyone role literally named `@everyone` or `@here` becomes `everyone (role)` / `here (role)`.
@@ -370,23 +370,23 @@ Unmappable Discord bits (listed per role in `lost`; source of the bit list: [Per
 ### 5.5 Categories, channels and order
 
 - **Categories** (type 4), sorted by `(position, id)`.
-  - Hearth category name = `cleanCategory` (trim, 32 chars).
+  - Cindrly category name = `cleanCategory` (trim, 32 chars).
   - Empty becomes `Category N`.
-  - **Deduplicated case-insensitively**: "General", then "General (2)", etc. Hearth categories are just strings, so two Discord categories with one name would otherwise merge.
-- **Category permission overwrites are dropped** (note `category_permissions_dropped`): Hearth categories have no permissions. Each child keeps its **own** overwrites, which in Discord is the channel's actual permission set (sync only copies).
+  - **Deduplicated case-insensitively**: "General", then "General (2)", etc. Cindrly categories are just strings, so two Discord categories with one name would otherwise merge.
+- **Category permission overwrites are dropped** (note `category_permissions_dropped`): Cindrly categories have no permissions. Each child keeps its **own** overwrites, which in Discord is the channel's actual permission set (sync only copies).
 - **Uncategorised channels** (no `parent_id`, or a parent that isn't a known category):
-  - Text-like ones go into a first group named `Text`; voice-like ones into a last group `Voice` (Hearth's defaults in `POST /servers/:id/channels`).
+  - Text-like ones go into a first group named `Text`; voice-like ones into a last group `Voice` (Cindrly's defaults in `POST /servers/:id/channels`).
   - Both pass through the same dedupe, so a Discord category already called "Text" makes this one "Text (2)".
 - **Within a group**, text-like channels (0, 5, 15, 16) come before voice-like ones (2, 13), each sorted by `(position, id)`. This is Discord's sidebar order.
-  - Hearth `channels.position` = a running index over the whole server in that order.
+  - Cindrly `channels.position` = a running index over the whole server in that order.
   - `servers.category_order` = group names in order (≤ 50; `PATCH /servers/:id` also caps at 50).
-- **Empty categories** are skipped (`reason: 'empty'`). The Hearth UI derives categories from channels (`orderedCategories` in `public/js/app.js`) and says "Every category needs at least one channel" (`openCreateCategory`).
+- **Empty categories** are skipped (`reason: 'empty'`). The Cindrly UI derives categories from channels (`orderedCategories` in `public/js/app.js`) and says "Every category needs at least one channel" (`openCreateCategory`).
 - **Names:**
   - Text: exactly the server's `cleanChannelName(name,'text')` (lower-case, whitespace to `-`, strip `[^a-z0-9\-_]`, 48 chars). E.g. `📢・announcements` → `announcements`. If nothing is left (`公告`), it becomes `channel-N`, where N = 1-based position. Note `renamed` whenever the result differs from the source.
   - Voice: trim, 48 chars.
 - **Other fields:**
   - `topic`: 300 chars (`PATCH /channels/:id`).
-  - `slowmode` = `rate_limit_per_user` clamped 0–21600 (same range as Hearth).
+  - `slowmode` = `rate_limit_per_user` clamped 0–21600 (same range as Cindrly).
   - Dropped with notes: `nsfw` (`nsfw_dropped`), `user_limit > 0` (`user_limit_dropped`), `bitrate`, `rtc_region`, `video_quality_mode`, `default_*`, `available_tags` (`forum_tags_dropped`).
 - **Overwrites:**
   - `type 1` / `'member'`: dropped (`member_overwrite_dropped`). Templates contain no members.
@@ -395,7 +395,7 @@ Unmappable Discord bits (listed per role in `lost`; source of the bit list: [Per
   - Empty results (allow = deny = 0) are not stored.
   - Cap 100 per channel (as in `PUT /channels/:id/overrides`); overflow is reported.
 - **Stage (13):** voice, plus @everyone `deny |= SPEAK` (and `allow &= ~SPEAK`). Every kept role whose Discord base has MUTE_MEMBERS, MOVE_MEMBERS or MANAGE_CHANNELS (stage moderators), and isn't Administrator, gets `allow |= SPEAK` on that channel. Note `stage`.
-- **Announcement (5):** text, overwrites as-is (note `announcement`). No automatic read-only: Discord announcement channels only restrict sending if their overwrites do. The report suggests Hearth's "Make read-only (announcements)" menu item (`quickOverride` in `public/js/app.js`) if the user wants it.
+- **Announcement (5):** text, overwrites as-is (note `announcement`). No automatic read-only: Discord announcement channels only restrict sending if their overwrites do. The report suggests Cindrly's "Make read-only (announcements)" menu item (`quickOverride` in `public/js/app.js`) if the user wants it.
 - **Forum / media (15, 16):** text (note `forum`).
 - **Skipped:** 10, 11, 12, 14 and unknown types (`reason: 'type_<n>'`).
 - **No usable channels left:** if the import yields zero channels, create `general` in `Text` (warning `added_default_channel`), as `POST /servers` does.
@@ -499,10 +499,10 @@ For the "Can't bring" lines, a frozen object in `discord-import.js`:
 - `MOVE_MEMBERS` → "Move members"
 - `MANAGE_NICKNAMES` → "Manage nicknames"
 - `VIEW_AUDIT_LOG` → "View audit log"
-- `PIN_MESSAGES` → "Pin messages (Hearth: part of Manage messages)"
-- `BYPASS_SLOWMODE` → "Bypass slowmode (Hearth: part of Manage messages)"
-- `READ_MESSAGE_HISTORY` → "Read message history (Hearth always allows it for people who can see a channel)"
-- `MANAGE_EVENTS` → "Manage events (Hearth: Manage server or Manage channels)"
+- `PIN_MESSAGES` → "Pin messages (Cindrly: part of Manage messages)"
+- `BYPASS_SLOWMODE` → "Bypass slowmode (Cindrly: part of Manage messages)"
+- `READ_MESSAGE_HISTORY` → "Read message history (Cindrly always allows it for people who can see a channel)"
+- `MANAGE_EVENTS` → "Manage events (Cindrly: Manage server or Manage channels)"
 - … one entry for every bit in §5.3.
 
 ### 5.10 Phase-1 edge cases
@@ -518,7 +518,7 @@ For the "Can't bring" lines, a frozen object in `discord-import.js`:
 - @everyone with ADMINISTRATOR → preview warning, create refused without `allowEveryoneAdmin: true`.
 - @everyone with MANAGE_* → warning only.
 - @everyone lacking VIEW_CHANNEL (private-by-default server) → fine: `perms.restricted` handles it, and all channels are restricted.
-- Duplicate role names → allowed (Hearth allows them). Duplicate text-channel names → allowed (no unique constraint).
+- Duplicate role names → allowed (Cindrly allows them). Duplicate text-channel names → allowed (no unique constraint).
 - Template from a big community (250 roles) → the top 99 are kept by default, and the preview shows the rest unticked with the reason.
 - `createServers: 'staff'` → non-staff get the same 403 text as `POST /servers`.
 - Concurrent double-click on Create → the 5/hour limit plus a client-side busy flag. Two servers would be created otherwise; acceptable.
@@ -565,9 +565,9 @@ Other server changes:
 - After the phase-1 create, the report modal offers "Also copy the server icon from Discord" when `meta.iconHash` is set (calls `/imports/icon`).
 
 ### 6.4 Edge cases
-- Discord emoji names are 2–32 alphanumeric/underscore; the same rule as Hearth's `emojiName`. Collisions get a suffix.
+- Discord emoji names are 2–32 alphanumeric/underscore; the same rule as Cindrly's `emojiName`. Collisions get a suffix.
 - Animated emoji over 512 KB → `too_big` (Discord caps uploads at 256 KiB).
-- AVIF originals: request `.png` / `.gif` (Discord serves those formats; [Reference](https://docs.discord.com/developers/reference)). Hearth's `uploadImage` filter doesn't accept AVIF.
+- AVIF originals: request `.png` / `.gif` (Discord serves those formats; [Reference](https://docs.discord.com/developers/reference)). Cindrly's `uploadImage` filter doesn't accept AVIF.
 - Deleted Discord emoji → CDN 404 → `not_found`.
 
 ---
@@ -581,10 +581,10 @@ Other server changes:
    - One or more DCE `.json` files, each ≤ 50 MB. Larger ones get: "Export in parts: DiscordChatExporter's 'Partition' option".
    - `JSON.parse` runs in the main thread; files are parsed one at a time.
 3. **Map each file to a channel.**
-   - Default: an existing Hearth text channel with the same cleaned name, preferring one in a category with the same name (`file.channel.category`).
+   - Default: an existing Cindrly text channel with the same cleaned name, preferring one in a category with the same name (`file.channel.category`).
    - Otherwise "Create #name" (via the existing `POST /servers/:id/channels`).
    - Threads (`GuildPublicThread` / `GuildPrivateThread` / `GuildNewsThread`) map onto their parent's channel (§7.6).
-4. **Consent.** Show the label text and a checkbox: "People in this Discord server agreed to bring their messages here. Hearth will show them under their Discord names, marked *imported, original author not verified*, posted by you."
+4. **Consent.** Show the label text and a checkbox: "People in this Discord server agreed to bring their messages here. Cindrly will show them under their Discord names, marked *imported, original author not verified*, posted by you."
 5. **Start:** `POST /servers/:id/imports/history` with `{ channels, total, source: 'dce:'+sha256hex(fingerprint), epoch }`. The fingerprint is the concatenation of channel ids, first and last message ids, and counts. Then encrypt and upload in batches (§7.3), with a progress bar and a Cancel (pause) button.
 6. **Finish:** `POST /imports/:id/finish` with counts. Show a summary of imported messages and of what was skipped, by kind.
 7. **Resume:** on reopening, list `running` imports (`GET /servers/:id/imports`). `GET /imports/:id/sources` returns the already-imported source tags; the client skips those.
@@ -607,7 +607,7 @@ export const IMPORT_FORMAT = 1;
   - `<#id>` → `#channel`;
   - `<@&id>` → `@role`;
   - `<t:…>` → an ISO date.
-  - The result must not contain Hearth role-mention syntax `<@&hearthId>` (it would ping-highlight). Strip `<@&` entirely.
+  - The result must not contain Cindrly role-mention syntax `<@&hearthId>` (it would ping-highlight). Strip `<@&` entirely.
 - **Custom emoji:**
   - `:name:` becomes `<:name:hearthId>` / `<a:name:hearthId>` only when `name` is in this message's `inlineEmojis` **and** `emojiMap` (from §6.2's map) has that Discord id.
   - Raw `<:name:discordId>` tokens are rewritten the same way, else to `:name:`.
@@ -705,10 +705,10 @@ Existing code to touch:
 ### 7.6 Threads, forums, pins
 
 - **Discord thread from a message:** the thread id equals the source message id ([Channel resource](https://docs.discord.com/developers/resources/channel), "The id of the created thread will be the same as the id of the source message"). For a thread export, `threadSrcId = channel.id`.
-  - If that root was imported (same import, same Hearth channel), replies go into the Hearth thread.
+  - If that root was imported (same import, same Cindrly channel), replies go into the Cindrly thread.
   - Otherwise they are imported top-level with `[thread: <name>]` prefixed to `imp.t`.
 - **Forum posts:** each post is a thread whose `ThreadStarterMessage` (or first message) becomes the root in the mapped text channel; the rest become thread replies.
-- **Pins:** `imp.pin` shows a "Pinned on Discord" badge. Real Hearth pins (`MAX_PINS = 50`) are not created automatically (open question 9).
+- **Pins:** `imp.pin` shows a "Pinned on Discord" badge. Real Cindrly pins (`MAX_PINS = 50`) are not created automatically (open question 9).
 
 ### 7.7 Client changes (phase 3)
 
@@ -733,7 +733,7 @@ Existing code to touch:
   - static reaction chips (tip "Reactions on Discord");
   - an embed card as text and link;
   - "edited on Discord" if `imp.ed`;
-  - **flag (always):** `h('div', { class: 'msg-flag', 'data-tip': 'Copied from a Discord export by @importer. Hearth checks only that @importer posted it here; who wrote it on Discord and when can’t be verified.' }, 'Imported from Discord by @importer · original author not verified')`;
+  - **flag (always):** `h('div', { class: 'msg-flag', 'data-tip': 'Copied from a Discord export by @importer. Cindrly checks only that @importer posted it here; who wrote it on Discord and when can’t be verified.' }, 'Imported from Discord by @importer · original author not verified')`;
   - if `m.dec.verified === false`, the existing "⚠ Sender could not be verified" flag (about the importer).
   - If `dec.imp` is present but **no** server `importId` (a member posted a crafted payload normally), render as a normal message showing the fallback `payload.t`. That fallback already says "[Imported from Discord]" and is attributed to the real poster.
 - `grouped(m, prev)`: group imported messages by `imp.ai || imp.a` instead of `authorId`, using `imp.at`.
@@ -766,7 +766,7 @@ Existing code to touch:
 
 - Re-upload attachments.
   - 3b: if the user exported with DCE's media download, select the media folder (`webkitdirectory`; desktop and web only), then `encryptFile` + `uploadSimple` / `uploadResumable` (`public/js/files.js`), and put entries into `payload.f`. Quotas apply to the importer.
-- Polls, voice messages, real Hearth reactions or pins.
+- Polls, voice messages, real Cindrly reactions or pins.
 - Server-side "who wrote it" claims.
 
 ### 7.10 Optional phase 3b: history keys for newcomers (open decision)
@@ -933,10 +933,10 @@ Also add the import modal to `test/a11y`.
 
 | # | Attack | Expected result | Proven by |
 |---|---|---|---|
-| 92 | An imported message passes itself off as a real person | Imported history shows the Discord name with "Imported from Discord by @importer · original author not verified". It never links to a Hearth profile, never pings, and only the importer's signature is checked. A normal message that carries import fields is shown as an ordinary message from its real poster | `discord-history-routes.test.js`, `import-crypto.test.js` |
+| 92 | An imported message passes itself off as a real person | Imported history shows the Discord name with "Imported from Discord by @importer · original author not verified". It never links to a Cindrly profile, never pings, and only the importer's signature is checked. A normal message that carries import fields is shown as an ordinary message from its real poster | `discord-history-routes.test.js`, `import-crypto.test.js` |
 | 93 | Someone imports history they shouldn't | Needs Manage Server and Send in every target channel; one running import per server; batch, hourly and total caps; undo by the importer or owner; audit-logged | `discord-history-routes.test.js` |
 | 94 | A template link is used to reach inside the network | Only `https://discord.com/api/v10/guilds/templates/<code>` through the outbound guard, no redirects, 1 MB, 10 s; emoji only from `cdn.discordapp.com/emojis/<id>.png\|gif` | `discord-import-routes.test.js`, `discord-import-emoji.test.js` |
-| 95 | An imported template grants more than Discord did | A Hearth permission is allowed only if every Discord permission behind it is; denied if any is; member overrides dropped; whatever Hearth can't restrict is listed before creating | `discord-map.test.js` |
+| 95 | An imported template grants more than Discord did | A Cindrly permission is allowed only if every Discord permission behind it is; denied if any is; member overrides dropped; whatever Cindrly can't restrict is listed before creating | `discord-map.test.js` |
 
 ---
 
@@ -950,7 +950,7 @@ Also add the import modal to `test/a11y`.
 - **Legal and ToS:**
   - Discord's Developer Policy governs API data use ([Developer Policy](https://support-dev.discord.com/hc/articles/25280499088279); not fetchable from here, so the wording is unverified).
   - User-token exports violate Discord's ToS (DCE README).
-  - Owners must decide; Hearth never handles tokens.
+  - Owners must decide; Cindrly never handles tokens.
 - **History privacy:** third parties' messages. Mitigation: consent checkbox, labels, undo, docs.
 - **Key-rotation readability gap** (§7.10).
 - **Phase-3 ids by original time** put imported rows anywhere in the channel's id space. Code that assumes "id ≈ insertion time" (none found beyond paging and read markers, which behave well) could surprise later features, e.g. disappearing messages (NEXT.md pick 11) must use the insertion time, not `created_at`.
@@ -959,13 +959,13 @@ Also add the import modal to `test/a11y`.
 
 1. **Is `GET /guilds/templates/{code}` reachable without auth today?** One curl from a normal network. If not, phase 1 ships the paste-from-bot-script path only, and the link field is hidden.
 2. **Does the template's `roles` array come in ascending position order, and does it carry `position`?** Check with a real template.
-3. **Default for `features.discordImport`:** `'on'` (recommended: one GET, no user data) or `'paste'` (Hearth never contacts Discord unless the owner opts in)?
+3. **Default for `features.discordImport`:** `'on'` (recommended: one GET, no user data) or `'paste'` (Cindrly never contacts Discord unless the owner opts in)?
 4. **Template `is_dirty`:** refuse or just warn? (Proposed: warn.)
 5. **User-Agent URL:** which fixed project URL to put in `DiscordBot (<url>, <version>)`? The repo may go private (task #43). Never use the instance's own address.
 6. **Phase 3b history keys:** build before phase 3 ships widely?
 7. **Should the importer be allowed into non-empty channels?** (Proposed: allowed with a warning.)
 8. **Keep empty Discord categories** by adding a placeholder `#archive` channel instead of skipping?
-9. **Turn `isPinned` into real Hearth pins** (≤ 50 per channel)?
+9. **Turn `isPinned` into real Cindrly pins** (≤ 50 per channel)?
 10. **Instance cap on imported messages per server** (beyond the per-import cap) for disk use?
 
 ---
@@ -1085,9 +1085,9 @@ Each commit runs `npm test` green.
 
 ### A.2 Expected plan (checked with a throwaway prototype of the rules above)
 
-- **@everyone** → `98767` (= Hearth `DEFAULT_EVERYONE`; now `1147343` with Change Nickname, which is no longer lost: see "Built so far"). Lost: USE_EXTERNAL_EMOJIS, CHANGE_NICKNAME, REQUEST_TO_SPEAK, CREATE_PRIVATE_THREADS, USE_EXTERNAL_STICKERS, USE_SOUNDBOARD, USE_EXTERNAL_SOUNDS, USE_EXTERNAL_APPS. No widened warnings (everyone has all of the widenable bits).
+- **@everyone** → `98767` (= Cindrly `DEFAULT_EVERYONE`; now `1147343` with Change Nickname, which is no longer lost: see "Built so far"). Lost: USE_EXTERNAL_EMOJIS, CHANGE_NICKNAME, REQUEST_TO_SPEAK, CREATE_PRIVATE_THREADS, USE_EXTERNAL_STICKERS, USE_SOUNDBOARD, USE_EXTERNAL_SOUNDS, USE_EXTERNAL_APPS. No widened warnings (everyone has all of the widenable bits).
 
-| key | Hearth role | pos | colour | icon | hoist / mention | Hearth perms | lost |
+| key | Cindrly role | pos | colour | icon | hoist / mention | Cindrly perms | lost |
 |---|---|---|---|---|---|---|---|
 | 1 | Muted | 1 | `#95a5a6` | | no / no | 0 | — |
 | 2 | Member | 2 | `''` | | no / no | 0 | — |
@@ -1098,7 +1098,7 @@ Each commit runs `npm test` green.
 
 - `categoryOrder` = `["Text", "Information", "Text Channels", "Voice Channels"]`. "Archive" is skipped (`empty`).
 
-| pos | key | Hearth channel | type | category | overrides (target: allow / deny) | notes |
+| pos | key | Cindrly channel | type | category | overrides (target: allow / deny) | notes |
 |---|---|---|---|---|---|---|
 | 0 | 40 | welcome | text | Text | everyone: 0 / 32774 | renamed |
 | 1 | 11 | announcements | text | Information | everyone: 0 / 2; role 5: 18 / 0 | renamed, announcement |
@@ -1107,7 +1107,7 @@ Each commit runs `npm test` green.
 | 4 | 22 | trail-photos | text (slowmode 30) | Text Channels | — | — |
 | 5 | 23 | mod-chat | text | Text Channels | everyone: 0 / 1; role 5: 1 / 0 | invite_override_dropped |
 | 6 | 24 | help-forum | text | Text Channels | — | forum |
-| 7 | 25 | channel-8 | text | Text Channels | — (READ_MESSAGE_HISTORY has no Hearth bit) | renamed, nsfw_dropped, widened:READ_MESSAGE_HISTORY |
+| 7 | 25 | channel-8 | text | Text Channels | — (READ_MESSAGE_HISTORY has no Cindrly bit) | renamed, nsfw_dropped, widened:READ_MESSAGE_HISTORY |
 | 8 | 31 | Campfire | voice | Voice Channels | — | — |
 | 9 | 32 | Town Hall | voice | Voice Channels | everyone: 0 / 128; role 4: 128 / 0; role 5: 128 / 0 | stage |
 | 10 | 33 | AFK | voice | Voice Channels | everyone: 0 / 128 | user_limit_dropped |

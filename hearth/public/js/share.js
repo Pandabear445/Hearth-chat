@@ -1,11 +1,11 @@
-// "Share to Hearth" (docs/design/SCROLL-TOGETHER.md › Getting videos in): the parts with no page around them, shared
+// "Share to Cindrly" (docs/design/SCROLL-TOGETHER.md › Getting videos in): the parts with no page around them, shared
 // by the share picker (app.js), the Reels tab and the tests (node --test loads this file as it is).
 //
 // A TikTok or Instagram link can reach the app four ways, all ending in the same picker (pick a conversation, or My
 // Reels, then it's sent as an ordinary encrypted message):
 //   - the Android app's share sheet (ACTION_SEND text/plain; mobile/native/ShareLinks.java picks the link out);
 //   - an installed web app's share sheet (the manifest's share_target: GET /share?url=…&text=…&title=…);
-//   - the "Send to Hearth" bookmarklet (GET /share?url=<the page you're on>);
+//   - the "Send to Cindrly" bookmarklet (GET /share?url=<the page you're on>);
 //   - a #share=<link> address.
 // Whatever arrives is untrusted (another app, another site): only a link that social.js accepts is kept, and nothing
 // is ever sent without the person picking where.
@@ -40,7 +40,7 @@ export function socialLinksIn(text, max = 50) {
   return out;
 }
 
-// The link something shared to Hearth carries: from url, then text, then title (share sheets put it in any of them).
+// The link something shared to Cindrly carries: from url, then text, then title (share sheets put it in any of them).
 export function sharedLink({ url, text, title } = {}) {
   for (const v of [url, text, title]) {
     if (typeof v !== 'string' || !v || v.length > TEXT_MAX) continue;
@@ -65,7 +65,7 @@ export function shareFromLocation(loc) {
 export const shareHash = (link) => `#share=${encodeURIComponent(link)}`;
 
 // The bookmarklet: opens this server's /share with the address of the page you're on. It reads location.href and
-// nothing else, adds nothing to the page, and sends nothing anywhere but a new Hearth tab.
+// nothing else, adds nothing to the page, and sends nothing anywhere but a new Cindrly tab.
 export function bookmarklet(origin) {
   const o = String(origin || '');
   if (!/^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/.test(o)) throw new Error('not an origin');

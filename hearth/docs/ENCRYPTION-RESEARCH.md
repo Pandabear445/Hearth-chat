@@ -1,8 +1,8 @@
 # Encryption research: post-quantum keys and forward secrecy (October 2026)
 
-This note answers one question: what is the strongest end-to-end encryption Hearth can ship that doesn't make
+This note answers one question: what is the strongest end-to-end encryption Cindrly can ship that doesn't make
 the app harder to use? It looks at what the big messengers do, at the NIST standards, at what browsers can do,
-and at which JavaScript libraries are usable. It then recommends a design and records what was built (Hearth 1.40,
+and at which JavaScript libraries are usable. It then recommends a design and records what was built (Cindrly 1.40,
 `public/js/e2ee.js`). Paths are relative to `hearth/`. Everything was checked as of late October 2026. Sources are
 linked inline and listed at the end.
 
@@ -10,18 +10,18 @@ linked inline and listed at the end.
 
 - **AES-256-GCM is not the weak point.** It isn't "trackable" and nobody can crack it, quantum computers
   included. Grover's algorithm at best halves the effective strength of a symmetric key, which leaves AES-256 at a
-  comfortable ~128-bit level. Hearth uses a fresh AES key per message, random 96-bit nonces, and authenticated data
+  comfortable ~128-bit level. Cindrly uses a fresh AES key per message, random 96-bit nonces, and authenticated data
   that binds every message to its place. That stays.
-- **The real gap was key agreement.** Every Hearth key exchange (DM keys, the ECIES wraps that hand out server
+- **The real gap was key agreement.** Every Cindrly key exchange (DM keys, the ECIES wraps that hand out server
   keys, the personal vault) relied on P-256 elliptic-curve Diffie-Hellman alone. A large enough quantum computer
-  running Shor's algorithm breaks that. Anyone who records Hearth's traffic or copies its database today could read
+  running Shor's algorithm breaks that. Anyone who records Cindrly's traffic or copies its database today could read
   it then. This is **"harvest now, decrypt later"**, and it is why Signal, Apple, Chrome, Cloudflare and the IETF
   all moved to hybrid post-quantum key agreement in 2023–2026.
-- **The fix is hybrid ML-KEM-768 + P-256** (NIST FIPS 203). Hearth already used P-256, so the combination works the
+- **The fix is hybrid ML-KEM-768 + P-256** (NIST FIPS 203). Cindrly already used P-256, so the combination works the
   way Signal's PQXDH and X-Wing do. To read anything, an attacker must now break both ML-KEM and P-256.
-- **Forward secrecy is the harder question.** Hearth promises that a new device reads your whole history after you
+- **Forward secrecy is the harder question.** Cindrly promises that a new device reads your whole history after you
   sign in. True forward secrecy means old keys are destroyed, so a stolen key can't read old messages. The two
-  conflict. Hearth now gives every DM its own key, wrapped inside the message for both people, so a leaked message
+  conflict. Cindrly now gives every DM its own key, wrapped inside the message for both people, so a leaked message
   key exposes that one message. That is **not** forward secrecy against someone who has your password and the
   server's database. The section on forward secrecy below explains why, and what it would cost to go further.
 
@@ -35,15 +35,15 @@ linked inline and listed at the end.
   Authentication is still classical: prekeys are signed with XEdDSA. A formal analysis found and fixed spec issues
   (KEM re-encapsulation and public-key binding) before they were exploitable ([Cryspen](https://cryspen.com/post/pqxdh/),
   [USENIX Security 2024](https://www.usenix.org/conference/usenixsecurity24/presentation/bhargavan)). The lesson:
-  bind the KEM ciphertext and the public keys into the KDF. Hearth does.
+  bind the KEM ciphertext and the public keys into the KDF. Cindrly does.
 - **SPQR, the Sparse Post-Quantum Ratchet (October 2025).** This runs an ML-KEM-768 ratchet beside the Double
   Ratchet, and message keys are derived from both. Forward secrecy and post-compromise security then hold against
   quantum attackers too, not only at session start. ML-KEM payloads are over 1 KB, so SPQR spreads them over many
   messages with chunking and erasure coding ("sparse"). Older sessions upgrade only once all clients support it
   ([Signal blog](https://signal.org/blog/spqr/)).
-- **Why Hearth can't just copy it.** The Double Ratchet keeps per-device state and deletes old keys. That is
+- **Why Cindrly can't just copy it.** The Double Ratchet keeps per-device state and deletes old keys. That is
   exactly why a new Signal device doesn't see old messages (Signal's history transfer is a separate, explicit,
-  device-to-device step). Hearth's whole model is the opposite: history lives on the server and every device you
+  device-to-device step). Cindrly's whole model is the opposite: history lives on the server and every device you
   sign in on reads it.
 
 ### Apple iMessage PQ3 (2024)
@@ -52,7 +52,7 @@ PQ3 adds a Kyber-768 (ML-KEM) key to each device's registered keys and uses it h
 setup and in a **periodic post-quantum rekey**. The rekey sends fresh PQ public keys in-band, so a compromise heals
 ("Level 3" in Apple's own scale). As with SPQR, the rekey is not run on every message because of the
 ~1.1 KB ciphertexts ([Apple Security](https://security.apple.com/blog/imessage-pq3/),
-[PQShield analysis](https://pqshield.com/?p=3206)). Hearth's design is closest to PQ3's "hybrid, rekey every so
+[PQShield analysis](https://pqshield.com/?p=3206)). Cindrly's design is closest to PQ3's "hybrid, rekey every so
 often", with history kept.
 
 ### MLS (RFC 9420) and post-quantum cipher suites
@@ -62,8 +62,8 @@ has epochs, a ratchet tree, and forward secrecy plus post-compromise security fo
 added through new cipher suites: ML-KEM alone or hybrid with ECDH, with classical or ML-DSA signatures, in
 [draft-ietf-mls-pq-ciphersuites](https://datatracker.ietf.org/doc/draft-ietf-mls-pq-ciphersuites/) (revision 06,
 July 2026, still a draft). Its suites with classical signatures exist precisely for harvest-now-decrypt-later.
-That is the same trade Hearth makes: post-quantum confidentiality now, classical authentication for now (an
-attacker would need a quantum computer *at the time* to forge). MLS is a good long-term target for Hearth's server
+That is the same trade Cindrly makes: post-quantum confidentiality now, classical authentication for now (an
+attacker would need a quantum computer *at the time* to forge). MLS is a good long-term target for Cindrly's server
 channels. It would replace the hand-rolled epoch scheme, but it's a large change, and its forward secrecy conflicts
 with server-kept history in the same way (see below).
 
@@ -81,8 +81,8 @@ As far as I can find, Matrix's mainline crypto (vodozemac) is still classical. A
 ([vodozemac #120](https://github.com/matrix-org/vodozemac/pull/120)), but I found no release with it. At the
 Matrix Conference 2026 (October) there was a talk on a post-quantum vodozemac wrapper built for a government
 deployment ([talk](https://cfp.2026.matrix.org/matrix-conference-2026/talk/TZ8ZYX/)). Matrix is the closest
-architecture to Hearth: server-kept history, key backup and many devices. Its Megolm sessions give only partial
-forward secrecy, because sessions are shared via key backup to every device. That is the same trade Hearth makes.
+architecture to Cindrly: server-kept history, key backup and many devices. Its Megolm sessions give only partial
+forward secrecy, because sessions are shared via key backup to every device. That is the same trade Cindrly makes.
 
 ## 2. The standards (NIST)
 
@@ -96,7 +96,7 @@ forward secrecy, because sessions are shared via key backup to every device. Tha
 
 **Why no post-quantum signatures yet.** Harvest-now-decrypt-later threatens *confidentiality*. A signature only
 matters at the moment it's checked: forging one needs a quantum computer *at that time*. So everyone who has
-shipped (Signal, Apple, MLS's harvest-now suites, Chrome's TLS) still signs classically. Hearth signs channel
+shipped (Signal, Apple, MLS's harvest-now suites, Chrome's TLS) still signs classically. Cindrly signs channel
 messages, key handoffs and its post-quantum public keys with ECDSA P-256. ML-DSA signatures on every channel
 message would add ~3.3 KB to each one. The time to add ML-DSA (hybrid with ECDSA) is when a quantum computer is
 close, not before.
@@ -107,7 +107,7 @@ close, not before.
   It can leave ML-KEM's ciphertext and key out because ML-KEM is IND-CCA2 and binds its own ciphertext.
 - PQXDH feeds all DH outputs and the KEM secret to HKDF.
 
-Hearth uses P-256 instead of X25519 because every existing identity key is P-256. Switching would mean new
+Cindrly uses P-256 instead of X25519 because every existing identity key is P-256. Switching would mean new
 identity keys for everyone and a verification round. It also binds *more* than X-Wing does: the whole transcript
 goes into the HKDF salt (see §5).
 
@@ -117,7 +117,7 @@ Tested here in the preinstalled **Chromium 153** (headless, secure context, `htt
 
 | Algorithm | Chromium 153 | Notes |
 |---|---|---|
-| ECDH / ECDSA P-256, AES-GCM, HKDF | yes | What Hearth has always used |
+| ECDH / ECDSA P-256, AES-GCM, HKDF | yes | What Cindrly has always used |
 | X25519 (`deriveBits`) | **yes** | |
 | Ed25519 (`sign`/`verify`) | **yes** | |
 | ML-KEM-768 (`generateKey`, `encapsulateBits`) | **no**: `NotSupportedError: Unrecognized name`; `subtle.encapsulateBits` undefined | |
@@ -133,15 +133,15 @@ Elsewhere:
   ([alcove #2499](https://github.com/georgetown-mdi/alcove/pull/2499)).
   [Cloudflare Workers](https://developers.cloudflare.com/changelog/post/2026-09-28-webcrypto-modern-algorithms/)
   has them behind a compatibility flag.
-- **X25519 / Ed25519** are now in all three engines (Chromium, Firefox, Safari). They're not needed here, as Hearth
+- **X25519 / Ed25519** are now in all three engines (Chromium, Firefox, Safari). They're not needed here, as Cindrly
   stays on P-256 for compatibility.
 - **Electron**: the desktop app pins `electron ^44.7.0` (`desktop/package.json`), so it gets whatever its bundled
   Chromium has. Until the Chromium it ships has ML-KEM on by default, assume it doesn't.
 - **Node** (the test suite): 22.22 here; native ML-KEM arrives in newer Node releases.
 - **TLS is different.** Chrome, Firefox and Safari already negotiate X25519MLKEM768 for HTTPS. That protects the
-  connection to the Hearth server, not the end-to-end layer: the server sees what TLS carries.
+  connection to the Cindrly server, not the end-to-end layer: the server sees what TLS carries.
 
-**Conclusion:** Hearth can't rely on native ML-KEM in Firefox, Safari, today's Chromium-based Electron, or the
+**Conclusion:** Cindrly can't rely on native ML-KEM in Firefox, Safari, today's Chromium-based Electron, or the
 Android/iOS WebViews for a while. **It needs a JavaScript implementation.** It can switch to native
 `crypto.subtle` ML-KEM later, when every target has it: the wire format is plain FIPS 203, so nothing on the
 server changes.
@@ -150,13 +150,13 @@ server changes.
 
 | Library | ML-KEM | Size | Audit | Notes |
 |---|---|---|---|---|
-| **[@noble/post-quantum](https://github.com/paulmillr/noble-post-quantum)** 0.7.1 (Aug 2026) | 512/768/1024, plus ML-DSA, SLH-DSA, Falcon and hybrids (X-Wing, ML-KEM768+P256) | Hearth's bundle of ML-KEM-768 and the SHA-3 it needs: **37 KB, 10.4 KB gzipped** | **No independent audit of this package.** The author self-audited 0.6.1 (April 2026), and an ACVP reproducibility study ran against 0.7.0 ("not an audit"). The sibling noble-curves and noble-hashes were independently audited in earlier versions | Pure JS, 3 small dependencies of the same author, signed releases with provenance, ACVP/Wycheproof vectors. **Not constant-time** (JS can't promise that) |
-| libcrux-ml-kem (Cryspen) | 512/768/1024 | WASM, larger | Formally verified (hax/F\*), used by Signal's SPQR | Rust: needs a WASM build pipeline Hearth doesn't have |
+| **[@noble/post-quantum](https://github.com/paulmillr/noble-post-quantum)** 0.7.1 (Aug 2026) | 512/768/1024, plus ML-DSA, SLH-DSA, Falcon and hybrids (X-Wing, ML-KEM768+P256) | Cindrly's bundle of ML-KEM-768 and the SHA-3 it needs: **37 KB, 10.4 KB gzipped** | **No independent audit of this package.** The author self-audited 0.6.1 (April 2026), and an ACVP reproducibility study ran against 0.7.0 ("not an audit"). The sibling noble-curves and noble-hashes were independently audited in earlier versions | Pure JS, 3 small dependencies of the same author, signed releases with provenance, ACVP/Wycheproof vectors. **Not constant-time** (JS can't promise that) |
+| libcrux-ml-kem (Cryspen) | 512/768/1024 | WASM, larger | Formally verified (hax/F\*), used by Signal's SPQR | Rust: needs a WASM build pipeline Cindrly doesn't have |
 | liboqs (Open Quantum Safe) via WASM | all | large (hundreds of KB) | Research-grade; "not for production" by its own docs | |
 | @hpke/ml-kem | 512/768/1024 | small | Not independently audited as far as I could find | HPKE-shaped API |
 
 **Chosen: @noble/post-quantum 0.7.1, ML-KEM-768 only, vendored** as `public/vendor/ml-kem.js`. It is bundled once
-by `scripts/vendor-ml-kem.sh` from exact npm versions, with npm's sha512 integrity in the file header. Hearth
+by `scripts/vendor-ml-kem.sh` from exact npm versions, with npm's sha512 integrity in the file header. Cindrly
 serves it itself, so the Content-Security-Policy stays `script-src 'self'`, and the service worker caches it for
 offline use. `test/pq-crypto.test.js` pins the file's SHA-256 and checks that it produces byte-for-byte the same
 keys, ciphertexts and shared secrets as the npm package. The missing third-party audit is a real gap. It is
@@ -164,7 +164,7 @@ mitigated by the hybrid design: **if ML-KEM or this implementation turns out bro
 as safe as it was before (P-256)**. Timing side channels matter less here than on a server: decapsulation runs on
 the user's own device, on ciphertexts the server can't usefully vary (AES-GCM rejects anything that doesn't decrypt).
 
-## 5. What Hearth now does (1.40)
+## 5. What Cindrly now does (1.40)
 
 | Where | Before | Now (when both sides have a PQ key) | Format |
 |---|---|---|---|
@@ -288,7 +288,7 @@ up to 8 MB.
 
 ## 6. Forward secrecy vs. multi-device history: the honest version
 
-What users of Hearth rely on: **sign in on a new phone and your whole history is there.** Forward secrecy (FS)
+What users of Cindrly rely on: **sign in on a new phone and your whole history is there.** Forward secrecy (FS)
 means a key that's stolen *today* can't decrypt *yesterday's* messages, because yesterday's keys were deleted.
 The two are in direct tension:
 
@@ -296,11 +296,11 @@ The two are in direct tension:
    explicit transfer from an old device that's still around), and it's also why Signal loses history when a phone
    is lost.
 2. **If old keys are kept so new devices can read, then whatever unlocks the kept keys unlocks all of history.**
-   In Hearth that is your password (it unlocks the identity key and the PQ seed) plus the server's database (it
+   In Cindrly that is your password (it unlocks the identity key and the PQ seed) plus the server's database (it
    holds the wrapped keys and the ciphertext). Matrix's key backup and iCloud-backed iMessage history make the same
    trade.
 
-What Hearth's per-message DM keys do give:
+What Cindrly's per-message DM keys do give:
 - **A leaked message key exposes one message**, not the conversation, past or future, and writes nothing: the wraps
   commit to that message's ciphertext. Before, one leaked `ECDH(a, b)` value exposed every DM between two people
   forever.

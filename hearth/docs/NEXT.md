@@ -1,6 +1,6 @@
 # What to build next
 
-This is a research note from October 2026. It shows what Hearth has, what people moving from Discord, Slack,
+This is a research note from October 2026. It shows what Cindrly has, what people moving from Discord, Slack,
 Matrix or Revolt would miss, and what is half done. Three research passes fed it:
 
 - an inventory of 105 existing features, each checked in the code;
@@ -33,7 +33,7 @@ Suggested order:
 2. Release B: picks 5, 7 and 10, plus a device test for Android calls.
 3. Then the big bets (6, 9 and 11), each as its own release with an honest-limits note in README and SECURITY.md.
 
-## Already in Hearth (don't rebuild)
+## Already in Cindrly (don't rebuild)
 
 - Feeds into channels: the news bot handles RSS/Atom, YouTube, subreddits, Steam and GitHub releases.
 - Announcement channels: the one-click read-only override.
@@ -70,7 +70,7 @@ Suggested order:
 ## Not recommended, and why
 
 - **Server-side AutoMod or content scanning.** It would need the server to read end-to-end encrypted text. Only a
-  client-side word list that hides messages on each reader's device is compatible, and that is what Hearth has (the
+  client-side word list that hides messages on each reader's device is compatible, and that is what Cindrly has (the
   word filter in 1.29: your own encrypted list, plus a server's suggested list members can turn off; FEATURES.md).
   It can't block a message from being posted, and shouldn't pretend to.
 - **Federation, or Matrix/Discord bridges.** A bridge must decrypt to relay messages, which drops end-to-end
@@ -116,11 +116,11 @@ The work log for the picks above is kept in [ENGINEERING-REPORT.md](ENGINEERING-
 
 - Getting it to people ([GROWTH.md](GROWTH.md)): the server is published as a multi-arch image
   (`.github/workflows/hearth-image.yml`, `deploy/compose.image.yml`), with app store templates in
-  `deploy/catalogs/` and a "Hearth vs Discord" page on the landing site (SECURITY.md rows 154–155). Left: publishing the
+  `deploy/catalogs/` and a "Cindrly vs Discord" page on the landing site (SECURITY.md rows 154–155). Left: publishing the
   first image and submitting to each store after a test install there.
 
 - Pick 9, phase 1 (structure) is in: **Add a server → Import from Discord** takes a pasted server template and
-  shows everything that won't come over before creating ([IMPORT.md](IMPORT.md)). Hearth doesn't fetch template
+  shows everything that won't come over before creating ([IMPORT.md](IMPORT.md)). Cindrly doesn't fetch template
   links itself yet: whether Discord serves them without a login is still unconfirmed. Left: that server-side
   fetch (through `server/netguard.js`) or a bot-token export script, then emoji (phase 2) and history (phase 3).
 
@@ -133,7 +133,7 @@ The work log for the picks above is kept in [ENGINEERING-REPORT.md](ENGINEERING-
 - The runners-up are built (schema v19; FEATURES.md, SECURITY.md rows 114–127): drag-and-drop channels and
   categories (Move up / Move down from the keyboard), automatic Away and custom statuses that clear themselves, text
   chat in voice channels, scheduled messages (Send later) and per-server nicknames. Notable limits: categories are
-  labels, not locks; Away reaches everyone on the instance as it happens, and in a browser only input in a Hearth
+  labels, not locks; Away reaches everyone on the instance as it happens, and in a browser only input in a Cindrly
   tab counts; everyone who can see a voice channel can read its chat, and the upgrade carries over only per-channel
   limits on posting; the server holds scheduled messages until their time and is trusted with it, and Export my
   data leaves out ones not sent yet; nicknames aren't in search's `from:` or bot events yet, and display names
@@ -142,7 +142,7 @@ The work log for the picks above is kept in [ENGINEERING-REPORT.md](ENGINEERING-
 - The batch-5 audit findings are in (1.29.0; SECURITY.md rows 128–138). Fixed: auth-6 (a fresh two-factor code for
   every sensitive change, with a one-time step-up ticket for two-step ones), auth-11 (a new sign-in token on a
   password change, turning on two-factor and "Log out all other devices" with the password), xss-8 (fonts served
-  by Hearth, outside images and watch-together video files wait for a click) and data-4 (pre-upgrade copies pruned
+  by Cindrly, outside images and watch-together video files wait for a click) and data-4 (pre-upgrade copies pruned
   to `PRE_UPGRADE_KEEP`). Partly fixed: xss-7 (the security policy no longer names Google Fonts or allows blob:
   frames), files-6 (GIF comments and profile songs' tags stripped), files-10 (server-signed per-picture links for
   news, webhook avatars and album art, so `/media/news` is no longer an open proxy; webhook avatars only from known

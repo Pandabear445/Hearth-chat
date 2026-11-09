@@ -110,7 +110,7 @@ test('the "X-Forwarded-For was ignored" hint names a safe fix, in and out of Doc
   // Without route information, no subnet is suggested at all.
   assert.match(ignoredXffHint('172.19.0.3', { ...docker, defaultIface: '' }), /set TRUST_PROXY=172\.19\.0\.3 /);
   // Not in a container (nginx on another machine): just that address, in .env.
-  assert.match(ignoredXffHint('192.168.1.5', { inContainer: false }), /set TRUST_PROXY=192\.168\.1\.5 in \.env and restart Hearth/);
+  assert.match(ignoredXffHint('192.168.1.5', { inContainer: false }), /set TRUST_PROXY=192\.168\.1\.5 in \.env and restart Cindrly/);
   // The server's own context reader works here.
   const ctx = netContext();
   assert.equal(typeof ctx.inContainer, 'boolean');
@@ -614,7 +614,7 @@ test('the Docker TRUST_PROXY upgrade never overrides a choice, writes through a 
   try {
     const r = lab.run('--yes', lab.zip);
     assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout, /TRUST_PROXY=1 in \.env believes any address in front of Hearth/);
+    assert.match(r.stdout, /TRUST_PROXY=1 in \.env believes any address in front of Cindrly/);
   } finally { lab.done(); }
 });
 
@@ -623,7 +623,7 @@ test('plain installs behind a proxy are told about the new TRUST_PROXY rule once
   try {
     const r = lab.run('--yes', lab.zip);
     assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout, /Heads-up: Hearth now only believes the visitor address/);
+    assert.match(r.stdout, /Heads-up: Cindrly now only believes the visitor address/);
     assert.match(r.stdout, /add TRUST_PROXY=<its address or subnet> to .*\.env/);
     await lab.started();
   } finally { lab.done(); }

@@ -362,14 +362,14 @@ function shrinkGif(buf, max = EMOJI_PX) {
 // EmojiRejected with a message for the person uploading it.
 function fitEmoji(buf, max = EMOJI_PX) {
   const info = imageInfo(buf);
-  if (!info || !info.width || !info.height) throw no('That isn’t a picture Hearth can use as an emoji. Use a PNG, JPG, GIF or WebP image.');
+  if (!info || !info.width || !info.height) throw no('That isn’t a picture Cindrly can use as an emoji. Use a PNG, JPG, GIF or WebP image.');
   let out = buf;
   if (info.type === 'gif') out = shrinkGif(buf, max); // (also clips frames that reach past a screen that fits)
   else if (info.width > max || info.height > max) {
     {
       throw no(info.animated
-        ? `That animated picture is ${info.width}×${info.height}. Emoji are up to ${max}×${max}: shrink it first, or upload it as a GIF and Hearth shrinks it for you.`
-        : `That picture is ${info.width}×${info.height}. Emoji are up to ${max}×${max}: the Hearth app shrinks pictures for you, or shrink it first.`);
+        ? `That animated picture is ${info.width}×${info.height}. Emoji are up to ${max}×${max}: shrink it first, or upload it as a GIF and Cindrly shrinks it for you.`
+        : `That picture is ${info.width}×${info.height}. Emoji are up to ${max}×${max}: the Cindrly app shrinks pictures for you, or shrink it first.`);
     }
   }
   if (out.length > EMOJI_STORED_MAX) throw no(`That emoji is ${Math.ceil(out.length / 1024)} KB once it fits ${max}×${max}. Emoji are up to ${EMOJI_STORED_MAX / 1024} KB: try a shorter animation or fewer colours.`);

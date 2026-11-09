@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Upgrade drill: earlier Hearth releases, upgraded in place to this checkout.
+# Upgrade drill: earlier Cindrly releases, upgraded in place to this checkout.
 #
 #   bash scripts/upgrade-drill.sh [--write-fixture] [REF ...]       (from hearth/, after npm ci)
 #
@@ -44,7 +44,7 @@ fail() { say "FAIL: $*"; [ -f "$WORK/server.log" ] && { say '--- server log ---'
 free_port() { node -e "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})"; }
 schema_of() { node -e "console.log(require('$HEARTH/server/backup').schemaOf(process.argv[1]))" "$1/hearth.db"; }
 
-# start CODE_DIR DATA_DIR [ENV=VALUE ...]: starts Hearth in the background; sets PID and BASE.
+# start CODE_DIR DATA_DIR [ENV=VALUE ...]: starts Cindrly in the background; sets PID and BASE.
 start() {
   local code="$1" data="$2"; shift 2
   local port; port="$(free_port)"
@@ -67,7 +67,7 @@ stop() { kill -TERM "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true;
 drill() { node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/upgrade-drill.js "$@"; }
 verify() { EXPECT_SCHEMA="$NEW_SCHEMA" drill verify "$BASE" "$1" "$2" "$3" || fail "checks failed ($4)"; }
 
-say "Hearth upgrade drill: ${REFS[*]} -> this checkout (database version $NEW_SCHEMA)"
+say "Cindrly upgrade drill: ${REFS[*]} -> this checkout (database version $NEW_SCHEMA)"
 for ref in "${REFS[@]}"; do
   short="$(git -C "$REPO" rev-parse --short "$ref^{commit}")"
   code="$WORK/code-$short"

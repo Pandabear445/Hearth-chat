@@ -83,7 +83,7 @@ test('ios-web-3: ios-push.js uses the same open-link and invite rules as android
 
 test('ios-web-4: the push bridge resolves with a token and keys, and says why it failed in iPhone terms', async () => {
   const IP = await mod('public', 'js', 'ios-push.js');
-  assert.match(IP.reasonText.blocked, /^Notifications are off for Hearth in iPhone Settings/);
+  assert.match(IP.reasonText.blocked, /^Notifications are off for Cindrly in iPhone Settings/);
   assert.match(IP.reasonText.noApns, /^This server can’t send iPhone notifications \(apnsEnabled is false\)/);
   assert.match(IP.reasonText.NETWORK, /^Couldn’t reach Apple’s push service/);
   assert.doesNotMatch(Object.values(IP.reasonText).join(' '), /ntfy|Android|push app/);

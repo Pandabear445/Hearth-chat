@@ -1,10 +1,10 @@
-# Dokploy template for Hearth (blueprints/hearth in Dokploy/templates). Staging copy: see ../../README.md.
+# Dokploy template for Cindrly (blueprints/hearth in Dokploy/templates). Staging copy: see ../../README.md.
 # Dokploy's Traefik serves the https: give the domain a Let's Encrypt certificate (Domains tab, HTTPS on), because
-# Hearth's encryption and microphones only work on https pages. The first account to sign up becomes the owner, so
+# Cindrly's encryption and microphones only work on https pages. The first account to sign up becomes the owner, so
 # sign-up needs the random REGISTRATION_CODE made at install (Environment tab) until you change it in Admin.
 services:
   hearth:
-    image: ghcr.io/pandabear445/hearth:1.45.0
+    image: ghcr.io/pandabear445/hearth:1.46.0
     restart: unless-stopped
     user: "1000:1000"
     expose:
@@ -16,7 +16,7 @@ services:
       # address on.
       TRUST_PROXY: ${TRUST_PROXY:-1}
       REGISTRATION_CODE: ${REGISTRATION_CODE:?a registration code, so strangers cannot sign up first}
-      INSTANCE_NAME: ${INSTANCE_NAME:-Hearth}
+      INSTANCE_NAME: ${INSTANCE_NAME:-Cindrly}
     volumes:
       # A new named volume starts out as the image's /data, which belongs to uid 1000.
       - hearth-data:/data

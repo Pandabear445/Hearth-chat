@@ -13,7 +13,7 @@ export function outsideMode(privacy) {
   return OUTSIDE_MODES.includes(v) ? v : 'ask';
 }
 
-// Whether loading `src` (as the app would put it in the page) contacts a site other than this Hearth server.
+// Whether loading `src` (as the app would put it in the page) contacts a site other than this Cindrly server.
 // Relative addresses, this server's own and data:/blob: ones stay here; anything that doesn't parse counts as outside.
 export function isOutside(src, origin) {
   const s = String(src || '');

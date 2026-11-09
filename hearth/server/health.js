@@ -280,7 +280,7 @@ function setupHealth(ctx) {
     // A job that hasn't run (or succeeded) yet has no time: its sample is left out rather than NaN.
     const perJob = (pick) => jobList.map((j) => [{ job: j.name }, pick(j)]).filter(([, v]) => !Number.isNaN(v));
     return [
-      fam('hearth_info', 'This Hearth server: its version and database schema (always 1).', [[{ version: VERSION, schema: String(SCHEMA_VERSION), node: process.version }, 1]]),
+      fam('hearth_info', 'This Cindrly server: its version and database schema (always 1).', [[{ version: VERSION, schema: String(SCHEMA_VERSION), node: process.version }, 1]]),
       fam('hearth_ready', '1 when /api/health/ready says ready, 0 when not.', [[null, readiness().ready ? 1 : 0]]),
       fam('hearth_process_uptime_seconds', 'Seconds since this process started.', [[null, Math.round(process.uptime())]]),
       fam('hearth_event_loop_lag_p99_seconds', 'Event-loop delay, 99th percentile over the last sampled minute.', [[null, lag.p99Ms / 1000]]),
@@ -299,8 +299,8 @@ function setupHealth(ctx) {
       fam('hearth_backups', 'Encrypted backups kept.', [[null, enc.length]]),
       fam('hearth_backup_last_timestamp_seconds', 'When the newest encrypted backup was made (Unix time); absent when there is none.', newest && newest.at ? [[null, secs(newest.at)]] : []),
       fam('hearth_backup_age_seconds', 'Age of the newest encrypted backup; absent when there is none.', newest && newest.at ? [[null, Math.max(0, Math.round((Date.now() - newest.at) / 1000))]] : []),
-      fam('hearth_disk_free_bytes', 'Free space where Hearth keeps its data.', d ? [[null, d.free]] : []),
-      fam('hearth_disk_total_bytes', 'Size of the disk where Hearth keeps its data.', d ? [[null, d.total]] : []),
+      fam('hearth_disk_free_bytes', 'Free space where Cindrly keeps its data.', d ? [[null, d.free]] : []),
+      fam('hearth_disk_total_bytes', 'Size of the disk where Cindrly keeps its data.', d ? [[null, d.total]] : []),
       fam('hearth_registered_users', 'Accounts (bots and webhooks not counted).', [[null, t.users]]),
       fam('hearth_messages', 'Messages stored, by kind (channel or direct).', [[{ kind: 'channel' }, t.channel], [{ kind: 'direct' }, t.direct]]),
     ];
@@ -313,7 +313,7 @@ function setupHealth(ctx) {
     const d = diskOf(DATA_DIR);
     if (d) {
       const ds = diskStatus(d.free, d.total);
-      if (ds.status !== 'ok' && ds.status !== 'unknown') alerts.raise(`disk:${ds.status}`, { severity: ds.status === 'fail' ? 'critical' : 'warning', title: ds.status === 'fail' ? 'The disk is almost full' : 'Disk space is getting low', detail: `${(d.free / 1073741824).toFixed(1)} GB free of ${(d.total / 1073741824).toFixed(1)} GB (${ds.pct.toFixed(1)}%) where Hearth keeps its data. Uploads and backups stop working when it runs out.` });
+      if (ds.status !== 'ok' && ds.status !== 'unknown') alerts.raise(`disk:${ds.status}`, { severity: ds.status === 'fail' ? 'critical' : 'warning', title: ds.status === 'fail' ? 'The disk is almost full' : 'Disk space is getting low', detail: `${(d.free / 1073741824).toFixed(1)} GB free of ${(d.total / 1073741824).toFixed(1)} GB (${ds.pct.toFixed(1)}%) where Cindrly keeps its data. Uploads and backups stop working when it runs out.` });
       else { alerts.clear('disk:degraded'); alerts.clear('disk:fail'); }
     }
     // A region that was up and has gone quiet (its agent reports every minute; it counts as down after 3).

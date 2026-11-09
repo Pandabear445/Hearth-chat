@@ -195,7 +195,7 @@ export function createPersonalNames({ S, vaultKey, onChange = () => {}, store = 
     };
     modal({ title: cur ? `Change your nickname for ${own}` : `Set a nickname for ${own}`, size: 'sm',
       body: h('div', { class: 'stack' },
-        field('Nickname', inp, `Only you see it, on all your devices: it replaces their name everywhere Hearth shows it to you. It’s end-to-end encrypted, so the server can’t read it, and ${own} isn’t told. Their profile still shows @${u.username}. Up to ${NAME_MAX} characters; leave it empty to remove it.`)),
+        field('Nickname', inp, `Only you see it, on all your devices: it replaces their name everywhere Cindrly shows it to you. It’s end-to-end encrypted, so the server can’t read it, and ${own} isn’t told. Their profile still shows @${u.username}. Up to ${NAME_MAX} characters; leave it empty to remove it.`)),
       actions: [
         cur ? { label: 'Remove nickname', action: () => save('') } : null,
         { label: 'Cancel' },

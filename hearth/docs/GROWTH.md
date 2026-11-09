@@ -1,4 +1,4 @@
-# Getting Hearth its first users, fast and cheap
+# Getting Cindrly its first users, fast and cheap
 
 A research note from 16 October 2026. The budget is close to zero, so every step below costs time, not money.
 It covers three things: what to fix first, where to post and in what order, and texts to start from. The sources
@@ -7,7 +7,7 @@ named before relying on it, since these rules change.
 
 **Status (16 October 2026, 1.29.0):** built with this note: the `LICENSE` files, the image workflow
 (`.github/workflows/hearth-image.yml`) and `deploy/compose.image.yml`, the app store templates
-(`deploy/catalogs/`), and the "Hearth vs Discord" page with `sitemap.xml`, `robots.txt`, canonical links and
+(`deploy/catalogs/`), and the "Cindrly vs Discord" page with `sitemap.xml`, `robots.txt`, canonical links and
 JSON-LD on the GitHub Pages site. Still to do by hand: the rest of step 0, publishing the first image (a `hearth-v1.29.0` tag),
 the store submissions and the posts.
 
@@ -18,7 +18,7 @@ the store submissions and the posts.
    against Discord's own pages). Accounts that aren't confirmed as adults are restricted, and confirming means a
    face scan or an ID[^age]. That the February announcement sent searches for "Discord alternative" up sharply, and
    that Stoat (formerly Revolt) buckled under the sign-ups, is *unverified*. People who look now land on Stoat,
-   Matrix and TeamSpeak. Hearth isn't listed anywhere yet.
+   Matrix and TeamSpeak. Cindrly isn't listed anywhere yet.
 2. **Fix three things before posting anywhere.** There is no LICENSE file, no ready-made Docker image, and the
    README doesn't say how the code was written. Self-hosting communities check all three within minutes.
    A pending task also plans to make the repo private, which would end every listing below.
@@ -30,7 +30,7 @@ the store submissions and the posts.
    - after the Docker image exists, the app stores built into home-server systems: Unraid Community Apps, CasaOS,
      Umbrel, Dokploy and Coolify.
 4. **The cheapest growth lever is already in the product: invite links.** Each server owner is a recruiter. But a
-   Hearth invite link pasted into Discord, Reddit or X shows a bare "Hearth" with no card, and a signed-out visitor
+   Cindrly invite link pasted into Discord, Reddit or X shows a bare "Cindrly" with no card, and a signed-out visitor
    gets a sign-in form with no mention of the invite. The two in-product items fix that.
 5. **Wait on two things.** awesome-selfhosted requires the first release to be more than 4 months old[^ash], so
    the earliest is about February 2027. r/selfhosted keeps projects younger than 3 months in the megathread[^rss].
@@ -39,10 +39,10 @@ the store submissions and the posts.
 
 | What | Why | Effort |
 |---|---|---|
-| Add `LICENSE` (MIT) at the repo root and in `hearth/` | `package.json` and the landing page say MIT, but there's no license file. GitHub then shows "no license", and Unraid Community Apps requires an OSI-approved license in the repo. The first Hearth commit reads "Add Hearth 1.11.0 source as received", so confirm you hold the rights and put the right name in the file. | 10 min |
+| Add `LICENSE` (MIT) at the repo root and in `hearth/` | `package.json` and the landing page say MIT, but there's no license file. GitHub then shows "no license", and Unraid Community Apps requires an OSI-approved license in the repo. The first Cindrly commit reads "Add Cindrly 1.11.0 source as received", so confirm you hold the rights and put the right name in the file. | 10 min |
 | Keep the repo public: drop the pending "make repo private" task | Every directory, catalog and Show HN below needs public source. The landing page promises "open source". | 0 |
 | One clearly named public repo | The landing page told people to `git clone .../Pandabear445.github.io`. A repo named after a GitHub Pages site looks odd to self-hosters, and its name never appears in "discord alternative" searches. The repository is already `Pandabear445/Hearth-chat` (the old `Pandabear445.github.io` address redirects there), and the landing page's clone command and links now use that name. Give it a one-line description, topics (`discord-alternative`, `self-hosted`, `chat`, `voice-chat`, `end-to-end-encryption`, `webrtc`) and a social preview image (reuse `site/og.png`). | 30 min |
-| Say how it was built | 165 commits on the 1.29.0 branch carry an AI co-author line. r/selfhosted and Lemmy's c/selfhosted both ask for AI-involvement labels, and HN readers will check the commit log. Add a short "How Hearth is built" paragraph to the README: what was AI-written, how you review and test, that the security reviews and the attacker test suite were automated, and that no independent human audit has happened yet. Saying it first costs little; being "caught" sinks the thread. | 20 min |
+| Say how it was built | 165 commits on the 1.29.0 branch carry an AI co-author line. r/selfhosted and Lemmy's c/selfhosted both ask for AI-involvement labels, and HN readers will check the commit log. Add a short "How Cindrly is built" paragraph to the README: what was AI-written, how you review and test, that the security reviews and the attacker test suite were automated, and that no independent human audit has happened yet. Saying it first costs little; being "caught" sinks the thread. | 20 min |
 | Make the root README concrete | The repo-root `README.md` uses vague lines ("Encrypted messaging features", "Privacy-conscious by design"). The detailed one is `hearth/README.md`. Self-hosters skim the first screen: one sentence, a screenshot, the install command, an honest limits list and links. | 30 min |
 | ~~Move the public instance off DuckDNS~~ (done: cindrly.com, November 2026) | `kappachat.duckdns.org` is a free dynamic-DNS name. School and work filters often block that category, and some link scanners treat it with suspicion (*unverified for Discord and Reddit specifically*). A custom domain avoids this. The old `arc32.me` has lapsed, so this needs a domain registered first; until then the public instance stays on DuckDNS. Once you have one, point a subdomain (e.g. `chat.<domain>`) at the VPS, add it to the Caddyfile, and keep the old name as a redirect. | 30 min |
 | Publish a Docker image (see "Build: site and listings", item 1) | Every app store and PikaPods expects a pullable image. Right now `docker-compose.yml` builds from source. | 1–2 h |
@@ -72,7 +72,7 @@ Ranked by expected users per hour of your time. None of it costs money.
 - post invite links in other people's Discord servers: that's unsolicited advertising under Discord's rules
   (*unverified*: see its Community Guidelines);
 - lead with "no age verification": it attracts the wrong crowd, and age-check laws apply to whoever runs a
-  server. Lead with what's true and durable: Hearth doesn't collect ID documents, so there's no ID database to
+  server. Lead with what's true and durable: Cindrly doesn't collect ID documents, so there's no ID database to
   leak. Discord disclosed a breach at one of its third-party support vendors in October 2025 that exposed about
   70,000 users' ID photos[^breach], so that point resonates without needing exaggeration.
 
@@ -104,7 +104,7 @@ machine-written submissions, so for those two you get an outline and a checklist
 The megathread asks for the project name and a repo or website link[^rss]. Use the flair or AI label the current
 rules require.
 
-> **Hearth**: self-hosted chat for friend groups and small communities (Discord-style servers, voice, video,
+> **Cindrly**: self-hosted chat for friend groups and small communities (Discord-style servers, voice, video,
 > screen share)
 >
 > Repo: <repo link> · Site: https://pandabear445.github.io/Hearth-chat · Public instance to try (needs an account): https://cindrly.com
@@ -136,7 +136,7 @@ HN's moderators have said generated text isn't allowed on the site (*unverified*
 can try, and sign-up pages are off topic[^showhn], so link the **repo**, not the landing page or the public
 instance's sign-up form.
 
-Title (under 80 characters): `Show HN: Hearth – a self-hosted, end-to-end encrypted Discord alternative`
+Title (under 80 characters): `Show HN: Cindrly – a self-hosted, end-to-end encrypted Discord alternative`
 
 Outline for the text, in about 150–250 words:
 1. One sentence on what it is and who it's for: friend groups and small communities.
@@ -163,7 +163,7 @@ Mark it as an alternative to Discord, TeamSpeak, Stoat and Element. Licence: ope
 self-hosted, Windows, Mac, Linux, Android, web. Suggested tags: chat, voice chat, self-hosted, end-to-end
 encryption, screen sharing.
 
-> Hearth is a chat app for friend groups and small communities that you can host yourself. It has servers with
+> Cindrly is a chat app for friend groups and small communities that you can host yourself. It has servers with
 > text and voice channels, roles, threads, direct messages and group chats, voice and video calls with screen
 > sharing, and a player for watching videos together. Messages and files are end-to-end encrypted in the
 > app, so the server stores only encrypted data (it still sees who talks to whom and when), and calls are
@@ -179,7 +179,7 @@ machine/LLM" (*unverified*: the template quoted in the sources shows the age and
 the entry yourself. I can check it against the rules afterwards. What it needs (only the 4-month rule and active
 maintenance are sourced; check the rest in the repository's `CONTRIBUTING.md` before writing):
 
-- **Eligible from about 6 February 2027.** The first release must be more than 4 months old, and Hearth's public
+- **Eligible from about 6 February 2027.** The first release must be more than 4 months old, and Cindrly's public
   history starts on 6 October 2026 (the repository's two older commits are the 2021 GitHub Pages site). The
   project also needs to be actively maintained, with working install instructions.
 - **Where it goes:** one file, `software/hearth.yml` (kebab-case), in `awesome-selfhosted/awesome-selfhosted-data`,
@@ -193,9 +193,9 @@ maintenance are sourced; check the rest in the repository's `CONTRIBUTING.md` be
 
 ### Email to selfh.st and YouTube creators (personalise each one)
 
-> Subject: Hearth, a self-hosted Discord alternative (MIT, Docker)
+> Subject: Cindrly, a self-hosted Discord alternative (MIT, Docker)
 >
-> Hi <name>, I make Hearth, a self-hosted chat app for friend groups: Discord-style servers, voice, video and
+> Hi <name>, I make Cindrly, a self-hosted chat app for friend groups: Discord-style servers, voice, video and
 > screen sharing, with messages and files end-to-end encrypted in the app. It's one Node process with SQLite and
 > installs with Docker Compose <or "from the Unraid/CasaOS store">. Repo: <link>. Honest limits are in the README
 > (the server sees metadata, no independent audit yet). If it's useful for <the newsletter / a video>, I'm happy
@@ -215,7 +215,7 @@ yet.
 **Site and listings**
 1. A multi-arch Docker image on GHCR, and a compose file that uses it.
 2. App store templates in `hearth/deploy/catalogs/`: Unraid, CasaOS, Umbrel, Dokploy and Coolify.
-3. A "Hearth vs Discord" page on the landing site, plus SEO basics: sitemap, robots.txt, canonical links, JSON-LD.
+3. A "Cindrly vs Discord" page on the landing site, plus SEO basics: sitemap, robots.txt, canonical links, JSON-LD.
 
 All five stay inside NEXT.md's "Not recommended" list:
 - no public directory of servers (an invite preview only reaches people who already have the link);

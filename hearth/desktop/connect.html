@@ -48,7 +48,7 @@
   <div class="card" id="offline" hidden>
     <img src="build/icon.png" alt="">
     <h1 id="off-title">Can’t reach your server</h1>
-    <p id="off-text">Hearth will connect again by itself as soon as the server answers. Check your internet connection if this takes a while.</p>
+    <p id="off-text">Cindrly will connect again by itself as soon as the server answers. Check your internet connection if this takes a while.</p>
     <div class="status" id="status" role="status" aria-live="polite"><span class="dot"></span><span id="status-text" aria-hidden="true">Trying again…</span><span class="sr" id="status-sr">Trying again…</span></div>
     <div class="why" id="why"></div>
     <button id="retry" type="button">Retry now</button>
@@ -58,7 +58,7 @@
   <form class="card" id="f" hidden>
     <img src="build/icon.png" alt="">
     <h1 id="title">Connect to your server</h1>
-    <p>Enter the address of the Hearth server you use in your browser.</p>
+    <p>Enter the address of the Cindrly server you use in your browser.</p>
     <label for="url">Server address</label>
     <input id="url" placeholder="chat.example.com" autocomplete="url" spellcheck="false" required>
     <button id="go" type="submit">Connect</button>
@@ -139,7 +139,7 @@
       r = String(r || '').replace(/^net::/, '');
       const http = /^HTTP_(\d{3})$/.exec(r);
       if (http) return +http[1] >= 500 ? `The server answered with error ${http[1]}, it\u2019s probably restarting.` : `The server answered with error ${http[1]}.`;
-      if (r === 'NOT_HEARTH') return 'Something answers at this address, but it isn\u2019t a Hearth server.';
+      if (r === 'NOT_HEARTH') return 'Something answers at this address, but it isn\u2019t a Cindrly server.';
       if (r === 'BAD_ADDRESS') return 'That doesn\u2019t look like a web address. Enter one like chat.example.com';
       if (r === 'LOCKED') return 'This app only connects to its own server.';
       if (isCert(r)) return 'The server\u2019s security certificate isn\u2019t trusted.';

@@ -20,7 +20,7 @@ export function expectedPosition(st, offset) {
 
 // ---- a small adapter per kind of player: load, play, pause, seek, rate, and "what time is it"
 // The players run sandboxed: scripts, their own storage, fullscreen and "open on YouTube" popups, but they
-// can never navigate the Hearth tab itself.
+// can never navigate the Cindrly tab itself.
 const PLAYER_SANDBOX = 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox';
 const YOUTUBE_ORIGIN = 'https://www.youtube-nocookie.com';
 // Brainrot mode's background video (brainrot.js): scripts and its own storage only (no popups, no full screen).

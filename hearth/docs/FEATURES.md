@@ -1,7 +1,7 @@
 # Message usability and notifications
 
 This page covers saved messages, pins, unread tracking, notification preferences, drafts, data export and
-moderation (slow mode, timeouts, reports), and link previews (the last section). It starts with what Hearth already had before this work (schema
+moderation (slow mode, timeouts, reports), and link previews (the last section). It starts with what Cindrly already had before this work (schema
 v17), then describes what changed (schema v18). Paths are relative to `hearth/`.
 
 Message content stays end-to-end encrypted throughout. The server stores and sends message ids, times and the
@@ -167,7 +167,7 @@ Before this, a thread reply counted nowhere: not as unread, not as a mention, an
   card if the call is still on (`#call/<room>`; only DM and group calls ring, the calls the server rings), and
   opening the app while a call rings does the same. Reading a conversation in the app also clears the
   notification posted while it was closed. The "In a call" notification names the call only with "Show who and
-  where on the lock screen" on. Settings → Apps & devices → *Notifications when Hearth is closed*, with the push
+  where on the lock screen" on. Settings → Apps & devices → *Notifications when Cindrly is closed*, with the push
   app's name, *Change*, and how it works; the app offers it once.
 - **Lock-screen privacy**: what a push looked like before is described in the inventory above. Now **previews
   are hidden by default**: a push says only the instance name and "New message" (or "Incoming call", "An event
@@ -190,7 +190,7 @@ Before this, a thread reply counted nowhere: not as unread, not as a mention, an
   are dropped, and at most 200 are kept.
 - The inbox (`hearth.inbox.<userId>`) and reminders (`hearth.reminders.<userId>`) also copy messages' words into the
   browser. Signing out (Log out, being signed out, Delete account) removes them for every account, like drafts
-  (`clearLocalCopies` in `usability.js`), and each time Hearth opens it drops any entry past its deadline
+  (`clearLocalCopies` in `usability.js`), and each time Cindrly opens it drops any entry past its deadline
   (`expireLocalCopies`), whoever it belongs to.
 
 ### Export my data
@@ -216,7 +216,7 @@ Before this, a thread reply counted nowhere: not as unread, not as a mention, an
 - **Limits**: 200,000 messages, 50,000 per conversation, 500 MB of attachments and 100 MB per file. Progress and
   a Cancel button are shown while it runs.
 - **Not included**:
-  - other people's private details (only the names and ids already shown in Hearth);
+  - other people's private details (only the names and ids already shown in Cindrly);
   - conversations you can no longer see;
   - passwords, keys and sessions.
 
@@ -684,7 +684,7 @@ What this pass built, and where it differs from that design:
   its words (`exp` on each: a reminder that fires passes its `exp` on to the inbox entry it makes, its notification
   is tagged with the message so it closes too, and its bar on screen goes), removes it from open search results, and
   redraws pins and saved. Those copies go at their `exp` even when the app wasn't running then: the signed-in app
-  purges its own at start-up, and every time Hearth opens (signed in or not) `expireLocalCopies` drops any account's
+  purges its own at start-up, and every time Cindrly opens (signed in or not) `expireLocalCopies` drops any account's
   copies past their deadline. Signing out (and deleting the account) removes every inbox and reminder list from the
   browser. Unread and mention
   counts are asked for again (`/me/unread`, debounced to at most every 30 seconds) when a conversation with unread
@@ -793,11 +793,11 @@ Automatic Away after a while without input, and an expiry for custom statuses. v
    `presence:idle { idle }` (`public/js/presence.js` `initAway`, checked every 15 seconds, and "in use" again on
    the first key, click, scroll, touch or pointer move, or when the page comes back into view). The desktop app
    uses the computer's idle time instead (`hearthDesktop.idleSeconds()` → `powerMonitor.getSystemIdleTime()`,
-   answered only to the main window showing the server), so a game in front of Hearth doesn't count as away.
-   The Android app counts like a browser: input in Hearth itself. Going to the background reports nothing by
+   answered only to the main window showing the server), so a game in front of Cindrly doesn't count as away.
+   The Android app counts like a browser: input in Cindrly itself. Going to the background reports nothing by
    itself, so Away still comes only after the person's time (a backgrounded web view may check only once a
    minute); the app's own messages to the page (`hearth-push`, `hearth-hangup`, `hearth-open`, `hearth-invite`, a
-   notification click) are never input; opening Hearth again, from the launcher or a notification, is use the
+   notification click) are never input; opening Cindrly again, from the launcher or a notification, is use the
    moment the page is visible. A call that carries on with the screen off (the app's call notification,
    `androidApp.callState`) counts as use like any call.
    Being in a call counts as use (`busy()`), and so does input in the Study page: the Recall frame is a sandbox of
@@ -863,10 +863,10 @@ A refused idle report changes nothing, and the app tries again on its next check
 
 - Away isn't end-to-end encrypted, like Online, and presence goes to every account signed in on the instance
   (`io.emit`), people who share no server with you and people you've blocked included. Because apps report as it
-  happens, everyone learns roughly when you stop using Hearth (within about 15 seconds plus your Away time) and the
+  happens, everyone learns roughly when you stop using Cindrly (within about 15 seconds plus your Away time) and the
   second you're back; in the desktop app, that's any input on your computer. "Never", Invisible or Do Not Disturb
   turns that off. (Proposed for SECURITY.md's honest limits.)
-- In a browser, only input in a Hearth tab counts: someone working in another tab or app shows as Away after their
+- In a browser, only input in a Cindrly tab counts: someone working in another tab or app shows as Away after their
   time. The desktop app counts the whole computer.
 - A tab in the background may check only once a minute (browsers slow timers there), so Away can come a minute late.
 - An older app that never reports keeps the person Online while it's open.
@@ -995,7 +995,7 @@ teach people to ignore it. The server (`followsVoiceChat` in `server/index.js`, 
   also denies Send Messages there; a role, member or @everyone denied Send Messages in every text channel it isn't
   hidden from is denied it on the voice channels too; and when every text channel has slow mode, the voice
   channels get the shortest. Only denies are added (an explicit allow is left alone), and each change is a
-  `channel_overrides` or `channel_update` entry in the server's audit log, by Hearth, marked `voiceChat`. So a
+  `channel_overrides` or `channel_update` entry in the server's audit log, by Cindrly, marked `voiceChat`. So a
   staff-only call room keeps a closed chat (staff included) until an admin allows Send Messages for the people who
   may use it. Limits set only server-wide (a role without Connect at all) aren't carried over, and everyone who can
   see a voice channel can read its chat. Deny Send Messages (or use Make the chat read-only) on channels that
@@ -1545,7 +1545,7 @@ server. This adds both, with no tracking and nothing public by default (`server/
 
 **Link previews** (`GET /invite/:code`): the app's page, with Open Graph and Twitter card tags in place of its title.
 
-- By default the card says "You're invited to a server on *instance*" and "Hearth is free, private chat. Messages are
+- By default the card says "You're invited to a server on *instance*" and "Cindrly is free, private chat. Messages are
   end-to-end encrypted." It is byte for byte the same for every code (unknown, expired, used up and revoked ones too),
   so the page can't be used to check whether a code works.
 - A server can opt in: **Server settings → Overview → Privacy → "Show this server's name and member count in invite
@@ -1553,7 +1553,7 @@ server. This adds both, with no tracking and nothing public by default (`server/
   link that still works shows "Join *server* on *instance*" and "*n* members". Never the icon, the description,
   channels, members' names or anything anyone wrote. Group chats have no invite links, so no setting.
 - The picture is the instance's own app icon (`/icons/icon-512.png`) at the configured public address: Admin → Email's
-  public address, `PUBLIC_URL`, or the first `PUBLIC_HOSTS` name when Hearth serves https itself. It is never built from
+  public address, `PUBLIC_URL`, or the first `PUBLIC_HOSTS` name when Cindrly serves https itself. It is never built from
   the request's Host header, so a forged one can't put another site into a card that a bot or cache keeps. Without a
   configured address the card has no picture. Server icons stay out (`/uploads` is for signed-in members); a signed
   link like the news pictures' could add them later.
@@ -1578,9 +1578,9 @@ code up.
 
 - Creating a server opens the invite dialog in a welcome mode: "Your server is ready. Invite your people." with the
   link already made. **Import from Discord** ends with **Invite people** on its report, which opens the same welcome
-  with a 30-day link and **Copy a moving announcement for Discord** ("We're trying Hearth… Our channels and roles are
+  with a 30-day link and **Copy a moving announcement for Discord** ("We're trying Cindrly… Our channels and roles are
   already set up: *link* (link expires in 30 days)", with the link's real expiry; nothing about expiry for Never).
-- Every invite dialog has **Copy invite message** ("Join me in *server* on Hearth: *link*", then what Hearth is and
+- Every invite dialog has **Copy invite message** ("Join me in *server* on Cindrly: *link*", then what Cindrly is and
   where they'll make an account), and **Share…** where the device has a share sheet (`navigator.share`: phones and
   some desktop browsers; not the desktop app or the Android app's web view). Share hands over the link and a message
   without it.
@@ -1594,7 +1594,7 @@ code up.
 - Alone in a server where you may invite people, its first text channel starts with "It's just you here." and an
   **Invite people** button; it goes by itself once someone joins, or when you dismiss it (remembered per server in this
   browser, `hearth.inviteNudgeDismissed`).
-- Nothing is sent by Hearth: no contacts, no automatic messages, no referral counts.
+- Nothing is sent by Cindrly: no contacts, no automatic messages, no referral counts.
 
 **API**
 
@@ -1631,7 +1631,7 @@ code up.
 - Whoever holds a link to an opted-in server, and every preview bot it passes through, learns the server's name and
   member count: that's the point, and the setting's hint says so. A link stays a key to the server for as long as it
   works (expiry and use limits as before).
-- Preview bots keep the cards they made: turning the setting off or revoking a link changes what Hearth serves at once,
+- Preview bots keep the cards they made: turning the setting off or revoking a link changes what Cindrly serves at once,
   not a card a bot already stored.
 - On an instance whose sign-ups need a code, a server invite still doesn't let someone sign up. An admin option for
   that would help invites on closed instances, but needs its own security review.
@@ -1729,7 +1729,7 @@ works the same in end-to-end encrypted conversations.
 
 ## Update notes ("What's new"): only the owner publishes them
 
-Hearth comes with no update notes of its own: nothing about an update is shown to anyone unless the server's owner
+Cindrly comes with no update notes of its own: nothing about an update is shown to anyone unless the server's owner
 publishes it. `public/js/whatsnew.js` holds no notes, the Android stores' changelog
 (`mobile/fastlane/.../changelogs/default.txt`) ships empty, and the release workflows don't make GitHub release notes
 up from commits (`test/update-notes.test.js` checks all three). In Admin → Owner → Update notes the owner writes a
@@ -1754,7 +1754,7 @@ Phone-only: a desktop with a mouse looks and behaves as before. Two definitions 
   by side, leaving the chat a sliver. Sideways it gets the same phone layout, a slimmer header (44 px), and no header
   while the keyboard is up (the page is then only about 170 px tall). Rules for wider screens use the opposite query.
 - **Touch UI**: `(pointer: coarse)`, phones and tablets: the swipes below, long-press menus as sheets, and a sideways
-  swipe in the chat no longer takes the browser back out of Hearth (`overscroll-behavior-x`).
+  swipe in the chat no longer takes the browser back out of Cindrly (`overscroll-behavior-x`).
 
 **Two levels, not a squeezed desktop** (app.js `phoneShell`, `phoneTab`, `phoneBack`; every rule in app.css under
 `body.m-ui`, which only the phone layout sets). The phone used to be the desktop with its server rail and channels
@@ -1802,7 +1802,7 @@ in a drawer behind a ☰ button. Now it's built like a phone app:
   full-screen dialogs stay full screen. A dialog opened from a sheet replaces it.
 
 **Back closes what's open** (`backStack` in `public/js/phone-nav.js`, wired up by `phoneNav` in app.js; the one
-place Hearth adds history steps of its own). In the phone layout the side panel (members, threads, pins, a voice
+place Cindrly adds history steps of its own). In the phone layout the side panel (members, threads, pins, a voice
 channel's chat), a picture, a menu or sheet, a message's long-press actions and every dialog (settings too) cover the
 screen; on a touch tablet, pictures, menus, message actions and dialogs do (its side panel sits beside the chat, and
 Back leaves it). A voice message being recorded, a message being edited and a reply being written take the screen
@@ -1810,13 +1810,13 @@ too, and Back cancels them as Esc or their own Cancel does (the recording is nev
 as it was). The top-most goes first: a menu, then the picture viewer (its More menu sits on it), a sheet, a dialog,
 whatever is under way in the side panel (a thread's), the side panel, whatever is under way in the chat (a
 recording, an edit, a reply), then Reels or Brainrot full screen (back to the chat), then **the conversation (back
-to its list)**, then **another tab's page (back to Home's)**; from Home's list Back leaves Hearth. Recording,
+to its list)**, then **another tab's page (back to Home's)**; from Home's list Back leaves Cindrly. Recording,
 editing and replying come and go inside the chat, so `phoneNav` watches it (and the side panel) only while Back is
-Hearth's. While one is open, the page's history has one extra step at the same address; Back (the gesture, or the
+Cindrly's. While one is open, the page's history has one extra step at the same address; Back (the gesture, or the
 Android app's back button, which calls `WebView.goBack()`) lands on the page's own entry, and the one on top closes,
 as with its own close button (a thread opened from the Threads list goes back to the list; a dialog that can't be
 dismissed stays). While more stay open, the step comes back. Closing one with its own button, Esc or a tap beside it
-takes the step back out (`history.back()`), so the history never grows and the next Back after that leaves Hearth as
+takes the step back out (`history.back()`), so the history never grows and the next Back after that leaves Cindrly as
 before. Nothing is added on a desktop, before the page has been tapped (browsers skip such steps: so an app opened
 straight onto a conversation from a notification leaves on its first Back until it's been touched; the header's
 Back always works), or while a `#c/…` link waits for app.js to follow it (it rewrites that entry's address). A link
@@ -1848,11 +1848,11 @@ without a drawer), and the e2e flow "phones" on an Android-sized touch phone: th
 four tabs of at least 48 px with one marked as showing, and hidden with the keyboard up and in a conversation; held
 sideways a conversation has the whole screen with Back in its header; Back closes the members panel, a picture and the
 More sheet (each leaving the conversation), then takes the conversation back to its list and the Messages page back to
-Home's, and closes settings opened from You leaving the You page, all without leaving Hearth; a swipe from the left
+Home's, and closes settings opened from You leaving the You page, all without leaving Cindrly; a swipe from the left
 edge goes back to the list (or closes the members panel first), and so does Esc; closing by their own buttons
 (including the header's Back and switching tabs) leaves `history.length` unchanged; on a desktop opening members and
 settings adds nothing to the history. The flow "phone message actions": Back cancels a reply, an edit and a
-recording and stays in Hearth, and focus goes back to the message without a ring. The Reels and Brainrot flows check
+recording and stays in Cindrly, and focus goes back to the message without a ring. The Reels and Brainrot flows check
 that neither the tab bar nor the call bar shows over Reels full screen. The accessibility suite
 (`npm run test:a11y`) checks the tab bar's size, names and landmark, every tab's page for sideways scrolling and a
 heading, that the hidden level is inert, and that Esc goes back to the list with focus on it. The flows in
@@ -2172,11 +2172,11 @@ whichever answers first. Settings → Calls → Test relay tests this server's o
 (`relayIp`), nobody else's relay's, and either the one the check-in comes from or one where the relay proves it is this
 relay: the server asks it for a relayed address under a login made with its own secret, and only a signed answer counts
 (`server/turnprobe.js`, with a login that runs out 12 hours later, so a relay whose clock is ahead still answers; for
-Hearth behind a proxy such as Cloudflare's, or a check-in over IPv6; never while the relay waits for a waiting place).
+Cindrly behind a proxy such as Cloudflare's, or a check-in over IPv6; never while the relay waits for a waiting place).
 It may change 4 times in 18 hours (then 429 until the oldest change is 18 hours old); changes of an approved relay go to
 the audit log. Check-ins are limited to 30 a minute per network (an IPv6 /64 as one) and per relay. An offer takes one
 of the 20 waiting places only once its machine checks in. The agent (version 5) checks in over IPv4 (any way that works
-when Hearth has no IPv4 address), and follows a new address on the machine's own network as well as a new public one
+when Cindrly has no IPv4 address), and follows a new address on the machine's own network as well as a new public one
 (`relay-ip` and `external-ip`). On the machine, an nftables rule (`/etc/hearth-region/relay-guard.nft`, loaded by a
 drop-in each time coturn starts) keeps the relay from passing anything on to the machine itself, except to its own relay
 ports: coturn relays to its own addresses whatever `denied-peer-ip` says. It hooks output at priority -150, before
@@ -2194,7 +2194,7 @@ Tests:
 
 ## Server templates, server search and the main server (v24)
 
-Three ways people find each other on a Hearth: a server that starts with a sensible shape, servers that choose to be
+Three ways people find each other on a Cindrly: a server that starts with a sensible shape, servers that choose to be
 found, and one server everyone joins at sign-up (`server/templates.js`, `server/discovery.js`, `server/mainserver.js`).
 
 **Templates.** "Create a server" offers Blank, Friends, Gaming, Study group, Community/Club and Creators

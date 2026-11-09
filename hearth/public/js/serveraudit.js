@@ -21,13 +21,13 @@ import { label as timerLabel } from './disappear.js';
 let sock = null;
 let watching = null; // { serverId, onNew } for the open Audit log tab
 let reportsOpen = null; // { serverId, reload } for the open Reports tab
-let brand = () => 'Hearth'; // this instance's name (it can be renamed)
+let brand = () => 'Cindrly'; // this instance's name (it can be renamed)
 const watch = (serverId, on) => { if (sock) sock.emit('audit:watch', { serverId, on }, () => {}); };
 // Once, when the app connects. onFreshReport(p): a new report reached this person as a moderator. instanceName():
 // what this instance is called, for "<name> staff".
 export function initServerAudit(socket, { onFreshReport, instanceName } = {}) {
   sock = socket;
-  if (instanceName) brand = () => instanceName() || 'Hearth';
+  if (instanceName) brand = () => instanceName() || 'Cindrly';
   socket.on('audit:new', ({ serverId } = {}) => {
     if (!watching || watching.serverId !== serverId) return;
     // The tab was closed or switched away from: stop following.
@@ -86,7 +86,7 @@ const theChannel = (d, deleting) => {
 };
 const quoted = (t) => `“${t}”`;
 
-// Hearth's own entries from the upgrade that gave voice channels a chat (v19, see server/db.js).
+// Cindrly's own entries from the upgrade that gave voice channels a chat (v19, see server/db.js).
 const VOICE_CHAT_NOTE = 'Voice channels have a text chat now: this keeps the limits the server had on who may post.';
 
 // One entry as a sentence: [parts of the sentence, an optional second line].

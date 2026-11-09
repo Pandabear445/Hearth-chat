@@ -2,7 +2,7 @@
   "name": "hearth-desktop",
   "productName": "Hearth",
   "version": "1.1.0",
-  "description": "Desktop app for Hearth, the self-hosted encrypted chat.",
+  "description": "Desktop app for Cindrly, the self-hosted encrypted chat.",
   "main": "main.js",
   "author": {
     "name": "Hearth",
@@ -30,7 +30,7 @@
     "appId": "app.hearth.desktop",
     "protocols": [
       {
-        "name": "Hearth link",
+        "name": "Cindrly link",
         "schemes": [
           "hearth"
         ]
@@ -74,6 +74,8 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Cindrly",
+      "uninstallDisplayName": "Cindrly ${version}",
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "mac": {
@@ -84,7 +86,9 @@
       "icon": "build/icon.png",
       "artifactName": "${productName}-${version}-${arch}.${ext}",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Hearth uses your microphone for voice chat."
+        "NSMicrophoneUsageDescription": "Cindrly uses your microphone for voice chat.",
+        "CFBundleDisplayName": "Cindrly",
+        "CFBundleName": "Cindrly"
       }
     },
     "linux": {
@@ -93,6 +97,11 @@
         "deb"
       ],
       "category": "Network;Chat;InstantMessaging",
+      "desktop": {
+        "entry": {
+          "Name": "Cindrly"
+        }
+      },
       "icon": "build/icon.png",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },

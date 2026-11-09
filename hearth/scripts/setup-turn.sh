@@ -2,9 +2,9 @@
 # Sets up a TURN relay (coturn) so calls connect on every network: mobile data, CGNAT home internet,
 # school/office Wi-Fi.
 #
-#   On the Hearth server:              sudo bash scripts/setup-turn.sh
+#   On the Cindrly server:              sudo bash scripts/setup-turn.sh
 #   Extra relay in another region      sudo bash setup-turn.sh --relay-only
-#   (a small, cheap VPS near people):  it asks for the main server's relay secret (on the Hearth server:
+#   (a small, cheap VPS near people):  it asks for the main server's relay secret (on the Cindrly server:
 #                                      node server/cli.js get-turn-secret), or reads it from a file only root
 #                                      can read: --secret-file <file>. (Admin → Regions does all this for you.)
 #
@@ -54,15 +54,15 @@ if [ -n "$SECRET_FILE" ]; then
   [ -n "$SECRET" ] || die "$SECRET_FILE is empty: put the relay secret on its first line."
 fi
 if [ "$RELAY_ONLY" = yes ] && [ -z "$SECRET" ] && [ -t 0 ]; then
-  printf "Paste the main server's relay secret (on the Hearth server: node server/cli.js get-turn-secret), then press Enter: "
+  printf "Paste the main server's relay secret (on the Cindrly server: node server/cli.js get-turn-secret), then press Enter: "
   IFS= read -rs SECRET || true
   echo
 fi
-[ "$RELAY_ONLY" = yes ] && [ -z "$SECRET" ] && die "An extra relay needs the main server's relay secret: paste it when asked, or use --secret-file <file> (on the Hearth server: node server/cli.js get-turn-secret)."
+[ "$RELAY_ONLY" = yes ] && [ -z "$SECRET" ] && die "An extra relay needs the main server's relay secret: paste it when asked, or use --secret-file <file> (on the Cindrly server: node server/cli.js get-turn-secret)."
 # One line of visible characters: it goes into /etc/turnserver.conf as it is.
 [[ "$SECRET" != *[[:cntrl:]]* ]] || die "The relay secret has a line break or another control character in it."
 
-# Find Hearth on this machine (not needed for --relay-only).
+# Find Cindrly on this machine (not needed for --relay-only).
 find_hearth() {
   local d="${HEARTH_DIR:-$(cat /etc/hearth-update.conf 2>/dev/null || true)}"
   if [ -z "$d" ] || [ ! -f "$d/server/index.js" ]; then
@@ -70,7 +70,7 @@ find_hearth() {
   fi
   echo "$d"
 }
-hearth_cli() { # run server/cli.js inside Hearth (Docker or plain), as the user that owns Hearth's data (e.g. "hearth")
+hearth_cli() { # run server/cli.js inside Cindrly (Docker or plain), as the user that owns Cindrly's data (e.g. "hearth")
   # (Standard input goes through to cli.js: that's how the relay secret reaches it, never as an argument.)
   ( cd "$DIR" && if docker compose ps -q hearth 2>/dev/null </dev/null | grep -q .; then docker compose exec -T hearth node server/cli.js "$@"
     else
@@ -82,7 +82,7 @@ hearth_cli() { # run server/cli.js inside Hearth (Docker or plain), as the user 
 DIR=""
 if [ "$RELAY_ONLY" = no ]; then
   DIR="$(find_hearth)"
-  # Keep the secret Hearth already uses, so relays in other regions keep working.
+  # Keep the secret Cindrly already uses, so relays in other regions keep working.
   if [ -z "$SECRET" ] && [ "$NEW_SECRET" = no ] && [ -n "$DIR" ] && [ -f "$DIR/server/cli.js" ]; then SECRET="$(hearth_cli get-turn-secret 2>/dev/null | tail -1 || true)"; fi
 fi
 
@@ -113,7 +113,7 @@ umask 077
 CONF_NEW="$(mktemp /etc/turnserver.conf.XXXXXX)"
 trap 'rm -f "$CONF_NEW"' EXIT
 cat > "$CONF_NEW" <<CONF
-# TURN relay for Hearth calls (written by scripts/setup-turn.sh)
+# TURN relay for Cindrly calls (written by scripts/setup-turn.sh)
 listening-port=3478
 external-ip=$EXTERNAL
 min-port=49160
@@ -171,7 +171,7 @@ if [ "$MEMBER" = yes ]; then
   [ -n "$NFT" ] || die "A member relay needs nftables, for the rule that keeps it away from this machine's own services (sudo apt-get install nftables)."
   install -d -m 700 /etc/hearth-region
   cat > /etc/hearth-region/relay-guard.nft <<'NFT_EOF'
-# Written by Hearth (scripts/setup-turn.sh --member): the relay never passes anything on to this machine itself, except
+# Written by Cindrly (scripts/setup-turn.sh --member): the relay never passes anything on to this machine itself, except
 # to its own relay ports (looked at before destination NAT, so a container's published port counts too). Loaded each
 # time coturn starts, and again by the check-in agent if it's gone; sudo hearth-relay-uninstall removes it.
 table inet hearth_relay
@@ -187,7 +187,7 @@ NFT_EOF
   chmod 600 /etc/hearth-region/relay-guard.nft
   "$NFT" -f /etc/hearth-region/relay-guard.nft || die "nftables couldn't load the rule that keeps the relay away from this machine's own services, so the relay wasn't started."
   install -d -m 755 /etc/systemd/system/coturn.service.d
-  printf '%s\n' "# Written by Hearth (scripts/setup-turn.sh --member): coturn runs as turnserver, and starts only once the rule that" \
+  printf '%s\n' "# Written by Cindrly (scripts/setup-turn.sh --member): coturn runs as turnserver, and starts only once the rule that" \
     "# keeps the relay away from this machine's own services is in place. sudo hearth-relay-uninstall removes it." \
     '[Service]' 'User=turnserver' 'Group=turnserver' "ExecStartPre=+$NFT -f /etc/hearth-region/relay-guard.nft" > /etc/systemd/system/coturn.service.d/hearth-relay-guard.conf
   systemctl daemon-reload
@@ -208,19 +208,19 @@ fi
 URLS="turn:$PUBLIC_IP:3478?transport=udp,turn:$PUBLIC_IP:3478?transport=tcp"
 if [ "$RELAY_ONLY" = yes ] && [ "$MANAGED" = yes ]; then exit 0; fi
 if [ "$RELAY_ONLY" = yes ]; then
-  printf '\n%s✓ Extra relay ready.%s Now add it to Hearth. On the Hearth server run:\n\n  node server/cli.js add-turn "%s"\n\n(or Settings → Instance → Calls → add these to the relay addresses).\n' "$c_g" "$c_0" "$URLS"
+  printf '\n%s✓ Extra relay ready.%s Now add it to Cindrly. On the Cindrly server run:\n\n  node server/cli.js add-turn "%s"\n\n(or Settings → Instance → Calls → add these to the relay addresses).\n' "$c_g" "$c_0" "$URLS"
   printf '\nIf this VPS provider has its own firewall (in their control panel), open UDP+TCP 3478 and UDP 49160-49400 there too.\n'
   exit 0
 fi
-step "Connecting Hearth to the relay…"
+step "Connecting Cindrly to the relay…"
 saved=no
 if [ -n "$DIR" ] && [ -f "$DIR/server/cli.js" ]; then
   printf '%s\n' "$SECRET" | hearth_cli add-turn "$URLS" --secret-stdin && saved=yes
 fi
 if [ "$saved" = yes ]; then
   ok "Done. Calls now fall back to the relay automatically when a direct connection isn't possible."
-  printf 'To add a relay in another region later: Admin \u2192 Regions in Hearth, or on a small VPS there\n  sudo bash setup-turn.sh --relay-only\n(it asks for the relay secret: node server/cli.js get-turn-secret shows it here).\n'
+  printf 'To add a relay in another region later: Admin \u2192 Regions in Cindrly, or on a small VPS there\n  sudo bash setup-turn.sh --relay-only\n(it asks for the relay secret: node server/cli.js get-turn-secret shows it here).\n'
 else
-  printf '\nCouldn'"'"'t save it into Hearth automatically. In Hearth go to Settings \u2192 Instance \u2192 Calls and enter:\n  Relay addresses: %s\n  Shared secret:   the static-auth-secret= value in /etc/turnserver.conf (only root can read it:\n                   sudo grep '"'"'^static-auth-secret='"'"' /etc/turnserver.conf)\n' "$URLS"
+  printf '\nCouldn'"'"'t save it into Cindrly automatically. In Cindrly go to Settings \u2192 Instance \u2192 Calls and enter:\n  Relay addresses: %s\n  Shared secret:   the static-auth-secret= value in /etc/turnserver.conf (only root can read it:\n                   sudo grep '"'"'^static-auth-secret='"'"' /etc/turnserver.conf)\n' "$URLS"
 fi
 printf '\nIf your VPS provider has its own firewall (in their control panel), open UDP+TCP 3478 and UDP 49160-49400 there too.\n'

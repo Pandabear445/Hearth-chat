@@ -67,7 +67,7 @@ const clean = (s, max) => String(s == null ? '' : s).replace(/[\u0000-\u001f\u00
 const slackText = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 module.exports = function setupAlertChannels(ctx) {
-  const { getSetting, setSetting, sealSecret, openSecret, fail, alerts = null, brandName = () => 'Hearth', emitAdmins = () => {} } = ctx;
+  const { getSetting, setSetting, sealSecret, openSecret, fail, alerts = null, brandName = () => 'Cindrly', emitAdmins = () => {} } = ctx;
   const now = () => Date.now();
 
   // ------------------------------------------------------------------ storage (the alertChannels setting)
@@ -190,7 +190,7 @@ module.exports = function setupAlertChannels(ctx) {
   // ------------------------------------------------------------------ sending
   // The request for one alert. `alert`: { key, severity, title, detail, held, at }; test marks the Test button's.
   function build(ch, t, alert, test) {
-    const brand = clean(brandName(), 40) || 'Hearth';
+    const brand = clean(brandName(), 40) || 'Cindrly';
     const held = alert.held ? `\n\n(${alert.held} more like this were held back since the last one.)` : '';
     const text = `${alert.detail}${held}\n\nOpen Admin → Health for details.`;
     const label = test ? 'Test' : alert.severity === 'critical' ? 'Needs attention now' : 'Needs a look';

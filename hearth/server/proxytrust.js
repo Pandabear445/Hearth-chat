@@ -3,11 +3,11 @@
 // proxy we trust. IP bans, every "per network" rate limit and the audit log's addresses depend on this.
 //
 // TRUST_PROXY (environment):
-//   unset            only this machine (loopback): Caddy or nginx running on the same host as Hearth.
+//   unset            only this machine (loopback): Caddy or nginx running on the same host as Cindrly.
 //   addresses        comma-separated IPs or subnets of your proxy, e.g. 10.231.47.0/28 (docker-compose.yml
 //                    sets this for its own Caddy). The words loopback, linklocal and uniquelocal work too.
 //   1, 2, …          that many proxies in front, whatever their address. Only safe when nothing can reach
-//                    Hearth's port except through them.
+//                    Cindrly's port except through them.
 //   false (or 0)     never believe the header.
 //   true             the same as 1 (trusting every hop would let any visitor choose their own address).
 //
@@ -51,7 +51,7 @@ const v4 = (s) => {
 const v4str = (n) => [24, 16, 8, 0].map((b) => (n >>> b) & 255).join('.');
 const maskBits = (m) => { let bits = 0; for (let n = m; n; n = (n << 1) >>> 0) bits++; return bits; };
 
-// Where Hearth itself runs: in a container or not, its own IPv4 networks, which of them holds the default route
+// Where Cindrly itself runs: in a container or not, its own IPv4 networks, which of them holds the default route
 // (the only one Docker forwards published ports through), and HEARTH_BIND (docker-compose.yml passes .env in).
 function netContext() {
   const fs = require('fs');
@@ -74,7 +74,7 @@ function netContext() {
 function ignoredXffHint(remote, ctx) {
   const ip = String(remote || '').replace(/^::ffff:/i, '');
   const head = `X-Forwarded-For from ${ip} was ignored (TRUST_PROXY doesn't include it), so everyone coming through it shares that address.`;
-  if (!ctx.inContainer) return `${head} If that's your reverse proxy, set TRUST_PROXY=${ip} in .env and restart Hearth.`;
+  if (!ctx.inContainer) return `${head} If that's your reverse proxy, set TRUST_PROXY=${ip} in .env and restart Cindrly.`;
   const restart = 'in .env (or under environment: in docker-compose.yml), then run docker compose up -d';
   const n = v4(ip);
   const net = n == null ? null : (ctx.nets || []).find((x) => {
@@ -90,13 +90,13 @@ function ignoredXffHint(remote, ctx) {
         ? `If your reverse proxy runs on this machine outside Docker, set TRUST_PROXY=${ip} ${restart}.`
         : `If your reverse proxy runs on this machine outside Docker, set both HEARTH_BIND=127.0.0.1 (so only this machine can reach port 3000) and TRUST_PROXY=${ip} ${restart}. Never trust it without HEARTH_BIND: anyone could then choose their own address.`);
   }
-  // A network Hearth shares with the proxy that isn't its way out (like the "proxy" network in docker-compose.yml):
+  // A network Cindrly shares with the proxy that isn't its way out (like the "proxy" network in docker-compose.yml):
   // nothing from outside arrives through it, so its whole subnet can be trusted and survives new container addresses.
   if (net && ctx.defaultIface && net.iface !== ctx.defaultIface) {
-    return `${head} If that's your reverse proxy, set TRUST_PROXY=${v4str((n & mask) >>> 0)}/${maskBits(mask)} (the Docker network Hearth shares with it) ${restart}.`;
+    return `${head} If that's your reverse proxy, set TRUST_PROXY=${v4str((n & mask) >>> 0)}/${maskBits(mask)} (the Docker network Cindrly shares with it) ${restart}.`;
   }
   return `${head} If that's your reverse proxy, set TRUST_PROXY=${ip} ${restart}. A container gets a new address when it's recreated: ` +
-    'give the proxy a fixed one, or put it on an internal network with Hearth (like the "proxy" network in docker-compose.yml) and trust that network\'s subnet.';
+    'give the proxy a fixed one, or put it on an internal network with Cindrly (like the "proxy" network in docker-compose.yml) and trust that network\'s subnet.';
 }
 
 module.exports = { DEFAULT_TRUST_PROXY, trustProxySetting, clientIp, netContext, ignoredXffHint };

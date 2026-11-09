@@ -1,7 +1,7 @@
-# Hearth for Android (and iPhone)
+# Cindrly for Android (and iPhone)
 
-A small app that opens your Hearth server, like the desktop app does. The iPhone app is built from the same folder
-and works the same way; its differences are in [iPhone](#iphone) at the end. Everything in Hearth works in it
+A small app that opens your Cindrly server, like the desktop app does. The iPhone app is built from the same folder
+and works the same way; its differences are in [iPhone](#iphone) at the end. Everything in Cindrly works in it
 (chats, calls, video, voice messages, polls, events, profiles, watch together…) because it *is* your
 server's app, and it updates whenever you update the server.
 
@@ -14,14 +14,14 @@ What the app adds on top of the web page (in `native/MainActivity.java`):
   away** through a push app (see below).
 * **Calls keep going** with the screen locked or the app in the background, with an "In a call" notification
   that has *Hang up*.
-* **Share → Hearth:** a TikTok or Instagram link shared from another app opens Hearth's share picker (pick a
+* **Share → Cindrly:** a TikTok or Instagram link shared from another app opens Cindrly's share picker (pick a
   conversation or My Reels; nothing is sent before that). Only an https link on TikTok's or Instagram's own names is
   taken from what's shared (`native/ShareLinks.java`), and the page checks it again.
 * **Invite links open in the app:** `hearth://invite/CODE`, and `https://your-server/invite/CODE` for an app
   built for your server (see *Invite links* below).
-* **Saving files** (attachments, exports) to *Downloads/Hearth*.
+* **Saving files** (attachments, exports) to *Downloads/Cindrly*.
 * **Links to other sites** open in your browser; only your server loads inside the app. The connect screen
-  links to Hearth's privacy policy, which opens in the browser too. Payment pages (Stripe's checkout, payment
+  links to Cindrly's privacy policy, which opens in the browser too. Payment pages (Stripe's checkout, payment
   links and billing pages, and Ko-fi) don't open at all, wherever the link comes from.
 * **Nothing copied off the phone:** Android's backup and phone-to-phone transfer are off for the app, so your
   sign-in and unlocked keys stay on the phone. On a new phone you sign in again.
@@ -36,7 +36,7 @@ What the app adds on top of the web page (in `native/MainActivity.java`):
 ## Get the APK
 
 It's built by GitHub Actions (`.github/workflows/hearth-apps.yml` at the top of the repository): open the
-repository's **Actions** tab → *Hearth apps* → the latest run → *Artifacts* → `hearth-android` (a zip with the
+repository's **Actions** tab → *Cindrly apps* → the latest run → *Artifacts* → `hearth-android` (a zip with the
 `.apk` inside). Push a tag like `app-v1.17.0` to get it attached to a GitHub release instead.
 
 Install it: open the `.apk` on the phone and allow "Install unknown apps" for your browser or file manager.
@@ -50,7 +50,7 @@ it to Android visitors (in a browser; opened inside the app, it lists no downloa
 [`../docs/ANDROID-STORES.md`](../docs/ANDROID-STORES.md).
 
 **Server address:** the app connects to the community server `https://cindrly.com` by itself on first
-launch (`defaultServer` in `www/config.json`). People can switch to any other Hearth server: Settings → Apps &
+launch (`defaultServer` in `www/config.json`). People can switch to any other Cindrly server: Settings → Apps &
 devices → *Switch server* opens the connect screen, where they type its address (e.g. `chat.example.com` or
 `1.2.3.4:3000`). To build an app for your server instead, set the repository variable `HEARTH_SERVER` (Settings →
 Secrets and variables → Actions → Variables), e.g. `https://chat.example.com`, or type it when running the
@@ -78,7 +78,7 @@ delete), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`hearth`) and `ANDROI
 **Moving off the old built-in key.** Older versions of this workflow, when these secrets were missing, made a
 key themselves, kept it in the Actions cache (`hearth-android-key-v1`) and protected it with a password written in
 the workflow. A cache entry outlives the workflow change, and pull request runs, even from forks, can restore it:
-treat that key as exposed, since whoever has it can sign an update that Android installs over Hearth. If your APKs
+treat that key as exposed, since whoever has it can sign an update that Android installs over Cindrly. If your APKs
 came from such builds:
 
 1. Delete the cache entry: repository → *Actions → Caches* → every `hearth-android-key-v1` (or
@@ -102,14 +102,14 @@ workflow's run number`.
 ## Notifications when the app is closed
 
 Android's web view has no push service of its own, so the app uses [UnifiedPush](https://unifiedpush.org/): a
-*push app* on the phone keeps one connection open for all apps that use it and wakes Hearth when something
+*push app* on the phone keeps one connection open for all apps that use it and wakes Cindrly when something
 happens. The usual one is **ntfy** (free on F-Droid and Google Play). No Google account or Firebase project is
 involved.
 
 1. Install ntfy on the phone (once).
-2. In Hearth: Settings → Apps & devices → **Notifications when Hearth is closed** (the app also offers this once
+2. In Cindrly: Settings → Apps & devices → **Notifications when Cindrly is closed** (the app also offers this once
    after you sign in). If you have several push apps and none is the phone's default, Android asks which to use.
-   While it's on, *Change* lists every push app on the phone (whatever the default is) and moves Hearth to the one
+   While it's on, *Change* lists every push app on the phone (whatever the default is) and moves Cindrly to the one
    you pick; backing out keeps the one you had.
 3. For notifications without delay, let ntfy run without battery limits (Android Settings → Apps → ntfy →
    Battery → Unrestricted).
@@ -122,11 +122,11 @@ the "In a call" notification says just that. With *Show who and where on the loc
 Notifications) they say who and where, and Android shows that on the lock screen too, unless Android itself is set
 to hide sensitive notification content (Android Settings → Notifications → Notifications on lock screen): only
 then does the lock screen show the generic text. A call that arrives more than two minutes late shows as a missed
-call instead of ringing; opening Hearth while a call rings stops the ringtone and goes to that call. Signing out,
+call instead of ringing; opening Cindrly while a call rings stops the ringtone and goes to that call. Signing out,
 or switching server, removes the phone's push registration.
 
 **What ntfy's operator learns** with the public ntfy.sh: that this phone gets notifications from your server, and
-when (not what). To avoid that, run your own ntfy next to Hearth and set `PUSH_NTFY_URL`; Settings then tells
+when (not what). To avoid that, run your own ntfy next to Cindrly and set `PUSH_NTFY_URL`; Settings then tells
 people to point the ntfy app at it. Recipe: [`../docs/OPERATIONS.md`](../docs/OPERATIONS.md#7-self-hosted-ntfy-for-android-notifications).
 The free ntfy.sh has daily limits (when it says "too many", the server waits as long as it asks without giving up
 on the phone); a busy server should run its own.
@@ -148,7 +148,7 @@ which the build follows:
   Joining a call does both. A listen-only call (no microphone permission) doesn't get the service.
 * Android describes `microphone` as the type to "continue microphone capture from the background, such as voice
   recorders or communication apps". `phoneCall` is for apps that are the phone's dialer or use Android's calling
-  API (ConnectionService, `MANAGE_OWN_CALLS`); Hearth doesn't, so it uses `microphone`
+  API (ConnectionService, `MANAGE_OWN_CALLS`); Cindrly doesn't, so it uses `microphone`
   ([phoneCall](https://developer.android.com/develop/background-work/services/fgs/service-types#phone-call)).
   Google Play asks apps to explain each foreground service type when they're submitted.
 
@@ -164,7 +164,7 @@ error) ends the call, and the notification goes with it. A server update never d
   `HEARTH_SERVER`) and Android has verified the app for that address: set `ANDROID_CERT_SHA256` on the server to
   the SHA-256 fingerprint of the app's signing key (several, comma-separated: your key and, for Play, Google's app
   signing key; see [`../docs/SIGNING.md`](../docs/SIGNING.md)). The server then serves
-  `/.well-known/assetlinks.json`. Without that, people can still allow it by hand (Android Settings → Apps → Hearth
+  `/.well-known/assetlinks.json`. Without that, people can still allow it by hand (Android Settings → Apps → Cindrly
   → Open by default).
 * An https invite for a different server than the app's isn't opened (the app says to switch server first).
 
@@ -179,11 +179,11 @@ still need a real phone (checklist: `docs/design/ANDROID-PUSH.md` §17) before a
 * the round trip through ntfy: registering, a notification arriving with the app swiped away, tapping it, and
   the push address changing;
 * choosing a push app: with several and no default (Android's list; backing out of it asks nothing more), with a
-  default or "Always" picked (no question), with none installed, and *Change* (Hearth's list of every push app,
+  default or "Always" picked (no question), with none installed, and *Change* (Cindrly's list of every push app,
   including one Android's list can't show; backing out keeps the current one);
 * the call notification: the call carrying on with the screen locked for several minutes, *Hang up*, Android 14+
   accepting the `microphone` service, and the notification going away after reloading the page or switching server;
-* the ringing channel for calls (sound, 45-second timeout), the missed-call case, and opening Hearth from the
+* the ringing channel for calls (sound, 45-second timeout), the missed-call case, and opening Cindrly from the
   launcher while a call rings (the ringtone stops and the call's conversation opens);
 * the lock screen with Android's default ("show all notification content"): only "<server>" / "New message" and
   "In a call" while *Show who and where* is off; names with it on; and with "hide sensitive content", the generic
@@ -233,7 +233,7 @@ instead of shipping an app without push. Then `./gradlew assembleRelease testRel
 **Updating the push library:** change the version in `scripts/patch-android.js` by hand after reading its
 release notes ([codeberg.org/UnifiedPush/android-connector](https://codeberg.org/UnifiedPush/android-connector)),
 and let the *android* job prove it still compiles. It brings `kotlin-stdlib` and Google's Tink (for decryption)
-with it; Hearth's own code writes no cryptography.
+with it; Cindrly's own code writes no cryptography.
 
 The native code: `MainActivity.java` (the web view and the page bridge), `BridgePolicy.java` (which page may ask
 for what), `HearthPush.java` / `HearthPushService.java` (UnifiedPush), `HearthNotifications.java` (channels and
@@ -261,8 +261,8 @@ How it differs from the Android app:
 * **Calls** keep their audio with the screen locked only while a call is going on (background audio). Whether the
   microphone keeps working when the phone locks hasn't been tried on a device yet. There's no in-call notification
   or full-screen call screen (that would need CallKit).
-* **Share → Hearth** is a share extension: it keeps a TikTok or Instagram link and Hearth's share picker opens the
-  next time you open Hearth (iOS doesn't let it open the app itself).
+* **Share → Cindrly** is a share extension: it keeps a TikTok or Instagram link and Cindrly's share picker opens the
+  next time you open Cindrly (iOS doesn't let it open the app itself).
 * **Invite links:** `hearth://invite/CODE`, and `https://your-server/invite/CODE` (Universal Links) once the server
   has `APPLE_APP_IDS` set.
 * **Saving files** opens the share sheet (*Save to Files*, AirDrop…); files saved in the app show in the Files app.

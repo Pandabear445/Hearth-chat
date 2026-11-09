@@ -2,7 +2,7 @@
 // gives a role, and roles can open private channels, so "supporters get #behind-the-scenes" just works.
 //
 // Money: members pay through Stripe Checkout; Stripe sends it to the creator's own Stripe account (Stripe
-// Connect Express, which also handles their identity checks, payouts and tax forms). This Hearth keeps the
+// Connect Express, which also handles their identity checks, payouts and tax forms). This Cindrly keeps the
 // fee its owner sets in Admin → Money (application_fee_percent); nothing else is taken. Nothing that is
 // free today depends on this: memberships only add things a creator chooses to offer.
 //
@@ -52,7 +52,7 @@ module.exports = function setupMemberships(ctx) {
   }
   async function stripe(method, path, params) {
     const c = cfg();
-    if (!c.key) fail(400, 'Memberships aren’t set up on this Hearth yet.');
+    if (!c.key) fail(400, 'Memberships aren’t set up on this Cindrly yet.');
     const body = params ? encode(params).toString() : undefined;
     let r;
     try {
@@ -120,7 +120,7 @@ module.exports = function setupMemberships(ctx) {
       if (!want.has(rid) && has.has(rid)) { db.prepare('DELETE FROM member_roles WHERE server_id = ? AND user_id = ? AND role_id = ?').run(sid, uid, rid); removed.push({ id: rid, name: role.name }); }
     }
     if (added.length || removed.length) {
-      // In the server's audit log as done by Hearth itself, because of a membership starting or ending.
+      // In the server's audit log as done by Cindrly itself, because of a membership starting or ending.
       if (serverAudit) serverAudit(sid, null, 'member_roles', uid, { added, removed, membership: true });
       emitServer(sid);
     }
@@ -262,7 +262,7 @@ module.exports = function setupMemberships(ctx) {
   api.post('/servers/:id/memberships/connect', auth, wrap(async (req, res) => {
     const s = requireOwner(req.params.id, req.userId);
     if (s.kind === 'group') fail(400, 'Group chats can’t sell memberships.');
-    if (!usable()) fail(400, 'Memberships aren’t turned on for this Hearth. Ask its owner.');
+    if (!usable()) fail(400, 'Memberships aren’t turned on for this Cindrly. Ask its owner.');
     rateLimit('membership-connect:' + req.userId, 20, 3600000);
     let acct = account(s.id);
     if (!acct) {
@@ -327,7 +327,7 @@ module.exports = function setupMemberships(ctx) {
   }
   api.post('/servers/:id/memberships/tiers', auth, (req, res) => {
     const s = requireOwner(req.params.id, req.userId);
-    if (!usable()) fail(400, 'Memberships aren’t turned on for this Hearth. Ask its owner.');
+    if (!usable()) fail(400, 'Memberships aren’t turned on for this Cindrly. Ask its owner.');
     if (db.prepare('SELECT COUNT(*) n FROM membership_tiers WHERE server_id = ? AND active = 1').get(s.id).n >= MAX_TIERS) fail(400, `Up to ${MAX_TIERS} memberships per server.`);
     const t = cleanTier(s, req.body || {});
     const id = newId();

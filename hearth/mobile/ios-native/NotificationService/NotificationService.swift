@@ -1,7 +1,7 @@
 import UserNotifications
 import HearthKit
 
-/// Hearth's notification extension: turns the notice Apple delivers into the real notification, on the phone.
+/// Cindrly's notification extension: turns the notice Apple delivers into the real notification, on the phone.
 ///
 /// The server never tells Apple who wrote or where: the alert it sends always says only the app's name and
 /// something like "New message". The real notification (the same JSON the Android app and browsers get, already

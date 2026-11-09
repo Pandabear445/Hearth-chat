@@ -1,4 +1,4 @@
-// Hearth web client.
+// Cindrly web client.
 // Layout: server rail | sidebar (home or server) | conversation | contextual right panel (members, pins, thread).
 import { androidApp, noPayments } from './android.js';
 import { iosApp } from './ios.js';
@@ -283,7 +283,7 @@ function bootFailed(e) {
   if (!el || !$('#auth').hidden || !$('#app').hidden) return; // (something was drawn: its own errors say what happened)
   el.classList.add('failed');
   const t = el.querySelector('.boot-text');
-  if (t) t.textContent = `Hearth couldn\u2019t start${e && e.message ? `: ${e.message}` : '.'} Reload the page to try again.`;
+  if (t) t.textContent = `Cindrly couldn\u2019t start${e && e.message ? `: ${e.message}` : '.'} Reload the page to try again.`;
 }
 
 // Whatever goes wrong while starting, the page never stays on its loading screen (index.html #boot-splash): it says so.
@@ -313,18 +313,18 @@ async function bootUp() {
   if (resetToken) { history.replaceState(null, '', '/'); sessionStorage.setItem('hearth.resetToken', resetToken); } // keep it out of the address bar
   const m = location.pathname.match(/^\/invite\/([A-Za-z0-9]+)/);
   if (m) { sessionStorage.setItem('hearth.pendingInvite', m[1]); history.replaceState(null, '', '/'); }
-  // A TikTok or Instagram link shared to Hearth (/share?url=… from a share sheet or the bookmarklet): kept until
+  // A TikTok or Instagram link shared to Cindrly (/share?url=… from a share sheet or the bookmarklet): kept until
   // signed in, then the share picker opens (share.js). The address bar goes back to / at once.
   const shared = shareFromLocation(location);
   if (shared.found) { sessionStorage.setItem('hearth.pendingShare', shared.link ? shared.link.url : ''); history.replaceState(null, '', '/'); }
-  try { S.config = await api('GET', '/config'); } catch { S.config = { name: 'Hearth', iceServers: [] }; }
+  try { S.config = await api('GET', '/config'); } catch { S.config = { name: 'Cindrly', iceServers: [] }; }
   // A disappearing timer inside a message counts only if it's one this server offers (disappear.js).
   setTimerChoices((S.config.disappearing || {}).choices);
   document.title = S.config.name;
   $$('[data-instance-name]').forEach((el) => { el.textContent = S.config.name; });
   $$('[data-instance-tagline]').forEach((el) => { el.textContent = S.config.tagline || ''; el.hidden = !S.config.tagline; });
 
-  // A reset link opened in a tab that already shows Hearth only changes the #part: catch that too.
+  // A reset link opened in a tab that already shows Cindrly only changes the #part: catch that too.
   window.addEventListener('hashchange', () => {
     const t = (location.hash.match(/^#reset=([A-Za-z0-9_-]{20,100})$/) || [])[1];
     if (t) { history.replaceState(null, '', '/'); if (S.me) { sessionStorage.setItem('hearth.resetToken', t); location.reload(); } else openReset(t); }
@@ -556,7 +556,7 @@ function showSignIn() {
 // What to do without an email on the account: write to the owner's contact email (Admin → Owner) when there is one.
 function noEmailHelp() {
   const to = S.config.contactEmail;
-  return to ? ['No email on your account? Email the owner at ', h('a', { href: `mailto:${to}?subject=${encodeURIComponent(`Reset link for my ${S.config.name || 'Hearth'} account`)}` }, to), ' for a reset link instead.']
+  return to ? ['No email on your account? Email the owner at ', h('a', { href: `mailto:${to}?subject=${encodeURIComponent(`Reset link for my ${S.config.name || 'Cindrly'} account`)}` }, to), ' for a reset link instead.']
     : [`No email on your account? Ask the owner of ${location.host} to send you a reset link instead.`];
 }
 // "Forgot your password?": a reset link goes to the account's verified email.
@@ -631,7 +631,7 @@ async function openReset(token) {
       if (!body.keepKeys || !body.pqInEnvelope) E2EE.forgetOwnPq(info.userId);
       // What a reset with a recovery key older than the account's post-quantum key loses, exactly: what was locked to
       // that key alone (secure.js keeps older copies as they were while the recovery key is older).
-      toast(body.keepKeys && info.hasPq && !body.pqInEnvelope ? 'Password reset. Your messages are still here, except direct messages, and server and group messages, encrypted to your account’s post-quantum key since you first signed in after Hearth added it: your recovery key is older than that key, so those can’t be opened on your account any more (the people you talked to still have them). Each server’s and group’s current key is shared with you again. Make a new recovery key in Settings.'
+      toast(body.keepKeys && info.hasPq && !body.pqInEnvelope ? 'Password reset. Your messages are still here, except direct messages, and server and group messages, encrypted to your account’s post-quantum key since you first signed in after Cindrly added it: your recovery key is older than that key, so those can’t be opened on your account any more (the people you talked to still have them). Each server’s and group’s current key is shared with you again. Make a new recovery key in Settings.'
         : body.keepKeys ? 'Password reset. All your messages are still here.'
         : res.user && res.user.keysReset ? 'Password reset with new keys. Ask a member to verify you so you can read your servers and groups again, and add a recovery key in Settings so this can\u2019t happen again.'
           : 'Password reset with new keys. Add a recovery key in Settings so this can\u2019t happen again.');
@@ -730,7 +730,7 @@ function startApp(account) {
       try {
         const n = new Notification(title, { body, icon: '/icons/icon-192.png', ...(tag ? { tag } : {}) });
         if (tag) rememberNotification(tag, n, msgId);
-        // A click brings Hearth forward (the desktop app's window too), at the message when it says which.
+        // A click brings Cindrly forward (the desktop app's window too), at the message when it says which.
         n.onclick = () => {
           window.focus();
           if (window.hearthDesktop) window.hearthDesktop.focus();
@@ -748,7 +748,7 @@ function startApp(account) {
   socket = io({ auth: (cb) => { socketToken = getToken(); cb({ token: socketToken }); }, transports: ['websocket', 'polling'] });
   // Tells the server when this app goes unused (and comes back), for automatic Away. Until the account has
   // loaded there's no setting yet, and while the status isn't Online it can't change anything: nothing is sent.
-  // Being in a call counts as using Hearth (talking, or watching a shared screen without touching anything).
+  // Being in a call counts as using Cindrly (talking, or watching a shared screen without touching anything).
   // (A connection made again with a new sign-in token starts out "in use" on the server like any new one, and
   // presence.js reports again on 'connect', so the person shows as Away again once this app is idle.)
   away = initAway({
@@ -2600,7 +2600,7 @@ function updateTitle() {
   S.mentions.forEach((c) => { n += c; });
   S.threadMentions.forEach((c, k) => { n += threadPings(k); });
   const { inbox } = navCounts();
-  document.title = (n ? `(${n}) ` : '') + (S.config.name || 'Hearth');
+  document.title = (n ? `(${n}) ` : '') + (S.config.name || 'Cindrly');
   if (window.hearthDesktop) window.hearthDesktop.setBadge(n);
   if (navigator.setAppBadge && isStandalone()) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
   const b = $('#rail .inbox-badge');
@@ -3752,7 +3752,7 @@ function sendLinksTo(key, urls, onProgress, from = 0) {
   linkQueue = p.catch(() => {});
   return p;
 }
-// "Share to Hearth": pick where a TikTok or Instagram link goes (it came from a share sheet, the bookmarklet, the
+// "Share to Cindrly": pick where a TikTok or Instagram link goes (it came from a share sheet, the bookmarklet, the
 // Android app or My Reels). Nothing is sent until a place is picked; then the link goes as an ordinary encrypted
 // message (or into My Reels) and that place's Reels tab opens.
 function openSharePicker(raw) {
@@ -3788,7 +3788,7 @@ function openSharePicker(raw) {
   search.addEventListener('input', draw);
   draw();
   m = modal({
-    title: 'Share to Hearth', size: 'sm', className: 'share-pick',
+    title: 'Share to Cindrly', size: 'sm', className: 'share-pick',
     body: h('div', { class: 'stack share-pick' },
       h('div', { class: 'share-what' }, icon('play'), h('span', null, `${p.kind === 'tiktok' ? 'TikTok video' : p.type === 'p' ? 'Instagram post' : 'Instagram reel'} · ${p.url.replace(/^https:\/\/(www\.)?/, '')}`)),
       search, list,
@@ -3873,7 +3873,7 @@ function openReelsImport(toKey = null) {
   m = modal({
     title: 'Import liked & saved videos', size: 'sm',
     body: h('div', { class: 'stack import-reels' },
-      h('p', { class: 'muted-p' }, 'Bring the videos you liked or saved on TikTok and Instagram into Hearth, from the copy of your data each site gives you.'),
+      h('p', { class: 'muted-p' }, 'Bring the videos you liked or saved on TikTok and Instagram into Cindrly, from the copy of your data each site gives you.'),
       h('details', null, h('summary', null, 'How to get it'),
         h('p', { class: 'field-hint' }, 'TikTok: Settings and privacy → Account → Download your data → JSON → Request, then download it when it’s ready. Instagram: Accounts Center → Your information and permissions → Download your information → JSON (Likes and Saved are enough). Both take a while to be ready.')),
       drop, out),
@@ -3932,7 +3932,7 @@ function closeNav() {
   if (t) t.focus({ preventScroll: true });
 }
 // ======================================================================= the phone layout: lists, and a conversation over them
-// On a phone Hearth isn't the computer's three columns squeezed into a drawer. It's two levels: a list page (the tab bar
+// On a phone Cindrly isn't the computer's three columns squeezed into a drawer. It's two levels: a list page (the tab bar
 // at the bottom picks Home, Messages, Notifications or You; Home has the server bar beside its list), and the
 // conversation, pushed over the list full screen, with a Back button (and Back, Esc and a swipe from the left edge)
 // to return to it. The list is drawn in #rail and #sidebar, the conversation in #main, as on a computer; the level
@@ -4306,7 +4306,7 @@ function closePanel() {
   if (hadFocus && !panelMode()) $('#main').focus({ preventScroll: true });
 }
 // Phones and tablets (phone-nav.js): Back closes the menu, picture, message actions, dialog, side panel or drawer on
-// top instead of leaving Hearth, and cancels a voice message being recorded, a message being edited or a reply (as Esc
+// top instead of leaving Cindrly, and cancels a voice message being recorded, a message being edited or a reply (as Esc
 // does); in the phone layout a swipe from the screen's left edge opens the drawer (or closes the side panel, which
 // covers the chat there).
 function phoneNav() {
@@ -4349,7 +4349,7 @@ function phoneNav() {
   });
   // Whatever opens or closes them: the drawer and panel are classes on the body; pictures, menus, sheets and dialogs
   // are added and removed. Recording, editing and replying come and go inside the chat and the side panel, which are
-  // watched only while Back is Hearth's (they change with every message).
+  // watched only while Back is Cindrly's (they change with every message).
   const watch = new MutationObserver(() => back.sync());
   watch.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-mtab'], childList: true }); // (data-mtab: the phone's tab)
   watch.observe($('#layer'), { childList: true });
@@ -6015,7 +6015,7 @@ function postFlag(m, author) {
   const d = m.dec;
   if (!d) return null;
   if (d.bot && m.authorId === NEWS_BOT_ID) return { label: 'News bot \u00b7 public feed, not end-to-end encrypted', tip: 'Posted by this server\u2019s news bot from a public feed, so it isn\u2019t end-to-end encrypted. Everything people write still is.' };
-  if (d.bot && d.webhook) return { label: 'Webhook \u00b7 not end-to-end encrypted', tip: `Posted by a program outside Hearth through this channel’s webhook “${displayName(author)}”, so it isn’t end-to-end encrypted. Everything people write still is.` };
+  if (d.bot && d.webhook) return { label: 'Webhook \u00b7 not end-to-end encrypted', tip: `Posted by a program outside Cindrly through this channel’s webhook “${displayName(author)}”, so it isn’t end-to-end encrypted. Everything people write still is.` };
   if (d.bot) return { label: 'Bot \u00b7 not end-to-end encrypted', tip: 'Posted by a bot this server added. Bot messages aren\u2019t end-to-end encrypted. Everything people write still is.' };
   if (d.legacy) return { label: 'Older message \u2014 not end-to-end encrypted, sender not verified', tip: 'Sent before end-to-end encryption was turned on. Protected by the server\u2019s encryption only, and nothing proves who wrote it: the server could have.' };
   return null;
@@ -6043,7 +6043,7 @@ function messageTrust(m, author, bind = bindingOfMessage(m)) {
   if (bind && bind.issues.length) notes.push({ warn: true, bind });
   // The first DM format bound nothing in (not even who wrote it): say so, quietly.
   else if (m.dmId && d && d.noPq) notes.push({ warn: true, label: '\u26a0 Without post-quantum encryption', tip: 'This conversation is post-quantum encrypted, but this message was encrypted with P-256 alone. The other person\u2019s app wouldn\u2019t fall back like that by itself, so the server may have tricked it, or held it back until now.' });
-  else if (m.dmId && d && d.legacyFormat) notes.push({ label: 'Older encryption format', tip: 'Encrypted by an early version of Hearth that didn\u2019t bind the conversation or the sender into the message, so the server could show it as written by either of you.' });
+  else if (m.dmId && d && d.legacyFormat) notes.push({ label: 'Older encryption format', tip: 'Encrypted by an early version of Cindrly that didn\u2019t bind the conversation or the sender into the message, so the server could show it as written by either of you.' });
   const bot = isBotPost(author, m);
   return {
     face: hookFace(author, m),
@@ -9183,7 +9183,7 @@ function createComposer({ id, key, threadId, placeholder }) {
       chip = h('div', { class: 'link-chip' }, icon('link', 'ic'),
         h('div', { class: 'link-chip-text' },
           L.status === 'ask' ? h('span', null, 'Preview ', h('strong', null, host), '?') : h('span', null, 'This link may be private (a sign-in, share or reset link).'),
-          h('span', { class: 'link-chip-hint' }, 'Your Hearth server fetches the page, so it sees this link. People reading don’t contact the site.')),
+          h('span', { class: 'link-chip-hint' }, 'Your Cindrly server fetches the page, so it sees this link. People reading don’t contact the site.')),
         h('button', { class: 'btn sm', type: 'button', 'data-act': 'preview', onclick: () => { requestPreview(L.url); ta.focus(); } }, L.status === 'ask' ? 'Preview' : 'Preview anyway'),
         L.status === 'ask' ? h('button', { class: 'btn ghost sm', type: 'button', 'data-act': 'always', 'data-tip': 'Preview links without asking (Settings → Chat)', onclick: () => {
           LS.set('hearth.chat', { ...LS.get('hearth.chat', {}), linkPreviews: 'always' });
@@ -9502,7 +9502,7 @@ function createComposer({ id, key, threadId, placeholder }) {
       upStatus.hidden = !files.length || f >= 1;
       bar.style.width = Math.round(f * 100) + '%';
       const what = files.length === 1 ? files[0].file.name : `${files.length} files`;
-      const stay = files.length > MAX_FILES ? ' (keep Hearth on screen)' : ''; // a big send takes a while (keepAwake)
+      const stay = files.length > MAX_FILES ? ' (keep Cindrly on screen)' : ''; // a big send takes a while (keepAwake)
       if (!retrying) upText.textContent = shrunk ? `Uploading ${what} (${Math.round(f * 100)}%)${stay}` : `Uploading ${what} — ${fmtSize(Math.round(f * totalBytes))} of ${fmtSize(totalBytes)} (${Math.round(f * 100)}%)${stay}`;
       if (pend && files.length && f < 1) sendProgress(pend, f); // and under its copy in the chat
     };
@@ -9511,7 +9511,7 @@ function createComposer({ id, key, threadId, placeholder }) {
         shrunk = true;
         upStatus.hidden = false;
         bar.style.width = Math.round(shrinking * 100) + '%';
-        upText.textContent = `Making the video smaller to send\u2026 ${Math.round(shrinking * 100)}% (keep Hearth on screen)`;
+        upText.textContent = `Making the video smaller to send\u2026 ${Math.round(shrinking * 100)}% (keep Cindrly on screen)`;
         return;
       }
       retrying = r ? wait : null;
@@ -9722,7 +9722,7 @@ async function uploadEncryptedFiles(key, files, onProgress, { signal, onStatus }
       ...(p.voice ? { voice: true, dur: p.dur } : {}) }, at: Date.now() };
   };
   // Videos over the limit go first, each made smaller (video-shrink.js; started in the tap that sent them) and
-  // uploaded before the next: it takes as long as they last, with "keep Hearth on screen" up from the start, their
+  // uploaded before the next: it takes as long as they last, with "keep Cindrly on screen" up from the start, their
   // players don't wait behind the rest, and only one smaller copy is in memory at a time.
   for (const p of files) {
     if (!p.session) continue;
@@ -11016,7 +11016,7 @@ async function openGetVerified() {
         : people.length ? h('div', { class: 'stack tight' }, ...people.map(({ u, names }) => h('div', { class: 'ss-row' }, avatarEl(u, 30),
           h('span', { class: 'ss-row-name' }, nameEl(u), names.length ? h('span', null, names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3}` : '')) : null),
           h('button', { class: 'btn ghost sm', onclick: () => { m.close(); openSafetyNumber(u); } }, 'Compare safety numbers'))))
-          : h('p', { class: 'field-hint' }, 'Nobody who was in a server or group with you before your reset is in one where you\u2019re waiting now. Ask an admin of this Hearth server to verify you (Admin \u2192 Users).')),
+          : h('p', { class: 'field-hint' }, 'Nobody who was in a server or group with you before your reset is in one where you\u2019re waiting now. Ask an admin of this Cindrly server to verify you (Admin \u2192 Users).')),
     actions: [{ label: 'Close' }],
   });
 }
@@ -11203,9 +11203,9 @@ function openJoinModal(code) {
       // In a browser on a computer: hand the invite to the installed desktop app instead.
       code && !window.hearthDesktop && !/Android|iPhone|iPad/.test(navigator.userAgent)
         ? h('p', { class: 'field-hint' }, 'Have the desktop app? ', h('a', { href: `hearth://invite/${encodeURIComponent(code)}` }, 'Open this invite in the app'))
-        // In a phone's browser: the Hearth Android app takes the same link.
+        // In a phone's browser: the Cindrly Android app takes the same link.
         : code && !androidApp.on && /Android/.test(navigator.userAgent)
-          ? h('p', { class: 'field-hint' }, 'Have the Hearth app? ', h('a', { href: `hearth://invite/${encodeURIComponent(code)}` }, 'Open this invite in the app')) : null),
+          ? h('p', { class: 'field-hint' }, 'Have the Cindrly app? ', h('a', { href: `hearth://invite/${encodeURIComponent(code)}` }, 'Open this invite in the app')) : null),
     actions: [
       { label: 'Cancel' },
       { label: 'Join server', kind: 'primary', action: async () => {
@@ -11226,7 +11226,7 @@ function privateOrigin(host) {
 }
 // The invite dialog. welcome: 'created' or 'imported' right after making a server ("Your server is ready. Invite
 // your people."), with a ready-to-send message, and for an import an announcement to post on Discord. Share opens
-// the device's own share sheet where there is one (invite-share.js); nothing is sent by Hearth itself.
+// the device's own share sheet where there is one (invite-share.js); nothing is sent by Cindrly itself.
 function openInvite(server, { welcome } = {}) {
   server = S.servers.find((x) => x.id === server.id) || server;
   const out = h('input', { class: 'input mono', readonly: true, value: 'Creating\u2026', 'aria-label': 'Invite link' });
@@ -11275,7 +11275,7 @@ function openInvite(server, { welcome } = {}) {
     // A new server's welcome: back to the channel once it closes (the dialog that opened it is gone by then).
     onClose: welcome ? () => setTimeout(() => { if (document.activeElement === document.body) { const c = $('#composer-input'); if (c) c.focus({ preventScroll: true }); } }, 160) : undefined,
     body: h('div', { class: 'stack' },
-      // Whoever runs Hearth on their own computer or network is told the link only works where that's reachable;
+      // Whoever runs Cindrly on their own computer or network is told the link only works where that's reachable;
       // everyone else just what the link does.
       h('p', { class: 'muted-p' }, ['owner', 'admin'].includes(S.me.staffRole) && privateOrigin(location.hostname)
         ? 'Send this link to people. They need to be able to reach this computer or VPS.' : `Anyone with this link can join ${server.name}.`),
@@ -12094,8 +12094,8 @@ function showAppUpdate(version) {
   if (document.getElementById('update-pill')) return;
   const restart = async () => { if (voice && voice.channelId && !(await confirmDialog({ title: 'Restart now?', text: 'Restarting leaves your call. It takes a few seconds.', confirm: 'Restart' }))) return; installUpdate(); };
   const pill = h('div', { id: 'update-pill', class: 'update-pill', role: 'status' }, icon('download'),
-    h('span', { class: 'update-pill-text', title: version ? `The ${S.config.name || 'Hearth'} app ${version} is ready to install.` : null }, 'Update ready'),
-    h('button', { class: 'btn primary sm', onclick: restart, 'aria-label': `Restart to install the ${S.config.name || 'Hearth'} app${version ? ` ${version}` : ''}` }, 'Restart'),
+    h('span', { class: 'update-pill-text', title: version ? `The ${S.config.name || 'Cindrly'} app ${version} is ready to install.` : null }, 'Update ready'),
+    h('button', { class: 'btn primary sm', onclick: restart, 'aria-label': `Restart to install the ${S.config.name || 'Cindrly'} app${version ? ` ${version}` : ''}` }, 'Restart'),
     ibtn('close', 'Later (restart from Settings \u2192 Apps & devices when you\u2019re ready)', () => pill.remove(), { cls: 'sm' }));
   const panel = $('#user-panel');
   if (panel) panel.before(pill); else document.body.append(pill);
@@ -12145,11 +12145,11 @@ async function enablePush({ quiet = false, choose = false } = {}) {
   if (androidApp.push && app.push.supported()) return enableAndroidPush({ quiet, choose });
   if (iosApp.on) {
     await iosApp.ready;
-    if (!iosApp.push) throw new Error('Update the Hearth app to get notifications while it\u2019s closed.');
+    if (!iosApp.push) throw new Error('Update the Cindrly app to get notifications while it\u2019s closed.');
     if (!(S.config && S.config.apnsEnabled)) { if (quiet) return; throw new Error(iosReasonText.noApns); }
     return enableIosPush({ quiet });
   }
-  if (!app.push.supported()) throw new Error(/iPhone|iPad/.test(navigator.userAgent) && !isStandalone() ? 'On iPhone and iPad, add Hearth to your Home Screen first, then turn this on from the app.' : 'This browser doesn\u2019t support push notifications.');
+  if (!app.push.supported()) throw new Error(/iPhone|iPad/.test(navigator.userAgent) && !isStandalone() ? 'On iPhone and iPad, add Cindrly to your Home Screen first, then turn this on from the app.' : 'This browser doesn\u2019t support push notifications.');
   if (Notification.permission !== 'granted') {
     if (quiet) return;
     if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notifications are blocked for this site in your browser settings.');
@@ -12203,7 +12203,7 @@ async function enableAndroidPush(opts = {}) {
 async function subscribeAndroidPush({ quiet = false, choose = false } = {}) {
   if (Notification.permission !== 'granted') {
     if (quiet) return;
-    if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notifications are turned off for Hearth. Turn them on in Android Settings \u2192 Apps \u2192 Hearth \u2192 Notifications.');
+    if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notifications are turned off for Cindrly. Turn them on in Android Settings \u2192 Apps \u2192 Cindrly \u2192 Notifications.');
   }
   const { publicKey } = await api('GET', '/push/key');
   let st = await androidApp.push.state();
@@ -12292,14 +12292,14 @@ function offerLift() {
   document.documentElement.style.setProperty('--offer-lift', `${lift}px`);
 }
 window.addEventListener('resize', () => { if (document.querySelector('.push-offer')) offerLift(); });
-// The one-time "Get notifications?" bar (Android app, and Hearth on an iPhone or iPad Home Screen).
+// The one-time "Get notifications?" bar (Android app, and Cindrly on an iPhone or iPad Home Screen).
 function offerPush() {
   const no = () => { localStorage.setItem('hearth.push', 'off'); bar.remove(); };
-  const bar = offerCard('push-offer', 'bell', 'Get notifications when Hearth is closed?',
+  const bar = offerCard('push-offer', 'bell', 'Get notifications when Cindrly is closed?',
     h('button', { class: 'btn ghost sm', onclick: no }, 'Not now'),
     h('button', { class: 'btn primary sm', onclick: async () => {
       bar.remove();
-      try { await enablePush(); toast('Notifications are on, even when Hearth is closed.'); } catch (e) { if (e.code !== 'CANCELLED') toast(e.message, 'error'); }
+      try { await enablePush(); toast('Notifications are on, even when Cindrly is closed.'); } catch (e) { if (e.code !== 'CANCELLED') toast(e.message, 'error'); }
     } }, 'Turn on'));
 }
 // ---- the web's ask for notifications, at the moment they start to matter
@@ -12323,8 +12323,8 @@ function firstHappened(what) {
     h('button', { class: 'btn primary sm', onclick: async () => {
       bar.remove();
       try {
-        if (app.push.supported()) { await enablePush(); toast('Notifications are on, even when Hearth is closed.'); }
-        else if ((await Notification.requestPermission()) === 'granted') toast('Notifications are on while Hearth is open.');
+        if (app.push.supported()) { await enablePush(); toast('Notifications are on, even when Cindrly is closed.'); }
+        else if ((await Notification.requestPermission()) === 'granted') toast('Notifications are on while Cindrly is open.');
       } catch (e) { if (e.code !== 'CANCELLED') toast(e.message, 'error'); }
     } }, 'Turn on'));
 }
@@ -12338,7 +12338,7 @@ function watchFirsts() {
   socket.on('relationship:update', ({ relationship } = {}) => { if (relationship && relationship.direction === 'incoming' && !relationship.removed) firstHappened('friend'); });
   socket.on('server:add', ({ server } = {}) => { if (server && server.kind !== 'group') firstHappened('server'); });
 }
-// iPhone and iPad: web push works only for Hearth opened from the Home Screen, on iOS 16.4 and newer. In Safari,
+// iPhone and iPad: web push works only for Cindrly opened from the Home Screen, on iOS 16.4 and newer. In Safari,
 // say so once; once it's on the Home Screen, offer notifications once, as the Android app does.
 const appleMobile = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
 const iosVersion = () => { const m = /OS (\d+)[_.](\d+)/.exec(navigator.userAgent); return m ? Number(m[1]) + Number(m[2]) / 100 : 0; };
@@ -12355,7 +12355,7 @@ function applePushAtStart() {
       h('strong', null, `Get notifications on this ${/iPad|Macintosh/.test(navigator.userAgent) ? 'iPad' : 'iPhone'}`),
       h('ol', { class: 'tip-steps' },
         h('li', null, 'Tap ', shareGlyph, h('strong', null, 'Share'), ' in Safari.'),
-        h('li', null, 'Choose ', h('strong', null, '\u201cAdd to Home Screen\u201d'), ', then open Hearth from there.'))),
+        h('li', null, 'Choose ', h('strong', null, '\u201cAdd to Home Screen\u201d'), ', then open Cindrly from there.'))),
     h('button', { class: 'btn ghost sm', onclick: done }, 'Got it'));
     return;
   }
@@ -12390,7 +12390,7 @@ function openReport({ message, user, ctx = 'main' }) {
   // share): its moderators can see the report too, without your name, unless you untick it. Not for group chats, and
   // child-safety reports stay with this instance's admins (the server decides that again). Of the messages shared,
   // they get only the reported person's: yours would give you away (server/serveraudit.js).
-  const instance = S.config.name || 'Hearth';
+  const instance = S.config.name || 'Cindrly';
   const viewed = !message && S.view.serverId && S.servers.find((x) => x.id === S.view.serverId);
   const inServer = message ? (message.channelId && serverOfChannel(message.channelId)) : (viewed && viewed.memberIds.includes(target.id) ? viewed : null);
   const shareable = inServer && !isGroup(inServer) ? inServer : null;
@@ -12436,7 +12436,7 @@ function openReport({ message, user, ctx = 'main' }) {
         h('label', { class: 'tos-check' }, h('input', { type: 'checkbox', checked: true, onchange: (e) => { includeContext = e.target.checked; drawPreview(); } }), h('span', null, 'Include up to 4 earlier messages for context')),
         preview,
         h('p', { class: 'field-hint' }, 'Messages are end-to-end encrypted, so admins can only see what you share here.'),
-        disappears(message) ? h('p', { class: 'field-hint dis-hint' }, icon('timer'), `Reporting sends the text of these messages to this Hearth\u2019s staff${shareable ? ` (and ${displayName(target)}\u2019s to the moderators of ${shareable.name}, if you show it to them)` : ''}, who keep it with the report after the messages disappear here.`) : null) : null,
+        disappears(message) ? h('p', { class: 'field-hint dis-hint' }, icon('timer'), `Reporting sends the text of these messages to this Cindrly\u2019s staff${shareable ? ` (and ${displayName(target)}\u2019s to the moderators of ${shareable.name}, if you show it to them)` : ''}, who keep it with the report after the messages disappear here.`) : null) : null,
       h('p', { class: 'field-hint' }, 'In danger right now? Contact your local emergency services.')),
     actions: [
       { label: 'Cancel' },
@@ -12955,10 +12955,10 @@ if (window.hearthDesktop && window.hearthDesktop.onPickScreen) {
 // ======================================================================= updates without the fuss
 // When the server restarts (an update), it tells everyone first. We show "Updating…", wait for it to
 // come back, then either carry on (same version) or switch to the new version, landing right where
-// you were with any unsent message kept. A new version is never something to click: every open Hearth
+// you were with any unsent message kept. A new version is never something to click: every open Cindrly
 // switches to it by itself (auto-update.js), at a moment that interrupts nothing (never during a call).
 let updatingTimer = null;
-function showUpdating(text = 'Updating Hearth\u2026', sub = 'You\u2019ll be right back \u2014 this usually takes a few seconds.') {
+function showUpdating(text = 'Updating Cindrly\u2026', sub = 'You\u2019ll be right back \u2014 this usually takes a few seconds.') {
   S.restarting = S.restarting || Date.now();
   // The server may have closed our connection on purpose (maintenance) or refused it for now; Socket.IO
   // doesn't retry those by itself, so keep knocking every few seconds until we're back.
@@ -13021,7 +13021,7 @@ const autoUpdate = createUpdater({
   lastApplied: () => { try { return Number(sessionStorage.getItem('hearth.updatedAt')) || 0; } catch { return 0; } },
   apply: (version) => {
     try { sessionStorage.setItem('hearth.updatedAt', String(Date.now())); } catch { /* ignore */ }
-    if (!document.hidden) showUpdating('Updated!', version ? `Loading Hearth ${version}\u2026` : 'Loading the new version of Hearth\u2026');
+    if (!document.hidden) showUpdating('Updated!', version ? `Loading Cindrly ${version}\u2026` : 'Loading the new version of Cindrly\u2026');
     updateAndReload();
   },
 });
@@ -13117,8 +13117,8 @@ function pqNotice({ always = false } = {}) {
   const go = () => unlockPq().catch((e) => { if (!e.cancelled) toast(e.message, 'error'); });
   return h('div', { class: 'key-bar pq-bar', id: 'pq-unlock', role: 'status' }, icon('shield'),
     h('span', null, why === 'seed'
-      ? 'Hearth added post-quantum encryption to your account. Enter your password once on this device to read and write what’s locked with it.'
-      : why === 'upgrade' ? 'Hearth can protect your messages against future quantum computers too. Enter your password once to turn it on for your account.'
+      ? 'Cindrly added post-quantum encryption to your account. Enter your password once on this device to read and write what’s locked with it.'
+      : why === 'upgrade' ? 'Cindrly can protect your messages against future quantum computers too. Enter your password once to turn it on for your account.'
         : 'Enter your password once on this device to finish setting up your account’s post-quantum encryption.'),
     h('span', { class: 'pq-bar-actions' },
       always ? null : h('button', { class: 'btn sm ghost', onclick: () => { pqLater.set(); if (composers.main) composers.main.renderExtras(); } }, 'Later'),

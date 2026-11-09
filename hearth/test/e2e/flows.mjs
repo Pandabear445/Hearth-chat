@@ -1330,7 +1330,7 @@ async function videosIn(t) {
   // ---- a link shared to Hearth (an installed web app's share sheet, or the bookmarklet): the picker, then sent
   await alice.page.goto(`${base}/share?title=TikTok&text=${encodeURIComponent(`Look at this https://www.tiktok.com/@hearth/video/${TT_ID3}?is_from_webapp=1`)}`);
   await alice.waitApp();
-  const picker = await alice.dialog('Share to Hearth');
+  const picker = await alice.dialog('Share to Cindrly');
   check(new URL(alice.page.url()).pathname === '/', 'The address bar goes back to / (the link isn’t kept in it).');
   await picker.locator('.share-what', { hasText: 'TikTok video' }).waitFor();
   await picker.locator('input[type=search]').fill('genera');
@@ -1342,11 +1342,11 @@ async function videosIn(t) {
   await alice.page.goto(`${base}/share?text=${encodeURIComponent('hello https://evil.example/@a/video/7444444444444444444')}`);
   await alice.waitApp();
   await alice.toast('Nothing to share');
-  check(!(await alice.$('.modal', { hasText: 'Share to Hearth' }).count()), 'No picker for junk.');
+  check(!(await alice.$('.modal', { hasText: 'Share to Cindrly' }).count()), 'No picker for junk.');
   // To My Reels: private, sealed in the vault, so the server never sees it.
   await alice.page.goto(`${base}/share?url=${encodeURIComponent('https://www.instagram.com/reel/PRIVATEreel1/')}`);
   await alice.waitApp();
-  await (await alice.dialog('Share to Hearth')).locator('.share-row', { hasText: 'My Reels' }).click();
+  await (await alice.dialog('Share to Cindrly')).locator('.share-row', { hasText: 'My Reels' }).click();
   await alice.toast('Added to My Reels.');
   await alice.$('.reels-layer:not([hidden]) .reels-bar .reels-sub', { hasText: 'Sealed in your vault' }).waitFor();
   await alice.page.waitForFunction(() => document.querySelectorAll('.reels-layer .reel-card').length === 1);
@@ -1409,7 +1409,7 @@ async function videosIn(t) {
   await phone.login('bob', t.pw.bob);
   await page.goto(`${base}/share?url=${encodeURIComponent('https://vm.tiktok.com/ZMphone01/')}`);
   await phone.waitApp();
-  const pp = await phone.dialog('Share to Hearth');
+  const pp = await phone.dialog('Share to Cindrly');
   await pp.locator('.share-row', { hasText: 'My Reels' }).waitFor();
   await page.waitForTimeout(400);
   await shot(phone, 'phone-share');
@@ -1668,9 +1668,9 @@ async function androidApp(t) {
   // Junk that slipped through is refused again here.
   await droid.page.evaluate(() => window.dispatchEvent(new CustomEvent('hearth-share', { detail: 'javascript:alert(1)//https://evil.example/' })));
   await droid.page.waitForTimeout(300);
-  check(!(await droid.$('.modal', { hasText: 'Share to Hearth' }).count()), 'Junk from another app opens nothing.');
+  check(!(await droid.$('.modal', { hasText: 'Share to Cindrly' }).count()), 'Junk from another app opens nothing.');
   await droid.page.evaluate(() => window.dispatchEvent(new CustomEvent('hearth-share', { detail: 'https://vm.tiktok.com/ZMdroid01/' })));
-  const sp = await droid.dialog('Share to Hearth');
+  const sp = await droid.dialog('Share to Cindrly');
   await sp.locator('.share-what', { hasText: 'vm.tiktok.com/ZMdroid01/' }).waitFor();
   await sp.locator('.modal-foot button', { hasText: 'Cancel' }).click();
   await droid.noModals();
@@ -1679,7 +1679,7 @@ async function androidApp(t) {
   // subscribes the address it hands back.
   const { publicKey } = await droid.page.evaluate(() => fetch('/api/push/key').then((r) => r.json()));
   await droid.$('.push-offer button', { hasText: 'Turn on' }).click();
-  await droid.toast('Notifications are on, even when Hearth is closed.');
+  await droid.toast('Notifications are on, even when Cindrly is closed.');
   const reg = await sent('pushRegister');
   check(reg.length === 1 && reg[0].vapid === publicKey, 'The app should be asked to register with this server\u2019s VAPID key.');
   check(subs.length === 1 && /^https:\/\/ntfy\.example\.test\/upE2e1/.test(subs[0].subscription.endpoint) && subs[0].subscription.keys.auth && !subs[0].replaces,
@@ -1687,9 +1687,9 @@ async function androidApp(t) {
 
   // Settings: on, through ntfy; picking the push app again gives a new address, which replaces the old one.
   await droid.openSettings('Apps & devices');
-  const row = droid.$('.set-content .toggle-row', { hasText: 'Notifications when Hearth is closed' });
+  const row = droid.$('.set-content .toggle-row', { hasText: 'Notifications when Cindrly is closed' });
   await row.waitFor();
-  const pushIs = (on) => droid.page.waitForFunction((want) => { const r = [...document.querySelectorAll('.set-content .toggle-row')].find((x) => /when Hearth is closed/.test(x.textContent)); return r && !r.querySelector('input').disabled && r.querySelector('input').checked === want; }, on);
+  const pushIs = (on) => droid.page.waitForFunction((want) => { const r = [...document.querySelectorAll('.set-content .toggle-row')].find((x) => /when Cindrly is closed/.test(x.textContent)); return r && !r.querySelector('input').disabled && r.querySelector('input').checked === want; }, on);
   const change = () => droid.$('.set-content button', { hasText: exact('Change') });
   await pushIs(true);
   await droid.$('.set-content .muted-p', { hasText: 'Push app: ntfy' }).waitFor();
@@ -1701,12 +1701,12 @@ async function androidApp(t) {
   // Turning it off takes the push app row (and Change, which would turn push back on) away at once; turning it
   // on again brings them back, without reopening Settings.
   await row.locator('.switch').click();
-  await droid.toast('Notifications when Hearth is closed are off.');
+  await droid.toast('Notifications when Cindrly is closed are off.');
   await pushIs(false);
   await change().waitFor({ state: 'detached' });
   check(!(await droid.$('.set-content .muted-p', { hasText: 'Push app:' }).count()), 'With push off, no push app should be shown.');
   await row.locator('.switch').click();
-  await droid.toast('Notifications are on, even when Hearth is closed.');
+  await droid.toast('Notifications are on, even when Cindrly is closed.');
   await pushIs(true);
   await change().waitFor();
   check((await sent('pushPick')).length === 1 && subs.length === 3, 'Turning push on again registers once, without the list of push apps.');
@@ -1798,7 +1798,7 @@ async function iPhoneNotifications(t) {
   // Opened from the Home Screen: notifications are offered once, as in the Android app.
   await phone.page.evaluate(() => localStorage.setItem('e2e.standalone', '1'));
   await restart();
-  const offer = phone.$('.push-offer', { hasText: 'Get notifications when Hearth is closed?' });
+  const offer = phone.$('.push-offer', { hasText: 'Get notifications when Cindrly is closed?' });
   await offer.waitFor();
   check(!(await phone.$('.push-offer', { hasText: 'Home Screen' }).count()), 'Once on the Home Screen, the Safari tip should not show.');
   await offer.locator('button', { hasText: 'Not now' }).click();
@@ -2555,7 +2555,7 @@ async function linkPreviews(t) {
     const chip = alice.$('.cw-main .link-chip');
     // "Ask each time" (the default): the chip only offers. Nothing has been fetched yet.
     await box.fill(`Have you seen this? ${url} `);
-    await chip.filter({ hasText: 'Your Hearth server fetches the page, so it sees this link.' }).waitFor();
+    await chip.filter({ hasText: 'Your Cindrly server fetches the page, so it sees this link.' }).waitFor();
     check(!site.hits.length, `Nothing should be fetched before Alice asks for a preview (fetched ${site.hits.join(', ')}).`);
     // No thanks: the link goes out as a plain link.
     await chip.locator('button[aria-label="No preview for this link"]').click();
@@ -6487,7 +6487,7 @@ async function soundboardAndProfile(t) {
   await page.locator('.set-h', { hasText: 'Your sounds (0/24)' }).waitFor();
   const file = page.locator('input[type=file]');
   await file.setInputFiles({ name: 'evil.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('<html><script>alert(1)</script>'.padEnd(400, ' ')) });
-  await alice.toast('isn’t a sound Hearth can play');
+  await alice.toast('isn’t a sound Cindrly can play');
   await file.setInputFiles({ name: 'long.wav', mimeType: 'audio/wav', buffer: beepWav(7) });
   await alice.toast('up to 5 seconds long');
   check(!t.server.rows('SELECT 1 FROM soundboard_items').length, 'Nothing should reach the server for a refused file.');

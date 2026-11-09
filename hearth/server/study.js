@@ -49,7 +49,7 @@ module.exports = function setupStudy(ctx) {
     rateLimit(budget, Infinity, 60000, bytes); // counted, never refused: this page has been read already
     // Apps from before paging read one answer as everything. Rather than let one of them act on half the list (and
     // overwrite the rest), ask for a reload: the new version is already waiting in the browser.
-    if (more && req.query.paged !== '1') fail(409, 'Reload Hearth to finish syncing your study decks (a newer version of the app is ready).', 'study_paged');
+    if (more && req.query.paged !== '1') fail(409, 'Reload Cindrly to finish syncing your study decks (a newer version of the app is ready).', 'study_paged');
     const used = db.prepare('SELECT COALESCE(SUM(size), 0) b, COUNT(*) n FROM study_items WHERE user_id = ? AND deleted = 0').get(req.userId);
     res.json({ items, more, now: now(), usedBytes: used.b, count: used.n });
   });

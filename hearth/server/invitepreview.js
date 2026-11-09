@@ -1,6 +1,6 @@
 // Invite links that unfurl (v19): what https://this-server/invite/<code> shows before anyone signs in, to the person
 // who got the link and to the preview bots of the apps it's pasted into (Discord's, Reddit's, X's, a phone's
-// messages app). Every invite link someone shares then says what it is, instead of a bare "Hearth".
+// messages app). Every invite link someone shares then says what it is, instead of a bare "Cindrly".
 //   - By default nothing about the server: "You're invited to a server on <instance>". The card is byte for byte
 //     the same for every code, working or not (unknown, expired, used up and revoked ones too), so the page can't be
 //     used to check codes.
@@ -12,7 +12,7 @@
 //   - Both share one allowance per network (60 a minute). The page never refuses (someone following a link still
 //     gets the app): past the allowance it shows the generic card without looking the code up. The JSON answers 429.
 //   - The card's picture is the instance's own app icon, at the configured public address (Admin -> Email's public
-//     address, PUBLIC_URL, or the first PUBLIC_HOSTS name when Hearth serves https itself), never the request's Host
+//     address, PUBLIC_URL, or the first PUBLIC_HOSTS name when Cindrly serves https itself), never the request's Host
 //     header, so a forged Host can't put another site into a card that a cache or a bot keeps. Without one: no picture.
 //   - Every value is HTML-escaped (quotes too) and cut to length; invite pages say noindex (meta tag and
 //     X-Robots-Tag) and are never cached.
@@ -29,7 +29,7 @@ const zlib = require('zlib');
 const PEEK_MAX = 60; // look-ups a minute per network, page and JSON together
 const PEEK_WINDOW = 60 * 1000;
 const CODE = /^[A-Za-z0-9]{1,32}$/;
-const PITCH = 'Hearth is free, private chat. Messages are end-to-end encrypted.';
+const PITCH = 'Cindrly is free, private chat. Messages are end-to-end encrypted.';
 const BASE_PITCH = 'Free, private chat with servers, voice and end-to-end encrypted messages.';
 
 // Text for an attribute or a <title>: half characters (a name cut mid-emoji), control and direction-changing characters
@@ -81,7 +81,7 @@ function inject(template, tags) {
 
 // pageHead: more tags for the end of every page's <head> (server/index.js: the app's modules to start fetching early).
 module.exports = function setupInvitePreview({ app, api, db, now, brand, publicOrigin, countHit, limitNet, netOf, PUBLIC_DIR, pageHead = '' }) {
-  const RAW = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8'); // read once: updates restart Hearth
+  const RAW = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8'); // read once: updates restart Cindrly
   const TEMPLATE = pageHead ? RAW.replace(/<\/head>/i, () => `${pageHead}\n</head>`) : RAW;
   const peekKey = (req) => `invitepeek:net:${netOf(req.ip)}`;
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// A tiny Hearth bot, as a starting point for your own (see docs/BOTS.md).
+// A tiny Cindrly bot, as a starting point for your own (see docs/BOTS.md).
 //
 // It's a plain Node HTTP(S) server with no dependencies. It:
-//  - checks the signature on every webhook Hearth sends, and refuses old or replayed ones;
+//  - checks the signature on every webhook Cindrly sends, and refuses old or replayed ones;
 //  - registers one slash command, /roll [sides], and answers it with a message;
 //  - says hello in the first channel it's allowed in when a server installs it.
 //
-// Hearth only sends webhooks to https addresses, so either give it a certificate (TLS_CERT, TLS_KEY) or put it
+// Cindrly only sends webhooks to https addresses, so either give it a certificate (TLS_CERT, TLS_KEY) or put it
 // behind something that does https for it (Caddy, nginx, a tunnel).
 //
 //   HEARTH_URL=https://chat.example.com BOT_TOKEN=hb_… WEBHOOK_SECRET=… PORT=8443 \
@@ -19,9 +19,9 @@ const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
 
-const REPLAY_WINDOW_SEC = 300; // Hearth's timestamps more than 5 minutes off are refused
+const REPLAY_WINDOW_SEC = 300; // Cindrly's timestamps more than 5 minutes off are refused
 
-// Is this webhook really from Hearth? The signature is HMAC-SHA256 over "<timestamp>.<raw body>" with your
+// Is this webhook really from Cindrly? The signature is HMAC-SHA256 over "<timestamp>.<raw body>" with your
 // webhook secret, sent as "X-Hearth-Signature: v1=<hex>". Check it against the raw bytes (before parsing the
 // JSON), compare in constant time, and refuse timestamps outside the replay window.
 function verify(secret, headers, rawBody, { now = Date.now(), windowSec = REPLAY_WINDOW_SEC } = {}) {
@@ -39,7 +39,7 @@ const roll = (sides) => 1 + crypto.randomInt(sides);
 // The bot itself: returns a request handler for the webhook, and start() to register its commands.
 function createBot({ hearthUrl, token, secret, log = () => {} }) {
   const base = String(hearthUrl).replace(/\/+$/, '') + '/api/bot/v1';
-  // Every call sends the token in the Authorization header (Hearth refuses it anywhere else).
+  // Every call sends the token in the Authorization header (Cindrly refuses it anywhere else).
   async function hearth(method, path, body) {
     const r = await fetch(base + path, { method, headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
     const json = await r.json().catch(() => ({}));
@@ -70,7 +70,7 @@ function createBot({ hearthUrl, token, secret, log = () => {} }) {
       if (!verify(secret, req.headers, raw)) { res.writeHead(401).end(); return; }
       let evt;
       try { evt = JSON.parse(raw.toString('utf8')); } catch { res.writeHead(400).end(); return; }
-      // Answer straight away (Hearth waits 5 seconds at most), then do the work.
+      // Answer straight away (Cindrly waits 5 seconds at most), then do the work.
       res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}');
       if (evt.v !== 1 || seen.has(evt.id)) return;
       seen.add(evt.id);

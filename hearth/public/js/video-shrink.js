@@ -3,7 +3,7 @@
 // smaller on the device before it's encrypted and sent: up to 1280 px on its long side, at a bitrate that fits the
 // limit, with the browser's own encoder (MediaRecorder): MP4 (H.264/AAC) where the browser has it (iPhone, Chrome),
 // otherwise WebM. The browser has to play the video through to record it, so it takes as long as the video lasts,
-// silently, with the progress where the upload's is (app.js deliver). It pauses while Hearth is out of sight (a phone
+// silently, with the progress where the upload's is (app.js deliver). It pauses while Cindrly is out of sight (a phone
 // stops playing then) and goes on when it's back, and goes on by itself after any other pause (a headset button).
 //
 // Phones only let a video play with sound after a tap, so startShrink() is called in the tap that sends (app.js
@@ -172,7 +172,7 @@ export function startShrink(file) {
         if (lock || document.hidden || !navigator.wakeLock) return;
         navigator.wakeLock.request('screen').then((l) => { lock = l; l.addEventListener('release', () => { if (lock === l) lock = null; }); }, () => {});
       };
-      // Out of sight a phone stops the video: the recording waits with it, and both go on once Hearth is back.
+      // Out of sight a phone stops the video: the recording waits with it, and both go on once Cindrly is back.
       const onVisible = () => {
         if (document.hidden) { video.pause(); return; }
         wake();
@@ -190,7 +190,7 @@ export function startShrink(file) {
       const others = () => [...document.querySelectorAll('video, audio')].some((m) => m !== video && !m.paused && !m.ended);
       const tick = setInterval(() => {
         onProgress(Math.min(0.99, video.currentTime / info.duration));
-        // Paused by something else (a headset, the notification) while Hearth is on screen: go on, unless the person
+        // Paused by something else (a headset, the notification) while Cindrly is on screen: go on, unless the person
         // is playing something else here (a phone plays one video with sound at a time).
         if (!document.hidden && video.paused && !video.ended && !stopped && rec.state === 'paused' && !others()) video.play().catch(() => {});
       }, 500);

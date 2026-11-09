@@ -355,7 +355,7 @@ test('play-7: in Chromium, a browser shows the ways to pay and downloads as befo
     await web.waitForSelector('.fund-card');
     assert.match(await web.locator('.fund-card').innerText(), /Chip in/);
     const webMenu = await menuItems(web);
-    assert.ok(webMenu.some((t) => /Support Hearth/.test(t)), `the Support item (${webMenu.join(' | ')})`);
+    assert.ok(webMenu.some((t) => /Support Cindrly/.test(t)), `the Support item (${webMenu.join(' | ')})`);
     // The Support window links to the owner's donation link.
     await web.click('.fund-card .btn.primary');
     await web.waitForSelector('.support-modal');
@@ -408,7 +408,7 @@ test('play-7: in Chromium, a browser shows the ways to pay and downloads as befo
     assert.ok(seen > tabs.length, `looked at the sub-tabs too (${seen})`);
     await openSettingsTab(app, 'Apps & devices');
     const appsText = await app.locator('.set-content').innerText();
-    assert.match(appsText, /You’re using the Hearth Android app/);
+    assert.match(appsText, /You’re using the Cindrly Android app/);
     assert.equal(await app.locator('.set-content a[href="/download"]').count(), 0, 'no Download page link');
     assert.doesNotMatch(appsText, /Send friends this link|Desktop app/);
     assert.deepEqual(await privacyHref(app), [['Privacy policy', '_blank', 'noopener noreferrer']]);
@@ -418,7 +418,7 @@ test('play-7: in Chromium, a browser shows the ways to pay and downloads as befo
     // ---- /download: the app gets no files; a phone's browser and a computer still get the APK and the installer
     await app.goto(srv.base + '/download');
     await app.waitForSelector('#primary h2');
-    assert.match(await app.locator('#primary').innerText(), /You’re using the Hearth Android app/);
+    assert.match(await app.locator('#primary').innerText(), /You’re using the Cindrly Android app/);
     assert.equal(await app.locator('a[href*="/downloads/"]').count(), 0, 'no download in the app');
     const phone = await open({ userAgent: PHONE_UA });
     await phone.goto(srv.base + '/download');

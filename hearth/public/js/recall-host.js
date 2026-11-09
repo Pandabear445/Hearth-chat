@@ -1,7 +1,7 @@
 // Study tools = Recall (public/recall/), a flashcard app with Learn, Smart Review, Write, Match, practice tests,
 // Blitz and more, plus courses, exam dates and a focus timer.
 //
-// Recall runs in a sandboxed frame with an origin of its own: it can't see your Hearth sign-in, can't store
+// Recall runs in a sandboxed frame with an origin of its own: it can't see your Cindrly sign-in, can't store
 // anything in the browser and can't reach the network. This module is its storage. It decrypts your study items,
 // hands them to the frame, and encrypts every change the frame sends back with a key only your devices can derive
 // (E2EE.vaultKey) before syncing it, so the server only ever holds ciphertext.
@@ -10,7 +10,7 @@
 //   deck      r-<deck id>     one Recall deck; its pictures are replaced by "hearth-img:<id>" references
 //   img       img-<sha256>    one picture (stored once, however many cards use it)
 //   settings  recall-profile  Recall's profile: courses, goals, streak, theme
-// Decks from the earlier Hearth study tools (kind deck, other ids) are moved into Recall the first time.
+// Decks from the earlier Cindrly study tools (kind deck, other ids) are moved into Recall the first time.
 import { h, toast } from './util.js';
 import { api } from './api.js';
 import * as E2EE from './e2ee.js';
@@ -130,7 +130,7 @@ export function createRecall(ctx) {
     return [...items].filter(([id, it]) => it.kind === 'deck' && id.startsWith('r-')).map(([, it]) => withImages(it.obj));
   }
 
-  // The first time: bring decks made with the earlier Hearth study tools into Recall.
+  // The first time: bring decks made with the earlier Cindrly study tools into Recall.
   async function migrate() {
     if (items.has(PROFILE_ID)) return;
     const old = [...items].filter(([id, it]) => it.kind === 'deck' && !id.startsWith('r-'));
@@ -172,8 +172,8 @@ export function createRecall(ctx) {
     if (!frame || e.source !== frame.contentWindow) return;
     const m = e.data;
     if (!m || m.recall !== 1 || typeof m.t !== 'string') return;
-    // Someone is studying: keys and clicks in the frame never reach Hearth's page, so the frame says so (at most
-    // every 30 seconds, and nothing about what was pressed). Automatic Away counts it as using Hearth.
+    // Someone is studying: keys and clicks in the frame never reach Cindrly's page, so the frame says so (at most
+    // every 30 seconds, and nothing about what was pressed). Automatic Away counts it as using Cindrly.
     if (m.t === 'active') { if (ctx.onActive) ctx.onActive(); return; }
     if (m.t === 'ready') {
       ready = true;
@@ -194,7 +194,7 @@ export function createRecall(ctx) {
       clearTimeout(pending.get(id)); pending.delete(id);
       await del(id);
     } else if (m.t === 'file' && typeof m.text === 'string' && m.text.length < 80 * 1024 * 1024) {
-      // Backups and exports: saved by Hearth, since the sandboxed frame can't download on every platform.
+      // Backups and exports: saved by Cindrly, since the sandboxed frame can't download on every platform.
       const type = ['text/csv', 'application/json', 'text/plain'].includes(m.type) ? m.type : 'text/plain';
       const name = String(m.name || 'recall.txt').replace(/[^\w .()-]+/g, '_').slice(0, 120) || 'recall.txt';
       const url = URL.createObjectURL(new Blob([m.text], { type }));
@@ -265,7 +265,7 @@ export function createRecall(ctx) {
     const main = $('#main');
     if (main) { const r = getComputedStyle(main).borderBottomLeftRadius; layer.style.borderRadius = `0 0 ${r} ${r}`; }
     if (!raf) raf = requestAnimationFrame(place);
-    // Hearth's light/dark may have changed since the frame opened.
+    // Cindrly's light/dark may have changed since the frame opened.
     if (ready) post({ t: 'theme', theme: hearthTheme() });
     return slot;
   }

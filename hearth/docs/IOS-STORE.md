@@ -1,6 +1,6 @@
-# Putting Hearth for iPhone in the App Store
+# Putting Cindrly for iPhone in the App Store
 
-This page takes you, step by step, from "the iPhone app builds on GitHub" to Hearth on **TestFlight** (you and up to
+This page takes you, step by step, from "the iPhone app builds on GitHub" to Cindrly on **TestFlight** (you and up to
 100 friends test it, no review) and then in the **App Store**. You don't need a Mac: GitHub's macOS machines build,
 sign and upload the app, and everything you do yourself happens in a browser. You do need an iPhone to test it on.
 
@@ -44,7 +44,7 @@ What's already done in this repository:
 Check it on the real page when you get there. Apple's rules and screens change; this was written in October 2026.
 
 **The contact email** isn't decided yet. Wherever this page says `{{CONTACT_EMAIL}}`, use the address you pick for
-Hearth (App Store Connect shows the support address publicly).
+Cindrly (App Store Connect shows the support address publicly).
 
 ---
 
@@ -61,9 +61,9 @@ Hearth (App Store Connect shows the support address publicly).
 
 All at <https://developer.apple.com/account/resources> (*Certificates, Identifiers & Profiles*).
 
-1. **App Group:** *Identifiers → +* → *App Groups* → description `Hearth`, identifier `group.app.hearth.mobile`.
+1. **App Group:** *Identifiers → +* → *App Groups* → description `Cindrly`, identifier `group.app.hearth.mobile`.
    The app and its two extensions share their saved server, the shared link and the push keys through it.
-2. **The app's ID:** *Identifiers → +* → *App IDs* → *App* → description `Hearth`, *Explicit* bundle ID
+2. **The app's ID:** *Identifiers → +* → *App IDs* → *App* → description `Cindrly`, *Explicit* bundle ID
    `app.hearth.mobile`. Tick these capabilities:
    - **Push Notifications**;
    - **App Groups** (then *Configure* → tick `group.app.hearth.mobile`);
@@ -73,7 +73,7 @@ All at <https://developer.apple.com/account/resources> (*Certificates, Identifie
    `app.hearth.mobile.ShareExtension`, each with **App Groups** (and `group.app.hearth.mobile` ticked).
    If you skip steps 1 to 3, Xcode's automatic signing tries to make them itself on the first build. Doing it by hand
    means you see what's switched on.
-4. **The push key** (for the server, not for GitHub): *Keys → +* → name `Hearth push`, tick **Apple Push
+4. **The push key** (for the server, not for GitHub): *Keys → +* → name `Cindrly push`, tick **Apple Push
    Notifications service (APNs)**, *Configure* → environment *Production* (or *Sandbox & Production*), key restriction
    *Team scoped*. *Continue → Register → Download*. You get `AuthKey_XXXXXXXXXX.p8` **once**; Apple never shows it
    again. Write down its **Key ID** (the `XXXXXXXXXX`). Keep the file somewhere safe and offline until step 3.
@@ -82,16 +82,16 @@ All at <https://developer.apple.com/account/resources> (*Certificates, Identifie
 
 The app shows the pages kappachat sends, so App Review sees what kappachat runs. Before the first TestFlight build:
 
-1. Update kappachat to **Hearth 1.43.0 or newer** (the release with iPhone notifications), the way you always do
+1. Update kappachat to **Cindrly 1.43.0 or newer** (the release with iPhone notifications), the way you always do
    (see [the README](../README.md#upgrading-a-server-that-already-has-users)). Older servers still show ways to pay
    and can't send to iPhones.
-2. Copy the `.p8` to the server, outside the Hearth folder, readable only by the user Hearth runs as. From your
+2. Copy the `.p8` to the server, outside the Cindrly folder, readable only by the user Cindrly runs as. From your
    computer (PowerShell works): `scp AuthKey_XXXXXXXXXX.p8 you@cindrly.com:/tmp/`, then on the server:
 
    ```
    sudo mkdir -p /etc/hearth
    sudo mv /tmp/AuthKey_XXXXXXXXXX.p8 /etc/hearth/
-   sudo chown hearth:hearth /etc/hearth/AuthKey_XXXXXXXXXX.p8   # the user Hearth runs as
+   sudo chown hearth:hearth /etc/hearth/AuthKey_XXXXXXXXXX.p8   # the user Cindrly runs as
    sudo chmod 600 /etc/hearth/AuthKey_XXXXXXXXXX.p8
    ```
 
@@ -109,7 +109,7 @@ The app shows the pages kappachat sends, so App Review sees what kappachat runs.
    PRIVACY_URL=https://pandabear445.github.io/Hearth-chat/privacy.html
    ```
 
-   Leave `APNS_ALLOW_SANDBOX` out. Restart Hearth (`docker compose up -d --force-recreate`, or
+   Leave `APNS_ALLOW_SANDBOX` out. Restart Cindrly (`docker compose up -d --force-recreate`, or
    `sudo systemctl restart hearth`). If a firewall limits where the server can connect, allow
    `api.push.apple.com` port 443.
 4. Check: `https://cindrly.com/api/config` shows `"apnsEnabled":true`, and
@@ -149,8 +149,8 @@ want to approve each build.
 
 <https://appstoreconnect.apple.com/apps> → **+ → New App**:
 
-- Platforms: **iOS**. Name: **Hearth** (if it's taken, something like *Hearth Chat*; the name on the phone stays
-  *Hearth*). Primary language: English (U.S.). Bundle ID: `app.hearth.mobile`. SKU: `hearth`. User access: *Full
+- Platforms: **iOS**. Name: **Cindrly** (if it's taken, something like *Cindrly Chat*; the name on the phone stays
+  *Cindrly*). Primary language: English (U.S.). Bundle ID: `app.hearth.mobile`. SKU: `hearth`. User access: *Full
   Access*.
 
 Then, in the app's pages:
@@ -162,13 +162,13 @@ Then, in the app's pages:
 
 ## 6. The first TestFlight build
 
-1. Push to the default branch, or tag a release (`app-v1.43.0`). GitHub → *Actions → Hearth apps*: `ios` builds
+1. Push to the default branch, or tag a release (`app-v1.43.0`). GitHub → *Actions → Cindrly apps*: `ios` builds
    and tests, then `ios-archive` signs and `testflight-upload` uploads. The first `ios-archive` run may take
    longer: Xcode registers whatever step 2 didn't and makes its certificate in Apple's cloud.
 2. After 10 to 30 minutes Apple has processed it: App Store Connect → your app → **TestFlight** shows the build
    (version `1.43.0`, build `14300xxx`: the build number always goes up, by the same rule as Android's).
 3. **Internal testing:** *TestFlight → Internal Testing → +* → group `Me`, add yourself (and anyone in your team).
-   No review. Install **TestFlight** from the App Store on your iPhone, open the invite, install Hearth.
+   No review. Install **TestFlight** from the App Store on your iPhone, open the invite, install Cindrly.
 4. **Friends (external testing):** *External Testing → +* → group `Friends`, add their emails or make a public
    link. The first build for external testers goes through a short *Beta App Review* (usually a day). Fill in
    *Test Information* (what to test, the demo account from step 3, your email) first.
@@ -185,16 +185,16 @@ account or a friend, and write down anything that doesn't work:
 
 1. **Basics:** sign in; send messages; upload a file and save one (it opens the share sheet: *Save to Files*).
 2. **Notifications** (*Settings → Apps & devices → Notifications*, turn them on; iOS asks once):
-   - with Hearth closed (swiped away), with the phone locked, and with Hearth open (then Hearth shows its own
+   - with Cindrly closed (swiped away), with the phone locked, and with Cindrly open (then Cindrly shows its own
      notice instead);
    - a DM and a mention; with *message previews* hidden and with names shown;
    - tapping one opens the right conversation;
    - an incoming call rings (the ring sound, through Focus); one older than two minutes shows *Missed call*.
 3. **Calls (the biggest unknown):** start a call, lock the phone, talk for 5 minutes: does audio still go both
    ways? Also answering from the ring notification, Bluetooth headphones, and a phone call coming in during a
-   Hearth call. If audio stops when the phone locks, say *keep Hearth open during calls* in the store text.
+   Cindrly call. If audio stops when the phone locks, say *keep Cindrly open during calls* in the store text.
 4. **Links:** an invite link as `hearth://invite/CODE` and as `https://cindrly.com/invite/CODE` pasted
-   into Notes and tapped; Share → Hearth from TikTok or Instagram (then open Hearth).
+   into Notes and tapped; Share → Cindrly from TikTok or Instagram (then open Cindrly).
 5. **No payments:** no *Support*, funding card, memberships or download links; a `ko-fi.com` link in a message
    doesn't open.
 6. **Delete account** (*Settings → Security*), **Report** and **Block** work.
@@ -207,6 +207,7 @@ App Store Connect → your app → the version under **iOS App** (*1.0 Prepare f
 
 ### 8.1 Text
 
+- **Name** (30 characters): `Cindrly: private group chat`. The app was called Hearth: an app that already exists in App Store Connect keeps that name until you change the **App Name** field by hand (*App Information*; it can only change when a new version is submitted). The bundle ID `app.hearth.mobile` stays.
 - **Subtitle** (30 characters): `Private chat, calls, your server`.
 - **Promotional text / Description:** reuse the Play listing
   ([`../mobile/fastlane/metadata/android/en-US/full_description.txt`](../mobile/fastlane/metadata/android/en-US/full_description.txt)),
@@ -222,7 +223,7 @@ App Store Connect → your app → the version under **iOS App** (*1.0 Prepare f
 Apple needs screenshots for the 6.9" iPhone display (1320 × 2868 or 1290 × 2796). Take them on your iPhone in the
 TestFlight build if it's a recent Pro Max; otherwise the `ios` job's simulator screenshot artifact shows how to
 make them, and any iPhone's screenshots can be resized to that size. Three to five: a conversation, a server with
-channels, a call, Settings → Security. Don't show other people's real messages. Hearth runs on iPad too, so App
+channels, a call, Settings → Security. Don't show other people's real messages. Cindrly runs on iPad too, so App
 Store Connect also asks for 13" iPad screenshots *(unverified: whether it still does when the app isn't
 iPad-optimised)*.
 
@@ -257,7 +258,7 @@ risk to check, not legal advice.
 
 ### 8.5 Age rating
 
-Answer the questionnaire honestly. Hearth has unrestricted chat with people's own content and links: tick that it
+Answer the questionnaire honestly. Cindrly has unrestricted chat with people's own content and links: tick that it
 has **user-generated content** and **messaging or chat**. Expect **13+** or higher *(unverified: Apple's 2025
 ratings)*.
 
@@ -268,7 +269,7 @@ ratings)*.
 - **Notes** (paste and edit):
 
   ```
-  Hearth is an end-to-end encrypted chat app (messages, voice and video calls) for communities that run their own
+  Cindrly is an end-to-end encrypted chat app (messages, voice and video calls) for communities that run their own
   server. This build connects to the publisher's server, cindrly.com; the interface is that server's own
   web page, shown in WKWebView.
 
@@ -279,7 +280,7 @@ ratings)*.
   - Notifications through APNs, decrypted on the device by a Notification Service Extension: Apple's payload only
     says "New message"; who and where are end-to-end encrypted to keys the phone generated.
   - Incoming calls ring as Time Sensitive notifications with their own sound (calls only; messages are "active").
-  - A Share Extension: share a TikTok or Instagram link to Hearth.
+  - A Share Extension: share a TikTok or Instagram link to Cindrly.
   - Invite links open the app (hearth:// and Universal Links).
   - Saving files uses the system share sheet; saved files show in the Files app.
   - Background audio is used only while a voice or video call the user joined is going on.
@@ -294,9 +295,9 @@ ratings)*.
 
 Choose the TestFlight build under *Build*, then *Add for Review → Submit*. Review usually takes one to three days.
 
-What reviewers tend to check, and where Hearth stands:
+What reviewers tend to check, and where Cindrly stands:
 
-| Guideline | The risk | Hearth |
+| Guideline | The risk | Cindrly |
 |---|---|---|
 | 4.2 Minimum functionality | "Just a website in an app" | The native features in the notes above. If rejected, reply pointing at the notification extension and the share extension; one more native feature (a native settings screen, a Live Activity for calls) is the fallback. |
 | 2.1 Completeness | Reviewers can't sign in or the server is down | Two demo accounts; kappachat up to date and running during review. |

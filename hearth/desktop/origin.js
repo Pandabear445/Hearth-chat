@@ -1,4 +1,4 @@
-// Is this address one of Hearth's own pages? Every trust decision in main.js (which pages load inside the
+// Is this address one of Cindrly's own pages? Every trust decision in main.js (which pages load inside the
 // window, which may use the hearthDesktop bridge, who may share the screen) goes through these. They compare
 // whole origins, never the start of the text: "https://chat.example.com.evil.net/" and
 // "https://chat.example.com@evil.net/" both *start with* "https://chat.example.com" but are other sites.

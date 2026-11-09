@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Recovery drill: proves, end to end, what each way of getting an account or a whole server back really restores,
 // and what it can't. It runs the app's own encryption code (public/js/e2ee.js, secure.js, api.js) in Node against
-// throwaway Hearth servers, the way test/crypto-hardening.test.js does, and prints a report.
+// throwaway Cindrly servers, the way test/crypto-hardening.test.js does, and prints a report.
 //
 //   cd hearth && node scripts/recovery-drill.js        (needs a checkout with dev dependencies: npm ci)
 //
@@ -35,7 +35,7 @@ function client(base) {
   };
 }
 
-// Starts Hearth on an existing data folder (a restored one) without touching its accounts.
+// Starts Cindrly on an existing data folder (a restored one) without touching its accounts.
 async function startOn(dir) {
   const port = await new Promise((resolve) => { const s = require('node:net').createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
   const env = { ...process.env, DATA_DIR: dir, PORT: String(port), HOST: '127.0.0.1', HTTPS: 'false', NODE_ENV: 'test', PUBLIC_URL: 'https://chat.example.test' };
@@ -590,7 +590,7 @@ function createDrill() {
 async function main() {
   const drill = createDrill();
   const started = Date.now();
-  const lines = [`Hearth recovery drill, ${new Date().toISOString()}`, ''];
+  const lines = [`Cindrly recovery drill, ${new Date().toISOString()}`, ''];
   let passed = 0;
   try {
     await drill.setup();

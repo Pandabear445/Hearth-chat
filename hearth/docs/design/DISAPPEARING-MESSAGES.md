@@ -1,6 +1,6 @@
 # Disappearing messages for DMs, group chats and server channels
 
-Status: design proposal for the release after Hearth 1.28.2. The schema moves from 18 to 19.
+Status: design proposal for the release after Cindrly 1.28.2. The schema moves from 18 to 19.
 It was written against commit `1a4b684`. Paths are relative to `hearth/`.
 Line numbers are hints taken from that commit; the function names are what counts.
 
@@ -40,7 +40,7 @@ Line numbers are hints taken from that commit; the function names are what count
 
 1. A per-conversation timer for DMs, group chats and server text channels: off, 1 h, 1 d, 1 w or 4 w.
 2. Each message keeps the timer it was sent with, so changes are never retroactive.
-3. Expired messages are removed everywhere Hearth controls:
+3. Expired messages are removed everywhere Cindrly controls:
    - the live database, along with their attachment files, reactions, poll votes and closures, mention marks, saved-message entries and pin history;
    - every API response;
    - every open app;
@@ -62,7 +62,7 @@ Line numbers are hints taken from that commit; the function names are what count
 
 ---
 
-## 2. Prior art, and why Hearth differs
+## 2. Prior art, and why Cindrly differs
 
 - **Signal.**
   - For messages you send, the timer starts when you send them. For messages you receive, it starts once you've read them. ([Signal support](https://support.signal.org/hc/en-us/articles/360007320771-Set-and-manage-disappearing-messages), [Signal blog, 2016](https://signal.org/blog/disappearing-messages/))
@@ -75,9 +75,9 @@ Line numbers are hints taken from that commit; the function names are what count
   - quoted replies can keep the quoted text after the original is gone.
 
   Sources: [XDA](https://www.xda-developers.com/whatsapp-publishes-faq-on-upcoming-disappearing-messages-feature/), [WABetaInfo](https://wabetainfo.com/whatsapp-releases-details-about-disappearing-messages/), [PhoneArena](https://www.phonearena.com/news/WhatsApps-Disappearing-Messages-feature-detailed-in-a-FAQ-document_id128175). In groups any participant can toggle it unless admins restrict it ([IOL, 2021](https://iol.co.za/technology/software-and-internet/2021-12-07-whatsapp-to-enable-messages-to-disappear-for-privacy-sake-and-more-honest-conversations/)).
-- **Hearth, by comparison.**
-  - In Signal and WhatsApp each phone deletes its own copy. In Hearth the server holds the only stored copy (ciphertext) and serves history to every device, so deletion happens once, on the server, for everyone. That is why the clock starts at send time.
-  - Hearth's reply quotes are looked up live from the original row (`serializeMessage` → `reply`), so they disappear with it. That is better than WhatsApp's quoted text.
+- **Cindrly, by comparison.**
+  - In Signal and WhatsApp each phone deletes its own copy. In Cindrly the server holds the only stored copy (ciphertext) and serves history to every device, so deletion happens once, on the server, for everyone. That is why the clock starts at send time.
+  - Cindrly's reply quotes are looked up live from the original row (`serializeMessage` → `reply`), so they disappear with it. That is better than WhatsApp's quoted text.
   - Forwarding follows WhatsApp: the copy takes the destination's timer.
   - Backups go one better than both: they leave disappearing messages out by default (§6.9).
 
@@ -89,7 +89,7 @@ Line numbers are hints taken from that commit; the function names are what count
 
 - **A stolen or seized database** (SECURITY.md adversary "Database thief") taken after a message expired doesn't contain it. With `secure_delete` and the WAL truncation, the bytes are overwritten in `hearth.db` and its WAL as well (§6.7.5).
 - **A later account takeover** (password plus session, or email reset plus server keys, row 10) can't fetch expired history from the live server.
-- **Hearth's own on-device copies go away**: memory, the decrypted-file cache, the inbox and reminders in `localStorage`, notifications, open search results.
+- **Cindrly's own on-device copies go away**: memory, the decrypted-file cache, the inbox and reminders in `localStorage`, notifications, open search results.
 - **By default, backups made after this feature never contain disappearing messages** (§6.9). So the backup thief and region-compromise rows (28 and 35) no longer cover them.
 - **Bot and news-bot posts** in a disappearing channel are removed too. These are sealed with `secret.key` and readable by the server.
 
@@ -109,14 +109,14 @@ These limits go into SECURITY.md §4 and the in-app explainer.
    - Binding a sender timestamp inside the payload is an open question (§13).
 4. **Backups made before this release, plus some other copies, keep everything until they are pruned or deleted:**
    - update snapshots by `hearth-update.sh` in `/root/hearth-backups` (5 kept);
-   - off-site rclone copies, which Hearth never prunes;
+   - off-site rclone copies, which Cindrly never prunes;
    - pre-upgrade copies `hearth-before-v*.db` made by versions without the scrub;
    - anything an operator copies by hand;
    - also everything kept while an operator sets `BACKUP_DISAPPEARING=keep` (§10).
 5. **Storage forensics below SQLite.**
    - On SSDs (wear levelling), copy-on-write file systems (btrfs, ZFS) and VPS snapshots, overwritten blocks can survive physically.
    - `secure_delete` only overwrites what SQLite controls. ([SQLite pragma docs](https://www.sqlite.org/pragma.html#pragma_secure_delete); on WAL caveats see [antonz.org](https://antonz.org/sqlite-secure-delete/))
-6. **Copies outside Hearth's control on people's devices:**
+6. **Copies outside Cindrly's control on people's devices:**
    - operating-system notification history (Android keeps dismissed notifications in its history when the user turned that on);
    - keyboards that learn words;
    - swap;
@@ -222,7 +222,7 @@ Timeouts don't apply: Manage Channels isn't in `TALK` (perms.js), and group chat
 | **In-app and native notifications** (app `notify` :3370; android.js `AppNotification`) | They carry up to 140 characters of decrypted text. They are closed when their message expires (§7.3). The Android app also gets a native timeout so a notification goes away when the app isn't running (§7.5). |
 | **Search** (`server/search.js`; app `openSearch` :4491) | The server returns ciphertext only and builds no index. Its load step drops expired rows (§6.6). The app's search is in memory (`scans`, `S.msgs`, `S.threads`), and `messageHits` skips expired messages. There is no on-device search index to purge. |
 | **Export** (`/me/export/messages`; client `runExport`) | The server filters out expired rows. The app skips disappearing messages unless the person ticks "Include messages set to disappear (the copies in the zip won’t disappear)". The manifest counts the skipped ones. |
-| **Reports** (`POST /reports` index.js:4061) | Reporting a disappearing message stays allowed, so abuse can be reported. The evidence (decrypted text of up to 25 messages, sent by the reporter's app) is stored in `reports.evidence` and **is not removed** when the messages expire. Staff need it. The report dialog (`openReport` :5880) warns: "Reporting sends the text of these messages to this Hearth’s staff, who keep it with the report after the messages disappear here." |
+| **Reports** (`POST /reports` index.js:4061) | Reporting a disappearing message stays allowed, so abuse can be reported. The evidence (decrypted text of up to 25 messages, sent by the reporter's app) is stored in `reports.evidence` and **is not removed** when the messages expire. Staff need it. The report dialog (`openReport` :5880) warns: "Reporting sends the text of these messages to this Cindrly’s staff, who keep it with the report after the messages disappear here." |
 | **Bots** (`server/bots.js`) | Bot posts are stamped. `metaOf` gets `expiresAt`. The bot API's message list and lookups skip expired rows. A new webhook event `messages.expired { channelId, messageIds }` uses the `messages.read.metadata` scope. Bots still never get content. |
 | **News bot** (`server/newsbot.js` `post`) | Posts are stamped. A news channel with a 1-hour timer shows the last hour of news. |
 | **At-rest sealing** (`seal` in db.js) | Bot, news-bot and legacy bodies are sealed with `secret.key`. Expiry deletes the row; there is no separate key to destroy. `secret.key` is inside every `.hbk`, so a sealed post copied into a backup is readable by anyone who holds the backup key. The default backup scrub keeps disappearing ones out (§6.9). |
@@ -705,7 +705,7 @@ export function remaining(ms)                     // 'in 3 days', 'in 5 hours', 
 | Live `hearth.db` and `-wal` | — | — | Deleted at the deadline (usually within a second, at most one 60 s sweep). Overwritten via `secure_delete`. The WAL is truncated within 10 min. | Same |
 | `data/backups/encrypted/*.hbk` | `backup.daily` → `createBackup` | Newest `keep` plus the newest of each of the last `keep` days (default 7, range 1–60; `backupsToPrune`) | Removed, files included | Included until that backup is pruned. Readable by whoever holds the backup key for sealed bot posts (`secret.key` is inside), and by anyone with a member's keys for end-to-end encrypted ones. |
 | Region copies of `.hbk` | `regions.js` `copyBackup` | `REGION_BACKUP_KEEP` (default 14, range 2–60) | Removed | Up to 14 days by default |
-| Off-site rclone copies | `uploadOffsite` (`rclone copyto`) | **Never pruned by Hearth** (the operator's remote policy) | Removed from new backups. **Older copies keep whatever they had.** | Indefinitely |
+| Off-site rclone copies | `uploadOffsite` (`rclone copyto`) | **Never pruned by Cindrly** (the operator's remote policy) | Removed from new backups. **Older copies keep whatever they had.** | Indefinitely |
 | `data/backups/hearth-auto-*.db` (plain SQLite) | `makeBackup('auto')` | `keep` newest (default 7) | Removed | Up to `keep` days |
 | `data/backups/hearth-before-v*.db` | `db.js` before each upgrade | **Never pruned** | Removed (scrubbed before rename) from v19 on | Indefinitely |
 | `/root/hearth-backups/*` | `scripts/hearth-update.sh` | 5 snapshots | **Not scrubbed**: a copy of `data/` at update time. Honest limit. | Same |

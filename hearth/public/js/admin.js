@@ -167,7 +167,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       h('div', { class: 'admin-head' }, h('h3', null, 'Server health'), h('span', { class: 'field-hint' }, 'Right now, on this machine')),
       h('div', { class: 'stats' },
         card('CPU', `${cpu}%`, `load ${hl.load.join(' / ')} on ${hl.cores} cores`, cpu > 80),
-        card('Memory', `${pct(memUsed, hl.memTotal)}%`, `${fmtSize(memUsed)} of ${fmtSize(hl.memTotal)} \u00b7 Hearth uses ${fmtSize(hl.rss)}`, pct(memUsed, hl.memTotal) > 90),
+        card('Memory', `${pct(memUsed, hl.memTotal)}%`, `${fmtSize(memUsed)} of ${fmtSize(hl.memTotal)} \u00b7 Cindrly uses ${fmtSize(hl.rss)}`, pct(memUsed, hl.memTotal) > 90),
         hl.disk ? card('Disk', `${pct(hl.disk.total - hl.disk.free, hl.disk.total)}% used`, `${fmtSize(hl.disk.free)} free of ${fmtSize(hl.disk.total)}`, hl.disk.free < 5 * 1024 ** 3) : null,
         card('Connections', String(hl.sockets), 'open app windows'),
         card('Responsiveness', `${hl.lagMs} ms`, hl.lagMs < 50 ? 'snappy' : hl.lagMs < 200 ? 'a little busy' : 'struggling \u2014 consider a bigger server', hl.lagMs >= 200)));
@@ -315,7 +315,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
           : h('div', { class: 'stack tight' },
             h('p', { class: 'field-hint' }, `${st.waiting} existing account${st.waiting === 1 ? ' isn’t' : 's aren’t'} in it. You can add them once; people who left it or are banned from it are skipped.`),
             st.waiting ? h('div', null, h('button', { class: 'btn ghost', onclick: async () => {
-              if (!(await confirmDialog({ title: `Add ${st.waiting} account${st.waiting === 1 ? '' : 's'} to ${st.server.name}?`, text: 'They’ll see it in their server list next time they open Hearth, and can leave it. This can only be done once for this server.', confirm: 'Add them' }))) return;
+              if (!(await confirmDialog({ title: `Add ${st.waiting} account${st.waiting === 1 ? '' : 's'} to ${st.server.name}?`, text: 'They’ll see it in their server list next time they open Cindrly, and can leave it. This can only be done once for this server.', confirm: 'Add them' }))) return;
               try { const r = await api('POST', '/admin/main-server/add-everyone', { confirm: true }); toast(`Added ${r.added}.`); draw(); } catch (e) { toast(e.message, 'error'); }
             } }, 'Add existing accounts')) : null)) : null);
     };
@@ -337,7 +337,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
           } }, 'Delete'))))));
   }
 
-  // Every bot on this Hearth. Switching one off stops all its API calls and webhooks everywhere (logged).
+  // Every bot on this Cindrly. Switching one off stops all its API calls and webhooks everywhere (logged).
   async function bots() {
     const { bots: list } = await api('GET', '/admin/bots');
     clear(body).append(h('div', { class: 'admin-head' }, h('h3', null, `Bots \u2014 ${list.length}`), h('span', { class: 'field-hint' }, 'Bots can\u2019t read people\u2019s messages: those are end-to-end encrypted')),
@@ -655,7 +655,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
   const CH_KIND = { ntfy: 'ntfy', webhook: 'Webhook', discord: 'Discord', slack: 'Slack' };
   const CH_HINT = {
     ntfy: 'Install the ntfy app and subscribe to the topic. On ntfy.sh anyone who knows a topic can read it, so pick one nobody can guess, or use your own ntfy with an access token.',
-    webhook: 'Hearth POSTs each alert as JSON, signed like bot webhooks: you get the signing secret once, next.',
+    webhook: 'Cindrly POSTs each alert as JSON, signed like bot webhooks: you get the signing secret once, next.',
     discord: 'In Discord: Server settings → Integrations → Webhooks → Copy Webhook URL. Anything that takes Discord webhooks works.',
     slack: 'An incoming webhook from Slack, Mattermost, Rocket.Chat or anything else that takes Slack’s {"text": …}.',
   };
@@ -825,7 +825,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
         ...d.regions.map((r) => h('div', { class: 'adm-row region-row' },
           h('b', null, r.name), h('span', { class: 'stat-sub' }, r.ip || '\u2014'), status(r),
           h('span', { class: 'stat-sub', 'data-live': `stats:${r.id}` }, regionStats(r)),
-          // Backup space on the region (Hearth 1.25+): keeps copies of this server's encrypted backups.
+          // Backup space on the region (Cindrly 1.25+): keeps copies of this server's encrypted backups.
           h('span', { class: 'stat-sub', 'data-live': `backup:${r.id}`, 'data-tip': r.backup && r.backup.last && !r.backup.last.ok ? r.backup.last.error : null }, regionBackup(r)),
           h('span', { class: 'row gap tight' },
             h('button', { class: 'btn ghost sm', 'data-focus': `reinstall:${r.id}`, onclick: async () => {
@@ -1000,7 +1000,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
         h('div', { class: 'stat' }, h('span', { class: 'stat-label' }, 'All time'), h('strong', null, cur(d.totals.allCents))),
         h('div', { class: 'stat' }, h('span', { class: 'stat-label' }, 'Supporters now'), h('strong', null, String(d.totals.supporters))),
         h('div', { class: `stat${d.totals.unmatched ? ' warn' : ''}` }, h('span', { class: 'stat-label' }, 'Need matching'), h('strong', null, String(d.totals.unmatched)))),
-      h('p', { class: 'field-hint' }, 'People pay through Ko-fi or Stripe and become supporters automatically: \uD83D\uDC9C badge, your supporter perks, and it shows in the funding card\u2019s \u201craised this month\u201d. Each person has a support code (in their Support window) that links the payment to them. Nothing is charged by Hearth; the money goes straight to you.'),
+      h('p', { class: 'field-hint' }, 'People pay through Ko-fi or Stripe and become supporters automatically: \uD83D\uDC9C badge, your supporter perks, and it shows in the funding card\u2019s \u201craised this month\u201d. Each person has a support code (in their Support window) that links the payment to them. Nothing is charged by Cindrly; the money goes straight to you.'),
       local ? h('p', { class: 'warn-box' }, 'Ko-fi and Stripe only deliver to a real HTTPS address. Put a domain in front of this server first (README \u2192 "On a VPS with a domain"); the webhook addresses below then use it.') : '',
 
       h('div', { class: 'admin-head' }, h('h3', null, 'Perks and price')),
@@ -1025,7 +1025,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       h('ol', { class: 'steps' },
         h('li', null, 'In Stripe, create a Payment Link (a one-off amount, or a monthly price for automatic renewals) and paste it below.'),
         h('li', null, 'Developers \u2192 Webhooks \u2192 Add endpoint with the address below and the events checkout.session.completed and invoice.paid. Copy its signing secret (whsec_\u2026) here.'),
-        h('li', null, 'Hearth adds each person\u2019s code to the link, so their payment matches them without typing anything.')),
+        h('li', null, 'Cindrly adds each person\u2019s code to the link, so their payment matches them without typing anything.')),
       copyRow('Webhook URL', hook('stripe')),
       h('div', { class: 'grid-2' }, field('Payment Link', f.stripeLink), field('Webhook signing secret', f.stripeSecret)),
       h('div', null, h('button', { class: 'btn primary', onclick: () => saveSecure({ stripeLink: f.stripeLink.value, ...(f.stripeSecret.value.trim() ? { stripeSecret: f.stripeSecret.value.trim() } : {}) }) }, 'Save Stripe')),
@@ -1039,7 +1039,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
   }
 
   // Creator memberships: server owners sell monthly tiers through their own Stripe accounts (Stripe Connect);
-  // this Hearth keeps a small fee. Set up once here.
+  // this Cindrly keeps a small fee. Set up once here.
   async function membershipsAdmin(cur, hook, copyRow) {
     const m = await api('GET', '/admin/memberships').catch(() => null);
     if (!m) return '';
@@ -1058,13 +1058,13 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
     const ready = c.keySet && c.webhookSet;
     return h('div', { class: 'stack' },
       h('div', { class: 'admin-head' }, h('h3', null, 'Creator memberships')),
-      h('p', { class: 'field-hint' }, 'Let server owners sell monthly memberships (a role, private channels, perks they choose), like Patreon inside their server. Members pay on Stripe\u2019s page; the money goes to the creator\u2019s own Stripe account, and this Hearth keeps the fee you set below. It\u2019s purely extra: nothing that\u2019s free today changes.'),
+      h('p', { class: 'field-hint' }, 'Let server owners sell monthly memberships (a role, private channels, perks they choose), like Patreon inside their server. Members pay on Stripe\u2019s page; the money goes to the creator\u2019s own Stripe account, and this Cindrly keeps the fee you set below. It\u2019s purely extra: nothing that\u2019s free today changes.'),
       h('div', { class: 'stats' },
         h('div', { class: 'stat' }, h('span', { class: 'stat-label' }, 'Creators getting paid'), h('strong', null, String(m.stats.creators))),
         h('div', { class: 'stat' }, h('span', { class: 'stat-label' }, 'Paying members'), h('strong', null, String(m.stats.members))),
         h('div', { class: 'stat' }, h('span', { class: 'stat-label' }, 'Memberships a month'), h('strong', null, cur(m.stats.monthlyCents, c.currency))),
         h('div', { class: 'stat' }, h('span', { class: 'stat-label' }, `Your ${c.feePercent}% a month`), h('strong', null, cur(m.stats.feeCents, c.currency)))),
-      m.stats.pendingCancellations ? h('p', { class: 'warn-box' }, `${m.stats.pendingCancellations} membership${m.stats.pendingCancellations === 1 ? '' : 's'} of deleted servers still need${m.stats.pendingCancellations === 1 ? 's' : ''} cancelling in Stripe${m.stats.cancelError ? ` (last try: ${m.stats.cancelError.replace(/\.$/, '')}). Hearth tries again every hour` : ' (being cancelled now)'}. You can also cancel them in your Stripe dashboard.`) : '',
+      m.stats.pendingCancellations ? h('p', { class: 'warn-box' }, `${m.stats.pendingCancellations} membership${m.stats.pendingCancellations === 1 ? '' : 's'} of deleted servers still need${m.stats.pendingCancellations === 1 ? 's' : ''} cancelling in Stripe${m.stats.cancelError ? ` (last try: ${m.stats.cancelError.replace(/\.$/, '')}). Cindrly tries again every hour` : ' (being cancelled now)'}. You can also cancel them in your Stripe dashboard.`) : '',
       h('ol', { class: 'steps' },
         h('li', null, 'In Stripe, turn on Connect (Connect \u2192 Get started, choose \u201cExpress\u201d accounts). Stripe handles the creators\u2019 identity checks, payouts and tax forms.'),
         h('li', null, 'Developers \u2192 API keys: paste your secret key below (or a restricted key with write access to Accounts, Account Links, Checkout Sessions and Subscriptions).'),
@@ -1089,7 +1089,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
       port: h('input', { class: 'input', type: 'number', value: String(mail.port || 587) }),
       user: h('input', { class: 'input', value: mail.user || '', autocomplete: 'off' }),
       pass: h('input', { class: 'input', type: 'password', autocomplete: 'new-password', placeholder: mail.passSet ? 'Saved (paste to replace)' : 'SMTP password / API key' }),
-      from: h('input', { class: 'input', value: mail.from || '', placeholder: 'Hearth <no-reply@yourdomain.com>' }),
+      from: h('input', { class: 'input', value: mail.from || '', placeholder: 'Cindrly <no-reply@yourdomain.com>' }),
       test: h('input', { class: 'input', type: 'email', placeholder: 'you@example.com', 'aria-label': 'Send a test email to' }),
     };
     const lastfmKey = h('input', { class: 'input mono', type: 'password', autocomplete: 'off', placeholder: act.lastfmKeySet ? 'Saved (paste to replace, or clear)' : 'Last.fm API key' });
@@ -1124,7 +1124,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
         setTimeout(() => URL.revokeObjectURL(url), 10000);
       } catch (e) { toast(e.message, 'error'); }
     })());
-    // Update notes: Hearth's updates come with none; people see only what's published here (server/updatenotes.js).
+    // Update notes: Cindrly's updates come with none; people see only what's published here (server/updatenotes.js).
     const note = {
       title: h('input', { class: 'input', maxlength: '100', placeholder: 'e.g. New this week' }),
       text: h('textarea', { class: 'input', rows: '5', placeholder: 'One line for each thing that\u2019s new' }),
@@ -1157,7 +1157,7 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
     const cancelBtn = h('button', { class: 'btn ghost sm', hidden: true, onclick: () => owner() }, 'Cancel');
     clear(body).append(
       h('div', { class: 'admin-head' }, h('h3', null, 'Update notes')),
-      h('p', { class: 'field-hint' }, 'Hearth\u2019s updates come with no notes: people see only what you publish here, and only you can. Each note shows once to everyone, in a \u201cWhat\u2019s new\u201d window (right away in apps that are open). Plain text, one line per item.'),
+      h('p', { class: 'field-hint' }, 'Cindrly\u2019s updates come with no notes: people see only what you publish here, and only you can. Each note shows once to everyone, in a \u201cWhat\u2019s new\u201d window (right away in apps that are open). Plain text, one line per item.'),
       field('Title (optional)', note.title),
       field('What\u2019s new', note.text, 'Up to 20 lines.'),
       h('label', { class: 'toggle-row' }, h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Show it in the Android app too'),
@@ -1269,11 +1269,11 @@ export function adminView({ tab = 'overview', setTab, openReports = 0, onCount, 
     } }, 'Older entries');
     clear(body).append(h('div', { class: 'admin-head' }, h('h3', null, 'Audit log'), h('span', { class: 'field-hint' }, 'Staff actions and account security events, newest first. Entries can\u2019t be edited or deleted.')),
       chain ? (chain.ok ? h('div', { class: 'chain-ok' }, icon('check'), `Tamper check passed: all ${chain.entries} entries are intact and in order.${chain.keyedFrom > 1 && chain.keyedSince
-        ? ` Entries before #${chain.keyedFrom} were written by an older version of Hearth (this server has signed entries since ${fmtStamp(chain.keyedSince)}), so they’re checked less strictly.` : ''}`)
+        ? ` Entries before #${chain.keyedFrom} were written by an older version of Cindrly (this server has signed entries since ${fmtStamp(chain.keyedSince)}), so they’re checked less strictly.` : ''}`)
         : h('div', { class: 'chain-bad' }, icon('shield'), chain.reason === 'missing'
-          ? `Tamper check FAILED: entries up to #${chain.anchoredId} were recorded on this machine, but the log now ends at #${chain.brokenAt - 1}. Entries were removed outside Hearth, or an older copy of the database was put back.`
-          : chain.reason === 'anchor' || chain.reason === 'keyed_from' ? 'Tamper check FAILED: the files Hearth uses to check the log were changed outside Hearth.'
-            : `Tamper check FAILED at entry #${chain.brokenAt}: the log was changed outside Hearth (someone edited the database file).`)) : '',
+          ? `Tamper check FAILED: entries up to #${chain.anchoredId} were recorded on this machine, but the log now ends at #${chain.brokenAt - 1}. Entries were removed outside Cindrly, or an older copy of the database was put back.`
+          : chain.reason === 'anchor' || chain.reason === 'keyed_from' ? 'Tamper check FAILED: the files Cindrly uses to check the log were changed outside Cindrly.'
+            : `Tamper check FAILED at entry #${chain.brokenAt}: the log was changed outside Cindrly (someone edited the database file).`)) : '',
       chain && chain.gaps && chain.gaps.length ? h('div', { class: 'chain-bad' }, icon('shield'), `Earlier problem${chain.gaps.length === 1 ? '' : 's'} found and recorded: ${chain.gaps.slice(-3).map((g) => `#${g.id} (${fmtStamp(g.at)})`).join(', ')}. See those entries below.`) : '',
       table, h('div', null, more));
   }

@@ -1,4 +1,4 @@
-# Hearth API route and permission inventory
+# Cindrly API route and permission inventory
 
 Generated from the code by enumerating every `api.*`/`app.*` route and `socket.on` handler in `hearth/server/*.js`,
 then annotated during the security audit (which middleware and checks actually run, limits, tests). "Gaps" lists

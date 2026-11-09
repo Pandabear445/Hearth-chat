@@ -15,7 +15,7 @@
 //    logged. Creating, rotating and revoking them is audit-logged.
 //  - Webhooks go through netguard (https only, private addresses refused unless BOT_WEBHOOK_ALLOW_PRIVATE=1),
 //    with a timeout, a per-bot concurrency cap, retries with backoff, then a dead-letter list.
-//  - A bot's own actions never come back to it as events, and no bot code ever runs inside Hearth.
+//  - A bot's own actions never come back to it as events, and no bot code ever runs inside Cindrly.
 // See docs/BOTS.md for the developer side.
 const crypto = require('crypto');
 const jobs = require('./jobs');
@@ -449,7 +449,7 @@ module.exports = function setupBots(ctx) {
       if (!botUsable(bot)) fail(403, 'This bot is turned off.', 'bot_disabled');
       rateLimit('botapi:' + bot.id, 60, 10000);
       rateLimit('botapih:' + bot.id, 5000, 3600000);
-      if (maintenance()) fail(503, 'This Hearth is under maintenance. Try again later.', 'maintenance');
+      if (maintenance()) fail(503, 'This Cindrly is under maintenance. Try again later.', 'maintenance');
       if (!t.last_used_at || now() - t.last_used_at > 60000) db.prepare('UPDATE bot_tokens SET last_used_at = ? WHERE id = ?').run(now(), t.id);
       req.bot = bot;
       req.botToken = t;
@@ -754,7 +754,7 @@ module.exports = function setupBots(ctx) {
     res.json({ canCreate: canCreate(req.userId), scopes: SCOPES, events: Object.keys(EVENTS), argTypes: ARG_TYPES, mine, available });
   });
   api.post('/bots', auth, limitUi, wrap(async (req, res) => {
-    if (!canCreate(req.userId)) fail(403, 'On this Hearth, only some people can create bots. Ask an admin.');
+    if (!canCreate(req.userId)) fail(403, 'On this Cindrly, only some people can create bots. Ask an admin.');
     rateLimit('botcreate:' + req.userId, 10, 3600000);
     const b = req.body || {};
     const name = cleanName(b.name);

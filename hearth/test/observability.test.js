@@ -425,7 +425,7 @@ test('doctor: broken data folders fail with exit 2; warnings exit 1; repairs onl
       r = doctor(loose, { PUBLIC_URL: 'http://chat.example.test', TRUST_PROXY: 'bogus/99/x' });
       assert.match(r.stdout, /^WARN {2}PUBLIC_URL: set, but not https/m);
       r = doctor(loose, { HTTPS: 'true', TRUST_PROXY: '2' });
-      assert.match(r.stdout, /^WARN {2}TRUST_PROXY: set while Hearth serves HTTPS itself/m);
+      assert.match(r.stdout, /^WARN {2}TRUST_PROXY: set while Cindrly serves HTTPS itself/m);
     } finally { await srv.stop(); }
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 });

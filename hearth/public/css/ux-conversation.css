@@ -1,4 +1,4 @@
-/* Hearth — the conversation and message delivery.
+/* Cindrly — the conversation and message delivery.
    Loaded after app.css (index.html), so a rule here wins over app.css at equal specificity. */
 
 /* A message that couldn't go yet stays in the chat (app.js pendingEl): "Waiting for connection", or "Not sent" with

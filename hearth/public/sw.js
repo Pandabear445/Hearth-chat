@@ -1,4 +1,4 @@
-// Hearth service worker. The server fills in the version and asset list (see /sw.js in server/index.js).
+// Cindrly service worker. The server fills in the version and asset list (see /sw.js in server/index.js).
 // - App files load from cache instantly; a new version installs in the background, and open pages switch to it by
 //   themselves (app.js autoUpdate).
 // - API calls, uploads and the realtime socket always go to the network.
@@ -67,14 +67,14 @@ const fromApple = async () => {
 
 self.addEventListener('push', (e) => {
   let data = {};
-  try { data = e.data ? e.data.json() : {}; } catch { data = { title: 'Hearth', body: e.data ? e.data.text() : '' }; }
+  try { data = e.data ? e.data.json() : {}; } catch { data = { title: 'Cindrly', body: e.data ? e.data.text() : '' }; }
   e.waitUntil((async () => {
-    // If a Hearth window is already focused, the app shows its own notification. Apple still needs one shown
+    // If a Cindrly window is already focused, the app shows its own notification. Apple still needs one shown
     // for this push (see above), so there it's shown and closed at once.
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     if (wins.some((w) => w.focused)) {
       if (!(await fromApple())) return;
-      await self.registration.showNotification(data.title || 'Hearth', { body: data.body || 'New activity', tag: SEEN_TAG, icon: '/icons/icon-192.png' });
+      await self.registration.showNotification(data.title || 'Cindrly', { body: data.body || 'New activity', tag: SEEN_TAG, icon: '/icons/icon-192.png' });
       for (const n of await self.registration.getNotifications({ tag: SEEN_TAG })) n.close();
       return;
     }
@@ -82,7 +82,7 @@ self.addEventListener('push', (e) => {
     // server sent it; something must still be shown, browsers require it.)
     const tag = typeof data.tag === 'string' ? data.tag : '';
     const missed = tag.startsWith('call:') && typeof data.at === 'number' && Date.now() - data.at > 120000;
-    await self.registration.showNotification(data.title || 'Hearth', {
+    await self.registration.showNotification(data.title || 'Cindrly', {
       body: missed ? 'Missed call' : data.body || 'New activity',
       tag: (missed ? 'missed-' + tag : tag) || undefined,
       renotify: !!tag,

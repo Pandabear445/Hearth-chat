@@ -1,8 +1,8 @@
 // Add a server → Import from Discord (docs/IMPORT.md): start a new server from a Discord server template.
-//   1. The person pastes the template's JSON (or chooses it as a file). Hearth never contacts Discord: given a
+//   1. The person pastes the template's JSON (or chooses it as a file). Cindrly never contacts Discord: given a
 //      template link, this only builds the address to open in their own browser.
 //   2. The server works out the plan (server/discordmap.js) and this shows it: roles, channels by category, what
-//      Hearth would allow that Discord didn't, and everything that won't come over, before anything exists.
+//      Cindrly would allow that Discord didn't, and everything that won't come over, before anything exists.
 //      Roles and channels can be left out; the plan is worked out again on the server each time (a moment after
 //      the last change, and never once Create was pressed or the dialog closed).
 //   3. Create: the server builds it again from the template (never from this plan) and the importer owns it.
@@ -48,39 +48,39 @@ const DISCORD_LABEL = {
 const discordLabel = (bit) => DISCORD_LABEL[bit] || bit.replace(/^BIT_(\d+)$/, 'Unknown permission $1');
 // Why one doesn't come over, where it's not obvious.
 const WHY_LOST = {
-  PIN_MESSAGES: 'in Hearth it’s part of Manage messages', BYPASS_SLOWMODE: 'in Hearth it’s part of Manage messages',
-  MODERATE_MEMBERS: 'in Hearth, timeouts need Kick members', MANAGE_EVENTS: 'in Hearth it’s part of Manage server and Manage channels',
-  MANAGE_WEBHOOKS: 'in Hearth it’s part of Manage channels', CREATE_GUILD_EXPRESSIONS: 'in Hearth it’s part of Manage emoji',
-  CREATE_PUBLIC_THREADS: 'Hearth’s Reply in threads needs both thread permissions', SEND_MESSAGES_IN_THREADS: 'Hearth’s Reply in threads needs both thread permissions',
+  PIN_MESSAGES: 'in Cindrly it’s part of Manage messages', BYPASS_SLOWMODE: 'in Cindrly it’s part of Manage messages',
+  MODERATE_MEMBERS: 'in Cindrly, timeouts need Kick members', MANAGE_EVENTS: 'in Cindrly it’s part of Manage server and Manage channels',
+  MANAGE_WEBHOOKS: 'in Cindrly it’s part of Manage channels', CREATE_GUILD_EXPRESSIONS: 'in Cindrly it’s part of Manage emoji',
+  CREATE_PUBLIC_THREADS: 'Cindrly’s Reply in threads needs both thread permissions', SEND_MESSAGES_IN_THREADS: 'Cindrly’s Reply in threads needs both thread permissions',
   CHANGE_NICKNAME: 'only for the whole server', MANAGE_NICKNAMES: 'only for the whole server',
-  CREATE_INSTANT_INVITE: 'Hearth invites are for the whole server', MUTE_MEMBERS: 'a Hearth server mute holds in every voice channel',
+  CREATE_INSTANT_INVITE: 'Cindrly invites are for the whole server', MUTE_MEMBERS: 'a Cindrly server mute holds in every voice channel',
   KICK_MEMBERS: 'only for the whole server', BAN_MEMBERS: 'only for the whole server',
   // Granted in one channel only (these come over, but do less there than in Discord).
-  MANAGE_CHANNELS: 'in Hearth, editing a channel takes Manage channels for the whole server',
-  MANAGE_ROLES: 'in Hearth, changing a channel’s permissions takes Manage roles for the whole server',
-  EMBED_LINKS: 'in Hearth, link previews take Show link previews for the whole server: a channel can turn them off, not on',
+  MANAGE_CHANNELS: 'in Cindrly, editing a channel takes Manage channels for the whole server',
+  MANAGE_ROLES: 'in Cindrly, changing a channel’s permissions takes Manage roles for the whole server',
+  EMBED_LINKS: 'in Cindrly, link previews take Show link previews for the whole server: a channel can turn them off, not on',
 };
-// What Hearth allows anyway, for permissions Discord withheld.
+// What Cindrly allows anyway, for permissions Discord withheld.
 const WHY_WIDENED = {
-  READ_MESSAGE_HISTORY: 'anyone who can see a Hearth channel can read all of its history',
+  READ_MESSAGE_HISTORY: 'anyone who can see a Cindrly channel can read all of its history',
   CREATE_EVENTS: 'anyone who can post in a channel can make events',
   SEND_POLLS: 'anyone who can post can make a poll',
   SEND_VOICE_MESSAGES: 'anyone who can post and attach files can send a voice message',
-  // What a Hearth permission includes that the role (or the channel) didn't allow in Discord.
-  MODERATE_MEMBERS: 'in Hearth, Kick members also times people out',
-  MANAGE_WEBHOOKS: 'in Hearth, Manage channels and Manage server also manage webhooks, which post under any name',
-  MANAGE_EVENTS: 'in Hearth, Manage channels and Manage server also change and delete anyone’s events',
-  PIN_MESSAGES: 'in Hearth, Manage messages also pins messages',
-  BYPASS_SLOWMODE: 'in Hearth, Manage messages and Manage channels also skip slowmode',
-  CREATE_INSTANT_INVITE: 'Hearth invites are for the whole server: anyone with Create invites can still make one',
-  MUTE_MEMBERS: 'a Hearth server mute holds in every voice channel: anyone with Mute members can still mute people there',
+  // What a Cindrly permission includes that the role (or the channel) didn't allow in Discord.
+  MODERATE_MEMBERS: 'in Cindrly, Kick members also times people out',
+  MANAGE_WEBHOOKS: 'in Cindrly, Manage channels and Manage server also manage webhooks, which post under any name',
+  MANAGE_EVENTS: 'in Cindrly, Manage channels and Manage server also change and delete anyone’s events',
+  PIN_MESSAGES: 'in Cindrly, Manage messages also pins messages',
+  BYPASS_SLOWMODE: 'in Cindrly, Manage messages and Manage channels also skip slowmode',
+  CREATE_INSTANT_INVITE: 'Cindrly invites are for the whole server: anyone with Create invites can still make one',
+  MUTE_MEMBERS: 'a Cindrly server mute holds in every voice channel: anyone with Mute members can still mute people there',
 };
 const REASON = {
   managed: 'managed by Discord (a bot’s or booster role)', limit: 'over the 100 roles a server can have (leave others out to bring it)',
   excluded: 'you left it out', empty: 'no channels left in it', type_10: 'threads don’t come with a template', type_11: 'threads don’t come with a template',
-  type_12: 'threads don’t come with a template', type_14: 'directory channels aren’t something Hearth has',
+  type_12: 'threads don’t come with a template', type_14: 'directory channels aren’t something Cindrly has',
 };
-const reasonText = (r) => REASON[r] || (r && r.startsWith('type_') ? `this kind of channel (type ${r.slice(5)}) isn’t something Hearth has` : r);
+const reasonText = (r) => REASON[r] || (r && r.startsWith('type_') ? `this kind of channel (type ${r.slice(5)}) isn’t something Cindrly has` : r);
 const NOTE = {
   member_overwrite_dropped: 'Permissions for single members (a template carries no members)',
   overwrite_role_missing: 'Permissions for roles that aren’t coming',
@@ -100,7 +100,7 @@ const SETTING = {
 };
 const CONVERTED = { announcement: 'Announcement channel → text', stage: 'Stage → voice, listen-only except moderators', forum: 'Forum → text' };
 
-// A role's Hearth permissions, in the role editor's words.
+// A role's Cindrly permissions, in the role editor's words.
 const HEARTH_LABELS = PERM_GROUPS.flatMap(([, list]) => list.map(([k, l]) => [k, l]));
 function hearthPerms(bits) {
   if (bits & PERMS.ADMINISTRATOR) return 'Administrator';
@@ -116,8 +116,8 @@ function leftBehind(report) {
   const out = [];
   const add = (title, items) => { if (items.length) out.push({ title, items }); };
   const warn = (code) => report.warnings.filter((w) => w.code === code);
-  add('Permissions Hearth doesn’t have', report.lost.map((l) => `${discordLabel(l.bit)}: ${nameList(l.where, l.more)}${WHY_LOST[l.bit] ? ` (${WHY_LOST[l.bit]})` : ''}`));
-  add('Permissions Hearth can’t set per channel', report.dropped.map((l) => `${discordLabel(l.bit)}: ${nameList(l.where, l.more)}${WHY_LOST[l.bit] ? ` (${WHY_LOST[l.bit]})` : ''}`));
+  add('Permissions Cindrly doesn’t have', report.lost.map((l) => `${discordLabel(l.bit)}: ${nameList(l.where, l.more)}${WHY_LOST[l.bit] ? ` (${WHY_LOST[l.bit]})` : ''}`));
+  add('Permissions Cindrly can’t set per channel', report.dropped.map((l) => `${discordLabel(l.bit)}: ${nameList(l.where, l.more)}${WHY_LOST[l.bit] ? ` (${WHY_LOST[l.bit]})` : ''}`));
   add('Roles', [
     ...report.skipped.filter((s) => s.kind === 'role').map((s) => `${s.name}: ${reasonText(s.reason)}`),
     ...warn('role_icon_image_dropped').map((w) => `${w.name}: its picture icon (emoji icons come over)`),
@@ -135,10 +135,10 @@ function leftBehind(report) {
   ]);
   return out;
 }
-// What Hearth will allow that Discord didn't, and moderator powers everyone who joins will have.
+// What Cindrly will allow that Discord didn't, and moderator powers everyone who joins will have.
 function widenedLines(plan) {
   const warn = (code) => plan.report.warnings.filter((w) => w.code === code);
-  const lines = plan.report.widened.map((w) => `${discordLabel(w.bit)} (${nameList(w.where, w.more)}): ${WHY_WIDENED[w.bit] || 'Hearth has no separate permission for it'}`);
+  const lines = plan.report.widened.map((w) => `${discordLabel(w.bit)} (${nameList(w.where, w.more)}): ${WHY_WIDENED[w.bit] || 'Cindrly has no separate permission for it'}`);
   for (const w of warn('override_limit_widened')) lines.push(`Permissions past 100 per channel (${nameList(w.channels, w.more)}): any that held a role back there won’t come, so that role can do more there`);
   if (warn('everyone_manage').length) lines.unshift('@everyone has moderator powers in this template, so everyone who joins will have them too');
   for (const w of warn('everyone_channel_manage')) lines.unshift(`@everyone has moderator powers in some channels (${nameList(w.channels, w.more)}), so everyone who joins will have them there too`);
@@ -152,7 +152,7 @@ function reportText(name, plan) {
   const c = plan.report.counts;
   const lines = [`Imported from Discord: ${name}`, `${plural(c.roles, 'role')}, ${plural(c.categories, 'category', 'categories')}, ${plural(c.channels, 'channel')}.`];
   const wide = widenedLines(plan);
-  if (wide.length) lines.push('', 'Hearth allows more than Discord did:', ...wide.map((t) => `- ${t}`));
+  if (wide.length) lines.push('', 'Cindrly allows more than Discord did:', ...wide.map((t) => `- ${t}`));
   for (const g of leftBehind(plan.report)) lines.push('', `${g.title}:`, ...g.items.map((t) => `- ${t}`));
   return lines.join('\n');
 }
@@ -167,7 +167,7 @@ export function openDiscordImport(ctx, keep = {}) {
   const showLink = () => {
     clear(linkHint);
     const t = templateCode(link.value);
-    if (!link.value.trim()) linkHint.append('Optional: paste it here and Hearth gives you the address to open.');
+    if (!link.value.trim()) linkHint.append('Optional: paste it here and Cindrly gives you the address to open.');
     else if (t && t.invite) linkHint.append('That’s an invite link. You need the server template link (Server Settings → Server Template in Discord).');
     else if (!t) linkHint.append('That doesn’t look like a Discord template link.');
     else {
@@ -184,7 +184,7 @@ export function openDiscordImport(ctx, keep = {}) {
       h('p', { class: 'muted-p' }, 'Start a new server with a Discord server’s roles, categories, channels and channel permissions. You’ll see what comes over, and what doesn’t, before anything is made. Members, messages and emoji don’t come with it.'),
       h('ol', { class: 'perk-list' },
         h('li', null, 'In Discord, open the server’s settings → Server Template and copy its link (it takes Manage Server there).'),
-        h('li', null, 'Paste the link here: Hearth gives you an address to open. Hearth itself never contacts Discord.'),
+        h('li', null, 'Paste the link here: Cindrly gives you an address to open. Cindrly itself never contacts Discord.'),
         h('li', null, 'Copy everything that page shows and paste it below.')),
       field('Template link', link, linkHint),
       field('Template', json, 'The whole template, or just its "serialized_source_guild" part.'),
@@ -244,17 +244,17 @@ function openPreview(ctx, state) {
     clear(problems);
     for (const p of plan.problems) {
       problems.append(h('p', { class: 'warn-box bad', role: 'alert' }, p.code === 'too_many_channels'
-        ? `That’s ${p.count} channels; Hearth brings up to ${p.max} at once. Leave some out below.`
+        ? `That’s ${p.count} channels; Cindrly brings up to ${p.max} at once. Leave some out below.`
         : p.code === 'too_many_overrides'
-          ? `That’s ${p.count} channel permissions; Hearth brings up to ${p.max} at once. Leave out some channels or roles below.`
-          : `That’s ${p.count} categories; a Hearth server has up to ${p.max}. Leave out some channels (a category goes when all its channels do).`));
+          ? `That’s ${p.count} channel permissions; Cindrly brings up to ${p.max} at once. Leave out some channels or roles below.`
+          : `That’s ${p.count} categories; a Cindrly server has up to ${p.max}. Leave out some channels (a category goes when all its channels do).`));
     }
     if (state.first.source.isDirty) problems.append(h('p', { class: 'warn-box' }, 'This template has changes that weren’t synced in Discord, so it may be out of date. Ask the Discord server’s admin to sync it, then copy it again.'));
     clear(wide);
     const lines = widenedLines(plan);
     if (plan.everyone.dangerous || lines.length) {
       wide.append(h('div', { class: 'warn-box stack tight' },
-        h('strong', null, 'Hearth will allow more than Discord did'),
+        h('strong', null, 'Cindrly will allow more than Discord did'),
         plan.everyone.dangerous ? h('label', { class: 'row gap tight' }, adminOk, h('span', null, 'In this template @everyone is an Administrator: everyone who joins could do anything. I understand.')) : null,
         lines.length ? h('ul', { class: 'perk-list' }, lines.map((t) => h('li', null, t))) : null));
     }
@@ -407,7 +407,7 @@ function showReport(server, plan, ctx = {}) {
       h('p', { class: 'muted-p' }, `Made ${plural(c.roles, 'role')}, ${plural(c.categories, 'category', 'categories')} and ${plural(c.channels, 'channel')}. You own it.`),
       h('p', { class: 'muted-p' }, ctx.invite ? 'Next: invite your people, then give out roles in Server settings → Roles or from the member list.'
         : 'Next: invite people (server menu → Invite people), then give out roles in Server settings → Roles or from the member list.'),
-      lines.length ? h('div', { class: 'warn-box stack tight' }, h('strong', null, 'Hearth allows more than Discord did'), h('ul', { class: 'perk-list' }, lines.map((t) => h('li', null, t)))) : null,
+      lines.length ? h('div', { class: 'warn-box stack tight' }, h('strong', null, 'Cindrly allows more than Discord did'), h('ul', { class: 'perk-list' }, lines.map((t) => h('li', null, t)))) : null,
       groups.length ? h('section', { class: 'di-section' }, h('h3', { class: 'set-h' }, 'Skipped'), groupsEl(groups)) : null),
     actions: [
       { label: 'Copy report', action: async () => { await copyText(reportText(server.name, plan)); toast('Report copied.'); return false; } },

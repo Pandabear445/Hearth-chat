@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Upgrade drill, the Node half (scripts/upgrade-drill.sh runs the servers):
-//   seed BASE CODE_ROOT STATE.json          fill a running (old) Hearth through its API: accounts with real keys,
+//   seed BASE CODE_ROOT STATE.json          fill a running (old) Cindrly through its API: accounts with real keys,
 //                                           two-factor, an encrypted server and DM, an attachment, settings with
 //                                           plaintext API keys, staff changes for the audit log
-//   verify BASE DATA_DIR STATE.json ROUND    check a running (new) Hearth on that data: sign-in, the same keys open
+//   verify BASE DATA_DIR STATE.json ROUND    check a running (new) Cindrly on that data: sign-in, the same keys open
 //                                           the messages, files byte-equal, secrets sealed, audit log verifies
 //   stamp DATA_DIR STATE.json               record the (stopped) old server's database version in the state
 //   pack DATA_DIR STATE.json OUT            bundle a stopped server's data and its state as a test fixture
@@ -228,7 +228,7 @@ async function main() {
   if (cmd === 'seed') {
     const state = await seed({ base: a, codeRoot: path.resolve(b) });
     fs.writeFileSync(c, JSON.stringify(state, null, 1));
-    console.log(`Seeded ${a} (Hearth ${state.madeBy}): 3 accounts, an encrypted server, a DM, an attachment, settings and audit entries.`);
+    console.log(`Seeded ${a} (Cindrly ${state.madeBy}): 3 accounts, an encrypted server, a DM, an attachment, settings and audit entries.`);
   } else if (cmd === 'verify') {
     const state = JSON.parse(fs.readFileSync(c, 'utf8'));
     const facts = await verify({ base: a, dataDir: path.resolve(b), state, round: Number(d) || 0, expectSchema: Number(process.env.EXPECT_SCHEMA) || 0 });

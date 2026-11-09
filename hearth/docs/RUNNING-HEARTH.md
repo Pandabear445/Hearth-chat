@@ -1,12 +1,12 @@
-# Running Hearth: capacity, regions, costs and money
+# Running Cindrly: capacity, regions, costs and money
 
-Numbers here were measured with Hearth 1.16 (still true for 1.18) under load (simulated app windows connected over WebSockets,
+Numbers here were measured with Cindrly 1.16 (still true for 1.18) under load (simulated app windows connected over WebSockets,
 real message traffic through the real server) on a small VPS, not guessed. The disk and bandwidth examples below
 assume about 150 GB of free disk and a 300 Mbit/s port: scale them to your own plan.
 
 ## How many people can it hold?
 
-Hearth runs its chat logic on one CPU core, so "per core" is what matters. Measured:
+Cindrly runs its chat logic on one CPU core, so "per core" is what matters. Measured:
 
 | What | Measured |
 |---|---|
@@ -47,12 +47,12 @@ people is 45 MB. GIFs loaded "through this server" (privacy setting) are the big
 that off in Settings → Instance if bandwidth ever becomes a problem.
 
 **Connection limit.** Each open app window is one connection. Many Linux setups cap a program at 1,024 open
-connections, which would cap you near 1,000 people online. Hearth's systemd file and docker-compose.yml now
+connections, which would cap you near 1,000 people online. Cindrly's systemd file and docker-compose.yml now
 raise it to 65,535; `hearth-update --status` tells you the current limit and how to raise it.
 
 **When to upgrade.** Admin → Overview → Server health. If CPU stays above ~60 % or "Responsiveness" stays
 above ~100 ms at busy times, move to a bigger plan (more CPU per core helps most). That's cheaper and simpler
-than splitting Hearth across machines.
+than splitting Cindrly across machines.
 
 ## Cost per person
 
@@ -129,19 +129,19 @@ third (Asia or US West) covers thousands of people. Oracle's free tier makes the
 
 **Optional, for the web app itself:** Cloudflare's free plan in front of your domain serves the app's files from
 near everyone, hides your server's IP and blocks floods, also at $0. WebSockets work on the free plan. It needs
-a domain (next section). Behind its proxy, Hearth sees Cloudflare's addresses instead of visitors' (for sign-in
+a domain (next section). Behind its proxy, Cindrly sees Cloudflare's addresses instead of visitors' (for sign-in
 limits, IP bans and the audit log) until Caddy is told to trust Cloudflare's published address ranges (Caddy's
 `trusted_proxies` option). Members' relays work either way: one whose check-in comes from an address that isn't its
-own proves its address by answering Hearth's check at it.
+own proves its address by answering Cindrly's check at it.
 
 ## Operating notes
 
 **Visitors' addresses behind a proxy (`TRUST_PROXY`).** IP bans, sign-in limits and the addresses in the audit log
-all depend on knowing who a visitor is. Hearth believes the `X-Forwarded-For` header only from a trusted proxy: by
+all depend on knowing who a visitor is. Cindrly believes the `X-Forwarded-For` header only from a trusted proxy: by
 default this machine (Caddy or nginx on the same host), and with `docker-compose.yml` its own Caddy network
 (`10.231.47.0/28`). Anything else — nginx in another container, Traefik, a tunnel, a proxy on another machine —
 needs `TRUST_PROXY=<its address or subnet>` in `.env`, or every visitor shares the proxy's address and one set of
-sign-in limits; Hearth's log names each ignored proxy address once. In Docker, a value in `.env` replaces the
+sign-in limits; Cindrly's log names each ignored proxy address once. In Docker, a value in `.env` replaces the
 compose default. Never set it to a number, or to Docker's gateway (`x.x.x.1`), unless `HEARTH_BIND=127.0.0.1`:
 then anyone reaching port 3000 directly could claim any address. `TRUST_PROXY=1` now really means "one proxy in
 front" (before, that value never matched, so everyone behind Caddy shared one address). Older Docker installs keep
@@ -173,7 +173,7 @@ branch's workflows can read a repository secret.
 fetches new ones by itself. Relay setups made before the bandwidth caps need `sudo bash scripts/setup-turn.sh` run
 again, and each region reinstalled. Setting coturn up by hand from `deploy/turnserver.conf`: remove the `#` from
 `static-auth-secret=` and set a long random secret (left as it is, the relay accepts no one), add `max-bps` if you
-want a cap, and give Hearth `TURN_URL` and `TURN_SECRET`. `TURN_USERNAME`/`TURN_CREDENTIAL` still work but hand
+want a cap, and give Cindrly `TURN_URL` and `TURN_SECRET`. `TURN_USERNAME`/`TURN_CREDENTIAL` still work but hand
 everyone, including people you remove, one password that never expires (the server warns at start-up). Changing
 the relay's secret or addresses needs your password and is audit-logged.
 
@@ -185,14 +185,14 @@ endpoints on private addresses: only for tests, or a push service on your own ne
 
 **Backups.** The encrypted backups in `data/backups/encrypted/` are the only thing to copy off-site; that folder
 only ever holds `.hbk` files (and `.hbk.part` while one is being written). The plain database snapshot each backup
-is made from lives in `data/backups/.tmp` (readable by Hearth alone) and is deleted afterwards, at shutdown, and at
+is made from lives in `data/backups/.tmp` (readable by Cindrly alone) and is deleted afterwards, at shutdown, and at
 start-up when a crash left one (anything untouched for 10 minutes). Copying with rclone yourself? Use
 `rclone copy data/backups/encrypted remote:hearth --include '*.hbk'`. `cli.js restore` and `verify-backup` warn
-when a backup comes from a newer Hearth, which this version won't start on.
+when a backup comes from a newer Cindrly, which this version won't start on.
 
 ## Making money without being invasive
 
-Hearth's chats are end-to-end encrypted, so there's no data to sell even if you wanted to. That's a selling
+Cindrly's chats are end-to-end encrypted, so there's no data to sell even if you wanted to. That's a selling
 point, not a limit. Everything below is built in (Admin → Money and Admin → Owner).
 
 **First: get a domain (about $10/year).** Ko-fi and Stripe only send payment notices to a real HTTPS address, and
@@ -218,15 +218,15 @@ Point it at your server and put Caddy in front (README → "On a VPS with a doma
    people trust you.
 3. **The funding card.** Shows the real monthly cost and how much is covered on everyone's Home screen (they can
    hide it). Honest numbers are the best fundraiser: see "Cost per person" above.
-4. **Hosted Hearth for other communities.** Clubs, classes, gaming groups pay ~$3–10/month and you run their own
-   private Hearth (one per small VPS, or several per server with Docker). Your updater and backups already make
+4. **Hosted Cindrly for other communities.** Clubs, classes, gaming groups pay ~$3–10/month and you run their own
+   private Cindrly (one per small VPS, or several per server with Docker). Your updater and backups already make
    this manageable, and each one is another source of supporters.
 5. **One-off support.** Sponsor-a-month, stickers/merch of the community's in-jokes.
 6. **Creator memberships (Admin → Money → Creator memberships).** Server owners sell monthly memberships to
    their own fans, like Patreon built into their server: each membership gives a role, and roles can open
    private channels (#behind-the-scenes, early videos, study notes). Members pay on Stripe's own page; the money
    goes straight to the creator's Stripe account (Stripe Connect Express handles their identity checks, payouts
-   and tax forms), and your Hearth keeps the fee you set (5% by default, 0–30%) automatically. Nobody who doesn't
+   and tax forms), and your Cindrly keeps the fee you set (5% by default, 0–30%) automatically. Nobody who doesn't
    join pays anything, and nothing that's free today moves behind it: you earn when creators earn.
    * Set up once: Stripe → Connect (Express accounts), paste a secret key and add a webhook to
      `https://your-server/api/pay/memberships` (events `checkout.session.completed`,
@@ -269,10 +269,10 @@ Avoid: ads, tracking pixels, selling data, paywalling safety or privacy features
   and set the age requirement in your Terms (13+ in most places).
 * Watch together embeds the official YouTube/Vimeo/Twitch players, which is allowed; each viewer loads the
   video from them directly.
-* Game pictures: Hearth shows Steam store art and Wikipedia images to identify games (and caches them on your
+* Game pictures: Cindrly shows Steam store art and Wikipedia images to identify games (and caches them on your
   server so Steam/Wikipedia never see your members). That's how game launchers and chat apps commonly show games;
   don't reuse the art for anything else.
-* Last.fm: their API is free for non-commercial use. If you start charging for Hearth itself (hosting it for
+* Last.fm: their API is free for non-commercial use. If you start charging for Cindrly itself (hosting it for
   others), read their API terms first.
 * Payments: money from Ko-fi/Stripe is income. Keep the Admin → Money list (or your Ko-fi/Stripe exports) for
   taxes, and make clear supporters are paying for the server, not buying a guaranteed service.

@@ -1,4 +1,4 @@
-// Hearth sounds.
+// Cindrly sounds.
 // Every sound is synthesized in the browser with real instrument techniques (FM bells, marimba/kalimba
 // partials, plucked strings, glass), rendered once with a touch of room reverb, loudness-matched, and cached.
 // People can put any sound on any event, or use their own audio file (kept on their device).
@@ -51,7 +51,7 @@ export const LIBRARY = [
   { id: 'coin', name: 'Coin', group: 'Retro', inst: 'chip', notes: [['B5', 0, 0.08, 0.9], ['E6', 0.08, 0.35, 0.9]] },
   { id: 'powerup', name: 'Power-up', group: 'Retro', inst: 'chip', notes: [['C5', 0, 0.07, 0.8], ['E5', 0.06, 0.07, 0.8], ['G5', 0.12, 0.07, 0.8], ['C6', 0.18, 0.25, 0.9]] },
   { id: 'powerdown', name: 'Power-down', group: 'Retro', inst: 'chip', notes: [['C6', 0, 0.07, 0.8], ['G5', 0.06, 0.07, 0.8], ['E5', 0.12, 0.07, 0.8], ['C5', 0.18, 0.25, 0.8]] },
-  { id: 'ringtone', name: 'Hearth ringtone', group: 'Ringtones', inst: 'marimba', notes: [['E5', 0, 0.3, 0.9], ['G#5', 0.15, 0.3, 0.9], ['B5', 0.3, 0.3, 0.9], ['E6', 0.45, 0.5, 1], ['B5', 0.75, 0.3, 0.8], ['E6', 0.9, 0.7, 0.95]] },
+  { id: 'ringtone', name: 'Cindrly ringtone', group: 'Ringtones', inst: 'marimba', notes: [['E5', 0, 0.3, 0.9], ['G#5', 0.15, 0.3, 0.9], ['B5', 0.3, 0.3, 0.9], ['E6', 0.45, 0.5, 1], ['B5', 0.75, 0.3, 0.8], ['E6', 0.9, 0.7, 0.95]] },
   { id: 'classicring', name: 'Classic phone', group: 'Ringtones', inst: 'bell', notes: Array.from({ length: 12 }, (_, i) => [i % 2 ? 'C7' : 'A6', i * 0.05, 0.12, 0.55]).concat(Array.from({ length: 12 }, (_, i) => [i % 2 ? 'C7' : 'A6', 0.75 + i * 0.05, 0.12, 0.55])) },
   { id: 'kalimbaring', name: 'Kalimba ring', group: 'Ringtones', inst: 'kalimba', notes: [['C6', 0, 0.4, 0.9], ['E6', 0.12, 0.4, 0.9], ['G6', 0.24, 0.4, 0.9], ['E6', 0.36, 0.4, 0.85], ['C6', 0.6, 0.4, 0.9], ['G6', 0.72, 0.8, 0.95]] },
   { id: 'harpring', name: 'Harp ring', group: 'Ringtones', inst: 'pluck', notes: [['G4', 0, 1, 0.8], ['B4', 0.08, 1, 0.8], ['D5', 0.16, 1, 0.85], ['G5', 0.24, 1, 0.9], ['B5', 0.32, 1, 0.9], ['D6', 0.4, 1.3, 0.95]] },

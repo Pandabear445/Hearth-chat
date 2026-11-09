@@ -590,10 +590,10 @@ test('a database from a newer Hearth is refused at start-up, untouched; backups 
     const newer = await backup();
     const verify = cli(['verify-backup', newer, key()]);
     assert.match(verify.out, /Restore test passed.*database version 99/);
-    assert.match(verify.err, /newer version of Hearth \(database version 99; this version understands up to \d+\)/);
+    assert.match(verify.err, /newer version of Cindrly \(database version 99; this version understands up to \d+\)/);
     const restore = cli(['restore', newer, path.join(tmp, 'newer'), key()]);
     assert.equal(restore.code, 2);
-    assert.match(restore.err, /newer version of Hearth/);
+    assert.match(restore.err, /newer version of Cindrly/);
     // Reading the version leaves nothing behind in the new data folder (opening it with SQLite left -wal and -shm).
     for (const dir of ['same', 'newer']) assert.deepEqual(fs.readdirSync(path.join(tmp, dir)).filter((f) => /-(wal|shm)$/.test(f)), [], dir);
 
@@ -601,7 +601,7 @@ test('a database from a newer Hearth is refused at start-up, untouched; backups 
     const db = path.join(s.dir, 'hearth.db');
     const before = sha(db);
     await assert.rejects(s.restart(), /didn't start/);
-    assert.match(s.log, /written by a newer version of Hearth \(database version 99; this version understands up to \d+\)/);
+    assert.match(s.log, /written by a newer version of Cindrly \(database version 99; this version understands up to \d+\)/);
     assert.match(s.log, /hearth-before-v99-/);
     assert.equal(sha(db), before, 'the file is untouched');
     assert.equal(version(s), 99);

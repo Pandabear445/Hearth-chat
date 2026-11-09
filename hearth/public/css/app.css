@@ -1,5 +1,5 @@
 /* =====================================================================
-   Hearth — stylesheet
+   Cindrly — stylesheet
    Themes are token sets on [data-theme]. Surfaces are RGB triplets so panels
    can turn translucent ("glass") when a background is showing behind them.
    ===================================================================== */
@@ -2100,11 +2100,11 @@ html.has-bg .set-nav, html.has-bg .set-main { backdrop-filter: blur(18px) satura
     body.m-ui.m-list.m-call #sidebar { padding-bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 66px); }
   }
 
-  /* Reduce motion (Hearth's own setting, or the device's): the levels swap without sliding. */
+  /* Reduce motion (Cindrly's own setting, or the device's): the levels swap without sliding. */
   html.reduce-motion body.m-ui #main, html.reduce-motion body.m-ui #sidebar, html.reduce-motion body.m-ui #rail, html.reduce-motion body.m-ui #members,
   html.reduce-motion body.m-ui #m-callbar, html.reduce-motion body.m-ui .modal { transition: none !important; animation: none !important; }
 }
-/* Touch screens: a sideways swipe in the chat doesn't take the browser back out of Hearth (Back still works, and
+/* Touch screens: a sideways swipe in the chat doesn't take the browser back out of Cindrly (Back still works, and
    closes what's open first: js/phone-nav.js). */
 @media (pointer: coarse) {
   html { overscroll-behavior-x: none; }

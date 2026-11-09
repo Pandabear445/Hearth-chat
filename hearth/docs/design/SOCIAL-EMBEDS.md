@@ -41,7 +41,7 @@ one); a test runs every link form, and a list of near-misses, through both.
   The player loads only when tapped. A ✕ closes it again (and stops it).
 - **Settings → Chat → TikTok and Instagram**: *Load when I tap* (default), *Always load*, *Just show the link*.
   Kept on the device (like the other Chat settings). *Always load* still waits for a tap on a short TikTok link,
-  since opening one asks the Hearth server (below).
+  since opening one asks the Cindrly server (below).
 - A message with two or more (a TikTok and a reel) shows them side by side; each plays on its own, so both can
   play at once.
 - Players follow the sender's **Embed links** permission, like link previews. A preview card for the same link is
@@ -60,7 +60,7 @@ one); a test runs every link form, and a list of near-misses, through both.
 
 - Sandboxed: scripts and their own storage (both players need them), full screen, and popups that leave the app.
   No top navigation, forms, modals or downloads.
-- No referrer: TikTok and Instagram aren't told which Hearth server or page the player is on.
+- No referrer: TikTok and Instagram aren't told which Cindrly server or page the player is on.
 - The page's CSP allows frames from exactly `https://www.tiktok.com` and `https://www.instagram.com` (nothing for
   their CDNs, which only the frames themselves load).
 - TikTok's player messages are read only from that frame (`e.source`) and from `https://www.tiktok.com`
@@ -69,7 +69,7 @@ one); a test runs every link form, and a list of near-misses, through both.
 ### Short TikTok links
 
 `vm.tiktok.com/…` and `tiktok.com/t/…` don't say which video they are. When someone taps one (or starts
-watching one together), the app asks the Hearth server: `POST /api/social/resolve { url }`. The server asks
+watching one together), the app asks the Cindrly server: `POST /api/social/resolve { url }`. The server asks
 TikTok hop by hop through netguard (public addresses only, DNS pinned): each hop must be https, the usual port,
 and one of TikTok's own names (`www.`, `m.`, `vm.`, `vt.tiktok.com`); the first redirect that names a video ends
 it, so the video's page itself is never fetched; at most 4 hops, 16 KiB read per hop, 6 s in all. The answer is
@@ -104,7 +104,7 @@ for someone). **The server then sees that short link, and who asked**, as with a
 
 - Nothing loads from TikTok or Instagram until a person taps (unless they chose *Always load*). Then that site
   sees their IP address, may set cookies inside its own player, and knows which video they opened. It isn't told
-  which Hearth server (no referrer).
+  which Cindrly server (no referrer).
 - A link preview of a TikTok link goes to TikTok's oEmbed, from the server, only when the sender asks for a preview.
 - A short TikTok link is looked up by the server, only when someone taps it or watches it together.
 - Watch together: the server fetches TikTok's oEmbed title (as it does YouTube's), and keeps the video's id and

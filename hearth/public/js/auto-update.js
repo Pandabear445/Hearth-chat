@@ -1,7 +1,7 @@
-// A new version of Hearth puts itself in place: the page reloads into it by itself (app.js updateAndReload keeps
+// A new version of Cindrly puts itself in place: the page reloads into it by itself (app.js updateAndReload keeps
 // where you were and anything half-typed), with no bar to click. It picks a moment that interrupts nothing:
-//  - right away while Hearth is out of sight, or when nobody has touched it since it opened;
-//  - right away when the server has just come back from its update (people saw "Updating Hearth…" already);
+//  - right away while Cindrly is out of sight, or when nobody has touched it since it opened;
+//  - right away when the server has just come back from its update (people saw "Updating Cindrly…" already);
 //  - otherwise once it has been left alone for IDLE_MS;
 //  - never while something is under way (blockedBy: a call, a recording, an upload, a message still sending, an
 //    open dialog, unsaved changes…): it looks again every RETRY_MS until that's done;
@@ -40,7 +40,7 @@ export function createUpdater({ now = () => Date.now(), hidden, blockedBy, apply
     },
     // The person did something (a key, a tap, the wheel…): wait for them to leave it alone again.
     input() { lastInput = now(); },
-    // Something changed that may make now a good moment (Hearth went out of sight, say).
+    // Something changed that may make now a good moment (Cindrly went out of sight, say).
     poke() { if (due) recheck(); },
     pending: () => !!due,
   };

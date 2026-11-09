@@ -62,7 +62,7 @@ const readSig = (text) => (String(text || '').split(/\r?\n/).map((l) => l.trim()
 
 function pubFileText(pub) {
   return [
-    '# Hearth server update signing key (Ed25519, public half). A server that installs an update carrying this file',
+    '# Cindrly server update signing key (Ed25519, public half). A server that installs an update carrying this file',
     '# afterwards only installs updates signed with the matching private key. Made with: node scripts/update-key.js keygen',
     pub, '',
   ].join('\n');

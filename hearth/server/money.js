@@ -2,7 +2,7 @@
 // get their 💜 badge and perks automatically, for as long as they've paid for.
 //
 //  - Ko-fi: free, takes 0% of one-off donations. People paste their support code (shown in the app) into
-//    the Ko-fi message; Ko-fi tells Hearth through a webhook.
+//    the Ko-fi message; Ko-fi tells Cindrly through a webhook.
 //  - Stripe (cards, Apple Pay, Google Pay; ~2.9% + 30¢): a Payment Link. The app adds the person's code to the
 //    link, so nothing needs pasting. Monthly subscriptions renew the badge every month by themselves.
 // Payments are matched to people by that code; anything that can't be matched waits in Admin → Money so the

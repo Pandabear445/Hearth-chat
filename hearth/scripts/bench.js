@@ -7,7 +7,7 @@
 //            1,000 members, 500,000 channel messages, 1,000 DM conversations with 20,000 DM messages, 10,000
 //            attachment rows.
 //   --out    also write the results as JSON to this file.
-//   --root   measure another Hearth checkout (an older release, say) with this script and the same dataset.
+//   --root   measure another Cindrly checkout (an older release, say) with this script and the same dataset.
 //   --only   run only some sections: bootstrap, members, history, threads, search, perms, fanout, roles, joinleave,
 //            slowmode, admin, startup, migration (memory is always reported).
 //   --plans  print EXPLAIN QUERY PLAN for the hot statements.
@@ -131,8 +131,8 @@ async function start() {
   child.stderr.on('data', (d) => { log += d; });
   for (;;) {
     try { const r = await fetch(BASE + '/api/config'); if (r.ok) break; } catch { /* not up yet */ }
-    if (child.exitCode !== null) throw new Error(`Hearth didn't start:\n${log}`);
-    if (performance.now() - t0 > 600000) throw new Error('Hearth took over 10 minutes to start');
+    if (child.exitCode !== null) throw new Error(`Cindrly didn't start:\n${log}`);
+    if (performance.now() - t0 > 600000) throw new Error('Cindrly took over 10 minutes to start');
     await sleep(5);
   }
   return performance.now() - t0;
@@ -517,7 +517,7 @@ async function sendAndWait(channelId, sender, count) {
   BASE = `http://127.0.0.1:${PORT}`;
   const cpu = os.cpus();
   const machine = { cpu: cpu[0] && cpu[0].model, cores: cpu.length, ramGb: Math.round(os.totalmem() / 1073741824), node: process.version, os: `${os.platform()} ${os.release()}`, loadavg: os.loadavg().map((x) => Math.round(x * 100) / 100) };
-  console.log(`Hearth at ${ROOT}\nMachine: ${machine.cpu}, ${machine.cores} cores, ${machine.ramGb} GB RAM, Node ${machine.node}, ${machine.os}, load ${machine.loadavg.join(' ')}`);
+  console.log(`Cindrly at ${ROOT}\nMachine: ${machine.cpu}, ${machine.cores} cores, ${machine.ramGb} GB RAM, Node ${machine.node}, ${machine.os}, load ${machine.loadavg.join(' ')}`);
   console.log(`Data folder: ${DIR}\nSeeding (scale ${SCALE})…`);
   const dataset = seed();
   console.log('Dataset:', JSON.stringify(dataset));

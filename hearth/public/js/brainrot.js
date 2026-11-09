@@ -6,7 +6,7 @@
 // - The gameplay is drawn here, in code (brainrot-games.js): nothing is loaded. "Your own background" is a YouTube
 //   video, muted and looping, loaded (from youtube-nocookie.com, sandboxed) only after a tap that says so.
 // - Never more than 3 flashes in a second (WCAG 2.3.1: every flash and shake asks the limiter first). Reduced motion
-//   (the device's or Hearth's own setting): slower, no shake or flash, the slider at most 1.
+//   (the device's or Cindrly's own setting): slower, no shake or flash, the slider at most 1.
 // - Esc or ✕ turns it off. Sounds are made here (WebAudio), only after this person turns them on, and never kept
 //   on across a reload; nothing plays on its own.
 // - Paused whenever it isn't on screen (another tab, scrolled away, a mini player) or the page is hidden; the
@@ -37,7 +37,7 @@ function save(uid, patch) {
   for (const s of surfaces) s.sync();
 }
 let sounds = false; // this visit only
-let ytConsented = false; // "Load background": for as long as Hearth is open
+let ytConsented = false; // "Load background": for as long as Cindrly is open
 
 const readMotion = () => document.documentElement.classList.contains('reduce-motion') || matchMedia('(prefers-reduced-motion: reduce)').matches;
 // Read once and kept up to date by wire() (it's asked several times a frame).
@@ -67,7 +67,7 @@ function wire() {
     const s = [...surfaces].reverse().find((x) => x.isActive() && x.onScreen() && x.owns(document.activeElement));
     if (s) { e.preventDefault(); s.escape(); }
   });
-  // Reduced motion changed (the device's setting, or Hearth's own: a class on <html>).
+  // Reduced motion changed (the device's setting, or Cindrly's own: a class on <html>).
   const again = () => { const now = readMotion(); if (now === motionNow) return; motionNow = now; for (const s of surfaces) s.sync(true); };
   try { matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', again); } catch { /* old browsers */ }
   motionNow = readMotion();
@@ -84,7 +84,7 @@ function warn(uid) {
       title: 'Turn on Brainrot mode?', size: 'sm', className: 'br-warn',
       body: h('div', { class: 'stack' },
         h('p', null, 'Gameplay plays under the video. Turn the stimulation up and you also get falling emoji, a score counter, big bouncing captions and a little shake when people react.'),
-        h('p', null, 'It moves a lot. It never flashes more than 3 times a second, and with reduced motion (your device’s or Hearth’s) it’s slower and calmer, with no shake.'),
+        h('p', null, 'It moves a lot. It never flashes more than 3 times a second, and with reduced motion (your device’s or Cindrly’s) it’s slower and calmer, with no shake.'),
         h('p', { class: 'muted-p' }, 'Esc or ✕ turns it off. Sounds stay off unless you turn them on.')),
       actions: [{ label: 'Not now' }, { label: 'Turn it on', kind: 'primary', action: () => { ok = true; save(uid, { warned: true }); } }],
       onClose: () => resolve(ok),

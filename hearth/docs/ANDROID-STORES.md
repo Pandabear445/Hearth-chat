@@ -1,6 +1,6 @@
-# Putting Hearth for Android in app stores
+# Putting Cindrly for Android in app stores
 
-This page takes you, step by step, from "the APK is on GitHub" to Hearth in **IzzyOnDroid** and in **Google
+This page takes you, step by step, from "the APK is on GitHub" to Cindrly in **IzzyOnDroid** and in **Google
 Play internal testing** (invite only, up to 100 testers). Public Google Play and F-Droid come later; the end of
 this page says what they need. It's written for Windows: where you type a command, open PowerShell (in File
 Explorer, go to the folder, click the address bar, type `powershell` and press Enter).
@@ -9,7 +9,7 @@ The plan, in order:
 
 1. [Test on your own phone first](#1-test-on-your-own-phone-first), and record a short video of a call.
 2. [Back up the signing key](#2-back-up-the-signing-key).
-3. [Ask IzzyOnDroid to list Hearth](#3-izzyondroid).
+3. [Ask IzzyOnDroid to list Cindrly](#3-izzyondroid).
 4. [Google Play internal testing](#4-google-play-internal-testing): account, app, signing, first upload, testers,
    the *App content* forms.
 5. [Optional: automatic uploads to Play](#5-optional-automatic-uploads-to-google-play).
@@ -27,7 +27,7 @@ What's already done in this repository:
   flags that block. The Play bundle (`.aab`) still has it, for Play Console's library checks.
 - **No Android backup.** From `app-v1.29.1` on, Android doesn't back the app's data up or move it to a new phone
   (the session and the unlocked keys stay on the phone; the privacy policy says so).
-- **No way to pay in the app**, once kappachat runs Hearth 1.29.1 (step 4.4). The app itself also refuses to open
+- **No way to pay in the app**, once kappachat runs Cindrly 1.29.1 (step 4.4). The app itself also refuses to open
   Stripe and Ko-fi payment pages.
 
 **Marked *(unverified)*:** a rule or label taken from Google's or a store's help pages that couldn't be opened
@@ -35,7 +35,7 @@ while writing this. Check it on the real page when you get there. Store rules ch
 October 2026.
 
 **The contact email** isn't decided yet. Wherever this page says `{{CONTACT_EMAIL}}`, use the address you pick
-for Hearth (a separate free address is a good idea: Google Play shows it publicly). The privacy policy, the account
+for Cindrly (a separate free address is a good idea: Google Play shows it publicly). The privacy policy, the account
 deletion page and the child safety page on the website have the same placeholder: step 4.6 says how to replace it
 there before Google gets their addresses.
 
@@ -50,25 +50,25 @@ store review uses the same features.
 
 You need your Android phone and a second account or a friend (to send you messages and call you).
 
-1. On the phone, install **ntfy** (free, from Google Play or F-Droid). It delivers Hearth's notifications while
-   Hearth is closed.
+1. On the phone, install **ntfy** (free, from Google Play or F-Droid). It delivers Cindrly's notifications while
+   Cindrly is closed.
 2. On the phone, open <https://github.com/Pandabear445/Hearth-chat/releases/latest> and tap
    `Hearth-<version>.apk`. When Android asks, allow your browser to install unknown apps.
-3. Open Hearth. It connects to the community server **cindrly.com** by itself. Sign in.
+3. Open Cindrly. It connects to the community server **cindrly.com** by itself. Sign in.
 4. Go through this list. Write down anything that doesn't work.
-   - **Notifications with the app closed:** *Settings → Apps & devices → Notifications when Hearth is closed*,
-     turn it on and pick ntfy. Swipe Hearth away from your recent apps. Have someone send you a direct message.
+   - **Notifications with the app closed:** *Settings → Apps & devices → Notifications when Cindrly is closed*,
+     turn it on and pick ntfy. Swipe Cindrly away from your recent apps. Have someone send you a direct message.
      A notification should arrive, and tapping it should open the conversation.
    - **Battery:** *Android Settings → Apps → ntfy → Battery → Unrestricted*. Then leave the phone untouched for half
      an hour and have someone message you again.
    - **A call with the screen locked:** join a voice channel with someone, lock the screen and keep talking for a
      few minutes. An "In a call" notification should show. Tap *Hang up* in it: you should leave the call.
-   - **Ringing:** with Hearth closed, have someone call you in a direct message. It should ring for about 45
-     seconds, then show a missed call. Call again and open Hearth from its icon while it rings: the ringing stops
+   - **Ringing:** with Cindrly closed, have someone call you in a direct message. It should ring for about 45
+     seconds, then show a missed call. Call again and open Cindrly from its icon while it rings: the ringing stops
      and the call's conversation opens.
    - **Lock screen:** by default a notification there says only your server's name and "New message".
    - **Invite links:** make an invite (server menu → *Invite people*). Send yourself `hearth://invite/` followed
-     by the code, somewhere it shows as a link you can tap (an email, say), and tap it. Hearth should open with
+     by the code, somewhere it shows as a link you can tap (an email, say), and tap it. Cindrly should open with
      the invite.
 5. If something on the list fails, fix it (or have it fixed) before going further, and remove any claim about
    it from `full_description.txt`.
@@ -76,7 +76,7 @@ You need your Android phone and a second account or a friend (to send you messag
    (step 4.7). Use test accounts, not real people's names.
    1. Pull down the quick settings twice and tap **Screen record** (if it isn't there, tap the pencil and drag it
       in). Start recording.
-   2. Open Hearth and join a voice channel.
+   2. Open Cindrly and join a voice channel.
    3. Press Home. Pull down the notifications and show the "In a call" notification.
    4. Lock the screen for a few seconds, unlock it, and show the notification is still there and the call is still
       on (the recording may be black while the screen is locked; that's fine).
@@ -96,7 +96,7 @@ Android app shows that same page, so they're accurate, but they come from a brow
 
 ## 2. Back up the signing key
 
-`hearth.jks` is the key every Hearth APK is signed with. Android only installs an update signed with the same key.
+`hearth.jks` is the key every Cindrly APK is signed with. Android only installs an update signed with the same key.
 **If you lose it, or its passwords, nobody can ever update the app again**: not on GitHub, not on IzzyOnDroid, not
 on Google Play. Everyone would have to uninstall and lose what the app keeps on the phone.
 
@@ -151,13 +151,13 @@ GitHub Actions builds everything and makes the release (follow it in the reposit
 <https://github.com/Pandabear445/Hearth-chat/releases>: the release should have `Hearth-1.29.1.apk` and
 `Hearth.apk` (the same file under a fixed name, for the website's download button).
 
-`changelogs/default.txt` is the "what's new" text IzzyOnDroid (and later F-Droid) shows. Hearth ships it empty, like
+`changelogs/default.txt` is the "what's new" text IzzyOnDroid (and later F-Droid) shows. Cindrly ships it empty, like
 the app's own update notes (only the owner publishes those): write it yourself when you release, if you want one (at
 most 500 characters), or leave it empty and the store shows none. Google Play's release notes are typed in Play Console instead (step 4.4).
 F-Droid's tools use `default.txt` when there's no changelog for that exact build; IzzyOnDroid runs on the same tools
 *(unverified)*. A changelog for one build is named after its **versionCode**: the workflow sets it to
 `(major × 100 + minor) × 100000 + the workflow's run number`, so you only learn it once the build ran (the
-*Version* step's log says `Hearth 1.29.1, Android versionCode 12900042`, and the Play bundle is named
+*Version* step's log says `Cindrly 1.29.1, Android versionCode 12900042`, and the Play bundle is named
 `Hearth-1.29.1-12900042.aab`). That's why `default.txt` is the practical choice for now. To add one for a build
 that's already out, save it as `changelogs/12900042.txt` (with that build's number).
 
@@ -170,7 +170,7 @@ that's already out, save it as `changelogs/12900042.txt` (with that build's numb
 3. Fill in the template. Everything it's likely to ask, ready to paste:
 
 ```
-App: Hearth (package app.hearth.mobile)
+App: Cindrly (package app.hearth.mobile)
 Source code: https://github.com/Pandabear445/Hearth-chat
 License: MIT
 Releases: GitHub releases, tags app-v*, https://github.com/Pandabear445/Hearth-chat/releases
@@ -182,7 +182,7 @@ Fastlane metadata: hearth/mobile/fastlane/metadata/android/en-US/
 The APK has no Google Play Services, no Firebase and no trackers. Notifications while the app is closed use
 UnifiedPush (a distributor such as ntfy).
 Network: by default the app opens the free community server cindrly.com; people can switch to any
-Hearth server (it's self-hostable, MIT). Watch together can embed YouTube, Vimeo and Twitch players, and calls
+Cindrly server (it's self-hostable, MIT). Watch together can embed YouTube, Vimeo and Twitch players, and calls
 use the server's STUN servers (Google's by default).
 Contact: {{CONTACT_EMAIL}}
 ```
@@ -194,22 +194,22 @@ Contact: {{CONTACT_EMAIL}}
    downloads) stop working if it goes private. So do the privacy policy, account deletion and child safety pages
    you give Google Play (section 4): they're part of the website, which GitHub Pages publishes from this repository, and on
    a free GitHub plan Pages only publishes public repositories *(unverified)*. If the repository has to go private
-   while Hearth is on Play, first put copies of the three pages somewhere public (kappachat, say), give Play
+   while Cindrly is on Play, first put copies of the three pages somewhere public (kappachat, say), give Play
    Console those addresses, and set `PRIVACY_URL` on kappachat (step 4.4) to the new privacy policy address.
 
 ## 4. Google Play internal testing
 
-Internal testing lets up to 100 people you invite by email install Hearth from the Play Store, with no "unknown
+Internal testing lets up to 100 people you invite by email install Cindrly from the Play Store, with no "unknown
 app" warnings, and get updates automatically. It isn't public: nobody else can find it.
 
 ### 4.1 Open a developer account ($25 once)
 
-1. Go to <https://play.google.com/console> and sign in with the Google account that will own Hearth on Play.
+1. Go to <https://play.google.com/console> and sign in with the Google account that will own Cindrly on Play.
 2. Choose a **Personal** account.
 3. Pay the **$25** with a credit or debit card in your name (prepaid cards are refused *(unverified)*).
 4. Verify your identity: your legal name and address, and a photo of a government ID if asked.
 5. Fill in the developer details. **Play shows the developer name, and for a personal account also your legal name
-   and country, publicly** on Hearth's page, plus the developer email. Use `{{CONTACT_EMAIL}}`.
+   and country, publicly** on Cindrly's page, plus the developer email. Use `{{CONTACT_EMAIL}}`.
    For the **developer name**, use `Pandabear445`. The privacy policy, the deletion page and the child safety page
    name the developer that way, and Google wants the privacy policy and the deletion page to name the developer or
    app the way the listing does *(unverified)*. If you pick another name, change it in those three pages too (search
@@ -226,7 +226,7 @@ app" warnings, and get updates automatically. It isn't public: nobody else can f
 
 | Field | Answer |
 |---|---|
-| App name | `Hearth: private group chat` (same as `title.txt`; up to 30 characters) |
+| App name | `Cindrly: private group chat` (same as `title.txt`; up to 30 characters) |
 | Default language | English (United States) – en-US |
 | App or game | App |
 | Free or paid | Free (a free app can't become paid later) |
@@ -242,13 +242,15 @@ And *Main store listing*: copy in `title.txt`, `short_description.txt` and `full
 `images/icon.png`, `images/featureGraphic.png` and the phone screenshots, all from
 [`../mobile/fastlane/metadata/android/en-US/`](../mobile/fastlane/metadata/android/en-US/).
 
+**Renamed from Hearth.** The app is now called Cindrly. An app that is already on Google Play keeps its old name until the store listing changes: upload the new `title.txt` and descriptions with fastlane `supply`, or paste them into *Grow → Store presence → Main store listing* in Play Console. The package name `app.hearth.mobile` and the APK file names (`Hearth-<version>.apk`) stay, so updates and IzzyOnDroid keep working.
+
 ### 4.3 Play App Signing with your own key (can't be undone)
 
 Google Play re-signs every app it installs. You choose once which key it uses:
 
 - **Your own key (do this).** You hand Google an encrypted copy of `hearth.jks`. The Play version and the GitHub and
   IzzyOnDroid APK then have the same signature, so people can move between them without uninstalling. Uninstalling
-  erases what Hearth keeps on the phone, so this matters.
+  erases what Cindrly keeps on the phone, so this matters.
 - A key Google makes. Then your key is only the "upload key", and the Play version and the APK can't update each
   other.
 
@@ -278,7 +280,7 @@ How (the labels may differ a little *(unverified)*):
 **Update cindrly.com first.** The Android app shows the pages kappachat sends, so a Play reviewer sees
 what kappachat runs, not only what's in the APK. Two things Play checks come from the server:
 
-- **No way to pay.** From Hearth 1.29.1 the Android app shows no *Support* window, funding card or memberships. A
+- **No way to pay.** From Cindrly 1.29.1 the Android app shows no *Support* window, funding card or memberships. A
   server on an older version still shows them, with links to Stripe and Ko-fi. (The 1.29.1 app also refuses to
   open Stripe and Ko-fi pages, but the buttons would still be there.)
 - **A privacy policy link in the app.** The app opens the saved server, or kappachat, straight away, so the connect
@@ -288,15 +290,15 @@ what kappachat runs, not only what's in the APK. Two things Play checks come fro
 
 So, before the first upload and before any review:
 
-1. Update kappachat to Hearth 1.29.1 or newer, the way you always do (see
+1. Update kappachat to Cindrly 1.29.1 or newer, the way you always do (see
    [the README](../README.md#upgrading-a-server-that-already-has-users)).
-2. In kappachat's `.env` file (in the Hearth folder on the server), add this line:
+2. In kappachat's `.env` file (in the Cindrly folder on the server), add this line:
 
    ```
    PRIVACY_URL=https://pandabear445.github.io/Hearth-chat/privacy.html
    ```
 
-   Then restart Hearth: `docker compose up -d --force-recreate` in the Hearth folder if it runs in Docker, or
+   Then restart Cindrly: `docker compose up -d --force-recreate` in the Cindrly folder if it runs in Docker, or
    `sudo systemctl restart hearth` if it doesn't. The address must start with `https://`; anything else is ignored
    (the server's log then says `privacy_url_ignored`).
 3. Check on your phone, in the Android app signed in to kappachat: *Settings → Security* (at the bottom, in the
@@ -305,7 +307,7 @@ So, before the first upload and before any review:
 
 Then the first upload. Play takes the first bundle only by hand.
 
-1. Get the bundle: GitHub → *Actions → Hearth apps* → the run for the `app-v1.29.1` tag (or the newest run on `main`)
+1. Get the bundle: GitHub → *Actions → Cindrly apps* → the run for the `app-v1.29.1` tag (or the newest run on `main`)
    → *Artifacts* → **hearth-android-play-bundle**. It downloads as a zip; inside is `Hearth-1.29.1-<versionCode>.aab`.
    (The artifact is only there when the `ANDROID_KEYSTORE_*` secrets are set.)
 2. Play Console → *Test and release → Testing → Internal testing → Create new release*.
@@ -313,7 +315,7 @@ Then the first upload. Play takes the first bundle only by hand.
 
    ```
    <en-US>
-   The connect screen links to Hearth's privacy policy.
+   The connect screen links to Cindrly's privacy policy.
    Android's backup of the app is off, so your sign-in and keys stay on this phone.
    </en-US>
    ```
@@ -331,7 +333,7 @@ back *(unverified for internal testing)*.
 1. *Internal testing → Testers → Create email list*. Name it (for example "Friends") and add the Google account
    emails your friends use on the Play Store (up to 100). Save, tick the list, save again.
 2. Copy the **opt-in link** (*Join on the web*) and send it to them.
-3. Each tester opens it on their phone, accepts, and then installs Hearth from the Play Store.
+3. Each tester opens it on their phone, accepts, and then installs Cindrly from the Play Store.
 
 ### 4.6 App content: the forms, with answers
 
@@ -370,7 +372,7 @@ say `{{CONTACT_EMAIL}}` where the address goes. Google wants a working contact o
 Instructions to paste (with the username and password in Play's own fields):
 
 ```
-1. Open Hearth. It connects to the community server cindrly.com by itself.
+1. Open Cindrly. It connects to the community server cindrly.com by itself.
 2. Sign in with the username and password above. No two-factor code is needed.
 3. Tap the menu button (top left) and open the "Play review" server to read and send messages.
 4. To try a call, open the "Lounge" voice channel (being alone in it is fine) and allow the microphone. An
@@ -389,11 +391,11 @@ other and **yes, they can share content** (pictures, videos, files, voice). The 
 location. Expect a teen-or-older rating with a "Users interact" note *(unverified)*. Answer again whenever the app
 changes in a way that changes these answers.
 
-**Target audience and content:** **13–15, 16–17 and 18 and over.** Not any group under 13: that would put Hearth
+**Target audience and content:** **13–15, 16–17 and 18 and over.** Not any group under 13: that would put Cindrly
 under Google's Families policy, which a chat app with strangers can't meet. Choosing 13–17 tells Google that
-teenagers use Hearth. The app and its listing then have to be suitable for them, and laws about minors' use of apps
+teenagers use Cindrly. The app and its listing then have to be suitable for them, and laws about minors' use of apps
 apply (see [6.2](#62-age-checks-for-under-18s)). If asked whether the listing could appeal to children, answer No.
-Hearth's terms (on kappachat: *Admin → Registration & Terms*) should say the same minimum age, 13.
+Cindrly's terms (on kappachat: *Admin → Registration & Terms*) should say the same minimum age, 13.
 
 **News app:** No. **Health apps:** no health features. **Financial features:** none. **Government app:** No.
 
@@ -402,7 +404,7 @@ Hearth's terms (on kappachat: *Admin → Registration & Terms*) should say the s
 **Foreground service permissions:** see [4.7](#47-foreground-service-declaration).
 
 **Child safety standards:** Google's help says this applies to apps in the Social and Dating categories
-*(unverified)*; Hearth is in Communication. If Play Console asks for it anyway, give it
+*(unverified)*; Cindrly is in Communication. If Play Console asks for it anyway, give it
 `https://pandabear445.github.io/Hearth-chat/child-safety.html` (your standards against child abuse, with the
 contact `{{CONTACT_EMAIL}}`). People can already report a message or a person in the app under a child safety
 category.
@@ -412,7 +414,7 @@ category.
 What the app has (from `../mobile/scripts/patch-android.js` and `../mobile/native/CallService.java`): **one**
 foreground service, `CallService`, of type **microphone**, with the permissions `FOREGROUND_SERVICE` and
 `FOREGROUND_SERVICE_MICROPHONE`. It starts only when the person joins a call (and only when they've already allowed
-the microphone), shows an "In a call" notification with *Hang up*, and stops when the call ends. Hearth's push
+the microphone), shows an "In a call" notification with *Hang up*, and stops when the call ends. Cindrly's push
 service (`HearthPushService`) is not a foreground service. The push library adds a `RaiseToForegroundService`
 with no foreground service type, so it has nothing to declare *(unverified)*. There's no camera, phone call, media
 playback, screen capture or data sync service, and no full-screen incoming call screen.
@@ -423,7 +425,7 @@ calls *(unverified label)*. Then paste:
 Description:
 
 ```
-Hearth is a chat app with voice and video calls. When the user joins a call, the app starts a foreground
+Cindrly is a chat app with voice and video calls. When the user joins a call, the app starts a foreground
 service of type microphone with an ongoing "In a call" notification. It keeps the call's audio going while the
 screen is locked or the user is in another app, so the other people in the call can still hear them. It runs
 only during a call the user joined themselves, and stops when the call ends or when the user taps Hang up in
@@ -442,7 +444,7 @@ Video: the YouTube link from step 1.6.
 ### 4.8 Data safety answers
 
 These are for **cindrly.com**, the server the app opens by default. Anyone can point the app at their
-own Hearth server; that server's owner then holds the data, not you. They come from the code and from
+own Cindrly server; that server's owner then holds the data, not you. They come from the code and from
 [`../SECURITY.md`](../SECURITY.md) (section 1 says what each piece of data is and how it's protected).
 
 **End-to-end encrypted content isn't declared.** Messages, attachments (pictures, videos, files), voice messages
@@ -464,7 +466,7 @@ First page:
 Data types to tick. For each: **collected yes**, **shared no** (but see the two things to decide below), and
 processed on the server (not only on the phone):
 
-| Play's data type | What it is in Hearth | Required or optional | Purposes |
+| Play's data type | What it is in Cindrly | Required or optional | Purposes |
 |---|---|---|---|
 | Personal info → Name | display name and nicknames | optional | App functionality |
 | Personal info → Email address | for password reset and security notices; shown only to the account itself | optional | Account management |
@@ -476,7 +478,7 @@ processed on the server (not only on the phone):
 | App activity → In-app search history | GIF search words: the server sends them to KLIPY or GIPHY (whichever kappachat uses) without saying who searched. The server keeps them only in memory (never on disk), until newer searches push them out or it restarts. Message search runs on the phone and isn't included | optional | App functionality |
 | App activity → Other user-generated content | profile text and profile page, server, channel and category names, events, server folders and tracked feeds; links someone presses *Preview* on (fetched by the server and kept in memory for a few minutes) | optional | App functionality |
 | Device or other IDs | the push address of the phone's push app, the browser or app name (user agent) of each signed-in session, IP addresses (with sign-ins, sessions and reports; never turned into a location) | required | App functionality, Fraud prevention, security, and compliance, Account management |
-| Financial info → Purchase history | **not needed while kappachat runs Hearth 1.29.1 or newer:** the Android app then shows no way to pay (`noPayments` in `../public/js/android.js`, which the server sends). The APK doesn't decide this, the server does: tick it if kappachat is ever on an older version, where the app still offers supporter payments or memberships (Stripe, Ko-fi): what was paid, when, by whom | optional | App functionality |
+| Financial info → Purchase history | **not needed while kappachat runs Cindrly 1.29.1 or newer:** the Android app then shows no way to pay (`noPayments` in `../public/js/android.js`, which the server sends). The APK doesn't decide this, the server does: tick it if kappachat is ever on an older version, where the app still offers supporter payments or memberships (Stripe, Ko-fi): what was paid, when, by whom | optional | App functionality |
 
 Play's form has no separate item for IP addresses. Listing them under *Device or other IDs* is our reading
 *(unverified)*.
@@ -555,7 +557,7 @@ release, or upload the `.aab` there by hand. Recruit 15 to 20 real people so 12 
 
 ### 6.2 Age checks for under-18s
 
-Hearth's minimum age is 13. New laws make app stores and apps check or respect users' ages: **Texas SB2420** and
+Cindrly's minimum age is 13. New laws make app stores and apps check or respect users' ages: **Texas SB2420** and
 **Brazil's Digital ECA** (its law on children and teenagers online). Google offers a *Play Age Signals* API for
 them; its page names Brazil from 17 March 2026 and Texas accounts made after 28 May 2026 *(unverified)*. What
 exactly a developer of a 13+ chat app has to do under each law is **unverified** here, and court challenges may
@@ -566,14 +568,14 @@ library would mean a separate Play-only build, so the IzzyOnDroid and F-Droid bu
 ## 7. Later: F-Droid (not before about January 2027)
 
 F-Droid's main repository builds apps from source itself and wants a project that's been developed for at least
-three months. Hearth's code arrived in this repository on 6 October 2026, so about **January 2027** at the
-earliest. By then Hearth needs:
+three months. Cindrly's code arrived in this repository on 6 October 2026, so about **January 2027** at the
+earliest. By then Cindrly needs:
 
 - a versionCode that's written in the repository instead of taken from the workflow's run number (F-Droid reads
   it from the tagged source), always higher than every code already shipped or uploaded to Play;
 - the launcher icons committed, and the build's extra steps (in `hearth-apps.yml`) moved into
   `../mobile/scripts/patch-android.js`, so F-Droid's build server can run the same steps;
-- ideally a **reproducible build**: F-Droid then ships your own signed APK. Otherwise F-Droid signs Hearth with its
+- ideally a **reproducible build**: F-Droid then ships your own signed APK. Otherwise F-Droid signs Cindrly with its
   own key, and people can't switch between the F-Droid version and the GitHub, IzzyOnDroid or Play version without
   uninstalling (they should save their recovery key first).
 

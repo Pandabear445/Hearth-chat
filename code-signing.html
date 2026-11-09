@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hearth code signing policy</title>
-<meta name="description" content="How the Hearth Windows app is signed, who can release it, and what it sends over the network.">
+<title>Cindrly code signing policy</title>
+<meta name="description" content="How the Cindrly Windows app is signed, who can release it, and what it sends over the network.">
 <link rel="canonical" href="https://pandabear445.github.io/Hearth-chat/code-signing.html">
 <meta name="theme-color" content="#100e16">
 <link rel="icon" href="site/favicon.svg" type="image/svg+xml">
@@ -34,16 +34,16 @@
 </head>
 <body>
 <main>
-  <a class="back" href="./"><img src="site/icon-192.png" alt="" width="28" height="28">Hearth</a>
+  <a class="back" href="./"><img src="site/icon-192.png" alt="" width="28" height="28">Cindrly</a>
   <h1>Code signing policy</h1>
-  <p>How the Hearth apps are signed, who can release them, and what they send over the network.</p>
+  <p>How the Cindrly apps are signed, who can release them, and what they send over the network.</p>
 
   <div class="card"><p>Free code signing provided by <a href="https://signpath.io">SignPath.io</a>, certificate by <a href="https://signpath.org">SignPath Foundation</a>.</p></div>
 
   <h2>What gets signed</h2>
-  <p>The Windows desktop app (<code>Hearth.exe</code>) and its installer (<code>Hearth-Setup-&lt;version&gt;.exe</code>). They are built by GitHub Actions straight from the public source code in <a href="https://github.com/Pandabear445/Hearth-chat/tree/main/hearth">the Hearth repository</a> (the workflow is <code>.github/workflows/hearth-apps.yml</code>). Only release builds are signed: version tags, the main branch and builds started by hand. Every signing request is approved by a person before it's signed.</p>
-  <p>Separately, the desktop app's updates are signed with the publisher's own update key (Ed25519). Builds made with that key install an update only when its signature checks out, its version is newer and the installer's checksum matches, so whoever controls a Hearth server can't make the app install a different program. Builds made without the key (for example a fork's) say so and ask before installing any update. macOS builds don't update themselves.</p>
-  <p>Hearth is open source under the MIT license. Every component it ships is open source too.</p>
+  <p>The Windows desktop app (<code>Hearth.exe</code>) and its installer (<code>Hearth-Setup-&lt;version&gt;.exe</code>). They are built by GitHub Actions straight from the public source code in <a href="https://github.com/Pandabear445/Hearth-chat/tree/main/hearth">the Cindrly repository</a> (the workflow is <code>.github/workflows/hearth-apps.yml</code>). Only release builds are signed: version tags, the main branch and builds started by hand. Every signing request is approved by a person before it's signed.</p>
+  <p>Separately, the desktop app's updates are signed with the publisher's own update key (Ed25519). Builds made with that key install an update only when its signature checks out, its version is newer and the installer's checksum matches, so whoever controls a Cindrly server can't make the app install a different program. Builds made without the key (for example a fork's) say so and ask before installing any update. macOS builds don't update themselves.</p>
+  <p>Cindrly is open source under the MIT license. Every component it ships is open source too.</p>
 
   <h2>Team roles</h2>
   <table>
@@ -55,13 +55,13 @@
 
   <h2 id="privacy">Privacy</h2>
   <p>This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.</p>
-  <p>In practice, the desktop app only connects to the Hearth server you choose when you first open it (or the one your community set up for you). It downloads its updates from that same server and asks you before installing one. It asks before your microphone, camera or clipboard is used for each server, and screen sharing always starts in the app's own picker. If you turn on game or music detection (Settings → Profile → Games &amp; music), it sends the name of the game or song to that server so your friends can see it. Links you click open in your normal web browser. Like any web page, the pages your server sends can load things from other sites, such as the call servers that help connections start, and videos or pictures people share. The app's fonts come from your server.</p>
-  <p>What the apps and the community server collect, and how long it's kept, is in the <a href="privacy.html">Hearth Privacy Policy</a>.</p>
+  <p>In practice, the desktop app only connects to the Cindrly server you choose when you first open it (or the one your community set up for you). It downloads its updates from that same server and asks you before installing one. It asks before your microphone, camera or clipboard is used for each server, and screen sharing always starts in the app's own picker. If you turn on game or music detection (Settings → Profile → Games &amp; music), it sends the name of the game or song to that server so your friends can see it. Links you click open in your normal web browser. Like any web page, the pages your server sends can load things from other sites, such as the call servers that help connections start, and videos or pictures people share. The app's fonts come from your server.</p>
+  <p>What the apps and the community server collect, and how long it's kept, is in the <a href="privacy.html">Cindrly Privacy Policy</a>.</p>
 
   <h2>Reporting a problem</h2>
-  <p>If you think a signed Hearth file was tampered with, or you found a security problem, please open an issue on the <a href="https://github.com/Pandabear445/Hearth-chat/issues">GitHub repository</a> (for security problems, see <code>hearth/SECURITY.md</code> first).</p>
+  <p>If you think a signed Cindrly file was tampered with, or you found a security problem, please open an issue on the <a href="https://github.com/Pandabear445/Hearth-chat/issues">GitHub repository</a> (for security problems, see <code>hearth/SECURITY.md</code> first).</p>
 
-  <footer>Hearth · MIT licensed · <a href="privacy.html">Privacy</a> · <a href="delete-account.html">Delete account</a> · <a href="child-safety.html">Child safety</a> · <a href="./">pandabear445.github.io/Hearth-chat</a></footer>
+  <footer>Cindrly · MIT licensed · <a href="privacy.html">Privacy</a> · <a href="delete-account.html">Delete account</a> · <a href="child-safety.html">Child safety</a> · <a href="./">pandabear445.github.io/Hearth-chat</a></footer>
 </main>
 </body>
 </html>

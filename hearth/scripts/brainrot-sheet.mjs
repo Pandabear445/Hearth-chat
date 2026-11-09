@@ -9,7 +9,7 @@ const fig = (n, cap, cls) => `<figure class="${cls}"><img src="${img(n)}"><figca
 const html = `<!doctype html><html><body style="margin:0;background:#0d0c13;color:#ede9f5;font:15px system-ui,sans-serif;padding:24px;width:1452px;box-sizing:border-box">
 <style>figure{margin:0}figcaption{margin-top:6px;font-size:13px;color:#b9b2c9}img{display:block;border-radius:10px;border:1px solid #2a2635}
 .d img{width:692px}.p img{width:200px}.row{display:flex;gap:20px;margin-bottom:20px;align-items:flex-start}</style>
-<h2 style="margin:0 0 4px">Hearth · Brainrot mode</h2><p style="margin:0 0 18px;color:#b9b2c9">Original gameplay drawn in code (Block Parkour, Rail Runner) under the content; stand-in TikTok players (the e2e test's fake pages); desktop 1400×900 and a 390×844 phone.</p>
+<h2 style="margin:0 0 4px">Cindrly · Brainrot mode</h2><p style="margin:0 0 18px;color:#b9b2c9">Original gameplay drawn in code (Block Parkour, Rail Runner) under the content; stand-in TikTok players (the e2e test's fake pages); desktop 1400×900 and a 390×844 phone.</p>
 <div class="row">${fig('desktop-reels', 'Reels tab, desktop (member list open, so below): Rail Runner, stimulation 3', 'd')}${fig('desktop-together', 'Scrolling together: turned on for everyone, Bob joined in', 'd')}</div>
 <div class="row">${fig('desktop-watch', 'Watch together on a wide screen: gameplay beside the shared video, its title as captions', 'd')}${fig('phone-parkour', 'Phone: 50/50, Block Parkour', 'p')}${fig('phone-runner', 'Phone: Rail Runner', 'p')}</div>
 <div class="row">${fig('desktop-call', 'A call: gameplay under the tiles', 'd')}</div></body></html>`;

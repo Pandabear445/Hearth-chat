@@ -1,15 +1,15 @@
-Hearth is a chat app for friend groups and communities: servers with text and voice channels, direct messages, group chats, and voice and video calls.
+Cindrly is a chat app for friend groups and communities: servers with text and voice channels, direct messages, group chats, and voice and video calls.
 
 Messages and files are end-to-end encrypted on your phone before they are sent, so the server stores them in a form it can't read. Calls are encrypted between the people in them.
 
-The app connects to the free community server, cindrly.com, by default. You can switch to any Hearth server you or your friends run: Settings → Apps & devices → Switch server. Hearth is open source (MIT), and the server runs on your own computer or a small VPS.
+The app connects to the free community server, cindrly.com, by default. You can switch to any Cindrly server you or your friends run: Settings → Apps & devices → Switch server. Cindrly is open source (MIT), and the server runs on your own computer or a small VPS.
 
 WHAT THE ANDROID APP ADDS
-• Notifications about messages and calls, also after you swipe the app away. For that you need a UnifiedPush distributor app, such as ntfy (free). Without one, notifications only arrive while Hearth is open or in the background.
+• Notifications about messages and calls, also after you swipe the app away. For that you need a UnifiedPush distributor app, such as ntfy (free). Without one, notifications only arrive while Cindrly is open or in the background.
 • Calls keep going with the screen locked, with an "In a call" notification that has a Hang up button.
 • Invite links (hearth://invite/...) open in the app.
-• Attachments and exports save to Downloads/Hearth.
-• Links to other websites open in your browser. Only your Hearth server loads inside the app.
+• Attachments and exports save to Downloads/Cindrly.
+• Links to other websites open in your browser. Only your Cindrly server loads inside the app.
 • If your server uses a self-signed certificate, the app shows its fingerprint, asks once, and then remembers that exact certificate.
 
 IN HEARTH

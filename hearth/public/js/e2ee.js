@@ -1,4 +1,4 @@
-// Hearth end-to-end encryption.
+// Cindrly end-to-end encryption.
 //
 // Primitives (the browser's WebCrypto, plus Argon2id via WebAssembly and ML-KEM-768 from public/vendor/ml-kem.js):
 //   Password hardening  Argon2id (64 MiB, 3 passes) with a random per-account salt.
@@ -869,7 +869,7 @@ const keyIn = (k) => (canonicalKey(k) ? k : null);
 // anything about keys, or one with no signing key or another one, is a change: otherwise a server could blank or
 // leave out the key it can't fake and slip in a signing key of its own. A real account never loses its identity key,
 // and never loses its signing key without a new identity key (a password reset gives both).
-// The exception is an account deleted by an older version of Hearth, which cleared both keys: deleted, with neither,
+// The exception is an account deleted by an older version of Cindrly, which cleared both keys: deleted, with neither,
 // there is nothing the server could use, so it's left as it was pinned (calls with a deleted account are refused
 // anyway, secure.js checkSdp). Someone pinned before they had a signing key gets the first one listed for them,
 // unless this device verified them by safety number: those numbers covered "no signing key", so a new one is a

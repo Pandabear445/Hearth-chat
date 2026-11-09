@@ -1,7 +1,7 @@
 # Recovery guide
 
-What you can get back when something goes wrong with a Hearth account or a whole Hearth server, what you can't, and
-how to do it. The first half is for **people using Hearth**, the second for **whoever runs the server**.
+What you can get back when something goes wrong with a Cindrly account or a whole Cindrly server, what you can't, and
+how to do it. The first half is for **people using Cindrly**, the second for **whoever runs the server**.
 
 Every promise here is checked by automated drills, using the app's real encryption code against real servers:
 
@@ -11,7 +11,7 @@ Every promise here is checked by automated drills, using the app's real encrypti
 
 See [Running the drills](#running-the-drills).
 
-> **One rule runs through all of it.** Hearth's messages and files are end-to-end encrypted. Nobody holds a spare
+> **One rule runs through all of it.** Cindrly's messages and files are end-to-end encrypted. Nobody holds a spare
 > key: not the server owner, not the backups, not us. If every copy of a key is gone, what it locked is gone.
 > This guide never promises otherwise.
 
@@ -50,7 +50,7 @@ the old messages, which were locked for the old key, don't.
 
 ---
 
-## For people using Hearth
+## For people using Cindrly
 
 ### Changing your password
 
@@ -67,7 +67,7 @@ the old messages, which were locked for the old key, don't.
 
 - It's 32 letters and numbers. It unlocks a second copy of your private key, which the server keeps locked.
 - The server never sees the recovery key itself.
-- Keep it in a password manager or on paper, **not** in Hearth and not only on the phone you use Hearth on.
+- Keep it in a password manager or on paper, **not** in Cindrly and not only on the phone you use Cindrly on.
 - Making a new one replaces the old one.
 
 ### Forgot your password, with your recovery key
@@ -116,7 +116,7 @@ The reset link still gets you back in, but your device has to make **new encrypt
   - **Older key periods** (before the last key change): stay unreadable for you. Nobody can hand out an old key again.
   - Invite links you made before the reset keep working: you made them, and people may be using them.
   - Only accounts that share a server or group with someone are held back (with nobody to protect it's like a new
-    account, and nobody could verify it). Resets made before Hearth 1.29.0 weren't marked.
+    account, and nobody could verify it). Resets made before Cindrly 1.29.0 weren't marked.
 - Your old posts still show as yours. A device that knew your old key shows them as verified. A device that never
   knew it shows "older key, not verified", because it only has the server's word for that old key.
 - Everything new works normally.
@@ -184,7 +184,7 @@ epoch) and gives it to everyone still there.
 
 `data/backups/encrypted/hearth-<date>.hbk` is one encrypted file with:
 
-- the database (a consistent snapshot, taken while Hearth runs);
+- the database (a consistent snapshot, taken while Cindrly runs);
 - `secret.key` (the key that seals two-factor secrets, API keys and older messages);
 - `vapid.json` (web push);
 - every file in `data/uploads/` (pictures and the encrypted attachments).
@@ -210,7 +210,7 @@ hasn't come yet disappear on schedule.
 ### Making a backup
 
 - Daily and automatic (Admin → Owner → Backups), or with "Back up now".
-- From the command line, while Hearth runs: `node server/cli.js backup`. With Docker:
+- From the command line, while Cindrly runs: `node server/cli.js backup`. With Docker:
   `docker compose exec hearth node server/cli.js backup`.
 
 Each backup is decrypted into a scratch folder and its database is checked as soon as it's made. A backup that
@@ -239,7 +239,7 @@ error, never a partial restore.
 
 ### Restoring, for example onto a new machine
 
-1. Install the **same or a newer** version of Hearth. Run `npm ci` in `hearth/`.
+1. Install the **same or a newer** version of Cindrly. Run `npm ci` in `hearth/`.
 2. Copy the `.hbk` file over. Have the backup key ready (64 hex characters).
 3. Restore into a folder that **doesn't exist yet or is empty**:
    ```bash
@@ -251,10 +251,10 @@ error, never a partial restore.
    |---|---|
    | 0 | Restored, and every file the database refers to is there. |
    | 3 | Restored, but some files the database refers to aren't in the backup (they're listed). Those attachments or pictures will show as unavailable. Run `node server/cli.js check-files` (with `DATA_DIR` set) any time for the same report. |
-   | 2 | Refused: the backup is from a **newer** Hearth. Nothing was restored. Install that version (or newer) and restore with its own `server/cli.js`. |
+   | 2 | Refused: the backup is from a **newer** Cindrly. Nothing was restored. Install that version (or newer) and restore with its own `server/cli.js`. |
    | 1 | Failed: wrong key, damaged file, folder not empty. Nothing usable was restored. |
 
-5. Put `.env` back, then start Hearth with `DATA_DIR=/opt/hearth/data`, or move the folder to `hearth/data/`.
+5. Put `.env` back, then start Cindrly with `DATA_DIR=/opt/hearth/data`, or move the folder to `hearth/data/`.
 6. Sign in and check Admin → Audit log. It verifies, and lists a "new anchor started" entry where the restore happened.
 
 **Safety rails:**
@@ -263,7 +263,7 @@ error, never a partial restore.
 - While a restore is unpacking, the folder holds a file called `RESTORE-INCOMPLETE`. It's removed only as the very
   last step, once the database has been checked.
   - If the restore is killed, the disk fills up or the backup turns out to be damaged, the marker stays (with the
-    reason), and **Hearth refuses to start on that folder**. So a half-restored folder can never pass for a complete one.
+    reason), and **Cindrly refuses to start on that folder**. So a half-restored folder can never pass for a complete one.
   - Delete the folder and restore again.
 
 **Who stays signed in after a restore:**
@@ -294,11 +294,11 @@ error, never a partial restore.
 
 ### Upgrades and rolling back
 
-- Before an upgrade that changes the database (a new database version), Hearth copies the database to
+- Before an upgrade that changes the database (a new database version), Cindrly copies the database to
   `data/backups/hearth-before-v<new version>-<date>.db`.
 - Once an upgrade has gone through, older copies are pruned: the newest `PRE_UPGRADE_KEEP` stay (3 by default;
   `0` keeps them all). The copy that upgrade made always stays, and nothing is pruned while an upgrade keeps
-  failing. Only files named exactly `hearth-before-v<N>-<date>.db` (as Hearth names them) are removed, so to keep
+  failing. Only files named exactly `hearth-before-v<N>-<date>.db` (as Cindrly names them) are removed, so to keep
   one for good, rename it (for example `keep-hearth-before-v18-….db`) or copy it elsewhere.
 - These copies are plain database files, not encrypted, as sensitive as `data/hearth.db` itself: they never leave
   the server and can't be downloaded. Don't copy them elsewhere as they are; the encrypted backups are the ones
@@ -307,7 +307,7 @@ error, never a partial restore.
   - If it's killed half-way (crash, out of memory, power cut), the database is exactly as it was. The next start
     simply runs the upgrade again.
   - The drill kills an upgrade on purpose and checks this, including that the audit log still verifies afterwards.
-- A database written by a **newer** Hearth is refused at start-up, untouched, with a message saying how to get back.
+- A database written by a **newer** Cindrly is refused at start-up, untouched, with a message saying how to get back.
 
 To **roll back** an upgrade:
 
@@ -315,13 +315,13 @@ To **roll back** an upgrade:
   copy of `data/` from before the update.
 - By hand:
 
-1. Stop Hearth.
+1. Stop Cindrly.
 2. Put the old version of the code back.
 3. Move the current database aside: `mv data/hearth.db data/hearth.db.after-upgrade`. Delete `data/hearth.db-wal`
    and `data/hearth.db-shm` if they exist.
 4. Copy the pre-upgrade database into place:
    `cp data/backups/hearth-before-v<N>-<date>.db data/hearth.db`
-5. Start Hearth.
+5. Start Cindrly.
 
 Whatever was written after the upgrade (messages, sign-ups, settings) is not in the old copy. Rolling back past the
 post-quantum change (1.40, database version 26) and upgrading again later works like a restore (above): post-quantum
@@ -369,6 +369,6 @@ npm test                              # includes the drills, the backup edge cas
 ```
 
 - The `upgrade-drill` job in `.github/workflows/hearth-security.yml` runs both drill scripts on every push.
-- `test/fixtures/upgrade-v16-c55a9dc.hfx.gz` is a real version-16 data folder made by Hearth 1.27.1 through its API.
+- `test/fixtures/upgrade-v16-c55a9dc.hfx.gz` is a real version-16 data folder made by Cindrly 1.27.1 through its API.
   It holds throwaway accounts and a throwaway `secret.key`.
 - To make a fixture for another release: `bash scripts/upgrade-drill.sh --write-fixture <ref>`.

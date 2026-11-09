@@ -45,7 +45,7 @@ export const clearAllDrafts = () => {
 // keep a copy of a message's words in this browser, with exp when the message disappears. The signed-in app drops
 // those as their time comes, but only for its own account while it runs. So signing out (or deleting the account)
 // removes every account's from this browser, like drafts: the next person here doesn't get them, and no deadline is
-// left that nobody would keep. And each time Hearth opens, any copy past its deadline goes, whoever it belongs to.
+// left that nobody would keep. And each time Cindrly opens, any copy past its deadline goes, whoever it belongs to.
 // The side view's list (hearth.sideview.<account>, side-view.js) goes with them: which messages someone pinned to the
 // side is theirs alone. (It has no deadlines, so expireLocalCopies leaves it as it is.)
 const COPIES = ['hearth.inbox.', 'hearth.reminders.', 'hearth.sideview.'];
@@ -76,7 +76,7 @@ export function expireLocalCopies(now = Date.now()) {
 }
 
 // ---------------------------------------------------------------- one notification per message
-// With Hearth open in several tabs, each gets every message. Only the first to claim a message shows its
+// With Cindrly open in several tabs, each gets every message. Only the first to claim a message shows its
 // notification and plays its sound. A Web Lock makes the claim atomic between tabs; a short list in
 // localStorage covers tabs that check a moment later.
 const CLAIMED = 'hearth.notified';
@@ -204,7 +204,7 @@ export function createZip() {
 // ---------------------------------------------------------------- export my data
 export const EXPORT_LIMITS = { messages: 200000, perConversation: 50000, attachmentBytes: 500 * 1024 * 1024, fileBytes: 100 * 1024 * 1024 };
 const safeName = (s) => String(s || 'file').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '_').slice(0, 80) || 'file';
-const README = `Hearth data export
+const README = `Cindrly data export
 ==================
 
 This archive was put together on your own device. The server sent your messages encrypted, and your app
@@ -223,7 +223,7 @@ What's inside
 - manifest.json        What was exported, what was skipped and why.
 
 What's not inside
-- Other people's private details: only the names and ids already shown to you in Hearth.
+- Other people's private details: only the names and ids already shown to you in Cindrly.
 - Conversations you can no longer see (servers you left, channels you lost access to).
 - Passwords, keys and sign-in sessions.
 

@@ -1,6 +1,6 @@
 # Import from Discord
 
-Start a new Hearth server with a Discord server's skeleton: its roles, categories, channels and channel
+Start a new Cindrly server with a Discord server's skeleton: its roles, categories, channels and channel
 permissions. This is phase 1 of [design/DISCORD-IMPORT.md](design/DISCORD-IMPORT.md); custom emoji (phase 2) and
 message history (phase 3) aren't built yet.
 
@@ -16,14 +16,14 @@ template before anything is made.
 
 1. In Discord, open the server's settings → **Server Template** and copy the template link (it needs Manage
    Server there). If the template says it has unsynced changes, sync it first.
-2. In Hearth: **Add a server** (the + in the server list) → **Import from Discord**.
-3. Paste the template link. Hearth shows an address on discord.com: open it in your browser. It shows the template
+2. In Cindrly: **Add a server** (the + in the server list) → **Import from Discord**.
+3. Paste the template link. Cindrly shows an address on discord.com: open it in your browser. It shows the template
    as text. Select everything (Ctrl+A), copy it and paste it into the **Template** box. In Firefox, switch to
    **Raw Data** first. You can also save that page (Ctrl+S) and choose the file instead.
 4. **Preview.** You'll see:
    - what will be made, and that you'll own the server, alone, until you invite people;
-   - in an orange box, anything Hearth will allow that Discord didn't (see below);
-   - the roles, highest first, with their Hearth permissions and what they can't bring;
+   - in an orange box, anything Cindrly will allow that Discord didn't (see below);
+   - the roles, highest first, with their Cindrly permissions and what they can't bring;
    - the channels by category, with a lock on private ones and notes on converted ones (a stage, a forum);
    - **These will be skipped**: every permission, channel, category, role and setting that won't come over, and
      why.
@@ -34,7 +34,7 @@ template before anything is made.
    when it expires (FEATURES.md, "Invite links that unfurl"). Then give out the roles (Server settings → Roles, or
    from the member list).
 
-Hearth never contacts Discord for this. The template link only builds the address you open yourself. Hearth
+Cindrly never contacts Discord for this. The template link only builds the address you open yourself. Cindrly
 doesn't ask for, keep or pass on any Discord login or token.
 
 You can paste the whole template, just its `serialized_source_guild` part, or a guild-shaped JSON object with real
@@ -45,17 +45,17 @@ are ordered by their `position`.
 
 ### Permissions
 
-The rule: **where Hearth can't match Discord exactly, it errs toward less, and anything Hearth would allow beyond
-what Discord did is listed before creating** (in the orange box, "Hearth will allow more than Discord did").
+The rule: **where Cindrly can't match Discord exactly, it errs toward less, and anything Cindrly would allow beyond
+what Discord did is listed before creating** (in the orange box, "Cindrly will allow more than Discord did").
 
-- A role gets a Hearth permission only if it had every Discord permission behind it.
-- In a channel override, Hearth allows a permission only if Discord allowed every one behind it. It denies it if
+- A role gets a Cindrly permission only if it had every Discord permission behind it.
+- In a channel override, Cindrly allows a permission only if Discord allowed every one behind it. It denies it if
   Discord denied any of them.
 - Only per-channel permissions are kept in overrides, as when you set them by hand.
-- Some Hearth permissions do more than their Discord namesake, and some exist only server-wide. Those are the
-  ones that can end up allowing more; see "Allowed anyway in Hearth" below.
+- Some Cindrly permissions do more than their Discord namesake, and some exist only server-wide. Those are the
+  ones that can end up allowing more; see "Allowed anyway in Cindrly" below.
 
-| Hearth | Discord |
+| Cindrly | Discord |
 |---|---|
 | View channels | View Channels |
 | Send messages | Send Messages |
@@ -65,7 +65,7 @@ what Discord did is listed before creating** (in the orange box, "Hearth will al
 | Manage messages | Manage Messages |
 | Connect | Connect |
 | Speak | Speak |
-| Create invites | Create Invite (roles only: Hearth invites are for the whole server) |
+| Create invites | Create Invite (roles only: Cindrly invites are for the whole server) |
 | Kick members | Kick Members |
 | Ban members | Ban Members |
 | Manage channels | Manage Channels |
@@ -73,68 +73,68 @@ what Discord did is listed before creating** (in the orange box, "Hearth will al
 | Manage server | Manage Server |
 | Manage emoji | Manage Expressions |
 | Reply in threads | Send Messages in Threads **and** Create Public Threads |
-| Show link previews | Embed Links (it counts server-wide in Hearth: an override can turn previews off in a channel, not on) |
-| Mute members | Mute Members (roles only: a Hearth server mute holds in every voice channel) |
+| Show link previews | Embed Links (it counts server-wide in Cindrly: an override can turn previews off in a channel, not on) |
+| Mute members | Mute Members (roles only: a Cindrly server mute holds in every voice channel) |
 | Move members | Move Members |
 | View audit log | View Audit Log (roles only, as in Discord: each server's own audit log) |
 | Change nickname | Change Nickname (roles only, as in Discord: your own nickname in this server) |
 | Manage nicknames | Manage Nicknames (roles only, as in Discord: other people's, below your highest role) |
 | Administrator | Administrator |
 
-**Covered by a broader Hearth permission.** These aren't reported as lost when the role gets the Hearth one:
+**Covered by a broader Cindrly permission.** These aren't reported as lost when the role gets the Cindrly one:
 
 | Discord | Covered by |
 |---|---|
 | Pin Messages | Manage messages |
 | Bypass Slowmode | Manage messages, or Manage channels in that channel |
-| Timeout Members | Kick members (Hearth timeouts need it) |
+| Timeout Members | Kick members (Cindrly timeouts need it) |
 | Manage Events | Manage server or Manage channels |
 | Manage Webhooks | Manage server or Manage channels |
 | Create Expressions | Manage emoji |
 
-The other way round, a role that gets the broader Hearth permission without the Discord one can do more in Hearth
+The other way round, a role that gets the broader Cindrly permission without the Discord one can do more in Cindrly
 than it could in Discord, and the preview lists it (see below).
 
-**Only in a channel in Discord, server-wide in Hearth.** Manage Channel and Manage Permissions granted in one
-channel come over as that channel's override, but Hearth only lets someone edit a channel, or its permissions,
+**Only in a channel in Discord, server-wide in Cindrly.** Manage Channel and Manage Permissions granted in one
+channel come over as that channel's override, but Cindrly only lets someone edit a channel, or its permissions,
 when they also have Manage channels or Manage roles server-wide. Embed Links is the same: a channel override that
-allows it comes over, but Hearth shows someone's link previews only when they have Show link previews server-wide
+allows it comes over, but Cindrly shows someone's link previews only when they have Show link previews server-wide
 (readers' apps check it), so an override can turn previews off in a channel, not on. A role (or @everyone) that
-had any of these only per channel is listed under "Permissions Hearth can't set per channel".
+had any of these only per channel is listed under "Permissions Cindrly can't set per channel".
 
-**No Hearth equivalent** (listed per role as "can't bring"): Priority Speaker, Send TTS Messages,
+**No Cindrly equivalent** (listed per role as "can't bring"): Priority Speaker, Send TTS Messages,
 View Server Insights, Deafen Members, Request to Speak, Manage Threads, Create Private Threads, Use External
 Stickers, View Monetization Analytics, Use Soundboard, Use External Sounds, Set Voice Channel Status and Use External
-Apps. Unknown bits are listed by number. (Change Nickname and Manage Nicknames come over: Hearth has per-server
+Apps. Unknown bits are listed by number. (Change Nickname and Manage Nicknames come over: Cindrly has per-server
 nicknames, server-wide permissions as in Discord.)
 
-**Allowed anyway in Hearth.** The preview lists each of these, with who or which channel, before creating:
+**Allowed anyway in Cindrly.** The preview lists each of these, with who or which channel, before creating:
 
-- Things Discord can withhold but Hearth has no separate permission for, when @everyone lacks one or an override
+- Things Discord can withhold but Cindrly has no separate permission for, when @everyone lacks one or an override
   denies one:
-  - Read Message History: anyone who can see a Hearth channel can read all of it. This is the one that matters
+  - Read Message History: anyone who can see a Cindrly channel can read all of it. This is the one that matters
     most.
   - Create Events: anyone who can post in a channel can make events.
   - Create Polls and Send Voice Messages: anyone who can post (and attach files) can.
   - Video, Use Voice Activity, Use Application Commands and Use Activities.
-- What a Hearth permission includes that the role didn't have in Discord:
+- What a Cindrly permission includes that the role didn't have in Discord:
   - Kick members also times people out (Timeout Members).
   - Manage channels and Manage server also manage webhooks, which post under any name, and change or delete
     anyone's events (Manage Webhooks, Manage Events).
   - Manage messages also pins (Pin Messages), and Manage messages or Manage channels also skip slowmode
     (Bypass Slowmode).
 - A channel override that took one of those away (a Pin Messages deny for a role that can manage messages
-  there, say), or took away something Hearth only has server-wide: Create Invite (Hearth invites are for the
-  whole server) and Mute Members (a Hearth server mute holds in every voice channel). Only where the role could
+  there, say), or took away something Cindrly only has server-wide: Create Invite (Cindrly invites are for the
+  whole server) and Mute Members (a Cindrly server mute holds in every voice channel). Only where the role could
   see the channel in Discord: a channel nobody could see took nothing away.
-- Overrides past Hearth's 100 per channel (or past the 300 per channel the importer reads) that held a role back.
+- Overrides past Cindrly's 100 per channel (or past the 300 per channel the importer reads) that held a role back.
 
-Not in the preview, because Discord has no permission to compare it with: in Hearth, members who can Manage
+Not in the preview, because Discord has no permission to compare it with: in Cindrly, members who can Manage
 messages, Kick members or Ban members also see the reports people send about this server (Server settings →
 Reports, without who sent them; [FEATURES.md](FEATURES.md)).
 
 Use External Emoji is allowed anyway too, without a warning: custom emoji from any server work everywhere in
-Hearth.
+Cindrly.
 
 An @everyone with Administrator needs its own confirmation ("everyone who joins could do anything"). An @everyone
 with moderator powers (Manage anything, Manage emoji, Manage nicknames, View audit log, Kick, Ban, Mute or Move
@@ -144,7 +144,7 @@ a channel that gives @everyone Manage messages, Move members, Manage channel, Ma
 
 ### Roles
 
-- @everyone becomes the server's @everyone role. A default Discord @everyone becomes exactly Hearth's default.
+- @everyone becomes the server's @everyone role. A default Discord @everyone becomes exactly Cindrly's default.
 - The other roles keep Discord's order, from position 1 up. You're the owner, above all of them.
 - At most 99 roles come over: with @everyone, that's a server's 100. If there are more, the lowest stay behind
   (marked "over the 100 roles"). Leaving out others makes room for them.
@@ -155,25 +155,25 @@ a channel that gives @everyone Manage messages, Move members, Manage channel, Ma
 
 ### Categories and channels
 
-| Discord | Hearth |
+| Discord | Cindrly |
 |---|---|
 | Text (0) | text channel |
-| Announcement (5) | text channel (following it from other servers isn't something Hearth has) |
+| Announcement (5) | text channel (following it from other servers isn't something Cindrly has) |
 | Forum and media (15, 16) | text channel (posts and tags don't come with a template) |
 | Voice (2) | voice channel |
 | Stage (13) | voice channel where @everyone can't speak; roles that could speak there without being brought up in Discord can (Mute Members and Speak in that stage, after its overrides) |
 | Category (4) | a category; one with no channels left is skipped |
 | Threads (10–12), directory (14), anything else | skipped, by type |
 
-- Channels without a category go first under "Text" (text ones) or last under "Voice" (voice ones), as Hearth does.
-- Two categories whose names differ only in case become "General" and "general (2)", since Hearth groups
+- Channels without a category go first under "Text" (text ones) or last under "Voice" (voice ones), as Cindrly does.
+- Two categories whose names differ only in case become "General" and "general (2)", since Cindrly groups
   channels by name.
 - In each category, text channels come before voice ones, each in Discord's order.
-- Text channel names are cleaned exactly as Hearth cleans them: lower case, spaces become dashes, and anything
+- Text channel names are cleaned exactly as Cindrly cleans them: lower case, spaces become dashes, and anything
   but letters a–z, digits, `-` and `_` goes. So `📢・announcements` becomes `announcements`. A name with nothing
   left (`公告`) becomes `channel-<its position>`. Voice channel names are kept as they are, up to 48 characters.
 - Topics are cut to 300 characters. Slowmode (0–6 hours) comes over for text channels, and for voice channels too,
-  where it applies to their chat (Hearth's voice channels have a text chat, like Discord's).
+  where it applies to their chat (Cindrly's voice channels have a text chat, like Discord's).
 - Skipped and listed in the report: a category's own permissions (each channel keeps its own, which is what
   Discord shows anyway), permissions for single members (a template has no members), overrides for roles that
   aren't coming, age-restricted (NSFW) flags, voice user limits and forum tags.
@@ -186,7 +186,7 @@ a channel that gives @everyone Manage messages, Move members, Manage channel, Ma
   only, the same applies here, with the same message.
 - 5 imported servers an hour per account (a refused attempt doesn't count), 30 attempts an hour, and 60 previews
   per 10 minutes, plus a ceiling per network.
-- At most 500 channels, 50 categories (Hearth's limit for a server's category order) and 5,000 channel
+- At most 500 channels, 50 categories (Cindrly's limit for a server's category order) and 5,000 channel
   permissions in all, counting the ones a stage adds for its speakers (every member's app loads them all with the
   server). Over that, the preview says so and Create stays off until you leave some out. At most 99 roles (above)
   and 100 overrides per channel.

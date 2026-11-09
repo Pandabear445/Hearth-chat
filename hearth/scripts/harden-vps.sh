@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hearth server hardening — locks down a Debian/Ubuntu VPS that runs Hearth. Safe to run again any time.
+# Cindrly server hardening — locks down a Debian/Ubuntu VPS that runs Cindrly. Safe to run again any time.
 #
 #   sudo bash scripts/harden-vps.sh               explains each step and asks before changing anything
 #   sudo bash scripts/harden-vps.sh --dry-run     only shows what it would do (changes nothing)
@@ -13,7 +13,7 @@
 #   2. SSH: key-only logins (only if you already have an SSH key set up, so you can't be locked out).
 #   3. fail2ban: blocks addresses that keep guessing SSH passwords.
 #   4. Automatic security updates.
-#   5. Runs Hearth as its own unprivileged user in a sandbox (systemd installs).
+#   5. Runs Cindrly as its own unprivileged user in a sandbox (systemd installs).
 #   6. Checks for common risky settings and lists what's reachable from the internet.
 set -Eeuo pipefail
 
@@ -106,7 +106,7 @@ if ! [[ " ${ID:-} ${ID_LIKE:-} " =~ \ (debian|ubuntu)\  ]]; then
   warn "This isn't Debian/Ubuntu (${PRETTY_NAME:-unknown}); the dry run continues, but a real run would stop here."
 fi
 
-# Find Hearth: the folder this script is in, hearth-update's saved location, or a search.
+# Find Cindrly: the folder this script is in, hearth-update's saved location, or a search.
 find_hearth() {
   local here d; here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
   for d in "${HEARTH_DIR:-}" "$here" "$(cat /etc/hearth-update.conf 2>/dev/null || true)"; do
@@ -117,13 +117,13 @@ find_hearth() {
   return 1
 }
 DIR="$(find_hearth || true)"
-envval() { # one setting from Hearth's .env (empty if not set)
+envval() { # one setting from Cindrly's .env (empty if not set)
   [ -n "$DIR" ] || return 0
   { grep -E "^\s*$1\s*=" "$DIR/.env" 2>/dev/null || true; } | tail -1 | sed -E "s/^\s*$1\s*=\s*//; s/^['\"]//; s/['\"]\s*$//; s/\r$//"
 }
 PORT="$(envval PORT)"; PORT="${PORT:-3000}"
 
-# How does Hearth run? (same detection as hearth-update)
+# How does Cindrly run? (same detection as hearth-update)
 DC=""
 if docker compose version >/dev/null 2>&1; then DC="docker compose"; elif has docker-compose; then DC="docker-compose"; fi
 find_unit() {
@@ -148,7 +148,7 @@ elif [ -f /etc/systemd/system/hearth.service ]; then
   DIR="$(sed -n 's/^[[:space:]]*WorkingDirectory=[[:space:]]*//p' /etc/systemd/system/hearth.service | head -1 | sed -E 's/^"//; s/"[[:space:]]*$//')"
 fi
 
-# Is a web server (Caddy, nginx, …) in front of Hearth, answering on 443?
+# Is a web server (Caddy, nginx, …) in front of Cindrly, answering on 443?
 PROXY=""
 if ss -H -tlnp 2>/dev/null | awk '$4 ~ /:443$/' | grep -qE 'caddy|nginx|apache|httpd|haproxy|traefik|docker-proxy'; then
   PROXY="$(ss -H -tlnp 2>/dev/null | awk '$4 ~ /:443$/' | grep -oE 'caddy|nginx|apache2?|httpd|haproxy|traefik|docker-proxy' | head -1)"
@@ -171,12 +171,12 @@ ssh_ports() {
 mapfile -t SSH_PORTS < <(ssh_ports)
 [ ${#SSH_PORTS[@]} -gt 0 ] || SSH_PORTS=(22)
 
-title "Hearth server hardening"
+title "Cindrly server hardening"
 [ "$DRY" = 1 ] && say "DRY RUN: nothing will be changed; you'll see what would happen."
 say "System:       ${PRETTY_NAME:-unknown}"
-say "Hearth:       ${DIR:-not found on this server} ($( case $MODE in docker) echo "Docker";; systemd) echo "systemd service $UNIT";; pm2) echo "pm2";; plain) echo "plain node";; *) echo "not running";; esac ))"
-say "Hearth port:  $PORT"
-say "In front:     ${PROXY:-nothing on port 443 (Hearth is reached directly)}"
+say "Cindrly:       ${DIR:-not found on this server} ($( case $MODE in docker) echo "Docker";; systemd) echo "systemd service $UNIT";; pm2) echo "pm2";; plain) echo "plain node";; *) echo "not running";; esac ))"
+say "Cindrly port:  $PORT"
+say "In front:     ${PROXY:-nothing on port 443 (Cindrly is reached directly)}"
 say "SSH port(s):  ${SSH_PORTS[*]}"
 
 # ================================================================ 1. firewall
@@ -200,7 +200,7 @@ if [ "$DO_FW" = 1 ]; then
   HEARTH_DIRECT=0
   if [ -z "$PROXY" ] && [ "$MODE" != none ] && [ "$MODE" != docker ]; then HEARTH_DIRECT=1; fi
   if [ "$HEARTH_DIRECT" = 1 ]; then
-    say "Nothing answers on port 443, so people seem to reach Hearth directly on port $PORT. To avoid taking your site offline, $PORT/tcp stays open. Once Caddy is in front (see README: 'On a VPS with a domain'), run this again and it will be closed."
+    say "Nothing answers on port 443, so people seem to reach Cindrly directly on port $PORT. To avoid taking your site offline, $PORT/tcp stays open. Once Caddy is in front (see README: 'On a VPS with a domain'), run this again and it will be closed."
   fi
   if ask "Set up the firewall now?"; then
     if ! has ufw; then apt_install ufw || true; fi
@@ -212,8 +212,8 @@ if [ "$DO_FW" = 1 ]; then
       runq ufw allow 80/tcp comment 'web (Caddy)'
       runq ufw allow 443/tcp comment 'web (Caddy)'
       runq ufw allow 443/udp comment 'web HTTP/3 (Caddy)'
-      for r in "${TURN_RULES[@]}"; do runq ufw allow "$r" comment 'Hearth call relay (coturn)'; done
-      [ "$HEARTH_DIRECT" = 1 ] && runq ufw allow "$PORT/tcp" comment 'Hearth (direct, no proxy)'
+      for r in "${TURN_RULES[@]}"; do runq ufw allow "$r" comment 'Cindrly call relay (coturn)'; done
+      [ "$HEARTH_DIRECT" = 1 ] && runq ufw allow "$PORT/tcp" comment 'Cindrly (direct, no proxy)'
       [ ${#TURN_RULES[@]} -gt 0 ] && ok "Call relay ports allowed: ${TURN_RULES[*]}"
       ssh_rule_ok=1
       if [ "$DRY" = 0 ]; then
@@ -228,7 +228,7 @@ if [ "$DO_FW" = 1 ]; then
         else
           runq ufw --force enable; ok "Firewall switched on."
         fi
-        CHANGED+=("Firewall (ufw): incoming blocked except SSH ${SSH_PORTS[*]}, 80/tcp, 443/tcp+udp${TURN_RULES:+, relay ${TURN_RULES[*]}}$( [ "$HEARTH_DIRECT" = 1 ] && echo ", $PORT/tcp (Hearth direct)")")
+        CHANGED+=("Firewall (ufw): incoming blocked except SSH ${SSH_PORTS[*]}, 80/tcp, 443/tcp+udp${TURN_RULES:+, relay ${TURN_RULES[*]}}$( [ "$HEARTH_DIRECT" = 1 ] && echo ", $PORT/tcp (Cindrly direct)")")
         if ufw status 2>/dev/null | grep -qE "^$PORT(/tcp)?\s+ALLOW" && [ "$HEARTH_DIRECT" = 0 ]; then
           warn "An older firewall rule still allows port $PORT. With Caddy in front it isn't needed: sudo ufw delete allow $PORT/tcp  (and/or: sudo ufw delete allow $PORT)"
         fi
@@ -287,7 +287,7 @@ if [ "$DO_SSH" = 1 ]; then
     root_val="prohibit-password"; [ "$root_now" = no ] && root_val=no
     prev=""; [ -f "$SSH_DROPIN" ] && prev="$(cat "$SSH_DROPIN")"
     if put_file "$SSH_DROPIN" 0644 <<CONF
-# Written by Hearth's scripts/harden-vps.sh. Delete this file and reload ssh to undo.
+# Written by Cindrly's scripts/harden-vps.sh. Delete this file and reload ssh to undo.
 # (Its name starts with 10- so it's read before other files here: for SSH, the first setting found wins.)
 PasswordAuthentication no
 KbdInteractiveAuthentication no
@@ -327,7 +327,7 @@ if [ "$DO_F2B" = 1 ]; then
     apt_install fail2ban python3-systemd || true
     ports_csv="$(IFS=,; echo "${SSH_PORTS[*]}")"
     if put_file /etc/fail2ban/jail.d/hearth-sshd.local 0644 <<CONF
-# Written by Hearth's scripts/harden-vps.sh
+# Written by Cindrly's scripts/harden-vps.sh
 [sshd]
 enabled  = true
 port     = $ports_csv
@@ -351,12 +351,12 @@ fi
 if [ "$DO_UPD" = 1 ]; then
   title "4. Automatic security updates"
   say "Installs security fixes for the system every day by itself (only security updates, from Debian/Ubuntu)."
-  if [ "$AUTO_REBOOT" = 1 ]; then say "Because of --auto-reboot, the server restarts at 04:00 when an update needs it (e.g. a new kernel). Hearth starts again by itself."
+  if [ "$AUTO_REBOOT" = 1 ]; then say "Because of --auto-reboot, the server restarts at 04:00 when an update needs it (e.g. a new kernel). Cindrly starts again by itself."
   else say "The server is never restarted automatically. When an update needs a restart, you'll find /var/run/reboot-required; restart when it suits you (add --auto-reboot to do that at 04:00 by itself)."; fi
   if ask "Switch on automatic security updates?"; then
     apt_install unattended-upgrades || true
     put_file /etc/apt/apt.conf.d/20auto-upgrades 0644 <<'CONF' && CHANGED+=("Automatic security updates: on (daily)")
-// Written by Hearth's scripts/harden-vps.sh
+// Written by Cindrly's scripts/harden-vps.sh
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::AutocleanInterval "7";
@@ -365,18 +365,18 @@ CONF
 Unattended-Upgrade::Automatic-Reboot-Time "04:00";'
     else reboot_cfg='Unattended-Upgrade::Automatic-Reboot "false";'; fi
     put_file /etc/apt/apt.conf.d/52hearth-unattended-upgrades 0644 <<CONF && CHANGED+=("Automatic restart after updates: $( [ "$AUTO_REBOOT" = 1 ] && echo "on, at 04:00" || echo off)")
-// Written by Hearth's scripts/harden-vps.sh (overrides 50unattended-upgrades; which updates are installed is set there).
+// Written by Cindrly's scripts/harden-vps.sh (overrides 50unattended-upgrades; which updates are installed is set there).
 $reboot_cfg
 Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 CONF
     runq systemctl enable --now unattended-upgrades || true
     ok "Security updates will install automatically."
-    say "Not covered: Docker images and Node.js from other sources. Hearth's own updates come through hearth-update; rebuild Docker images now and then with: docker compose pull && docker compose up -d --build"
+    say "Not covered: Docker images and Node.js from other sources. Cindrly's own updates come through hearth-update; rebuild Docker images now and then with: docker compose pull && docker compose up -d --build"
   else SKIPPED+=("Automatic security updates (you chose to skip it)"); fi
 fi
 
-# ================================================================ 5. Hearth as its own user
+# ================================================================ 5. Cindrly as its own user
 health_ok() { # $1 attempts, 2 s apart
   local host scheme out; host="$(envval HOST)"
   case "$host" in ""|0.0.0.0|::|"[::]") host=127.0.0.1 ;; *:*) host="[$host]" ;; esac
@@ -400,19 +400,19 @@ harden_systemd() {
   [ -f "$unit_file" ] || { warn "Couldn't find the file for $UNIT."; return 0; }
   cur_user="$(sed -nE 's/^\s*User\s*=\s*//p' "$unit_file" | tail -1 | tr -d '"[:space:]')"
   if [ -n "$cur_user" ] && [ "$cur_user" != root ] && [ "$cur_user" != 0 ]; then
-    ok "Hearth already runs as '$cur_user', not root."
+    ok "Cindrly already runs as '$cur_user', not root."
     if ! grep -qE '^\s*ProtectSystem\s*=' "$unit_file"; then
       say "Tip: it isn't sandboxed yet. Compare $unit_file with deploy/hearth.service and copy the '# ---- Sandbox ----' lines into it (then: systemctl daemon-reload && systemctl restart $UNIT)."
       NEXT+=("Add the sandbox settings from deploy/hearth.service to $unit_file.")
     fi
     return 0
   fi
-  say "Hearth's service ($UNIT) runs as root, so a bug in Hearth or one of its libraries would give an attacker the whole server. This creates a 'hearth' user that can only write Hearth's data folder, and runs Hearth in a sandbox (read-only system, no root powers). The program files stay owned by root, so Hearth can't change its own code. If Hearth doesn't come back up, the old setup is put back automatically."
-  ask "Run Hearth as its own sandboxed user?" || { SKIPPED+=("Hearth service user (you chose to skip it)"); return 0; }
+  say "Cindrly's service ($UNIT) runs as root, so a bug in Cindrly or one of its libraries would give an attacker the whole server. This creates a 'hearth' user that can only write Cindrly's data folder, and runs Cindrly in a sandbox (read-only system, no root powers). The program files stay owned by root, so Cindrly can't change its own code. If Cindrly doesn't come back up, the old setup is put back automatically."
+  ask "Run Cindrly as its own sandboxed user?" || { SKIPPED+=("Cindrly service user (you chose to skip it)"); return 0; }
 
   wd="$(sed -n 's/^[[:space:]]*WorkingDirectory=[[:space:]]*//p' "$unit_file" | head -1 | sed -E 's/^"//; s/"[[:space:]]*$//; s/[[:space:]]+$//')"
   wd="${wd:-$DIR}"
-  [ -f "$wd/server/index.js" ] || { warn "The service's folder ($wd) doesn't look like Hearth; left alone."; SKIPPED+=("Hearth service user (unknown folder)"); return 0; }
+  [ -f "$wd/server/index.js" ] || { warn "The service's folder ($wd) doesn't look like Cindrly; left alone."; SKIPPED+=("Cindrly service user (unknown folder)"); return 0; }
   DIR="$wd"
   exec_line="$(sed -nE 's/^\s*ExecStart\s*=\s*-?//p' "$unit_file" | head -1)"
   node="${exec_line%% *}"
@@ -421,10 +421,10 @@ harden_systemd() {
   data="$(abs_in "$wd" "$(envval DATA_DIR)")"; [ -n "$(envval DATA_DIR)" ] || data="$wd/data"
   dl="$(envval DOWNLOADS_DIR)"; [ -n "$dl" ] && dl="$(abs_in "$wd" "$dl")"
 
-  # Things that would stop a non-root Hearth from working: say so instead of breaking the site.
+  # Things that would stop a non-root Cindrly from working: say so instead of breaking the site.
   if [ -z "$node" ] || [ ! -x "$node" ]; then reason="Node.js wasn't found"
   elif [[ "$node" == /root/* || "$node" == /home/* ]]; then reason="Node.js is installed inside a home folder ($node, e.g. with nvm), which the hearth user can't (and shouldn't) see. Install Node system-wide (e.g. from nodesource.com or your distribution) and run this again"
-  elif [[ "$wd" == /root/* ]]; then reason="Hearth lives in /root ($wd), which only root can open. Move it, e.g.: systemctl stop $UNIT && mv '$wd' /opt/hearth, set WorkingDirectory=/opt/hearth in $unit_file, then run this again"
+  elif [[ "$wd" == /root/* ]]; then reason="Cindrly lives in /root ($wd), which only root can open. Move it, e.g.: systemctl stop $UNIT && mv '$wd' /opt/hearth, set WorkingDirectory=/opt/hearth in $unit_file, then run this again"
   fi
   local port_n="${PORT//[^0-9]/}"; local low_port=0; [ -n "$port_n" ] && [ "$port_n" -lt 1024 ] && low_port=1
   for k in SSL_CERT SSL_KEY; do
@@ -433,15 +433,15 @@ harden_systemd() {
       reason="${reason:-$k points into /etc/letsencrypt, which only root can read. Put Caddy in front instead (README: 'On a VPS with a domain'), or give the hearth group read access to that certificate, then run this again}"
     fi
   done
-  if [ -n "$reason" ]; then loud "Hearth's service NOT changed: $reason."; SKIPPED+=("Hearth service user ($reason)"); return 0; fi
+  if [ -n "$reason" ]; then loud "Cindrly's service NOT changed: $reason."; SKIPPED+=("Cindrly service user ($reason)"); return 0; fi
 
   step "Creating the 'hearth' system user (no password, no login shell)…"
   if ! id hearth >/dev/null 2>&1; then
     run useradd --system --user-group --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin hearth
   else ok "User 'hearth' already exists."; fi
   if [ "$DRY" = 0 ] && ! runuser -u hearth -- test -r "$wd/server/index.js" -a -x "$wd/node_modules" -a -x "$node"; then
-    loud "Hearth's service NOT changed: the hearth user can't read $wd (a parent folder is private). Move Hearth to /opt/hearth (or make its folders readable), then run this again."
-    SKIPPED+=("Hearth service user (folder not readable for the hearth user)"); return 0
+    loud "Cindrly's service NOT changed: the hearth user can't read $wd (a parent folder is private). Move Cindrly to /opt/hearth (or make its folders readable), then run this again."
+    SKIPPED+=("Cindrly service user (folder not readable for the hearth user)"); return 0
   fi
 
   # Build the new unit from deploy/hearth.service, with this server's paths.
@@ -454,7 +454,7 @@ harden_systemd() {
   new="$(awk -v wd="$(esc_unit "$wd")" -v ex="$(esc_unit "$node") server/index.js" -v rw="$rw" -v env="$envkeep" \
              -v home="$( [[ "$wd" == /home/* ]] && echo read-only || echo yes)" -v low="$low_port" '
     /^# The easy way|^# By hand|^#   sudo |^#   Copy this file|^#   and the node path|^#   sudo systemctl daemon-reload/ { next }
-    /^# systemd unit to run Hearth/ { print "# Hearth chat server — installed by scripts/harden-vps.sh from deploy/hearth.service."; next }
+    /^# systemd unit to run Cindrly/ { print "# Cindrly chat server — installed by scripts/harden-vps.sh from deploy/hearth.service."; next }
     /^WorkingDirectory=/ { print "WorkingDirectory=" wd; next }
     /^ExecStart=/ { print "ExecStart=" ex; next }
     /^ReadWritePaths=/ { print "ReadWritePaths=" rw; next }
@@ -473,7 +473,7 @@ harden_systemd() {
     printf '%s\n' "$new" | put_file "$target" 0644 || true
     run systemctl daemon-reload; run systemctl stop "$UNIT"
     run chown -R hearth:hearth "$data"; run systemctl start "$UNIT"
-    say "…then it checks that Hearth answers on port $PORT, and puts the old service back if it doesn't."
+    say "…then it checks that Cindrly answers on port $PORT, and puts the old service back if it doesn't."
     return 0
   fi
 
@@ -484,25 +484,25 @@ harden_systemd() {
   local eff_user; eff_user="$(systemctl show -p User --value "$UNIT" 2>/dev/null || true)"
   if [ "$eff_user" = hearth ]; then
     # Stop first, so the old (root) process can't create new root-owned files after the hand-over.
-    step "Restarting Hearth as the hearth user (a few seconds offline)…"
+    step "Restarting Cindrly as the hearth user (a few seconds offline)…"
     systemctl stop "$UNIT" || true
     install -d -o hearth -g hearth -m 0700 "$data"
     chown -R hearth:hearth "$data"
     if [ -n "$dl" ]; then mkdir -p "$dl"; chown -R hearth:hearth "$dl"; fi
     if [ -f "$env_file" ]; then
       env_mode="$(stat -c %a "$env_file")"; env_group="$(stat -c %g "$env_file")"
-      chgrp hearth "$env_file"; chmod 640 "$env_file"   # Hearth can read its settings; other users can't
+      chgrp hearth "$env_file"; chmod 640 "$env_file"   # Cindrly can read its settings; other users can't
     fi
     systemctl start "$UNIT" || true
-    step "Checking that Hearth answers…"
+    step "Checking that Cindrly answers…"
     if health_ok 30; then
-      ok "Hearth now runs as the 'hearth' user in a sandbox. Old service saved as $saved"
-      CHANGED+=("Hearth runs as user 'hearth' with the sandboxed $UNIT (data: $data)")
-      NEXT+=("Hearth's command-line tool now runs as that user: cd '$wd' && sudo -u hearth node server/cli.js …")
+      ok "Cindrly now runs as the 'hearth' user in a sandbox. Old service saved as $saved"
+      CHANGED+=("Cindrly runs as user 'hearth' with the sandboxed $UNIT (data: $data)")
+      NEXT+=("Cindrly's command-line tool now runs as that user: cd '$wd' && sudo -u hearth node server/cli.js …")
       say "How locked down it is now: systemd-analyze security $UNIT"
       return 0
     fi
-    warn "Hearth didn't answer as the new user. Its last log lines:"
+    warn "Cindrly didn't answer as the new user. Its last log lines:"
     journalctl -u "$UNIT" -n 25 --no-pager 2>/dev/null || true
   else
     warn "Something else sets the service's user (now: '${eff_user:-root}'); check: systemctl cat $UNIT"
@@ -511,40 +511,40 @@ harden_systemd() {
   if [ "$unit_file" = "$target" ]; then cp -a "$saved" "$target"; else rm -f "$target"; fi
   if [ -n "$env_mode" ]; then chgrp "$env_group" "$env_file"; chmod "$env_mode" "$env_file"; fi
   systemctl daemon-reload; systemctl restart "$UNIT" || true
-  if health_ok 20; then ok "Hearth is running again as before (the data folder now belongs to 'hearth'; root can still use it)."
-  else loud "Hearth isn't answering. Check: journalctl -u $UNIT -n 50"; fi
-  SKIPPED+=("Hearth service user (didn't come up; rolled back to the old service)")
+  if health_ok 20; then ok "Cindrly is running again as before (the data folder now belongs to 'hearth'; root can still use it)."
+  else loud "Cindrly isn't answering. Check: journalctl -u $UNIT -n 50"; fi
+  SKIPPED+=("Cindrly service user (didn't come up; rolled back to the old service)")
 }
 
 harden_docker() {
   local uid="" bind
   uid="$(docker exec "$CID" sh -c 'awk "/^Uid:/ { print \$2 }" /proc/1/status' 2>/dev/null || true)"
   if [ "$uid" = 0 ]; then
-    say "Hearth's container runs as root."
-  elif [ -n "$uid" ]; then ok "Hearth's container already runs as an unprivileged user (uid $uid)."; fi
+    say "Cindrly's container runs as root."
+  elif [ -n "$uid" ]; then ok "Cindrly's container already runs as an unprivileged user (uid $uid)."; fi
   if ! grep -qE '^\s*user:\s*"?1000' "$DIR/docker-compose.yml" 2>/dev/null; then
-    say "Your docker-compose.yml is from before the security update (hearth-update never replaces it, so your own changes are kept). The new one in this download runs Hearth as an unprivileged user on a read-only filesystem without any root powers, keeps port $PORT private behind Caddy, and fixes the data folder's owner by itself. To switch:"
+    say "Your docker-compose.yml is from before the security update (hearth-update never replaces it, so your own changes are kept). The new one in this download runs Cindrly as an unprivileged user on a read-only filesystem without any root powers, keeps port $PORT private behind Caddy, and fixes the data folder's owner by itself. To switch:"
     say "  cd '$DIR' && cp docker-compose.yml docker-compose.yml.old"
-    say "  copy docker-compose.yml from the new Hearth download over it (re-add any changes you made)"
+    say "  copy docker-compose.yml from the new Cindrly download over it (re-add any changes you made)"
     say "  docker compose up -d --build        (with a domain: docker compose --profile domain up -d --build)"
     NEXT+=("Docker: switch to the new docker-compose.yml (see step 5 above).")
   else ok "docker-compose.yml already has the hardened settings."; fi
   bind="$(docker port "$CID" 3000/tcp 2>/dev/null | head -1 || true)"
   if [ -n "$PROXY" ] && [[ "$bind" == 0.0.0.0:* || "$bind" == "[::]:"* || "$bind" == :::* ]]; then
-    warn "Hearth's port is published on all addresses ($bind). Docker goes around the firewall, so it's reachable from the internet, not just through Caddy. Put HEARTH_BIND=127.0.0.1 in $DIR/.env, then: docker compose --profile domain up -d"
+    warn "Cindrly's port is published on all addresses ($bind). Docker goes around the firewall, so it's reachable from the internet, not just through Caddy. Put HEARTH_BIND=127.0.0.1 in $DIR/.env, then: docker compose --profile domain up -d"
   fi
 }
 
 if [ "$DO_SVC" = 1 ]; then
-  title "5. Run Hearth without root"
+  title "5. Run Cindrly without root"
   case $MODE in
     systemd) harden_systemd ;;
     docker) harden_docker ;;
     pm2|plain)
-      say "Hearth is started with $( [ "$MODE" = plain ] && echo "a plain node command" || echo pm2 ) here, so this script leaves it alone. Safer: run it as a systemd service with deploy/hearth.service (its own user, sandboxed, restarts by itself) — copy it to /etc/systemd/system/, follow the steps at its top, stop the $MODE copy, then run this script again."
-      NEXT+=("Move Hearth from $MODE to the systemd service in deploy/hearth.service.")
+      say "Cindrly is started with $( [ "$MODE" = plain ] && echo "a plain node command" || echo pm2 ) here, so this script leaves it alone. Safer: run it as a systemd service with deploy/hearth.service (its own user, sandboxed, restarts by itself) — copy it to /etc/systemd/system/, follow the steps at its top, stop the $MODE copy, then run this script again."
+      NEXT+=("Move Cindrly from $MODE to the systemd service in deploy/hearth.service.")
       ;;
-    *) say "Hearth isn't running on this server (or wasn't found), so there's nothing to change here." ;;
+    *) say "Cindrly isn't running on this server (or wasn't found), so there's nothing to change here." ;;
   esac
 fi
 
@@ -604,9 +604,9 @@ if has ss; then
     prog="$(grep -oE '"[^"]+"' <<<"$rest" | head -1 | tr -d '"')"
     if [ "$port" = "$PORT" ] && [ "$proto" = tcp ] && [ -n "$PROXY" ]; then
       if [ "$MODE" = docker ] || [ "$prog" = docker-proxy ]; then
-        warn "Hearth's port $PORT listens on all addresses ($addr) although $PROXY is in front, and Docker goes around the firewall. Set HEARTH_BIND=127.0.0.1 in .env and run: docker compose --profile domain up -d"
+        warn "Cindrly's port $PORT listens on all addresses ($addr) although $PROXY is in front, and Docker goes around the firewall. Set HEARTH_BIND=127.0.0.1 in .env and run: docker compose --profile domain up -d"
       else
-        warn "Hearth's port $PORT listens on all addresses ($addr) although $PROXY is in front.$( [ "$UFW_ON" = 1 ] && echo " The firewall blocks it, but better:") put HOST=127.0.0.1 in $DIR/.env and restart Hearth."
+        warn "Cindrly's port $PORT listens on all addresses ($addr) although $PROXY is in front.$( [ "$UFW_ON" = 1 ] && echo " The firewall blocks it, but better:") put HOST=127.0.0.1 in $DIR/.env and restart Cindrly."
       fi
       continue
     fi

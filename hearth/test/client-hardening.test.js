@@ -394,7 +394,7 @@ test('infra-1: the install dialog always asks, and says when an update can\'t be
   assert.equal(unverified.defaultId, 0, 'unverified: "Not now" is the default');
   assert.equal(unverified.type, 'warning');
   const verified = UV.installPrompt({ version: '1.30.0', verified: true });
-  assert.match(verified.detail, /signed by Hearth’s publisher/);
+  assert.match(verified.detail, /signed by Cindrly’s publisher/);
   assert.deepEqual(verified.buttons, ['Not now', 'Restart and install']);
   const f = path.join(os.tmpdir(), `hearth-upd-${process.pid}`);
   const data = crypto.randomBytes(300000);

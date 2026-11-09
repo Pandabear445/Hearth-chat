@@ -1,10 +1,12 @@
-# 🔥 Hearth
+# 🔥 Cindrly
+
+**Cindrly (formerly Hearth).** Hearth is now Cindrly. Same app, same servers, same encryption: nothing to do for existing installs.
 
 ### Your communities. Your conversations. Your control.
 
-**Hearth is a privacy-focused, self-hosted community communication platform designed for people who want a modern chat experience without giving up control of their infrastructure.**
+**Cindrly is a privacy-focused, self-hosted community communication platform designed for people who want a modern chat experience without giving up control of their infrastructure.**
 
-Whether you're building a private community for friends, running a gaming server, managing an online group, or creating a space for your own community, Hearth brings messaging, voice communication, moderation, and community management together in one platform.
+Whether you're building a private community for friends, running a gaming server, managing an online group, or creating a space for your own community, Cindrly brings messaging, voice communication, moderation, and community management together in one platform.
 
 🌐 **Website: https://cindrly.com/**
 
@@ -14,7 +16,7 @@ Whether you're building a private community for friends, running a gaming server
 
 Your community shouldn't have to sacrifice control for convenience.
 
-Hearth combines the familiar experience of a modern community chat application with a focus on privacy, security-conscious engineering, and self-hosting. Run your own infrastructure, manage your community, and build a communication space around your needs.
+Cindrly combines the familiar experience of a modern community chat application with a focus on privacy, security-conscious engineering, and self-hosting. Run your own infrastructure, manage your community, and build a communication space around your needs.
 
 - **Privacy-conscious by design** — Built with encrypted messaging and privacy-oriented features.
 - **Self-hosting** — Take control of your deployment and infrastructure.
@@ -70,7 +72,7 @@ Hearth combines the familiar experience of a modern community chat application w
 ### 💜 We Believe Customization Shouldn't Be a Luxury
 
 Some platforms reserve profile enhancements and personalization options for paid subscriptions.
-We want Hearth to take a different approach.
+We want Cindrly to take a different approach.
 Your profile is how you present yourself to the world. Being able to personalize it should be fun, accessible, and open to everyone—not another recurring expense.
 We want you to spend your time creating, connecting, and enjoying your community, not deciding whether changing your profile is worth another subscription.
 Make it weird. Make it beautiful. Make it yours. Have fun.
@@ -78,13 +80,13 @@ Make it weird. Make it beautiful. Make it yours. Have fun.
 Security is an ongoing process. Features and protections are subject to continued review, testing, and improvement. Encryption guarantees, deployment security, and individual features should be evaluated against the current implementation and documentation.
 
 ### ⚙️ Self-Hosted Infrastructure
-- Operate Hearth on infrastructure you control
+- Operate Cindrly on infrastructure you control
 - Deployment and administration tooling
 - Operational monitoring integrations
 - Optional metrics endpoint with access controls
 - Database migration and upgrade testing
 
-## 🎯 Who Is Hearth For?
+## 🎯 Who Is Cindrly For?
 
 - Gaming communities looking for their own communication platform
 - Friends who want a private place to hang out
@@ -92,7 +94,7 @@ Security is an ongoing process. Features and protections are subject to continue
 - Community owners who need moderation and administration tools
 - Developers interested in privacy-focused messaging infrastructure
 
-## 🚀 Explore Hearth
+## 🚀 Explore Cindrly
 
 Interested in the project? Start here:
 
@@ -104,13 +106,13 @@ Interested in the project? Start here:
 
 ## 🔧 Development Status
 
-Hearth is actively developed. Features, platform support, and security controls may change between versions. Review the current release notes and documentation before deploying it for important or sensitive communications.
+Cindrly is actively developed. Features, platform support, and security controls may change between versions. Review the current release notes and documentation before deploying it for important or sensitive communications.
 
-Before using Hearth in production, administrators should review the deployment requirements, configure authentication and network security, establish a tested backup-and-restore process, and keep the application updated.
+Before using Cindrly in production, administrators should review the deployment requirements, configure authentication and network security, establish a tested backup-and-restore process, and keep the application updated.
 
 ## 🤝 Contributing
 
-Contributions, bug reports, thoughtful feedback, and security improvements help make Hearth better.
+Contributions, bug reports, thoughtful feedback, and security improvements help make Cindrly better.
 
 Please review the repository's contribution guidelines before submitting changes. For potential security vulnerabilities, follow the responsible-disclosure instructions in `SECURITY.md` rather than publicly posting exploit details.
 
@@ -118,6 +120,6 @@ Please review the repository's contribution guidelines before submitting changes
 
 A communication platform should work for its community—not the other way around.
 
-**Discover Hearth at https://cindrly.com/invite/pVScPcMw.** (my server plug)
+**Discover Cindrly at https://cindrly.com/invite/pVScPcMw.** (my server plug)
 
-*Hearth — A place for your community to call home.*
+*Cindrly — A place for your community to call home.*

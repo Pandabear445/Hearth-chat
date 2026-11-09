@@ -1,6 +1,6 @@
 import AVFoundation
 
-/// Keeps a call's audio going with the screen locked or Hearth in the background, between the page's callStart and
+/// Keeps a call's audio going with the screen locked or Cindrly in the background, between the page's callStart and
 /// callEnd (CallService.java's job on Android). iOS keeps an app running while it holds an active voice-chat audio
 /// session (UIBackgroundModes audio); the call itself stays in the web view. Whether WebKit keeps the microphone
 /// running once the screen locks is up to iOS: see docs/IOS-STORE.md. When iOS takes the audio away for good (a
@@ -37,7 +37,7 @@ final class CallAudio: NSObject {
     @objc private func interrupted(_ n: Notification) {
         guard let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: raw), type == .began else { return }
-        // Only during a call (the session is Hearth's then, and the app isn't suspended).
+        // Only during a call (the session is Cindrly's then, and the app isn't suspended).
         DispatchQueue.main.async {
             guard CallAudio.shared.active else { return }
             CallAudio.shared.active = false

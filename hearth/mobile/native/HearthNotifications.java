@@ -14,7 +14,7 @@ import android.os.Build;
 import android.service.notification.StatusBarNotification;
 
 /**
- * Hearth's notification channels, and the notifications the app posts by itself: pushes that arrive while the
+ * Cindrly's notification channels, and the notifications the app posts by itself: pushes that arrive while the
  * app is closed (HearthPushService) and the "in a call" notification that keeps a call going (CallService).
  * Uses only Android's own classes, so the push path doesn't depend on the web view or its libraries.
  *
@@ -42,7 +42,7 @@ final class HearthNotifications {
         messages.setDescription("New messages and mentions");
         nm.createNotificationChannel(messages);
         NotificationChannel calls = new NotificationChannel(CALLS, "Calls", NotificationManager.IMPORTANCE_HIGH);
-        calls.setDescription("Someone is calling you while Hearth is closed");
+        calls.setDescription("Someone is calling you while Cindrly is closed");
         calls.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
         calls.enableVibration(true);
@@ -56,7 +56,7 @@ final class HearthNotifications {
         nm.createNotificationChannel(ongoing);
     }
 
-    /** Whether Android lets Hearth show notifications at all. */
+    /** Whether Android lets Cindrly show notifications at all. */
     static boolean allowed(Context c) {
         NotificationManager nm = c.getSystemService(NotificationManager.class);
         if (nm == null || !nm.areNotificationsEnabled()) return false;
@@ -70,7 +70,7 @@ final class HearthNotifications {
     }
 
     static CharSequence appLabel(Context c) {
-        try { return c.getPackageManager().getApplicationLabel(c.getApplicationInfo()); } catch (Exception e) { return "Hearth"; }
+        try { return c.getPackageManager().getApplicationLabel(c.getApplicationInfo()); } catch (Exception e) { return "Cindrly"; }
     }
 
     /** Opens the app at `path` (checked by PushPolicy.safeOpenPath), or just brings it back with null. */
@@ -127,7 +127,7 @@ final class HearthNotifications {
     }
 
     /**
-     * Hearth is on screen: a call notification still ringing (insistent, posted while the app was closed) stops, as
+     * Cindrly is on screen: a call notification still ringing (insistent, posted while the app was closed) stops, as
      * the open app shows calls itself. Returns where the newest one leads ("/#call/<room>"), or null if none rang.
      */
     static String stopRinging(Context c) {

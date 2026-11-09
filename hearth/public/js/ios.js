@@ -1,4 +1,4 @@
-// Inside the Hearth iPhone app, gives the page what WKWebView lacks on its own: notifications (window.Notification)
+// Inside the Cindrly iPhone app, gives the page what WKWebView lacks on its own: notifications (window.Notification)
 // and saving files (<a download> links, handed to the share sheet), notifications while it's closed (iosApp.push, see
 // ios-push.js), calls that keep their audio with the screen locked (iosApp.callState) and invite links and shared
 // links that open in the app. The same messages as the Android app (android.js), over window.HearthIOS, which the app
@@ -73,7 +73,7 @@ if (I) {
   window.addEventListener('hearth-hangup', () => { if (typeof iosApp.onHangUp === 'function') iosApp.onHangUp(); });
 
   // ---- calls: while one is on, the app keeps an audio session for it, so the call keeps going with the screen
-  // locked or Hearth in the background (as long as iOS lets the web view keep its microphone).
+  // locked or Cindrly in the background (as long as iOS lets the web view keep its microphone).
   let inCall = false; let callTitle = '';
   iosApp.callState = ({ inCall: on, title = '' } = {}) => {
     const t = String(title || '').slice(0, 120);
@@ -107,7 +107,7 @@ if (I) {
       });
     }
     constructor(title, opts = {}) {
-      this.title = String(title || 'Hearth');
+      this.title = String(title || 'Cindrly');
       this.body = String(opts.body || '');
       this.tag = String(opts.tag || `n${Date.now()}${Math.random().toString(36).slice(2, 6)}`);
       this.onclick = null;

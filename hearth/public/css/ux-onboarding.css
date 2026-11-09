@@ -1,8 +1,8 @@
-/* Hearth — first run, onboarding and app chrome.
+/* Cindrly — first run, onboarding and app chrome.
    Loaded after app.css (index.html), so a rule here wins over app.css at equal specificity. */
 
 /* ------------------------------------------------------------------ first paint (index.html #boot-splash)
-   Drawn by the page before any script runs, so a slow connection shows Hearth at once instead of a blank screen.
+   Drawn by the page before any script runs, so a slow connection shows Cindrly at once instead of a blank screen.
    Its own two colours (the theme isn't known yet): the device's light or dark, like the sign-in page. app.js removes
    it once the sign-in screen or the app is drawn. */
 :root { --boot-bg: #100e16; --boot-ink: #ece8f4; --boot-muted: #a39cb5; --boot-flame: #f2a541; }

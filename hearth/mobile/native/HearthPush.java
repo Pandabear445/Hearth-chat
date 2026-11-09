@@ -18,11 +18,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Notifications while Hearth is closed, through UnifiedPush: a push app on the phone (a "distributor", usually
- * ntfy) gives Hearth a Web Push address, and the UnifiedPush library makes the keys and decrypts what arrives.
+ * Notifications while Cindrly is closed, through UnifiedPush: a push app on the phone (a "distributor", usually
+ * ntfy) gives Cindrly a Web Push address, and the UnifiedPush library makes the keys and decrypts what arrives.
  * This class registers and unregisters one registration per server and keeps what the page needs to know.
  *
- * Native code never talks to the Hearth server and never sees the sign-in token: it hands the address and the
+ * Native code never talks to the Cindrly server and never sees the sign-in token: it hands the address and the
  * public keys to the server's own page (MainActivity -> "hearth-push"), which subscribes them like a browser
  * would. State lives in the app's "hearth" preferences:
  *   push.instance, push.vapid, push.endpoint, push.p256dh, push.auth, push.temporary, push.state, push.reason
@@ -85,7 +85,7 @@ final class HearthPush {
 
     /**
      * Asks for a push address for the current server. `vapid` is the server's VAPID public key (from
-     * /api/push/key); `choose` is "Change": Hearth's list of push apps, even if one was picked before.
+     * /api/push/key); `choose` is "Change": Cindrly's list of push apps, even if one was picked before.
      * The answer comes later, through onEndpoint or onFailed (or a cancel, see cancelled()).
      */
     static void register(Activity a, String vapid, boolean choose) {
@@ -117,13 +117,13 @@ final class HearthPush {
                     return kotlin.Unit.INSTANCE;
                 });
             } else {
-                // Nothing Android can choose between (no push app, or only older ones without its list): Hearth's own.
+                // Nothing Android can choose between (no push app, or only older ones without its list): Cindrly's own.
                 pickDistributor(a, instance, key, false, false);
             }
         } catch (RuntimeException e) { failNow(a, "INTERNAL_ERROR"); }
     }
 
-    // Hearth's own list of push apps: every one installed, older ones too, whatever the phone's default is. Without
+    // Cindrly's own list of push apps: every one installed, older ones too, whatever the phone's default is. Without
     // `choose`, a single push app is used without asking. keep: cancelling leaves the current registration.
     private static void pickDistributor(Activity a, String instance, String key, boolean choose, boolean keep) {
         List<String> found = new ArrayList<>();
@@ -145,7 +145,7 @@ final class HearthPush {
                     : nameOf(a, pkg)) + (pkg.equals(current) ? " (in use)" : "");
         }
         chooser = new AlertDialog.Builder(a)
-                .setTitle("Which app should deliver Hearth\u2019s notifications?")
+                .setTitle("Which app should deliver Cindrly\u2019s notifications?")
                 .setItems(labels, (d, which) -> {
                     // Saving another push app unregisters this app from the old one (the library does that).
                     UnifiedPush.saveDistributor(a, found.get(which));
@@ -167,7 +167,7 @@ final class HearthPush {
 
     private static void doRegister(Context c, String instance, String key) {
         try {
-            UnifiedPush.register(c, instance, "Hearth \u00b7 " + host(prefs(c).getString("server", "")), key);
+            UnifiedPush.register(c, instance, "Cindrly \u00b7 " + host(prefs(c).getString("server", "")), key);
         } catch (Exception e) {
             // The library throws VapidNotValidException for a key in the wrong form (checked above already).
             failNow(c, e instanceof UnifiedPush.VapidNotValidException ? "VAPID_INVALID" : "INTERNAL_ERROR");
