@@ -334,11 +334,21 @@ function serverBackgroundCss(b) {
   return null;
 }
 
+// The browser's theme-color follows the painted theme's background: the desktop app colours its title bar
+// with it, and phones colour their address bar.
+function paintThemeColor(root) {
+  const meta = document.querySelector('meta[name="theme-color"]');
+  const rgb = getComputedStyle(root).getPropertyValue('--bg').trim().split(/\s+/).map(Number);
+  if (!meta || rgb.length !== 3 || !rgb.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) return;
+  meta.setAttribute('content', `#${rgb.map((n) => n.toString(16).padStart(2, '0')).join('')}`);
+}
+
 export function applyAppearance() {
   const a = loadAppearance();
   const root = document.documentElement;
   const theme = resolveTheme(a.theme);
   root.dataset.theme = theme;
+  paintThemeColor(root);
 
   const st = serverTheme && (serverTheme.chat ? a.chatLooks !== false : a.serverThemes !== false) ? serverTheme : null;
   const accent = st && HEX.test(st.accent || '') ? st.accent : HEX.test(a.accent) ? a.accent : DEFAULTS.accent;

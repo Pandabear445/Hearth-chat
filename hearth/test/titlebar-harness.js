@@ -109,24 +109,71 @@ const server = http.createServer((req, res) => {
   const menu = Menu.getApplicationMenu();
   const realPopup = menu.popup.bind(menu);
   const pops = [];
-  menu.popup = (o = {}) => { pops.push({ x: o.x, y: o.y }); if (o.callback) setTimeout(o.callback, 10); };
+  let pick = null; // a menu item to choose while the menu is "open"
+  menu.popup = (o = {}) => {
+    pops.push({ x: o.x, y: o.y, pageFocused: page.isFocused(), barFocused: bar.isFocused() });
+    if (pick) { const item = pick; pick = null; item.click(); }
+    if (o.callback) setTimeout(o.callback, 10);
+  };
   ipcMain.emit('titlebar:menu', { sender: page, senderFrame: page.mainFrame });
   out.menuFromPage = pops.length;
   await js(bar, "document.getElementById('brand').click(); 1");
   await until(() => pops.length > 0, 3000);
-  out.menuFromBar = pops.slice();
+  out.menuFromBar = pops.map(({ x, y }) => ({ x, y }));
   out.ariaExpandedAfter = await until(() => js(bar, "document.getElementById('brand').getAttribute('aria-expanded') === 'false' ? 'false' : null"), 3000);
+  // View → Reload, chosen from the menu opened by the Cindrly button, reloads the page (not the strip)
+  const viewMenu = menu.items.find((i) => i.label === 'View').submenu;
+  let barLoads = 0;
+  bar.on('did-finish-load', () => { barLoads++; });
+  pick = viewMenu.items.find((i) => i.label === 'Reload');
+  const loadsBeforeMenu = loads;
+  await js(bar, "document.getElementById('brand').click(); 1");
+  out.menuReload = { page: !!(await until(async () => loads > loadsBeforeMenu, 4000)) };
+  await until(() => js(page, "document.readyState === 'complete'"), 5000);
+  await sleep(300);
+  out.menuReload.bar = barLoads;
+  out.menuFocus = pops.map(({ pageFocused, barFocused }) => ({ pageFocused, barFocused }));
   // a lone Alt press opens it too; Alt+Shift doesn't
   page.focus();
   const before = pops.length;
   page.sendInputEvent({ type: 'keyDown', keyCode: 'Alt' }); page.sendInputEvent({ type: 'keyUp', keyCode: 'Alt' });
-  await sleep(300);
+  await sleep(400);
   out.altMenu = pops.length - before;
   page.sendInputEvent({ type: 'keyDown', keyCode: 'Alt' }); page.sendInputEvent({ type: 'keyDown', keyCode: 'Shift', modifiers: ['alt', 'shift'] });
   page.sendInputEvent({ type: 'keyUp', keyCode: 'Shift', modifiers: ['alt'] }); page.sendInputEvent({ type: 'keyUp', keyCode: 'Alt' });
-  await sleep(300);
+  await sleep(400);
   out.altShiftMenu = pops.length - before - out.altMenu;
+  // Alt held down for a click isn't a lone Alt
+  const beforeClick = pops.length;
+  page.sendInputEvent({ type: 'keyDown', keyCode: 'Alt' });
+  page.sendInputEvent({ type: 'mouseDown', x: 400, y: 200, button: 'left', clickCount: 1, modifiers: ['alt'] });
+  page.sendInputEvent({ type: 'mouseUp', x: 400, y: 200, button: 'left', clickCount: 1, modifiers: ['alt'] });
+  page.sendInputEvent({ type: 'keyUp', keyCode: 'Alt' });
+  await sleep(400);
+  out.altClickMenu = pops.length - beforeClick;
+  // Settings → Keybinds recording a lone Alt (the page sends it back when Alt is let go): no menu
+  await js(page, `document.addEventListener('keyup', (e) => { if (e.key === 'Alt') { e.preventDefault(); window.hearthDesktop.setKeybinds({ ptt: { code: 'AltLeft' } }); } }, { capture: true, once: true }); 1`);
+  const beforeRecord = pops.length;
+  page.sendInputEvent({ type: 'keyDown', keyCode: 'Alt' }); page.sendInputEvent({ type: 'keyUp', keyCode: 'Alt' });
+  await sleep(400);
+  out.altRecordMenu = pops.length - beforeRecord;
+  await js(page, 'window.hearthDesktop.setKeybinds({}).then(() => 1)');
   menu.popup = realPopup;
+
+  // The strip follows the page's theme-color (Light theme: a light strip, dark symbols); back to dark without one
+  const barColor = async () => {
+    await sleep(500);
+    const im = await bar.capturePage(); const s2 = im.getSize(); const b2 = im.toBitmap();
+    const i = (Math.round(s2.height / 2) * s2.width + Math.round(s2.width * 0.45)) * 4;
+    return { pixel: `#${[b2[i + 2], b2[i + 1], b2[i]].map((v) => v.toString(16).padStart(2, '0')).join('')}`, light: await js(bar, "document.body.classList.contains('light')") };
+  };
+  await js(page, "(() => { const m = document.createElement('meta'); m.name = 'theme-color'; m.content = '#e8e6f0'; document.head.append(m); return 1; })()");
+  out.themeLight = await barColor();
+  shot('05-light-theme');
+  await js(page, "document.querySelector('meta[name=theme-color]').content = '#1e2129'; 1");
+  out.themeDim = await barColor();
+  await js(page, "document.querySelector('meta[name=theme-color]').remove(); 1");
+  out.themeNone = await barColor();
 
   // Zooming the app (Settings → Apps & devices) zooms the page, never the strip
   await js(page, "window.hearthDesktop.setDesktopSetting('zoom', 1.5)");

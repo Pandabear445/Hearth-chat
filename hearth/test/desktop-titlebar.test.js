@@ -61,9 +61,25 @@ test('desktop titlebar: the server\'s page gets no window controls; only the str
   assert.deepEqual([...tpre.matchAll(/ipcRenderer\.(on|send|invoke|sendSync)\('([^']+)'/g)].map((m) => m[2]).sort(), ['titlebar:menu', 'titlebar:state']);
   // a lone Alt opens the menu (Help → Reset permissions lives there), unless Alt is a call keybind
   assert.match(main, /if \(CUSTOM_BAR && !IS_MAC\) altMenuKey\(input\);/);
-  assert.match(main, /if \(!keybindCodes\.some\(\(c\) => \/\^Alt\(Left\|Right\)\$\/\.test\(c\)\)\) popAppMenu\(\);/);
-  // developer tools only in a development copy
-  assert.match(main, /app\.isPackaged \? null : \{ role: 'toggleDevTools' \}/);
+  assert.match(main, /const altIsKeybind = \(\) => keybindCodes\.some\(\(c\) => \/\^Alt\(Left\|Right\)\$\/\.test\(c\)\);/);
+  // developer tools only in a development copy; Reload and the developer tools are always the page's
+  assert.match(main, /app\.isPackaged \? null\s*: \{ label: 'Toggle developer tools'[^\n]*page\.toggleDevTools\(\)/);
+  assert.match(main, /\{ label: 'Reload', accelerator: 'CmdOrCtrl\+R', click: \(\) => \{ if \(page && !page\.isDestroyed\(\)\) page\.reload\(\); \} \}/);
+  assert.doesNotMatch(main, /role: '(reload|forceReload|toggleDevTools)'/);
+  const pop = main.slice(main.indexOf('function popAppMenu()'), main.indexOf('const fromTitleBar'));
+  assert.ok(pop.indexOf('page.focus()') > 0 && pop.indexOf('page.focus()') < pop.indexOf('menu.popup('), 'the page has the keyboard before the menu opens');
+  // Alt+click isn't a lone Alt; a keybind just recorded as Alt doesn't open the menu
+  assert.match(main, /page\.on\('before-mouse-event', \(e, m\) => \{ if \(m\.type === 'mouseDown'\) altAlone = false; \}\)/);
+  assert.match(main, /setTimeout\(\(\) => \{ if \(!altIsKeybind\(\)\) popAppMenu\(\); \}, ALT_MENU_WAIT\)/);
+  // the strip's colours: the server page's theme-color (a valid #rrggbb, on the server only), high contrast on Windows
+  assert.match(main, /page\.on\('did-change-theme-color', \(e, color\) => pageThemeColor\(color\)\)/);
+  assert.match(main, /const c = onServerPage\(\) && typeof color === 'string' && HEX6\.test\(color\)/);
+  assert.match(main, /nativeTheme\.on\('updated', \(\) => applyBarColors\(\)\)/);
+  assert.match(main, /IS_WIN \|\| !nativeTheme\.shouldUseHighContrastColors/);
+  assert.match(main, /systemPreferences\.getColor\('window'\)[\s\S]{0,120}systemPreferences\.getColor\('window-text'\)/);
+  assert.match(main, /win\.setTitleBarOverlay\(\{ color: c\.bg, symbolColor: focused \? c\.fg : c\.fgBlurred, height: BAR_H \}\)/);
+  assert.match(main, /const BAR_FG_BLURRED = '#847c97';/, 'the system buttons dim to the same grey as the name');
+  assert.match(read('public', 'js', 'appearance.js'), /meta\[name="theme-color"\][\s\S]{0,200}getPropertyValue\('--bg'\)/, 'the page\'s theme-color is its theme\'s background');
   // Linux: the system's own bar instead, for window managers that need it
   assert.match(main, /const CUSTOM_BAR = !\(IS_LINUX && settings\.systemTitleBar === true\);/);
   assert.match(main, /IS_LINUX \? \{ label: 'Use the system title bar \(after a restart\)', type: 'checkbox'/);
@@ -77,7 +93,9 @@ test('desktop titlebar: the strip is plain, safe, accessible and packaged', () =
   assert.doesNotMatch(html + js, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   assert.match(js, /getElementById\('name'\)\.textContent = name/, 'the name is text');
   assert.match(html, /aria-label="Cindrly menu" aria-haspopup="menu"/);
-  assert.match(html, /background: #100e16/);
+  assert.match(html, /--bar-bg: #100e16; --bar-fg: #b6afc6; --bar-fg-blurred: #847c97;/);
+  assert.match(html, /background: var\(--bar-bg\); color: var\(--bar-fg\);/);
+  assert.match(js, /\/\^#\[0-9a-f\]\{6\}\$\/i\.test\(v\)/, 'only plain colours from main.js');
   assert.match(html, /-webkit-app-region: drag/);
   assert.match(html, /\.brand \{[^}]*-webkit-app-region: no-drag/);
   assert.match(html, /env\(titlebar-area-width, 100vw\)/, 'nothing under the system buttons');
@@ -168,6 +186,14 @@ test('desktop titlebar: in Electron, the strip sits above the page, the system b
   // the menu: from the strip's button (and a lone Alt), never from the page
   assert.equal(r.menuFromPage, 0, 'a menu request from the server\'s page is ignored');
   assert.deepEqual(r.menuFromBar, [{ x: 8, y: 32 }]);
+  for (const f of r.menuFocus) assert.deepEqual(f, { pageFocused: true, barFocused: false }, 'the page has the keyboard while the menu is open');
+  assert.deepEqual(r.menuReload, { page: true, bar: 0 }, 'View → Reload from the Cindrly button reloads the page, not the strip');
+  assert.equal(r.altClickMenu, 0, 'Alt+click doesn\'t open the menu');
+  assert.equal(r.altRecordMenu, 0, 'recording Alt as a keybind doesn\'t open the menu');
+  // the strip follows the page's theme
+  assert.deepEqual(r.themeLight, { pixel: '#e8e6f0', light: true });
+  assert.deepEqual(r.themeDim, { pixel: '#1e2129', light: false });
+  assert.deepEqual(r.themeNone, { pixel: '#100e16', light: false });
   assert.equal(r.ariaExpandedAfter, 'false');
   assert.equal(r.altMenu, 1, 'Alt on its own opens the menu');
   assert.equal(r.altShiftMenu, 0, 'Alt+Shift doesn\'t');

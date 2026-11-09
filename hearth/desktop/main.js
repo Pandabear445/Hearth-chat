@@ -2,7 +2,7 @@
 // All chat code (including end-to-end encryption) runs from your server exactly as in the browser.
 const {
   app, BaseWindow, BrowserWindow, WebContentsView, Menu, Tray, shell, session, ipcMain, nativeImage, dialog, net, desktopCapturer, powerMonitor,
-  screen, clipboard, Notification,
+  screen, clipboard, Notification, nativeTheme, systemPreferences,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -212,7 +212,30 @@ const CUSTOM_BAR = !(IS_LINUX && settings.systemTitleBar === true); // read once
 const BAR_H = CUSTOM_BAR ? 32 : 0; // 32px: Windows draws its buttons 46px wide at this height
 const BAR_BG = '#100e16';
 const BAR_FG = '#b6afc6';
-const BAR_FG_BLURRED = '#6f6880';
+const BAR_FG_BLURRED = '#847c97'; // the same grey as the name on the strip when the window isn't focused
+// The strip takes the colour of the server's page (its theme-color, which the page sets to its theme's
+// background), so a Light theme gets a light strip. The connect screen and older servers keep the dark one.
+let pageBarColor = '';
+const HEX6 = /^#[0-9a-f]{6}$/i;
+const lightColor = (hex) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4;
+};
+// Windows high contrast: the person's own window and text colours, on the system's buttons too.
+function highContrastColors() {
+  if (!IS_WIN || !nativeTheme.shouldUseHighContrastColors) return null;
+  try {
+    const bg = String(systemPreferences.getColor('window')).slice(0, 7);
+    const fg = String(systemPreferences.getColor('window-text')).slice(0, 7);
+    return HEX6.test(bg) && HEX6.test(fg) ? { bg, fg, fgBlurred: fg, light: lightColor(bg), contrast: true } : null;
+  } catch { return null; }
+}
+function barColors() {
+  const hc = highContrastColors();
+  if (hc) return hc;
+  const bg = pageBarColor || BAR_BG;
+  return lightColor(bg) ? { bg, fg: '#4e5058', fgBlurred: '#5c5e66', light: true } : { bg, fg: BAR_FG, fgBlurred: BAR_FG_BLURRED, light: false };
+}
 function layout() {
   if (!win || win.isDestroyed()) return;
   const { width, height } = win.getContentBounds();
@@ -223,16 +246,38 @@ function layout() {
 }
 function barState(extra) {
   if (!bar || !win || win.isDestroyed() || bar.webContents.isDestroyed()) return;
-  bar.webContents.send('titlebar:state', { focused: win.isFocused(), maximized: win.isMaximized(), fullscreen: win.isFullScreen(), ...extra });
+  const { bg, fg, fgBlurred, light, contrast } = barColors();
+  bar.webContents.send('titlebar:state', {
+    focused: win.isFocused(), maximized: win.isMaximized(), fullscreen: win.isFullScreen(), colors: { bg, fg, fgBlurred, light, contrast: !!contrast }, ...extra,
+  });
 }
 function barSymbols(focused) {
-  if (!bar || IS_MAC) return;
-  try { win.setTitleBarOverlay({ color: BAR_BG, symbolColor: focused ? BAR_FG : BAR_FG_BLURRED, height: BAR_H }); } catch { /* not on this system */ }
+  if (!bar || IS_MAC || !win || win.isDestroyed()) return;
+  const c = barColors();
+  try { win.setTitleBarOverlay({ color: c.bg, symbolColor: focused ? c.fg : c.fgBlurred, height: BAR_H }); } catch { /* not on this system */ }
 }
+// The strip, the system's buttons on it and the window behind them, all in the same colours.
+function applyBarColors() {
+  if (!bar || !win || win.isDestroyed()) return;
+  const { bg } = barColors();
+  try { win.setBackgroundColor(bg); bar.setBackgroundColor(bg); } catch { /* closing */ }
+  barSymbols(win.isFocused());
+  barState();
+}
+// The page's theme-color: only the server's own page sets it, and only a plain #rrggbb counts.
+function pageThemeColor(color) {
+  const c = onServerPage() && typeof color === 'string' && HEX6.test(color) ? color.toLowerCase() : '';
+  if (c === pageBarColor) return;
+  pageBarColor = c;
+  applyBarColors();
+}
+if (CUSTOM_BAR) nativeTheme.on('updated', () => applyBarColors());
 // The app's menu (File, Edit, View, Window, Help), from the Cindrly button or a lone Alt press.
 function popAppMenu() {
   const menu = Menu.getApplicationMenu();
   if (!menu || !win || win.isDestroyed()) return;
+  // The page has the keyboard first, so Edit (Copy, Paste…) works on it, not on the strip that was clicked.
+  if (page && !page.isDestroyed()) page.focus();
   menu.popup({ window: win, x: 8, y: BAR_H, callback: () => { barState({ menuOpen: false }); if (page && !page.isDestroyed()) page.focus(); } });
 }
 // Only the title bar's own page may ask for the menu.
@@ -279,6 +324,8 @@ function createWindow() {
     bwc.setWindowOpenHandler(() => ({ action: 'deny' }));
     bwc.setVisualZoomLevelLimits(1, 1).catch(() => {});
     bwc.on('did-finish-load', () => barState());
+    applyBarColors();
+    page.on('did-change-theme-color', (e, color) => pageThemeColor(color));
     bwc.loadFile(TITLEBAR_FILE, { query: { name: APP_NAME, platform: process.platform } }).catch(() => {});
   }
   layout();
@@ -328,6 +375,7 @@ function createWindow() {
   // A reload or a new page starts outside any call until the page says otherwise. The server being down
   // behind a proxy (Caddy answers 502 while Cindrly restarts) gets the "can't reach" screen too.
   page.on('did-navigate', (e, url, code) => {
+    if (CUSTOM_BAR && !onServerPage()) pageThemeColor(''); // the connect screen: the dark strip again
     call = { inCall: false, muted: false, deafened: false }; drawThumbar();
     applyZoom();
     if (isServer(url) && [502, 503, 504, 520, 521, 522, 523, 524].includes(code)) loadOffline(`HTTP_${code}`);
@@ -369,6 +417,8 @@ function createWindow() {
     const menu = contextMenu(page, params);
     if (menu) menu.popup({ window: win, frame: params.frame || undefined });
   });
+  // Alt+click isn't a lone Alt press.
+  if (CUSTOM_BAR && !IS_MAC) page.on('before-mouse-event', (e, m) => { if (m.type === 'mouseDown') altAlone = false; });
   page.on('zoom-changed', (e, dir) => stepZoom(dir === 'in' ? 1 : -1));
   page.on('before-input-event', (e, input) => {
     if (CUSTOM_BAR && !IS_MAC) altMenuKey(input);
@@ -386,15 +436,20 @@ function createWindow() {
   load({ coldStart: true });
 }
 // Alt on its own (pressed and let go with nothing in between) opens the app's menu, as the hidden menu bar
-// used to; Help → Reset permissions is only there. Not when Alt is one of the person's call keybinds.
+// used to; Help → Reset permissions is only there. Not when Alt is one of the person's call keybinds, and
+// not when it just became one: Settings → Keybinds records a lone Alt when it's let go and sends it straight
+// back, so the menu waits a moment for that before opening.
 let altAlone = false;
 let keybindCodes = [];
+const ALT_MENU_WAIT = 150;
+const altIsKeybind = () => keybindCodes.some((c) => /^Alt(Left|Right)$/.test(c));
 function altMenuKey(input) {
   const isAlt = input.key === 'Alt' && !input.control && !input.shift && !input.meta;
   if (input.type === 'keyDown') altAlone = isAlt && !input.isAutoRepeat ? true : (isAlt && altAlone);
   else if (input.type === 'keyUp' && isAlt && altAlone) {
     altAlone = false;
-    if (!keybindCodes.some((c) => /^Alt(Left|Right)$/.test(c))) popAppMenu();
+    if (altIsKeybind()) return;
+    setTimeout(() => { if (!altIsKeybind()) popAppMenu(); }, ALT_MENU_WAIT);
   }
 }
 
@@ -860,13 +915,17 @@ function buildAppMenu() {
     ] }] : [{ label: 'File', submenu: [settingsItem, { type: 'separator' }, { label: 'Quit', click: () => { quitting = true; app.quit(); } }] }]),
     { role: 'editMenu' },
     { label: 'View', submenu: [
-      { role: 'reload' }, { role: 'forceReload' }, { type: 'separator' },
+      // The page's own, whichever part of the window has the keyboard (the strip, after a click on its button).
+      { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => { if (page && !page.isDestroyed()) page.reload(); } },
+      { label: 'Force reload', accelerator: 'Shift+CmdOrCtrl+R', click: () => { if (page && !page.isDestroyed()) page.reloadIgnoringCache(); } },
+      { type: 'separator' },
       { label: 'Actual size', ...shown('CmdOrCtrl+0'), click: () => setDesktopSetting('zoom', 1) },
       { label: 'Zoom in', ...shown('CmdOrCtrl+='), click: () => stepZoom(1) },
       { label: 'Zoom out', ...shown('CmdOrCtrl+-'), click: () => stepZoom(-1) },
       { type: 'separator' },
       // Developer tools (Ctrl+Shift+I) only in a development copy, never in the installed app.
-      { role: 'togglefullscreen' }, app.isPackaged ? null : { role: 'toggleDevTools' },
+      { role: 'togglefullscreen' }, app.isPackaged ? null
+        : { label: 'Toggle developer tools', accelerator: IS_MAC ? 'Alt+Command+I' : 'Ctrl+Shift+I', click: () => { if (page && !page.isDestroyed()) page.toggleDevTools(); } },
     ].filter(Boolean) },
     { role: 'windowMenu' },
     { label: 'Help', submenu: [
