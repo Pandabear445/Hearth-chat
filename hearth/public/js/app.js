@@ -5572,10 +5572,17 @@ async function onKeysChanged(serverId, added, heldChanged) {
     for (const c of server ? server.channels : []) {
       const store = S.msgs['c:' + c.id];
       if (!store) continue;
+      // Only what was waiting for a key can open now (decryptAll leaves every other message as it is), so a channel
+      // with nothing waiting isn't drawn again: with every member's app doing that for each new key, a big server's
+      // new key cost each of them a whole redraw of the open channel.
+      let waiting = false;
       store.list.forEach((m) => {
+        if (!m.dec || m.dec.pending) waiting = true;
         if (m.dec && m.dec.pending) m.dec = null;
+        if (m.reply && (!m.reply.dec || m.reply.dec.pending)) waiting = true;
         if (m.reply && m.reply.dec && m.reply.dec.pending) m.reply.dec = null;
       });
+      if (!waiting) continue;
       await decryptAll('c:' + c.id);
       if (!store.loaded) continue;
       if (currentKey() === 'c:' + c.id) {
