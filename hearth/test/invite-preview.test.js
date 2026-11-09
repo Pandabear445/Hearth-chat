@@ -117,7 +117,7 @@ test('a hostile server name is escaped everywhere (quotes, tags, ampersands, $& 
   const c = await invite(owner, evil.id);
   const html = (await page(`/invite/${c}`)).text;
   assert.ok(!html.includes('<script>alert(1)'), 'no tag from the name');
-  assert.equal((html.match(/<script/g) || []).length, 2, 'only the app’s own two scripts');
+  assert.equal((html.match(/<script/g) || []).length, 3, 'only the app’s own three scripts (with js/boot-guard.js)');
   const t = meta(html, 'og:title');
   assert.equal(t, `Join &quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt; &amp; &#39;q&#39; $&amp; $1 on ${srv.config.name}`);
   assert.ok(!/[\u202e\u0007]/.test(html), 'control and direction characters dropped');

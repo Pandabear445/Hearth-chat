@@ -13,6 +13,8 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Cindrly">
+  <!-- Reloads the page once if the app's own files fail to load (js/boot-guard.js); async, so it can never hold the page up. -->
+  <script src="/js/boot-guard.js" async></script>
   <link rel="stylesheet" href="/fonts/fonts.css">
   <link rel="stylesheet" href="/css/app.css">
   <link rel="stylesheet" href="/css/brainrot.css">
@@ -24,11 +26,13 @@
 </head>
 <body>
   <!-- ============================== first paint: shown by the page itself, before any script has run (app.js removes it
-       once the sign-in screen or the app is drawn). HTML and CSS only (ux-onboarding.css), so the page's CSP is unchanged. -->
+       once the sign-in screen or the app is drawn). HTML and CSS only (ux-onboarding.css), so the page's CSP is unchanged.
+       Its Reload link works with no script at all (js/boot-guard.js makes it reload this very address). -->
   <div id="boot-splash" role="status" aria-live="polite">
     <svg class="boot-mark" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12.8 1.6a1 1 0 0 0-1.6.6c-.5 2.9-2 4.6-3.6 6.3C6 10.2 4.5 12 4.5 15a7.5 7.5 0 0 0 15 0c0-2.4-1-4.4-2.2-6a1 1 0 0 0-1.7.4c-.2 1-.6 1.8-1.2 2.3.2-3.7-.9-7.3-1.6-10.1M12 21a3.5 3.5 0 0 1-3.5-3.5c0-1.8 1.4-3 2.5-4.4.3 1.2 1 2 2 2.2.2 0 .4 0 .5-.2 1.3 1 2 1.9 2 2.9A3.5 3.5 0 0 1 12 21"/></svg>
     <p class="boot-text">Loading Cindrly…</p>
     <p class="boot-slow">This is taking longer than usual. Check your connection, or reload the page.</p>
+    <a class="boot-reload" href="/">Reload</a>
     <noscript><p class="boot-noscript">Cindrly needs JavaScript. Turn it on for this site and reload.</p></noscript>
   </div>
 

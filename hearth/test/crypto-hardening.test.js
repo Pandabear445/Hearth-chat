@@ -983,7 +983,7 @@ test('each tab checks a start-up against the account it started as, not the one 
   assert.match(boot, /sec\.proveOwnKeys\(b\.me, b\.encSignPrivateKey, \{ account: signedInAs \}\)/);
   assert.match(app, /function startApp\(account\) \{\n  signedInAs = account;/);
   assert.match(app, /setTokenOwner\(account\);/);
-  assert.match(app, /if \(key\) \{ S\.privateKey = key;(?: S\.pqSeed = await E2EE\.loadPqSeed\(uid\);)? return startApp\(uid\); \}/);
+  assert.match(app, /if \(key\) \{ S\.privateKey = key;(?: S\.pqSeed = await (?:bootStep\()?E2EE\.loadPqSeed\(uid\)(?:, '[^']*'\))?;)? return startApp\(uid\); \}/);
   const fin = app.slice(app.indexOf('async function finishLogin(res, privateKey'), app.indexOf('let loggingOut = null;'));
   assert.match(fin, /startApp\(res\.user\.id\);/);
   assert.ok(fin.indexOf("localStorage.setItem('hearth.userId', res.user.id);") < fin.indexOf('setToken(res.token);'));

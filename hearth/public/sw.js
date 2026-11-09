@@ -28,6 +28,18 @@ self.addEventListener('message', (e) => {
   if (e.data === 'skipWaiting') self.skipWaiting();
 });
 
+// A copy of the cached file, read whole here, not the Cache Storage response itself. Chromium sometimes aborts a
+// cached body that is still streaming to the page when this worker collects garbage (net::ERR_ABORTED, up to a
+// few reloads in a hundred, more since the page preloads all its modules at once): a module that fails like that stays
+// failed for the whole page, app.js never runs and the page sat on its loading screen for good. A body already
+// read into memory isn't affected. (The bytes are the cached ones, unchanged; nothing is written back.)
+const CACHE_WAIT_MS = 5000; // a cache that doesn't answer in this long: the network instead
+async function fromCache(req) {
+  const hit = await caches.match(req);
+  if (!hit) return null;
+  return new Response(await hit.blob(), { status: hit.status, statusText: hit.statusText, headers: hit.headers });
+}
+
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
@@ -40,14 +52,14 @@ self.addEventListener('fetch', (e) => {
 
   // Pages: try the network first (fresh HTML), fall back to the cached app shell when offline.
   if (req.mode === 'navigate') {
-    e.respondWith(fetch(req).catch(async () => (await caches.match('/')) || Response.error()));
+    e.respondWith(fetch(req).catch(async () => (await fromCache('/').catch(() => null)) || Response.error()));
     return;
   }
   if (!ASSETS.includes(url.pathname)) return;
   // App files: cache first, then network (and remember it). Matched exactly: ignoring the "?…" part once
   // made every GIF show as the same one, because GIFs differ only in their query string.
   e.respondWith((async () => {
-    const hit = await caches.match(req);
+    const hit = await Promise.race([fromCache(req).catch(() => null), new Promise((r) => setTimeout(r, CACHE_WAIT_MS, null))]);
     if (hit) return hit;
     const res = await fetch(req);
     if (res.ok && res.type === 'basic') { const c = await caches.open(CACHE); c.put(req, res.clone()); }

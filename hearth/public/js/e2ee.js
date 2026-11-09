@@ -1088,18 +1088,30 @@ export function pinnedKeys(myId, user, at = 0) {
 function idb() {
   return new Promise((resolve, reject) => {
     const r = indexedDB.open('hearth', 1);
+    let blocked = false;
     r.onupgradeneeded = () => r.result.createObjectStore('keys');
-    r.onsuccess = () => resolve(r.result);
+    // Another tab holds an older version open: say so rather than wait for it (a late success is closed again).
+    r.onblocked = () => { blocked = true; reject(new Error('This browser\u2019s storage is in use by another tab.')); };
+    r.onsuccess = () => {
+      const db = r.result;
+      if (blocked) { db.close(); return; }
+      db.onversionchange = () => db.close(); // never the one holding a newer version up
+      resolve(db);
+    };
     r.onerror = () => reject(r.error);
   });
 }
 async function tx(mode, fn) {
   const db = await idb();
   return new Promise((resolve, reject) => {
-    const t = db.transaction('keys', mode);
+    const done = () => { try { db.close(); } catch { /* closed */ } };
+    let t;
+    try { t = db.transaction('keys', mode); } catch (e) { done(); reject(e); return; }
     const req = fn(t.objectStore('keys'));
-    t.oncomplete = () => resolve(req && req.result);
-    t.onerror = () => reject(t.error);
+    t.oncomplete = () => { done(); resolve(req && req.result); };
+    t.onerror = () => { done(); reject(t.error); };
+    // Aborted with no request error (the browser closed the database, storage full…): fails, never waits for good.
+    t.onabort = () => { done(); reject(t.error || new Error('Storage transaction aborted')); };
   });
 }
 export const storeKey = (userId, key) => tx('readwrite', (s) => s.put(key, userId));

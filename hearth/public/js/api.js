@@ -66,8 +66,11 @@ export function netError(e) {
   return out;
 }
 
-export async function api(method, path, body) {
+// timeout (ms): a request that hasn't answered by then fails as a network error (the start-up's first requests: a
+// connection that never answers mustn't leave the page waiting for good).
+export async function api(method, path, body, { timeout = 0 } = {}) {
   const opts = { method, headers: {} };
+  if (timeout > 0 && typeof AbortSignal !== 'undefined' && AbortSignal.timeout) opts.signal = AbortSignal.timeout(timeout);
   if (token) opts.headers.Authorization = 'Bearer ' + token;
   if (body instanceof FormData) opts.body = body;
   else if (body !== undefined) {

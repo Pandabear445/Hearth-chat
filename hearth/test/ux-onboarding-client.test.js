@@ -31,9 +31,10 @@ test('first paint: a splash in the page itself, outside anything hidden, with no
   assert.match(tag, /role="status"/);
   assert.match(tag, /aria-live="polite"/);
   assert.doesNotMatch(tag, /\shidden/);
-  // CSP: only the two script tags the page always had, both with src; no inline handlers anywhere.
+  // CSP: only the two script tags the page always had and the start-up guard (js/boot-guard.js), all with src; no
+  // inline handlers anywhere.
   const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)];
-  assert.equal(scripts.length, 2);
+  assert.equal(scripts.length, 3);
   for (const [, attrs, inner] of scripts) { assert.match(attrs, /\ssrc="/); assert.equal(inner.trim(), ''); }
   assert.doesNotMatch(html, /\son[a-z]+="/i, 'no inline event handlers');
   // Styled by ux-onboarding.css, in the device's light or dark, and still for reduced motion.
