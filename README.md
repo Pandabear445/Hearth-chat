@@ -6,7 +6,7 @@
 
 Whether you're building a private community for friends, running a gaming server, managing an online group, or creating a space for your own community, Hearth brings messaging, voice communication, moderation, and community management together in one platform.
 
-🌐 **Website: https://kappachat.duckdns.org/**
+🌐 **Website: https://cindrly.com/**
 
 ---
 
@@ -96,7 +96,7 @@ Security is an ongoing process. Features and protections are subject to continue
 
 Interested in the project? Start here:
 
-🌐 **Website:** https://kappachat.duckdns.org
+🌐 **Website:** https://cindrly.com
 
 🐙 **Source code:** Browse this repository to explore the implementation, development history, and available documentation.
 
@@ -118,6 +118,6 @@ Please review the repository's contribution guidelines before submitting changes
 
 A communication platform should work for its community—not the other way around.
 
-**Discover Hearth at https://kappachat.duckdns.org/invite/pVScPcMw.** (my server plug)
+**Discover Hearth at https://cindrly.com/invite/pVScPcMw.** (my server plug)
 
 *Hearth — A place for your community to call home.*

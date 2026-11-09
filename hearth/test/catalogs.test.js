@@ -441,7 +441,7 @@ test('landing site: the privacy policy, account deletion and child safety pages'
   assert.equal(titleOf(kids), 'Hearth child safety standards');
   for (const [f, html] of [['privacy.html', privacy], ['delete-account.html', del], ['child-safety.html', kids]]) {
     assert.match(html, /<a href="mailto:[^"]+">/, `${f}: an address to write to`);
-    assert.match(html, /kappachat\.duckdns\.org/, `${f}: says which server it covers`);
+    assert.match(html, /cindrly\.com/, `${f}: says which server it covers`);
     assert.match(html, /Pandabear445/, `${f}: names the developer`);
   }
   assert.match(privacy, /<a href="delete-account\.html">/);

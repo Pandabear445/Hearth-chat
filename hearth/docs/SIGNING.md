@@ -29,7 +29,7 @@ Prices and rules below were checked in October 2026. They change, so check the l
 
 ## First: the website certificate is a different thing
 
-Your Hearth website (for example `https://kappachat.duckdns.org`) already has a real **TLS certificate**
+Your Hearth website (for example `https://cindrly.com`) already has a real **TLS certificate**
 (what people often call "SSL"). Caddy gets it from Let's Encrypt and renews it by itself. That's what makes
 the padlock appear and keeps the connection private.
 

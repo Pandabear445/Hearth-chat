@@ -1,7 +1,7 @@
 {
   "appName": "Hearth",
   "appId": "app.hearth.desktop",
-  "defaultServer": "https://kappachat.duckdns.org",
+  "defaultServer": "https://cindrly.com",
   "lockServer": false,
   "closeToTray": true,
   "autoUpdate": true,

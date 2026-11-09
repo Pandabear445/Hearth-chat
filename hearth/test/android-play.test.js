@@ -190,7 +190,7 @@ test('play-5: the connect screen’s privacy policy link opens in the browser an
   try {
     const urls = ['https://pandabear445.github.io/Hearth-chat/privacy.html', 'https://pandabear445.github.io/Hearth-chat/', 'https://pandabear445.github.io/',
       'https://pandabear445.github.io/Hearth-chat', 'https://pandabear445.github.io.evil.example/Hearth-chat/privacy.html', 'https://pandabear445.github.io@evil.example/Hearth-chat/',
-      'http://pandabear445.github.io/Hearth-chat/privacy.html', 'https://kappachat.duckdns.org/', 'https://chat.example.com/Hearth-chat/', ''];
+      'http://pandabear445.github.io/Hearth-chat/privacy.html', 'https://cindrly.com/', 'https://chat.example.com/Hearth-chat/', ''];
     const check = `package app.hearth.mobile;
 public class LinkCheck {
   public static void main(String[] a) {
@@ -223,7 +223,7 @@ test('play-8: the app refuses Stripe and Ko-fi payment pages (javac), before any
     const pay = ['https://checkout.stripe.com/c/pay/cs_test_a1', 'https://buy.stripe.com/test_123', 'https://donate.stripe.com/x', 'https://billing.stripe.com/p/session/x',
       FUNDING, 'https://www.ko-fi.com/hearth', 'https://KO-FI.COM/hearth', 'http://ko-fi.com/hearth', 'https://ko-fi.com./hearth', 'https://ko-fi.com:443/hearth',
       'https://someone@ko-fi.com/hearth', 'https://ko-fi.com', 'https://ko-fi.com?x=1', 'https://ko-fi.com#top'];
-    const other = ['https://kappachat.duckdns.org/', 'https://stripe.com/docs', 'https://connect.stripe.com/express/x', 'https://notko-fi.com/x', 'https://ko-fi.com.evil.example/x',
+    const other = ['https://cindrly.com/', 'https://stripe.com/docs', 'https://connect.stripe.com/express/x', 'https://notko-fi.com/x', 'https://ko-fi.com.evil.example/x',
       'https://evil.example/ko-fi.com', 'https://evil.example/?u=https://ko-fi.com', 'https://ko-fi.com@evil.example/', 'https://[::1]:3000/', 'ftp://ko-fi.com/', 'ko-fi.com', '',
       'https://pandabear445.github.io/Hearth-chat/privacy.html'];
     fs.writeFileSync(path.join(tmp, 'PayCheck.java'), `package app.hearth.mobile;

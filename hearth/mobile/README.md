@@ -49,7 +49,7 @@ it to Android visitors (in a browser; opened inside the app, it lists no downloa
 [`fastlane/metadata/android/en-US/`](fastlane/metadata/android/en-US/):
 [`../docs/ANDROID-STORES.md`](../docs/ANDROID-STORES.md).
 
-**Server address:** the app connects to the community server `https://kappachat.duckdns.org` by itself on first
+**Server address:** the app connects to the community server `https://cindrly.com` by itself on first
 launch (`defaultServer` in `www/config.json`). People can switch to any other Hearth server: Settings → Apps &
 devices → *Switch server* opens the connect screen, where they type its address (e.g. `chat.example.com` or
 `1.2.3.4:3000`). To build an app for your server instead, set the repository variable `HEARTH_SERVER` (Settings →

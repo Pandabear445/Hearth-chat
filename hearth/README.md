@@ -391,7 +391,7 @@ Release builds (`app-v*` tags and the default branch) then copy the installers a
 
 | Key | What it does |
 |---|---|
-| `defaultServer` | Your address, e.g. `https://chat.example.com` (set to `https://kappachat.duckdns.org`). Empty = ask on first launch. The repository variable `HEARTH_SERVER` overrides it at build time. |
+| `defaultServer` | Your address, e.g. `https://chat.example.com` (set to `https://cindrly.com`). Empty = ask on first launch. The repository variable `HEARTH_SERVER` overrides it at build time. |
 | `lockServer` | `true` to hide "Change server" (a branded app for your community). |
 | `appName`, `appId` | Window title, and the ID Windows/macOS use for notifications. Also change `productName`/`appId` in `desktop/package.json` if you rebrand. |
 | `closeToTray` | Keep running in the tray when the window is closed (Windows/Linux). |
@@ -693,7 +693,7 @@ Password resets need the server to send email. In **Admin → Owner → Email**,
 - **Resend** (3,000/month free): host `smtp.resend.com`, port `465`, user `resend`, password = your API key. Needs your own domain.
 - **Gmail**: host `smtp.gmail.com`, port `465`, your address and an *app password* (Google Account → Security → 2-Step Verification → App passwords).
 
-Set **Your server’s address** to the public URL people use (for example `https://kappachat.duckdns.org`) — reset links point there. Or use `.env`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `PUBLIC_URL`. The SMTP password is stored encrypted.
+Set **Your server’s address** to the public URL people use (for example `https://cindrly.com`) — reset links point there. Or use `.env`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `PUBLIC_URL`. The SMTP password is stored encrypted.
 
 ## Usernames
 

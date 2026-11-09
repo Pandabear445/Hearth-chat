@@ -54,7 +54,7 @@ You need your Android phone and a second account or a friend (to send you messag
    Hearth is closed.
 2. On the phone, open <https://github.com/Pandabear445/Hearth-chat/releases/latest> and tap
    `Hearth-<version>.apk`. When Android asks, allow your browser to install unknown apps.
-3. Open Hearth. It connects to the community server **kappachat.duckdns.org** by itself. Sign in.
+3. Open Hearth. It connects to the community server **cindrly.com** by itself. Sign in.
 4. Go through this list. Write down anything that doesn't work.
    - **Notifications with the app closed:** *Settings → Apps & devices → Notifications when Hearth is closed*,
      turn it on and pick ntfy. Swipe Hearth away from your recent apps. Have someone send you a direct message.
@@ -181,7 +181,7 @@ Signing certificate SHA-256: 5f65143b86381f11a552af6e24dbd0dddb3f652c9eb8047bb57
 Fastlane metadata: hearth/mobile/fastlane/metadata/android/en-US/
 The APK has no Google Play Services, no Firebase and no trackers. Notifications while the app is closed use
 UnifiedPush (a distributor such as ntfy).
-Network: by default the app opens the free community server kappachat.duckdns.org; people can switch to any
+Network: by default the app opens the free community server cindrly.com; people can switch to any
 Hearth server (it's self-hostable, MIT). Watch together can embed YouTube, Vimeo and Twitch players, and calls
 use the server's STUN servers (Google's by default).
 Contact: {{CONTACT_EMAIL}}
@@ -275,7 +275,7 @@ How (the labels may differ a little *(unverified)*):
 
 ### 4.4 Update kappachat, then the first upload
 
-**Update kappachat.duckdns.org first.** The Android app shows the pages kappachat sends, so a Play reviewer sees
+**Update cindrly.com first.** The Android app shows the pages kappachat sends, so a Play reviewer sees
 what kappachat runs, not only what's in the APK. Two things Play checks come from the server:
 
 - **No way to pay.** From Hearth 1.29.1 the Android app shows no *Support* window, funding card or memberships. A
@@ -359,7 +359,7 @@ say `{{CONTACT_EMAIL}}` where the address goes. Google wants a working contact o
 
 **App access:** *All or some functionality is restricted*, then add a reviewer login. Make the account first:
 
-1. On a computer, open <https://kappachat.duckdns.org> and sign up as `playreview` with a long random password
+1. On a computer, open <https://cindrly.com> and sign up as `playreview` with a long random password
    (keep it in your password manager). Leave **two-factor sign-in off**: reviewers can't type a code.
 2. As `playreview`, create a server called "Play review". It comes with `#general` and the `Lounge` voice channel.
    Post a few messages. Add a second test account to it, so there's someone to message. No real names.
@@ -370,7 +370,7 @@ say `{{CONTACT_EMAIL}}` where the address goes. Google wants a working contact o
 Instructions to paste (with the username and password in Play's own fields):
 
 ```
-1. Open Hearth. It connects to the community server kappachat.duckdns.org by itself.
+1. Open Hearth. It connects to the community server cindrly.com by itself.
 2. Sign in with the username and password above. No two-factor code is needed.
 3. Tap the menu button (top left) and open the "Play review" server to read and send messages.
 4. To try a call, open the "Lounge" voice channel (being alone in it is fine) and allow the microphone. An
@@ -441,7 +441,7 @@ Video: the YouTube link from step 1.6.
 
 ### 4.8 Data safety answers
 
-These are for **kappachat.duckdns.org**, the server the app opens by default. Anyone can point the app at their
+These are for **cindrly.com**, the server the app opens by default. Anyone can point the app at their
 own Hearth server; that server's owner then holds the data, not you. They come from the code and from
 [`../SECURITY.md`](../SECURITY.md) (section 1 says what each piece of data is and how it's protected).
 

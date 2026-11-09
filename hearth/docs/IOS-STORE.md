@@ -86,7 +86,7 @@ The app shows the pages kappachat sends, so App Review sees what kappachat runs.
    (see [the README](../README.md#upgrading-a-server-that-already-has-users)). Older servers still show ways to pay
    and can't send to iPhones.
 2. Copy the `.p8` to the server, outside the Hearth folder, readable only by the user Hearth runs as. From your
-   computer (PowerShell works): `scp AuthKey_XXXXXXXXXX.p8 you@kappachat.duckdns.org:/tmp/`, then on the server:
+   computer (PowerShell works): `scp AuthKey_XXXXXXXXXX.p8 you@cindrly.com:/tmp/`, then on the server:
 
    ```
    sudo mkdir -p /etc/hearth
@@ -112,8 +112,8 @@ The app shows the pages kappachat sends, so App Review sees what kappachat runs.
    Leave `APNS_ALLOW_SANDBOX` out. Restart Hearth (`docker compose up -d --force-recreate`, or
    `sudo systemctl restart hearth`). If a firewall limits where the server can connect, allow
    `api.push.apple.com` port 443.
-4. Check: `https://kappachat.duckdns.org/api/config` shows `"apnsEnabled":true`, and
-   `https://kappachat.duckdns.org/.well-known/apple-app-site-association` shows your app ID. If `apnsEnabled` is
+4. Check: `https://cindrly.com/api/config` shows `"apnsEnabled":true`, and
+   `https://cindrly.com/.well-known/apple-app-site-association` shows your app ID. If `apnsEnabled` is
    false, the server's log says why (`push apns_disabled why=…`; see
    [OPERATIONS.md](OPERATIONS.md#8-iphone-notifications-apns)).
 5. **Two demo accounts** for App Review, on kappachat: make two accounts (for example `appreview1` and
@@ -138,7 +138,7 @@ and the alternative with your own certificate, are in [SIGNING.md](SIGNING.md#ip
 3. GitHub → your repository → *Settings → Environments → production → Environment secrets*: add
    `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8_BASE64` (that line of text). Then *Settings → Secrets and
    variables → Actions → Variables*: add `APPLE_TEAM_ID` = your Team ID. `HEARTH_SERVER` is already there
-   (`https://kappachat.duckdns.org`).
+   (`https://cindrly.com`).
 4. Delete the downloaded `.p8` and the text, or keep them only in a password manager.
 
 An Admin key can do anything in your App Store Connect account, so it lives only in the `production` environment,
@@ -193,7 +193,7 @@ account or a friend, and write down anything that doesn't work:
 3. **Calls (the biggest unknown):** start a call, lock the phone, talk for 5 minutes: does audio still go both
    ways? Also answering from the ring notification, Bluetooth headphones, and a phone call coming in during a
    Hearth call. If audio stops when the phone locks, say *keep Hearth open during calls* in the store text.
-4. **Links:** an invite link as `hearth://invite/CODE` and as `https://kappachat.duckdns.org/invite/CODE` pasted
+4. **Links:** an invite link as `hearth://invite/CODE` and as `https://cindrly.com/invite/CODE` pasted
    into Notes and tapped; Share → Hearth from TikTok or Instagram (then open Hearth).
 5. **No payments:** no *Support*, funding card, memberships or download links; a `ko-fi.com` link in a message
    doesn't open.
@@ -269,11 +269,11 @@ ratings)*.
 
   ```
   Hearth is an end-to-end encrypted chat app (messages, voice and video calls) for communities that run their own
-  server. This build connects to the publisher's server, kappachat.duckdns.org; the interface is that server's own
+  server. This build connects to the publisher's server, cindrly.com; the interface is that server's own
   web page, shown in WKWebView.
 
   Demo accounts: appreview1 / <password> and appreview2 / <password>. They share a server with a channel, and a DM.
-  To test a call, sign in to the second account on another device or at https://kappachat.duckdns.org.
+  To test a call, sign in to the second account on another device or at https://cindrly.com.
 
   Native features:
   - Notifications through APNs, decrypted on the device by a Notification Service Extension: Apple's payload only
