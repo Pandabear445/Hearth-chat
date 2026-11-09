@@ -21,6 +21,14 @@
    in the splash's status line from the first moment of a quick start. */
 #boot-splash .boot-slow { font-size: calc(14 / 16 * 1rem); color: var(--boot-muted); opacity: 0; visibility: hidden; animation: boot-late .3s ease 15s forwards; }
 #boot-splash.failed .boot-slow { display: none; }
+/* Reload: with the "taking longer" line, and at once when the start failed. Any page stuck here can get out. */
+#boot-splash .boot-reload {
+  display: inline-block; padding: 8px 20px; border: 1px solid currentColor; border-radius: 999px; color: var(--boot-ink);
+  font-size: calc(14 / 16 * 1rem); font-weight: 600; text-decoration: none; opacity: 0; visibility: hidden; animation: boot-late .3s ease 15s forwards;
+}
+#boot-splash .boot-reload:hover { background: color-mix(in srgb, var(--boot-ink) 10%, transparent); }
+#boot-splash .boot-reload:focus-visible { outline: 2px solid var(--boot-flame); outline-offset: 2px; }
+#boot-splash.failed .boot-reload { animation: none; opacity: 1; visibility: visible; }
 #boot-splash.failed .boot-text { color: var(--boot-ink); }
 #boot-splash .boot-noscript { font-size: calc(14 / 16 * 1rem); color: var(--boot-ink); }
 @keyframes boot-glow { from { opacity: .55; transform: scale(.96); } to { opacity: 1; transform: scale(1.04); } }

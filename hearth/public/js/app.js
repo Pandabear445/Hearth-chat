@@ -271,6 +271,15 @@ export const app = {
 };
 
 // ======================================================================= boot
+// Every wait on the way to the first screen has an end: a request or this browser's storage that never answers would
+// otherwise leave the page on its splash for good, with nothing said.
+const BOOT_WAIT_MS = 10000; // (declared before init() runs below: it's read before bootUp's first await)
+function bootStep(promise, what) {
+  let timer;
+  const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} didn\u2019t answer.`)), BOOT_WAIT_MS); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+window.__cindrlyBooted = true; // for the page's start-up guard (js/boot-guard.js): every app file loaded, and it runs
 init();
 
 // The page's own loading screen, drawn before any script ran, goes once the sign-in screen or the app is drawn.
@@ -317,7 +326,7 @@ async function bootUp() {
   // signed in, then the share picker opens (share.js). The address bar goes back to / at once.
   const shared = shareFromLocation(location);
   if (shared.found) { sessionStorage.setItem('hearth.pendingShare', shared.link ? shared.link.url : ''); history.replaceState(null, '', '/'); }
-  try { S.config = await api('GET', '/config'); } catch { S.config = { name: 'Cindrly', iceServers: [] }; }
+  try { S.config = await api('GET', '/config', undefined, { timeout: BOOT_WAIT_MS }); } catch { S.config = { name: 'Cindrly', iceServers: [] }; }
   // A disappearing timer inside a message counts only if it's one this server offers (disappear.js).
   setTimerChoices((S.config.disappearing || {}).choices);
   document.title = S.config.name;
@@ -334,8 +343,9 @@ async function bootUp() {
   if (pendingReset) { sessionStorage.removeItem('hearth.resetToken'); showSignIn(); openReset(pendingReset); return; }
   const uid = localStorage.getItem('hearth.userId');
   if (getToken() && uid) {
-    const key = await E2EE.loadKey(uid).catch(() => null);
-    if (key) { S.privateKey = key; S.pqSeed = await E2EE.loadPqSeed(uid); return startApp(uid); }
+    // (Storage that doesn't answer is not "no key here": that would ask for the password again. bootFailed says so.)
+    const key = await bootStep(E2EE.loadKey(uid), 'This browser\u2019s storage');
+    if (key) { S.privateKey = key; S.pqSeed = await bootStep(E2EE.loadPqSeed(uid), 'This browser\u2019s storage'); return startApp(uid); }
   }
   showSignIn();
 }
