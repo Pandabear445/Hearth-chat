@@ -319,7 +319,7 @@ jobs:
         with:
           node-version: 22
       # Capacitor 8 (Android 16 / API 36, which Google Play requires) builds with Java 21.
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: 21
@@ -538,7 +538,7 @@ jobs:
             if [ ! -f "$n" ]; then echo "::error title=Website download::No $n in this release, so the website's link to it would be broken."; missing=1; fi
           done
           exit "$missing"
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           files: dist/*
           generate_release_notes: false
