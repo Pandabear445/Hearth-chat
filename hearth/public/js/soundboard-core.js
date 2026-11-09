@@ -39,7 +39,7 @@ export function checkSoundFile({ size, type, head }) {
   if (!size) return 'That file is empty.';
   if (size > LIMITS.bytes) return `Sounds can be up to ${LIMITS.bytes / 1024 / 1024} MB. This one is ${(size / 1024 / 1024).toFixed(1)} MB.`;
   if (type && !/^audio\//i.test(type)) return 'That isn’t an audio file. Use an MP3, OGG, WAV, M4A, WebM or FLAC file.';
-  if (!sniffAudio(head)) return 'That file isn’t a sound Hearth can play. Use an MP3, OGG, WAV, M4A, WebM or FLAC file.';
+  if (!sniffAudio(head)) return 'That file isn’t a sound Cindrly can play. Use an MP3, OGG, WAV, M4A, WebM or FLAC file.';
   return '';
 }
 export function checkLength(seconds) {

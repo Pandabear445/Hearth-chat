@@ -83,7 +83,7 @@ const b64url = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const netError = (msg, code = 'NETWORK') => Object.assign(new Error(msg), { code });
 
 function createApns({ keyPem, keyFile, keyId, teamId, topic, allowSandbox = false, hostOverride = null, ca = null, pad = (p) => JSON.stringify(p),
-  brandName = () => 'Hearth', now = Date.now, log = null, timeoutMs = TIMEOUT_MS } = {}) {
+  brandName = () => 'Cindrly', now = Date.now, log = null, timeoutMs = TIMEOUT_MS } = {}) {
   // Only what was wrong is logged, never the key or the error that reading it gave.
   const disabled = (why) => { if (log) log.warn('push', 'apns_disabled', { why, msg: 'iPhone notifications are off. Check APNS_KEY_FILE (or APNS_KEY), APNS_KEY_ID, APNS_TEAM_ID and APNS_TOPIC.' }); return null; };
   if (!keyPem && keyFile) { try { keyPem = fs.readFileSync(keyFile, 'utf8'); } catch { return disabled('key_file_unreadable'); } }
@@ -196,7 +196,7 @@ function createApns({ keyPem, keyFile, keyId, teamId, topic, allowSandbox = fals
     const call = kind === 'call';
     const tag = typeof payload.tag === 'string' && payload.tag ? payload.tag : undefined;
     const aps = {
-      alert: { title: clip(brandName() || 'Hearth', 100), body: clip(generic || 'New activity', 100) },
+      alert: { title: clip(brandName() || 'Cindrly', 100), body: clip(generic || 'New activity', 100) },
       sound: call ? 'ring.wav' : 'default', 'mutable-content': 1, 'interruption-level': call ? 'time-sensitive' : 'active',
     };
     if (tag) aps['thread-id'] = tag;

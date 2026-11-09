@@ -27,13 +27,13 @@ const db = new Database(DB_FILE);
 // by stopping the server and copying the file back.
 const SCHEMA_VERSION = 27;
 const fromVersion = db.pragma('user_version', { simple: true });
-// v17 (data): a database written by a newer Hearth (the code was rolled back by hand, or a newer backup was
+// v17 (data): a database written by a newer Cindrly (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
 // new data, so refuse to start, without touching the file, and say how to get back.
 if (fromVersion > SCHEMA_VERSION) {
   db.close();
-  const err = new Error(`This database (${DB_FILE}) was written by a newer version of Hearth (database version ${fromVersion}; this version understands up to ${SCHEMA_VERSION}). `
-    + `Install that newer version again, or stop Hearth and restore the copy made before that upgrade (${path.join(DATA_DIR, 'backups', `hearth-before-v${fromVersion}-*.db`)}).`);
+  const err = new Error(`This database (${DB_FILE}) was written by a newer version of Cindrly (database version ${fromVersion}; this version understands up to ${SCHEMA_VERSION}). `
+    + `Install that newer version again, or stop Cindrly and restore the copy made before that upgrade (${path.join(DATA_DIR, 'backups', `hearth-before-v${fromVersion}-*.db`)}).`);
   err.code = 'HEARTH_DB_TOO_NEW';
   throw err;
 }
@@ -788,7 +788,7 @@ addColumn('channels', 'rtc_region', 'TEXT');
 addColumn('dm_channels', 'rtc_region', 'TEXT');
 
 // v16: creator memberships. A server's owner connects a Stripe account and sells monthly tiers; each tier
-// gives a role (which can open private channels). Payments go to the creator through Stripe; this Hearth
+// gives a role (which can open private channels). Payments go to the creator through Stripe; this Cindrly
 // keeps the fee its owner set. Only Stripe ids and statuses are stored here, never card details.
 db.exec(`
 CREATE TABLE IF NOT EXISTS creator_accounts (
@@ -952,11 +952,11 @@ function auditAppend(e) {
 // The database part of auditAppend, inside the caller's transaction. Returns the new entry's { id, hash }.
 function auditRows(e) {
   const a = readAnchor();
-  if (a && !a.valid) appendAuditRow({ action: 'audit_log_gap', detail: 'The audit log’s anchor file (data/audit-anchor.json) was changed, damaged or deleted outside Hearth.' });
+  if (a && !a.valid) appendAuditRow({ action: 'audit_log_gap', detail: 'The audit log’s anchor file (data/audit-anchor.json) was changed, damaged or deleted outside Cindrly.' });
   else if (a && a.id > 0) {
     const at = db.prepare('SELECT hash FROM admin_log WHERE id = ?').get(a.id);
     if (!at || at.hash !== a.hash) {
-      appendAuditRow({ action: 'audit_log_gap', detail: `Entry #${a.id}, the newest one recorded on this machine, is ${at ? 'different' : 'missing'}: entries were removed or changed outside Hearth, or an older copy of the database was put back.` });
+      appendAuditRow({ action: 'audit_log_gap', detail: `Entry #${a.id}, the newest one recorded on this machine, is ${at ? 'different' : 'missing'}: entries were removed or changed outside Cindrly, or an older copy of the database was put back.` });
     }
   }
   return appendAuditRow(e);
@@ -964,7 +964,7 @@ function auditRows(e) {
 // Walks the whole chain. { ok, entries, brokenAt, reason, keyedFrom, anchored, gaps }. reason: 'changed' (an entry
 // doesn't match its hash), 'missing' (the log ends before the newest entry the anchor remembers), 'anchor' (the
 // anchor file was edited) or 'keyed_from' (the setting saying where keyed entries start was edited or deleted).
-// gaps: entries where Hearth found and recorded such a problem earlier (the log has been intact since), including
+// gaps: entries where Cindrly found and recorded such a problem earlier (the log has been intact since), including
 // signing being started over. keyedSince: when signing started (entries before keyedFrom only have plain hashes).
 function auditVerify() {
   const a = readAnchor();
@@ -979,7 +979,7 @@ function auditVerify() {
     if (r.hash == null || (r.prev_hash || '') !== prev || r.hash !== want || (a && r.id === a.id && r.hash !== a.hash)) return bad('changed', r.id);
     if (a && r.id === a.id) seen = true;
     // When signing started (shown with the check). Signing only ever starts once, so a later start means the log
-    // was reset outside Hearth.
+    // was reset outside Cindrly.
     const restarted = r.action === 'audit_chain_keyed' && switches++ > 0;
     if (r.action === 'audit_chain_keyed' && r.id === AUDIT_FROM) out.keyedSince = r.created_at;
     if (r.action === 'audit_log_gap' || r.action === 'audit_anchor_reset' || restarted) out.gaps.push({ id: r.id, at: r.created_at, action: r.action, detail: r.detail });
@@ -1015,7 +1015,7 @@ CREATE TABLE IF NOT EXISTS user_key_history (
 );
 CREATE INDEX IF NOT EXISTS idx_user_key_history ON user_key_history(user_id, retired_at);
 `);
-// When this Hearth started encrypting channel messages end to end: the first encrypted message, or now. No
+// When this Cindrly started encrypting channel messages end to end: the first encrypted message, or now. No
 // member's app can write a plaintext channel message after that, so apps refuse "older" plaintext rows dated
 // later (only the server could have written them). Set once, never moved (and only looked up that once: it
 // scans every message).
@@ -1406,7 +1406,7 @@ CREATE INDEX IF NOT EXISTS idx_import_map_target ON import_map(kind, target_id);
 //   - whoever is denied Send Messages in every text channel they aren't hidden from (a "Muted" role, @everyone on a
 //     read-only server) is denied it in the server's voice chats too;
 //   - when every text channel has slow mode, the voice chats get the shortest of them.
-// Only ever more limits (an explicit allow is left alone), and each change goes in the server's audit log, by Hearth,
+// Only ever more limits (an explicit allow is left alone), and each change goes in the server's audit log, by Cindrly,
 // so its admins can see why and open a chat up in its Permissions. Voice channels made after this start open.
 if (!db.prepare("SELECT 1 FROM instance_settings WHERE key = 'voiceChatLimits'").get()) {
   const { PERMS: PB } = require('./perms');
@@ -1857,14 +1857,14 @@ if (upgradeCopy) {
     const set = keyedFromSetting();
     const head = auditHead();
     // Nothing says where the keyed entries start: either a log from before keyed hashing (this upgrade), or one whose
-    // markers were deleted outside Hearth so that entries edited and re-hashed with plain SHA-256 pass as old ones.
+    // markers were deleted outside Cindrly so that entries edited and re-hashed with plain SHA-256 pass as old ones.
     // An entry keyed with this server's key gives the second case away: the tamper check then reports 'keyed_from'.
     let firstKeyed = null;
     if (!marked && !anchored) {
       for (const r of db.prepare('SELECT * FROM admin_log WHERE hash IS NOT NULL ORDER BY id').iterate()) if (r.hash === auditMac(r.prev_hash, r)) { firstKeyed = r.id; break; }
     }
     AUDIT_FROM = anchored ? anchor.keyedFrom : set !== null ? set : firstKeyed !== null ? firstKeyed : head.id + 1;
-    if (firstKeyed !== null) log.warn('db', 'audit_anchor', { msg: `The audit log has entries keyed by this server from #${firstKeyed}, but the record of where they start was deleted outside Hearth.` });
+    if (firstKeyed !== null) log.warn('db', 'audit_anchor', { msg: `The audit log has entries keyed by this server from #${firstKeyed}, but the record of where they start was deleted outside Cindrly.` });
     else if (!marked) db.prepare('INSERT INTO instance_settings (key, value) VALUES (?, ?)').run('auditKeyedFrom', `${AUDIT_FROM}.${auditMacOf(`keyed-from|${AUDIT_FROM}`)}`);
     // Keyed hashing starts now, and the log says so in a keyed entry, with the date. Someone who wipes the markers to
     // pass edited entries off as old ones can't avoid a new one of these, dated when they did it (and listed as a
@@ -1872,7 +1872,7 @@ if (upgradeCopy) {
     const starting = !marked && !anchored && firstKeyed === null;
     if (starting && (head.id > 0 || db.prepare('SELECT 1 FROM users LIMIT 1').get())) {
       anchorTo = auditRows({ action: 'audit_chain_keyed', detail: head.id
-        ? `Entries from #${AUDIT_FROM} on are signed with this server’s secret key. The ${head.id === 1 ? 'entry before it was' : `${head.id} entries before it were`} written by an older version of Hearth and only have plain hashes. If this server was already up to date, the log was reset outside Hearth.`
+        ? `Entries from #${AUDIT_FROM} on are signed with this server’s secret key. The ${head.id === 1 ? 'entry before it was' : `${head.id} entries before it were`} written by an older version of Cindrly and only have plain hashes. If this server was already up to date, the log was reset outside Cindrly.`
         : `Entries from #${AUDIT_FROM} on are signed with this server’s secret key.` });
     } else if (!anchor) {
       // A keyed log without its anchor: a restored backup or a moved data folder (or the file was deleted). Start a

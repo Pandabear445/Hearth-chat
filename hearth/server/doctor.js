@@ -1,7 +1,7 @@
-// `node server/cli.js doctor`: checks a Hearth install and says what's wrong, in plain words.
+// `node server/cli.js doctor`: checks a Cindrly install and says what's wrong, in plain words.
 //
 // Read-only by default: it reads the database without changing it, never creates folders or files, and never prints a
-// secret (only "set" or "not set"). Safe while Hearth is running.
+// secret (only "set" or "not set"). Safe while Cindrly is running.
 //
 //   node server/cli.js doctor                    the checks
 //   node server/cli.js doctor --relays           also try to reach each relay region's TURN port
@@ -23,7 +23,7 @@ const KEY_FILES = ['secret.key', 'backup.key', 'vapid.json', 'key.pem', 'region-
 // The schema version this code expects, read from db.js as text (requiring it would open and upgrade the database).
 const codeSchema = () => Number((/const SCHEMA_VERSION = (\d+);/.exec(fs.readFileSync(path.join(__dirname, 'db.js'), 'utf8')) || [])[1]) || 0;
 
-// Opens the database without changing anything on disk. While Hearth runs (a -wal file exists) a normal read-only
+// Opens the database without changing anything on disk. While Cindrly runs (a -wal file exists) a normal read-only
 // connection sees the latest data and SQLite's companion files are already there. Otherwise a read-only connection
 // would still create them, so a database up to 256 MB is read from an in-memory copy instead (marked as a plain
 // rollback-journal file, which an in-memory database needs); a bigger one is opened read-only as usual.
@@ -52,10 +52,10 @@ async function runDoctor({ dataDir, env = process.env, flags = new Set() }) {
 
   // ---------------------------------------------------------------- versions
   const pkg = require('../package.json');
-  pass('Hearth version', pkg.version);
+  pass('Cindrly version', pkg.version);
   const major = +process.versions.node.split('.')[0];
-  if (major < 20) failed('Node.js', `${process.version}: Hearth needs Node 20 or newer (22 recommended).`);
-  else if (major < 22) warn('Node.js', `${process.version}: works, but Node 22 is what Hearth is tested on.`);
+  if (major < 20) failed('Node.js', `${process.version}: Cindrly needs Node 20 or newer (22 recommended).`);
+  else if (major < 22) warn('Node.js', `${process.version}: works, but Node 22 is what Cindrly is tested on.`);
   else pass('Node.js', process.version);
 
   // ---------------------------------------------------------------- data folder
@@ -63,13 +63,13 @@ async function runDoctor({ dataDir, env = process.env, flags = new Set() }) {
   let dirOk = false;
   let st = null;
   try { st = fs.statSync(dir); } catch { /* missing */ }
-  if (!st) failed('Data folder', `${dir} doesn't exist. Set DATA_DIR to Hearth's data folder (it's created on first start).`);
+  if (!st) failed('Data folder', `${dir} doesn't exist. Set DATA_DIR to Cindrly's data folder (it's created on first start).`);
   else if (!st.isDirectory()) failed('Data folder', `${dir} isn't a folder.`);
   else {
     dirOk = true;
     let writable = true;
     try { fs.accessSync(dir, fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK); } catch { writable = false; }
-    if (!writable) failed('Data folder', `${dir} isn't writable by this user (uid ${process.getuid ? process.getuid() : '?'}). Hearth must own it: chown -R the user Hearth runs as.`);
+    if (!writable) failed('Data folder', `${dir} isn't writable by this user (uid ${process.getuid ? process.getuid() : '?'}). Cindrly must own it: chown -R the user Cindrly runs as.`);
     else if (process.platform !== 'win32' && (st.mode & 0o007)) warn('Data folder', `${dir} can be read by every user on this machine (mode ${(st.mode & 0o777).toString(8)}). It holds the database and keys: chmod 700 it (or run with --fix-permissions).`);
     else pass('Data folder', `${dir} (writable${process.platform !== 'win32' ? `, mode ${(st.mode & 0o777).toString(8)}` : ''})`);
     const loose = [];
@@ -84,7 +84,7 @@ async function runDoctor({ dataDir, env = process.env, flags = new Set() }) {
   let db = null;
   const dbFile = path.join(dir, 'hearth.db');
   if (dirOk) {
-    if (!fs.existsSync(dbFile)) warn('Database', `No database yet (${dbFile}). It's created when Hearth first starts.`);
+    if (!fs.existsSync(dbFile)) warn('Database', `No database yet (${dbFile}). It's created when Cindrly first starts.`);
     else {
       try {
         db = openReadOnly(dbFile);
@@ -93,10 +93,10 @@ async function runDoctor({ dataDir, env = process.env, flags = new Set() }) {
         const v = db.pragma('user_version', { simple: true });
         const want = codeSchema();
         const tables = db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type = 'table'").get().n;
-        if (!tables) warn('Database schema', 'The database is empty. Hearth sets it up on start.');
+        if (!tables) warn('Database schema', 'The database is empty. Cindrly sets it up on start.');
         else if (v === want) pass('Database schema', `version ${v} (current)`);
-        else if (v < want) warn('Database schema', `version ${v}; this Hearth upgrades it to ${want} on next start (a copy is saved in backups/ first).`);
-        else failed('Database schema', `version ${v} is newer than this Hearth understands (${want}). Install the newer version again, or restore the backup made before that upgrade.`);
+        else if (v < want) warn('Database schema', `version ${v}; this Cindrly upgrades it to ${want} on next start (a copy is saved in backups/ first).`);
+        else failed('Database schema', `version ${v} is newer than this Cindrly understands (${want}). Install the newer version again, or restore the backup made before that upgrade.`);
         if (flags.has('--integrity')) {
           const r = db.pragma('quick_check', { simple: true });
           if (r === 'ok') pass('Database integrity', 'quick_check ok'); else failed('Database integrity', `quick_check: ${String(r).slice(0, 200)}`);
@@ -115,7 +115,7 @@ async function runDoctor({ dataDir, env = process.env, flags = new Set() }) {
   const publicUrl = String(env.PUBLIC_URL || '').trim();
   const https = String(env.HTTPS || 'true').toLowerCase() !== 'false';
   if (!publicUrl) warn('PUBLIC_URL', 'not set. Password-reset emails need it (the address people use, e.g. https://chat.example.com).');
-  else if (!/^https:\/\//i.test(publicUrl)) warn('PUBLIC_URL', 'set, but not https://. Sign-in tokens and encryption need HTTPS; put Hearth behind an HTTPS proxy.');
+  else if (!/^https:\/\//i.test(publicUrl)) warn('PUBLIC_URL', 'set, but not https://. Sign-in tokens and encryption need HTTPS; put Cindrly behind an HTTPS proxy.');
   else pass('PUBLIC_URL', 'set (https)');
   const secretKeyFile = dirOk && fs.existsSync(path.join(dir, 'secret.key'));
   if (isSet('AT_REST_KEY')) pass('At-rest key', 'AT_REST_KEY is set');
@@ -137,7 +137,7 @@ async function runDoctor({ dataDir, env = process.env, flags = new Set() }) {
       if (!isSet('SSL_CERT')) warn('TLS', 'HTTPS on with a self-signed certificate (browsers warn). Fine on a LAN; on the internet use a domain with Caddy, or set SSL_CERT/SSL_KEY.');
       else if (!fs.existsSync(env.SSL_CERT) || !fs.existsSync(env.SSL_KEY || '')) failed('TLS', 'SSL_CERT or SSL_KEY points at a file that doesn’t exist.');
       else pass('TLS', 'HTTPS with SSL_CERT/SSL_KEY');
-      if (trust && trust !== 'loopback') warn('TRUST_PROXY', 'set while Hearth serves HTTPS itself: with no proxy in front, X-Forwarded-For can only come from visitors, who could then pick their own address.');
+      if (trust && trust !== 'loopback') warn('TRUST_PROXY', 'set while Cindrly serves HTTPS itself: with no proxy in front, X-Forwarded-For can only come from visitors, who could then pick their own address.');
       else pass('TRUST_PROXY', trust === 'loopback' ? 'default (this machine only)' : 'off');
     } else {
       if (env.ALLOW_DIRECT_HTTP === 'true') warn('Reverse proxy', 'HTTPS=false and ALLOW_DIRECT_HTTP=true: plain HTTP from the internet is accepted, so tokens can travel unencrypted. Only for testing.');
@@ -197,7 +197,7 @@ async function runDoctor({ dataDir, env = process.env, flags = new Set() }) {
     for (const r of rows) {
       const alive = r.last_seen && Date.now() - r.last_seen < 3 * 60000;
       if (!r.last_seen) warn(`Region ${r.name}`, 'waiting for its install (no heartbeat yet)');
-      else if (!alive) warn(`Region ${r.name}`, `last heartbeat ${ago(r.last_seen)}. (Normal if Hearth is stopped: heartbeats go to the running server.)`);
+      else if (!alive) warn(`Region ${r.name}`, `last heartbeat ${ago(r.last_seen)}. (Normal if Cindrly is stopped: heartbeats go to the running server.)`);
       else pass(`Region ${r.name}`, `last heartbeat ${ago(r.last_seen)}`);
       if (flags.has('--relays') && r.ip) {
         let urls = [];
@@ -214,7 +214,7 @@ async function runDoctor({ dataDir, env = process.env, flags = new Set() }) {
 
   // ---------------------------------------------------------------- background jobs (as last recorded)
   if (db) {
-    if (!has('job_health')) warn('Background jobs', 'no record yet (this database predates job tracking; Hearth adds it on next start).');
+    if (!has('job_health')) warn('Background jobs', 'no record yet (this database predates job tracking; Cindrly adds it on next start).');
     else {
       const rows = db.prepare('SELECT * FROM job_health ORDER BY name').all();
       if (!rows.length) pass('Background jobs', 'no runs recorded yet');
@@ -234,7 +234,7 @@ async function runDoctor({ dataDir, env = process.env, flags = new Set() }) {
     const fix = (p, mode, why) => {
       try { const m = fs.statSync(p).mode & 0o777; if (m !== mode) { fs.chmodSync(p, mode); repairs.push(`chmod ${mode.toString(8)} ${p} (was ${m.toString(8)}): ${why}`); } } catch { /* not there */ }
     };
-    fix(dir, 0o700, 'only the account Hearth runs as needs the data folder');
+    fix(dir, 0o700, 'only the account Cindrly runs as needs the data folder');
     for (const f of KEY_FILES) fix(path.join(dir, f), 0o600, 'key files are as sensitive as passwords');
   }
 

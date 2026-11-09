@@ -8,7 +8,7 @@
 // leaves that window is let go (its frame removed), so a long feed doesn't fill the memory.
 //
 // Privacy: "Load when I tap" (Settings → Chat) shows a cover until this person taps once; that tap counts for the
-// whole tab, and every other Reels tab, until Hearth is closed or reloaded, and the cover says so. "Just show the
+// whole tab, and every other Reels tab, until Cindrly is closed or reloaded, and the cover says so. "Just show the
 // link" shows cards with the link, never a player. Players are social.js's: built from a checked id, sandboxed, no
 // referrer. The current TikTok plays without sound until a tap on its sound button.
 //
@@ -267,8 +267,8 @@ export function createReels(deps) {
       const verb = typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches ? ['Click', 'Clicking'] : ['Tap', 'Tapping'];
       add(st.cover, h('div', { class: 'reels-cover-in' },
         h('strong', null, `${verb[0]} to start watching`),
-        h('p', null, `These videos load from TikTok and Instagram, which see your IP address (and may set cookies in their players). ${verb[1]} here lets every video in this tab, and other Reels tabs, load until you close Hearth.`),
-        h('p', { class: 'muted-p' }, 'Short TikTok links are looked up by your Hearth server. Settings → Chat → TikTok and Instagram changes this.'),
+        h('p', null, `These videos load from TikTok and Instagram, which see your IP address (and may set cookies in their players). ${verb[1]} here lets every video in this tab, and other Reels tabs, load until you close Cindrly.`),
+        h('p', { class: 'muted-p' }, 'Short TikTok links are looked up by your Cindrly server. Settings → Chat → TikTok and Instagram changes this.'),
         h('button', { class: 'btn primary', type: 'button' }, icon('play'), 'Start watching')));
     }
   }
@@ -654,7 +654,7 @@ export function createReels(deps) {
       why ? h('p', { class: 'field-hint' }, why) : h('form', { class: 'reels-add', onsubmit: submit },
         h('span', { class: 'field-label' }, 'Add a link'),
         input,
-        pv === 'off' || st.mine ? null : h('label', { class: 'row gap tight field-hint' }, box, 'With a preview card (your Hearth server fetches the link)'),
+        pv === 'off' || st.mine ? null : h('label', { class: 'row gap tight field-hint' }, box, 'With a preview card (your Cindrly server fetches the link)'),
         h('button', { class: 'btn primary sm', type: 'submit' }, st.mine ? 'Add' : 'Share'),
         h('span', { class: 'field-hint' }, st.mine ? 'Kept in your vault, sealed: only you see My Reels.' : 'It’s sent as a message here, encrypted like any other, so it shows in the chat too. You can also paste a link anywhere on this tab, or drop one on it.')),
       h('button', { class: 'btn ghost sm', onclick: () => deps.openImport(st.mine ? null : st.key) }, icon('download'), 'Import liked & saved videos'),

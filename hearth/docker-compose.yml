@@ -3,18 +3,18 @@
 #                  HTTPS=false
 #                  HEARTH_BIND=127.0.0.1     <- port 3000 then only answers on this machine itself
 #                then: docker compose --profile domain up -d
-#                (Visitors' real addresses reach Hearth through Caddy: see TRUST_PROXY below. Nothing to set,
+#                (Visitors' real addresses reach Cindrly through Caddy: see TRUST_PROXY below. Nothing to set,
 #                unless your proxy isn't this file's Caddy: then set TRUST_PROXY in .env to its address or subnet.)
 #
 # How it's locked down:
-#  - Hearth runs as uid 1000 (not root), on a read-only filesystem: it can only write ./data and a small /tmp.
+#  - Cindrly runs as uid 1000 (not root), on a read-only filesystem: it can only write ./data and a small /tmp.
 #    It has no Linux capabilities, can't gain any (no-new-privileges), and its process count is capped.
 #  - No Docker socket is mounted anywhere (that would equal root on the host).
 #  - Port 3000: Docker publishes ports straight past the server's firewall (ufw can't block them), so with a
-#    domain set HEARTH_BIND=127.0.0.1. Caddy reaches Hearth over a private network ("proxy") that has no
+#    domain set HEARTH_BIND=127.0.0.1. Caddy reaches Cindrly over a private network ("proxy") that has no
 #    route to the internet; only Caddy's ports 80/443 face the internet.
-#  - Visitors' addresses (IP bans, per-network limits, the audit log): Hearth only believes the X-Forwarded-For
-#    header when it comes from the private "proxy" network, where only Caddy and Hearth live. Someone reaching
+#  - Visitors' addresses (IP bans, per-network limits, the audit log): Cindrly only believes the X-Forwarded-For
+#    header when it comes from the private "proxy" network, where only Caddy and Cindrly live. Someone reaching
 #    port 3000 directly (LAN, Docker's port forwarding) can't claim to be someone else. Never set TRUST_PROXY to
 #    a number or to Docker's gateway (x.x.x.1) while port 3000 is reachable from other machines.
 #  - hearth-perms runs once at start-up: older images wrote ./data as root, so it hands the folder to uid 1000
@@ -57,7 +57,7 @@ services:
     environment:
       DATA_DIR: /data
       # HTTPS: "false"
-      # Who may tell Hearth a visitor's address: by default only Caddy, on the "proxy" network below (keep the
+      # Who may tell Cindrly a visitor's address: by default only Caddy, on the "proxy" network below (keep the
       # default equal to that network's subnet). A proxy of your own instead (nginx on this machine, Traefik, a
       # tunnel): put TRUST_PROXY=<its address or subnet> in .env, which replaces this default.
       TRUST_PROXY: "${TRUST_PROXY:-10.231.47.0/28}"
@@ -108,11 +108,11 @@ services:
     logging: *logging
 
 networks:
-  # Hearth's own network: outgoing connections (web push, GIFs, email, relays) and the published port 3000.
+  # Cindrly's own network: outgoing connections (web push, GIFs, email, relays) and the published port 3000.
   hearth_net: {}
   # Caddy's own network: getting certificates and the published ports 80/443.
   edge: {}
-  # Private link between Caddy and Hearth. internal = no route in or out of the server.
+  # Private link between Caddy and Cindrly. internal = no route in or out of the server.
   # A fixed, unusual subnet, so TRUST_PROXY above can name it. If Docker says it overlaps another network,
   # pick another private /28 (10.x, 172.16-31.x or 192.168.x) and change it in both places.
   proxy:

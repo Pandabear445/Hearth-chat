@@ -1,8 +1,8 @@
-# Android notifications when the app is closed: UnifiedPush delivering Hearth's Web Push
+# Android notifications when the app is closed: UnifiedPush delivering Cindrly's Web Push
 
-Status: design, ready to build. Target: Hearth 1.29 (server) + the next `app-v*` Android build.
+Status: design, ready to build. Target: Cindrly 1.29 (server) + the next `app-v*` Android build.
 Pick #1 in `docs/NEXT.md`. All paths are relative to `hearth/` unless they start with `.github/`.
-Line numbers are approximate (Hearth 1.28.2) and only help you find the function.
+Line numbers are approximate (Cindrly 1.28.2) and only help you find the function.
 
 ---
 
@@ -14,7 +14,7 @@ a Web Push (`pushTo` → `queuePush` → `sendPush` in `server/index.js`). But t
 the app has no endpoint to give the server and the push goes nowhere.
 
 UnifiedPush gives an Android app a standard Web Push endpoint (RFC 8030) from a "distributor" app, usually ntfy.
-The app's connector library generates the RFC 8291 keys and decrypts the `aes128gcm` messages. Hearth's server
+The app's connector library generates the RFC 8291 keys and decrypts the `aes128gcm` messages. Cindrly's server
 already encrypts with RFC 8291 and signs with RFC 8292 VAPID for every endpoint. So the server barely changes:
 
 1. **Native (Java):** add the `org.unifiedpush.android:connector` library. Add a `HearthPushService` that turns
@@ -122,7 +122,7 @@ There is no database schema change in phase 1.
 
 ### Goals
 
-1. When the Hearth Android app is swiped away, killed by the system or not started since boot, the person still
+1. When the Cindrly Android app is swiped away, killed by the system or not started since boot, the person still
    gets notifications for:
    - DMs;
    - mentions, replies and @everyone;
@@ -144,7 +144,7 @@ There is no database schema change in phase 1.
    - the native registration is removed on sign-out and on server switch.
 6. Operators can restrict which push services the server talks to, and can let a named LAN push service through
    without opening all private ranges.
-7. CI proves the Android build compiles against the pinned library and that Hearth's own Java logic is correct,
+7. CI proves the Android build compiles against the pinned library and that Cindrly's own Java logic is correct,
    all without a device.
 
 ### Non-goals
@@ -208,7 +208,7 @@ There is no database schema change in phase 1.
     on SDK ≥ 23. Capacitor 8's `minSdkVersion` is 24, so that branch always applies.
   - Decryption uses a vendored, fixed copy of Tink's Web Push decrypter,
     `com.google.crypto.tink.apps.fixed_webpush.WebPushHybridDecrypt`.
-  - **Hearth writes no cryptography.**
+  - **Cindrly writes no cryptography.**
   - Sources: https://raw.githubusercontent.com/UnifiedPush/android-connector/main/connector/src/main/java/org/unifiedpush/android/connector/keys/DefaultKeyManager.kt, https://raw.githubusercontent.com/UnifiedPush/android-connector/main/connector/src/main/java/org/unifiedpush/android/connector/keys/WebPushKeys.kt, https://github.com/UnifiedPush/android-connector/tree/main/connector/src/main/java, https://fuchsia.googlesource.com/third_party/tink/+/refs/tags/v1.3.0-rc2/apps/webpush/ (Tink's Web Push app implements RFC 8291).
 - **Manifest the library merges in:**
   - `WAKE_LOCK`;
@@ -257,7 +257,7 @@ There is no database schema change in phase 1.
   - The endpoint is `https://fcm.googleapis.com/fcm/send/<token>`, and FCM accepts RFC 8291 Web Push signed with
     VAPID.
   - With a VAPID key from the app, no gateway is used. Without one it falls back to UnifiedPush's hosted gateway
-    `fcm.distributor.unifiedpush.org`. Hearth always passes VAPID, so the gateway is never used.
+    `fcm.distributor.unifiedpush.org`. Cindrly always passes VAPID, so the gateway is never used.
   - It is declared as a non-exported receiver subclass of `EmbeddedDistributorReceiver`, with the actions
     `…distributor.feature.BYTES_MESSAGE`, `…distributor.REGISTER` and `…distributor.UNREGISTER`.
   - Sources: https://repo1.maven.org/maven2/org/unifiedpush/android/embedded-fcm-distributor/maven-metadata.xml, https://repo1.maven.org/maven2/org/unifiedpush/android/embedded-fcm-distributor/3.1.0/embedded-fcm-distributor-3.1.0.pom, https://raw.githubusercontent.com/UnifiedPush/android-embedded_fcm_distributor/main/embedded_fcm_distributor/src/main/java/org/unifiedpush/android/embedded_fcm_distributor/Constants.kt, https://raw.githubusercontent.com/UnifiedPush/android-embedded_fcm_distributor/main/embedded_fcm_distributor/src/main/java/org/unifiedpush/android/embedded_fcm_distributor/Utils.kt, https://raw.githubusercontent.com/UnifiedPush/android-embedded_fcm_distributor/main/embedded_fcm_distributor/src/main/java/org/unifiedpush/android/embedded_fcm_distributor/EmbeddedDistributorReceiver.kt, https://raw.githubusercontent.com/UnifiedPush/android-embedded_fcm_distributor/main/embedded_fcm_distributor/src/main/java/org/unifiedpush/android/embedded_fcm_distributor/DefaultGateway.kt
@@ -285,14 +285,14 @@ There is no database schema change in phase 1.
 ```mermaid
 flowchart LR
   subgraph phone["Android phone"]
-    PAGE["Hearth page in WebView<br/>android.js + android-push.js + app.js"]
+    PAGE["Cindrly page in WebView<br/>android.js + android-push.js + app.js"]
     MA["MainActivity.java<br/>HearthAndroid bridge"]
     HP["HearthPush.java<br/>(UnifiedPush.register/unregister)"]
     SVC["HearthPushService.java<br/>(PushService)"]
     CONN["UnifiedPush connector<br/>keys + RFC 8291 decrypt"]
     DIST["Distributor app<br/>ntfy (or embedded FCM)"]
   end
-  SRV["Hearth server<br/>pushTo → sendPush (web-push + netguard)"]
+  SRV["Cindrly server<br/>pushTo → sendPush (web-push + netguard)"]
   PS["Push server<br/>ntfy.sh / self-hosted ntfy / FCM"]
   PAGE -- "pushRegister {vapid}" --> MA --> HP --> CONN --> DIST
   DIST -- "NEW_ENDPOINT" --> CONN --> SVC -- "hearth-push {endpoint,p256dh,auth}" --> MA --> PAGE
@@ -308,14 +308,14 @@ sequenceDiagram
   participant P as Page (app.js/android-push.js)
   participant N as MainActivity / HearthPush
   participant C as Connector + distributor
-  participant S as Hearth server
+  participant S as Cindrly server
   P->>S: GET /api/push/key
   P->>N: {type:'pushRegister', vapid}
   N->>C: tryUseCurrentOrDefaultDistributor(activity)
   alt none saved and the deep link fails
     N->>N: getDistributors(): 0 → state noDistributor; 1 → save; ≥2 → chooser dialog
   end
-  N->>C: UnifiedPush.register(ctx, instanceFor(origin), "Hearth · host", vapid)
+  N->>C: UnifiedPush.register(ctx, instanceFor(origin), "Cindrly · host", vapid)
   C-->>N: PushService.onNewEndpoint(endpoint{url, pubKeySet})
   N->>N: save to prefs; state = registered
   N-->>P: event hearth-push {state:'registered', endpoint, p256dh, auth, temporary}
@@ -327,7 +327,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-  participant S as Hearth server
+  participant S as Cindrly server
   participant PS as Push server (ntfy/FCM)
   participant C as Connector
   participant SV as HearthPushService
@@ -344,7 +344,7 @@ sequenceDiagram
   P->>P: location.hash = '#m/…' → openLinkFromHash
 ```
 
-**Key decision: the page, not native code, talks to the Hearth server.** Native code never sees the Bearer token
+**Key decision: the page, not native code, talks to the Cindrly server.** Native code never sees the Bearer token
 (`localStorage['hearth.token']` in the WebView). If the distributor gives a new endpoint while the app is closed,
 native code stores it, and the page POSTs it, with `replaces`, the next time it opens. Until then the old endpoint
 fails (404/410 → dropped, or 507 → failures; see §6.4). This trade-off is accepted. It keeps the security property
@@ -360,9 +360,9 @@ fails (404/410 → dropped, or 507 → failures; see §6.4). This trade-off is a
   Payloads are built from metadata the server already knows. `shapePush` hides names by default.
 - **Push services and distributors see only RFC 8291 ciphertext.** This covers ntfy.sh, a self-hosted ntfy, Google
   FCM and the ntfy app itself.
-  - Only the Hearth server (which holds `p256dh` and `auth` in `push_subs.keys`) and the phone (which holds the
+  - Only the Cindrly server (which holds `p256dh` and `auth` in `push_subs.keys`) and the phone (which holds the
     private key in Keystore-wrapped storage) can produce or read a payload.
-  - The connector reports `decrypted=false` for anything else. Hearth drops those.
+  - The connector reports `decrypted=false` for anything else. Cindrly drops those.
 - **Forged or injected pushes are dropped.** Anyone who learns an ntfy topic URL can POST to it: ntfy topics are
   capabilities and ntfy ignores VAPID. They cannot make a payload that decrypts without `auth`. FCM endpoints
   additionally require a VAPID signature from the server's private key.
@@ -377,13 +377,13 @@ fails (404/410 → dropped, or 507 → failures; see §6.4). This trade-off is a
 ### What is new or weaker (put these in SECURITY.md §4)
 
 1. **A new party learns metadata.** The push server learns:
-   - the Hearth server's IP (and, through VAPID, its public key);
+   - the Cindrly server's IP (and, through VAPID, its public key);
    - the phone's IP (its connection to ntfy) or its Google account and device (FCM);
    - when each notification is sent, its size bucket (we pad to 256-byte steps, so name lengths don't show), and
      the `Urgency`.
 
-   **ntfy.sh links "this phone gets notifications from this Hearth server"**, and so does Google with the embedded
-   FCM build. Self-hosting ntfy next to Hearth removes the third party.
+   **ntfy.sh links "this phone gets notifications from this Cindrly server"**, and so does Google with the embedded
+   FCM build. Self-hosting ntfy next to Cindrly removes the third party.
 2. **Delivery is best effort.** A distributor can delay, drop or replay notifications. A replay shows the same
    notification again under the same tag, so it replaces itself. A distributor can't read or forge them. ntfy
    caches messages for 12 h, so a call push can arrive late. The app turns a call push older than 2 minutes into
@@ -396,17 +396,17 @@ fails (404/410 → dropped, or 507 → failures; see §6.4). This trade-off is a
    - This is already true for browser push today.
    - Possible hardening later: an ECDSA signature with the VAPID private key (`data/vapid.json`, not in the
      database) that the app checks against the VAPID key it registered with. See §15.
-4. **A malicious Hearth server** can put any title or body in a notification. It already controls the page, so
+4. **A malicious Cindrly server** can put any title or body in a notification. It already controls the page, so
    nothing new.
 5. **The chosen distributor app** (ntfy) learns timing and the endpoint. It never gets `auth`, because the page sends
-   the keys straight to Hearth.
-6. **A malicious distributor can't redirect Hearth's outbound requests inside the network.** The page posts
+   the keys straight to Cindrly.
+6. **A malicious distributor can't redirect Cindrly's outbound requests inside the network.** The page posts
    whatever endpoint the distributor returned. `/push/subscribe` still runs `netguard.checkPublicUrl`, plus
    `PUSH_HOSTS` if it is set. So a hostile distributor still can't point the server at internal addresses.
 7. **Exported components from the library.** `MessagingReceiverImpl` (exported receiver) and
    `RaiseToForegroundService` (exported service) come from the connector, as the spec requires.
    - Other apps can send intents, but the connector ignores unknown tokens, and forged messages fail decryption.
-   - Binding the foreground service only gives Hearth foreground importance for a few seconds.
+   - Binding the foreground service only gives Cindrly foreground importance for a few seconds.
 
 ---
 
@@ -636,7 +636,7 @@ import org.unifiedpush.android.connector.PushService;
 import org.unifiedpush.android.connector.data.PushEndpoint;
 import org.unifiedpush.android.connector.data.PushMessage;
 
-/** Notifications from Hearth while the app is closed. Content never includes message text (the server never has it). */
+/** Notifications from Cindrly while the app is closed. Content never includes message text (the server never has it). */
 public class HearthPushService extends PushService {
     @Override public void onNewEndpoint(@NonNull PushEndpoint endpoint, @NonNull String instance) { HearthPush.onEndpoint(this, instance, endpoint); }
     @Override public void onMessage(@NonNull PushMessage message, @NonNull String instance) {
@@ -694,7 +694,7 @@ Methods:
          - The embedded entry gets the subtitle "Google sees when you get a notification, not what it says".
          - Pick: `saveDistributor` then `doRegister`. Cancel: state `none`, reason `CANCELLED`.
          - Only one dialog at a time.
-  5. `doRegister`: `UnifiedPush.register(a, instance, "Hearth · " + host(origin), vapid)` inside a try. On
+  5. `doRegister`: `UnifiedPush.register(a, instance, "Cindrly · " + host(origin), vapid)` inside a try. On
      `VapidNotValidException`, fail with `VAPID_INVALID`; on any other exception, `INTERNAL_ERROR`.
 - `static void unregister(Context c, String instance)`: if the instance isn't empty, `UnifiedPush.unregister(c, instance)`
   inside a try, then clear the `push.*` keys and set state `none`.
@@ -767,7 +767,7 @@ package app.hearth.mobile;
 public class EmbeddedDistributor extends org.unifiedpush.android.embedded_fcm_distributor.EmbeddedDistributorReceiver { }
 ```
 
-It needs no gateway override, because Hearth always passes VAPID. Manifest:
+It needs no gateway override, because Cindrly always passes VAPID. Manifest:
 
 ```xml
 <receiver android:enabled="true" android:name=".EmbeddedDistributor" android:exported="false">
@@ -837,7 +837,7 @@ Workflow changes (`.github/workflows/hearth-apps.yml`, job `android`):
 ### 8.1 New module `public/js/android-push.js` (pure, testable in Node)
 
 ```js
-// Push for the Hearth Android app: the app gets a Web Push endpoint from a UnifiedPush distributor (ntfy, …)
+// Push for the Cindrly Android app: the app gets a Web Push endpoint from a UnifiedPush distributor (ntfy, …)
 // and hands it to this page, which subscribes it with the server like a browser would.
 export const OPEN_RE = /^\/(#(?:m|c|d)\/[a-z0-9]{1,64}|#call\/(?:dm:)?[a-z0-9]{1,64}|#updates|#study)?$/;
 export const safeOpenHash = (path) => { const m = OPEN_RE.exec(String(path || '')); return m && m[1] ? m[1] : ''; };
@@ -879,7 +879,7 @@ export const reasonText = { /* code → sentence, see §9.5 */ };
 - `enablePush({ quiet })` (~5838): Android branch `enableAndroidPush({ quiet })`:
   1. If `Notification.permission !== 'granted'`: return if `quiet`, else `await Notification.requestPermission()`
      (the existing `AppNotification` shim → `askNotify`). If still not granted, throw "Notifications are turned off
-     for Hearth in Android settings."
+     for Cindrly in Android settings."
   2. `const { publicKey } = await api('GET', '/push/key')`.
   3. `let st = await androidApp.push.state()`. If `st.state !== 'registered' || st.vapid !== publicKey`:
      - if `quiet` and `!st.distributor`, return (never pop a chooser at start-up);
@@ -899,7 +899,7 @@ export const reasonText = { /* code → sentence, see §9.5 */ };
 - Boot (~873): keep `if (localStorage.getItem('hearth.push') === 'on') enablePush({ quiet: true })`. Add:
   - **live changes:** `androidApp.push?.onChange((st) => { if (localStorage.getItem('hearth.push') === 'on') enablePush({ quiet: true }).catch(() => {}); })`;
   - **a one-time offer:** if `androidApp.push`, `localStorage.getItem('hearth.push') === null` and
-    `Notification.permission !== 'denied'`, show an `update-bar`-style bar "Get notifications when Hearth is
+    `Notification.permission !== 'denied'`, show an `update-bar`-style bar "Get notifications when Cindrly is
     closed?" with **Turn on** (`enablePush()`) and **Not now** (sets `'off'`).
 - `openLinkFromHash` (~2956): add
   ```js
@@ -930,13 +930,13 @@ notification the native service posted (same `(tag, 1)`) is then removed when th
 
 - `appsTab` (~1746):
   - `androidApp.on && !androidApp.push` → the existing `androidNotifyRow()`. This is an old APK: add the line
-    "Update the Hearth app to get notifications after you swipe it away.";
+    "Update the Cindrly app to get notifications after you swipe it away.";
   - otherwise → `section('Notifications', pushToggleRow(app), androidApp.push ? androidPushAppRow(app) : null, hint)`.
 - `pushToggleRow` (~1668): new note texts:
-  - `nodistributor`: "To get notifications when Hearth is closed, install a push app such as ntfy (F-Droid or
+  - `nodistributor`: "To get notifications when Cindrly is closed, install a push app such as ntfy (F-Droid or
     Google Play), then turn this on. ntfy only passes on encrypted notifications; it can't read them."
   - `failed`: `reasonText[reason]`.
-  - `on` (Android): "You'll get notifications even after you swipe Hearth away. They say 'New message', never what
+  - `on` (Android): "You'll get notifications even after you swipe Cindrly away. They say 'New message', never what
     it says."
 - New `androidPushAppRow(app)`:
   - "Push app: <distributorName> · [Change]". Change calls `register(publicKey, {choose:true})` and then
@@ -948,14 +948,14 @@ notification the native service posted (same `(tag, 1)`) is then removed when th
 
 ### 8.6 `public/js/whatsnew.js`
 
-Add an item: "Android: notifications now arrive even after you swipe Hearth away (needs a push app such as ntfy,
+Add an item: "Android: notifications now arrive even after you swipe Cindrly away (needs a push app such as ntfy,
 see Settings → Apps & devices). They never contain what a message says."
 
 ---
 
 ## 9. What notifications look like
 
-### 9.1 Channels (Android Settings → Apps → Hearth → Notifications)
+### 9.1 Channels (Android Settings → Apps → Cindrly → Notifications)
 
 | Channel id | Name | Importance | Used for |
 |---|---|---|---|
@@ -999,7 +999,7 @@ pushes per tag (`queuePush`), and the device replaces by tag. Android groups aut
 |---|---|
 | `NETWORK` | "The push app couldn't reach its server. Check your connection and try again." |
 | `ACTION_REQUIRED` | "Open your push app (for example ntfy) and finish its setup, then try again." |
-| `VAPID_REQUIRED`, `VAPID_INVALID` | "That push app can't be used with Hearth. Pick another one." |
+| `VAPID_REQUIRED`, `VAPID_INVALID` | "That push app can't be used with Cindrly. Pick another one." |
 | `INTERNAL_ERROR`, `NO_KEYS` | "Something went wrong setting up notifications. Try again." |
 | `DISTRIBUTOR_GONE` | "Your push app was removed. Install one and turn notifications on again." |
 | `CANCELLED` | (no toast) |
@@ -1043,7 +1043,7 @@ pushes per tag (`queuePush`), and the device replaces by tag. Android groups aut
 12. **Injected plaintext, wrong keys, bad JSON, oversize, unknown fields.** The first four are dropped. Unknown fields
     are skipped.
 13. **ntfy.sh limits.**
-    - 250 messages a day. Depending on ntfy.sh's subscriber-based rate limiting this may count against the Hearth
+    - 250 messages a day. Depending on ntfy.sh's subscriber-based rate limiting this may count against the Cindrly
       server's IP.
     - A 429 now pauses that device for `Retry-After` (clamped to 1 min–1 h) without dropping it.
     - Busy instances should self-host ntfy (OPERATIONS recipe).
@@ -1247,7 +1247,7 @@ See §17.
 4. **Crypto compatibility on the server side.** `android-push-1` decrypts the server's real output with keys in the
    connector's format, using `http_ece`, an independent RFC 8291 implementation.
 5. **Library decryption (optional).** `WebPushDecryptCanaryTest` runs the RFC 8291 Appendix A example through the
-   decrypter we ship. Hearth itself writes no decryption code, so nothing of ours needs a decryption unit test.
+   decrypter we ship. Cindrly itself writes no decryption code, so nothing of ours needs a decryption unit test.
 6. **Not covered in CI:** the distributor round trip, Doze, the actual ringing. These need a device or emulator
    with ntfy (§17). An emulator job is possible later (§15).
 
@@ -1264,7 +1264,7 @@ See §17.
 | `docs/ARCHITECTURE.md` | §1 Android row (UnifiedPush connector, `HearthPushService`, `HearthPush`, channels). §2 push paragraph (UnifiedPush endpoints use the same `/push/subscribe`). §8 "Web push" row (`PUSH_HOSTS`/`PUSH_PRIVATE_HOSTS`, the status classes, padding). §9 Android (connector dependency at an exact version, optional FCM flag). §10 CI (`patch-android.js`, `testReleaseUnitTest`, merged-manifest check). The header still says 1.27.1; `package.json` is 1.28.2. |
 | `docs/ROUTES.md` | Push rows: add `replaces`, key validation and `PUSH_HOSTS`. Fix the stale notes: "Not bound to the session; never removed by logout (auth-7)" was fixed in v17 by `session_id` and `revokeSessions`. `/config` gets `pushNtfy`. |
 | `docs/FEATURES.md` | Push section: Android closed-app delivery, channels, `#call/` links, missed calls. |
-| `docs/OPERATIONS.md` | New "Self-hosted ntfy for Android push" recipe: the `binwiederhier/ntfy` container behind Caddy on 443; `base-url`, `behind-proxy: true`, `auth-default-access: deny-all` + `ntfy access '*' 'up*' write-only`; either `visitor-request-limit-exempt-hosts: <Hearth server IP>` or `visitor-subscriber-rate-limiting: true`; ntfy ≥ 2.12; set `PUSH_NTFY_URL`; and `PUSH_PRIVATE_HOSTS` if it is on a LAN address. Also a troubleshooting entry for `push refused host=… status=…`. |
+| `docs/OPERATIONS.md` | New "Self-hosted ntfy for Android push" recipe: the `binwiederhier/ntfy` container behind Caddy on 443; `base-url`, `behind-proxy: true`, `auth-default-access: deny-all` + `ntfy access '*' 'up*' write-only`; either `visitor-request-limit-exempt-hosts: <Cindrly server IP>` or `visitor-subscriber-rate-limiting: true`; ntfy ≥ 2.12; set `PUSH_NTFY_URL`; and `PUSH_PRIVATE_HOSTS` if it is on a LAN address. Also a troubleshooting entry for `push refused host=… status=…`. |
 | `README.md` | Env table (`PUSH_HOSTS`, `PUSH_PRIVATE_HOSTS`, `PUSH_NTFY_URL`). Push paragraph (~294). Remove "push notifications for the Android app while it's swiped away" from the not-yet list (~519). Android section (~342). |
 | `mobile/README.md` | Features list: closed-app notifications through UnifiedPush (ntfy). Remove the line in "Not in the Android app (yet)" ("needs Google's Firebase…"). Building: the connector dependency, `patch-android.js`, `HEARTH_EMBEDDED_FCM`, bumping versions by hand. Battery advice for ntfy. |
 | `.env.example` | The three new variables, with comments. |
@@ -1289,7 +1289,7 @@ See §17.
 4. **Adoption friction.** People need a second app (ntfy). The one-time offer and Settings must explain it simply.
    The FCM flavour helps people with Play services, at a privacy cost.
 5. **ntfy.sh limits and availability** (250 messages a day). I could not confirm whether ntfy.sh counts UnifiedPush
-   messages against the subscriber or the publisher (the Hearth IP). ntfy says subscriber-based limiting "will still
+   messages against the subscriber or the publisher (the Cindrly IP). ntfy says subscriber-based limiting "will still
    work for `up*` topics", but the default is publisher-based. Recommend self-hosting for anything beyond a few
    people. The new 429 handling avoids losing devices.
 6. **Database-thief spoofing of notifications** (§5 item 3). Accepted for phase 1.
@@ -1378,16 +1378,16 @@ Use the ntfy app from F-Droid or Play, its latest version.
 
 1. Fresh install, sign in. The one-time offer appears → Turn on → the ntfy chooser or deep link → Settings shows
    "Push app: ntfy". The server has one `push_subs` row with an `https://ntfy.sh/up…` endpoint.
-2. Swipe Hearth away. A DM from another account → "<Instance> / New message" within seconds. Tap → the DM opens at
+2. Swipe Cindrly away. A DM from another account → "<Instance> / New message" within seconds. Tap → the DM opens at
    that message.
 3. Lock the phone with "hide sensitive content", previews set to "names". The lock screen shows the generic text,
    and unlocked shows the names.
-4. A call from another account with Hearth swiped away → the Calls channel rings for at most 45 s. Tap → the DM opens
+4. A call from another account with Cindrly swiped away → the Calls channel rings for at most 45 s. Tap → the DM opens
    and the ring card appears if the call is still on.
 5. Airplane mode for 5 minutes during a call attempt, then back online → "Missed call", no ring.
 6. Doze: run `adb shell dumpsys deviceidle force-idle`, then send a mention. With ntfy's battery exemption the
    notification arrives.
-7. Sign out → the row is gone server-side, and the ntfy app no longer lists the Hearth subscription. A message
+7. Sign out → the row is gone server-side, and the ntfy app no longer lists the Cindrly subscription. A message
    to that account → nothing on the phone.
 8. Switch server → the old instance is unregistered. Notifications from the old server stop.
 9. Uninstall ntfy → Settings shows "Your push app was removed".

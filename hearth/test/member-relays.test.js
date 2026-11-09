@@ -109,7 +109,7 @@ test('an offer gives an install command for the relay\'s own secret, with the me
   assert.match(row.secret, /^sealed:/);
   assert.ok(!row.secret.includes(own), 'not stored in plain text');
   // What the member chose: the bandwidth limit for setup-turn.sh, the backup space, the member-relay wording.
-  assert.match(s1, /^# Hearth member relay: /m);
+  assert.match(s1, /^# Cindrly member relay: /m);
   assert.match(s1, /^KIND='member'$/m);
   assert.match(s1, /^export TURN_CAPACITY_MBIT=50\nbash "\$SETUP_DIR\/setup-turn\.sh" --relay-only --managed --member --secret-file "\$SETUP_DIR\/turn-secret"\n/m, 'IPv4 only, and never to its own address');
   // setup-turn.sh --member: relayed addresses only on the machine's IPv4 address (so nothing goes to anyone's IPv6
@@ -143,7 +143,7 @@ test('an offer gives an install command for the relay\'s own secret, with the me
   }
   assert.ok(s1.includes('ForceCommand internal-sftp -d /backups'), 'backup space, as offered');
   assert.ok(s1.includes('\\"version\\":5'), 'agent version 5');
-  assert.ok(s1.includes("It waits for the owner'\"'\"'s approval: see Hearth → Settings → Help host."));
+  assert.ok(s1.includes("It waits for the owner'\"'\"'s approval: see Cindrly → Settings → Help host."));
   assert.ok(s1.includes('At home: forward UDP and TCP 3478 and UDP 49160–49400 to this machine in your router. On a VPS: open them in the provider\'s firewall.'));
   assert.ok(s1.includes("cat > /usr/local/bin/hearth-relay-uninstall <<'UNINSTALL_EOF'"));
   assert.doesNotMatch(s1, /\/tmp\/hearth-/);
@@ -164,7 +164,7 @@ test('an offer gives an install command for the relay\'s own secret, with the me
   const rs = await script(reg.json.region.id, linkIn(reg.json.command));
   assert.equal(secretIn(rs), MAIN_SECRET);
   assert.match(rs, /--relay-only --managed --secret-file/, 'an owner\'s region relays as before');
-  assert.match(rs, /^# Hearth region: /m);
+  assert.match(rs, /^# Cindrly region: /m);
   assert.match(rs, /^KIND='region'$/m);
   assert.doesNotMatch(rs, /^export TURN_CAPACITY_MBIT=/m, 'no bandwidth limit of a member\'s');
   assert.ok(rs.includes('ForceCommand internal-sftp -d /backups'));
@@ -355,7 +355,7 @@ test('the uninstaller, run on a copy of an installed machine: only what the inst
     assert.doesNotMatch(second.log, /^apt-get/m);
     assert.ok(exists('coturn-installed'));
     assert.match(second.log, /^systemctl disable --now coturn$/m);
-    assert.match(second.out, /coturn was here before Hearth, so it stays installed with your own settings back, switched off\. To start it again: sudo systemctl enable --now coturn/);
+    assert.match(second.out, /coturn was here before Cindrly, so it stays installed with your own settings back, switched off\. To start it again: sudo systemctl enable --now coturn/);
     assert.ok(!exists('etc/systemd/system/coturn.service.d/hearth-relay-guard.conf') && !exists('nft-table'), 'and starts again without Hearth\'s rule (whose file is gone)');
 
     // Settings that pass only with Hearth's block (removing it is what breaks them): back to the copy from before Hearth.
@@ -363,7 +363,7 @@ test('the uninstaller, run on a copy of an installed machine: only what the inst
     const third = run();
     assert.equal(read('etc/ssh/sshd_config'), 'Port 22\n');
     assert.match(third.log, /^systemctl reload ssh$/m);
-    assert.match(third.out, /back as they were before Hearth/);
+    assert.match(third.out, /back as they were before Cindrly/);
     assert.ok(!exists('etc/turnserver.conf') && !exists('etc/turnserver.conf.bak-2000'), 'Hearth\'s relay settings, with the secret, are gone');
 
     // coturn can't be uninstalled (another install holds the package lock): it says so and fails, and keeps the note
@@ -1227,7 +1227,7 @@ test('a member relay\'s address changes only so often: 4 times in 18 hours, then
     assert.equal(heard, 4, 'four times everyone\'s apps were told, not twenty');
     assert.deepEqual(ipsIn(await ice(avoider)).sort(), [...seen].sort(), 'and five addresses for avoiders to leave out, not twenty-one');
     const r = await beat(o.id, o.token, { ip: '198.51.100.230' });
-    assert.match(r.json.error, /^This relay’s address has changed 4 times in 18 hours, as often as Hearth takes, so it stays at 198\.51\.100\.203 until \d{4}-\d\d-\d\d \d\d:\d\d UTC/);
+    assert.match(r.json.error, /^This relay’s address has changed 4 times in 18 hours, as often as Cindrly takes, so it stays at 198\.51\.100\.203 until \d{4}-\d\d-\d\d \d\d:\d\d UTC/);
     assert.equal((await admin()).members.find((x) => x.id === o.id).ip, '198.51.100.203', 'it stays where it was');
     // From where it is, it carries on as before.
     assert.equal((await beat(o.id, o.token, { ip: '198.51.100.203' })).status, 200);

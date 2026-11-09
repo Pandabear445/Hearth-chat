@@ -3,7 +3,7 @@ const ua = navigator.userAgent;
 const os = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? 'ios'
   : /Android/.test(ua) ? 'android' : /Windows/.test(ua) ? 'windows' : /Mac OS X/.test(ua) ? 'mac' : /Linux|X11/.test(ua) ? 'linux' : 'other';
 const label = { windows: 'Windows', mac: 'macOS', linux: 'Linux', android: 'Android', ios: 'iPhone & iPad', other: 'your device' };
-// Opened inside the Hearth Android or iPhone app (its user agent says HearthAndroid or HearthiOS,
+// Opened inside the Cindrly Android or iPhone app (its user agent says HearthAndroid or HearthiOS,
 // mobile/capacitor.config.json): no downloads and no links to them, as the releases page has the Android app too.
 // An app from Google Play or the App Store updates only through its store.
 const inApp = /\bHearth(Android|iOS)\b/.test(ua);
@@ -12,7 +12,7 @@ const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag)
 let prompt = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); prompt = e; render(); });
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
-let cfg = { name: 'Hearth', downloads: [] };
+let cfg = { name: 'Cindrly', downloads: [] };
 try { cfg = await (await fetch('/api/config')).json(); } catch {}
 document.title = `Get ${cfg.name}`;
 document.querySelectorAll('[data-name]').forEach((n) => { n.textContent = cfg.name; });
@@ -20,8 +20,8 @@ const files = inApp ? [] : cfg.downloads || [];
 const mine = files.filter((f) => f.platform === os);
 const installBtn = () => prompt ? el('button', { class: 'btn primary', onclick: async () => { prompt.prompt(); await prompt.userChoice; prompt = null; render(); } }, 'Install the app') : null;
 const steps = {
-  ios: ['Open this page in Safari', 'Tap the Share button', 'Choose "Add to Home Screen"', 'Open Hearth from your Home Screen and log in', 'Tap "Turn on" when Hearth offers notifications (iOS 16.4 or newer)'],
-  android: ['Open this page in Chrome', 'Tap the menu (⋮)', 'Choose "Install app"', 'Open Hearth from your home screen'],
+  ios: ['Open this page in Safari', 'Tap the Share button', 'Choose "Add to Home Screen"', 'Open Cindrly from your Home Screen and log in', 'Tap "Turn on" when Cindrly offers notifications (iOS 16.4 or newer)'],
+  android: ['Open this page in Chrome', 'Tap the menu (⋮)', 'Choose "Install app"', 'Open Cindrly from your home screen'],
 };
 function render() {
   const p = document.getElementById('primary');
@@ -46,7 +46,7 @@ function render() {
   } else if (steps[os]) {
     p.append(installBtn() || '', el('ol', {}, steps[os].map((s) => el('li', {}, s))));
   } else {
-    p.append(el('p', { class: 'dl-note' }, prompt ? 'Install it as an app from your browser:' : 'Install it from your browser menu (Chrome/Edge: “Install Hearth”), or just use it in the browser.'), installBtn() || '');
+    p.append(el('p', { class: 'dl-note' }, prompt ? 'Install it as an app from your browser:' : 'Install it from your browser menu (Chrome/Edge: “Install Cindrly”), or just use it in the browser.'), installBtn() || '');
   }
   const all = document.getElementById('all');
   all.replaceChildren();

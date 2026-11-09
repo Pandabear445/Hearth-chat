@@ -56,7 +56,7 @@ const NOT_GAMES = new Set(['431960', '250820', '228980', '1070560', '1391110', '
 module.exports = function setupActivity(ctx) {
   const { api, app, auth, db, fail, wrap, rateLimit, isOnline, getUserRow, getSetting, setSetting, checkMediaToken, mediaLinks, requireInstanceAdmin, checkWords, DATA_DIR, version,
     sealSecret, openSecret, auditLog } = ctx;
-  const UA = `Hearth/${version} (self-hosted chat; https://github.com/)`;
+  const UA = `Cindrly/${version} (self-hosted chat; https://github.com/)`;
   const now = () => Date.now();
   // Keys saved in the app are sealed with data/secret.key (see sealSecret in db.js).
   const lastfmKey = () => openSecret(getSetting('lastfmKey')) || env.LASTFM_API_KEY || '';

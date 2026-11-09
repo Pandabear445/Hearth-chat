@@ -1,7 +1,7 @@
-# Security checks for the Hearth server.
+# Security checks for the Cindrly server.
 #   Runs on every push and pull request that changes hearth/, .github/ or the landing site, every Monday (new vulnerabilities
 #   get published all the time, even when the code doesn't change), and from the Actions tab ("Run workflow").
-#   - tests:   Hearth's test suite (npm test).
+#   - tests:   Cindrly's test suite (npm test).
 #   - audit:   known vulnerabilities in the server's npm dependencies (fails on high/critical).
 #   - secrets: gitleaks over the whole git history (passwords, API keys, private keys committed by mistake).
 #   - image:   builds the Docker image and scans it with Trivy (fails on fixable high/critical), plus a
@@ -13,7 +13,7 @@
 #              each filled through its API and then upgraded in place to this commit (also killed half-way through
 #              the upgrade, then restarted); plus the recovery drill's report (hearth/docs/RECOVERY.md).
 # Third-party actions are pinned to exact commits (the comment says which version); Dependabot updates them.
-name: Hearth security
+name: Cindrly security
 
 on:
   push:

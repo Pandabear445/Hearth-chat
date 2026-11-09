@@ -2,7 +2,7 @@
 // Mute/Deafen in the taskbar preview, the "update ready" banner, reconnecting after sleep, and flashing the
 // taskbar on @mentions.
 //
-// In a browser (or if global keys aren't available), the keys work while Hearth is the focused window.
+// In a browser (or if global keys aren't available), the keys work while Cindrly is the focused window.
 // In the desktop app they work everywhere, and the app — not this page — listens, so nothing fires twice.
 const KEY = 'hearth.keybinds';
 export const DEFAULT_KEYBINDS = {

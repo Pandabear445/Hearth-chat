@@ -1,7 +1,7 @@
 // Incoming webhooks: a secret address per channel that programs post to, the way they post to Discord or Slack.
 //
 // Uptime Kuma, Grafana, Home Assistant, Jellyfin, GitHub Actions and most CI tools can post to a Discord webhook
-// address. Paste a Hearth one instead (https://<hearth>/api/webhooks/<id>/<secret>) and they keep working, with no
+// address. Paste a Cindrly one instead (https://<hearth>/api/webhooks/<id>/<secret>) and they keep working, with no
 // bot to write. Discord-style JSON (content, username, embeds), Slack-style JSON (text, attachments, blocks), a
 // Slack form (payload=…), plain text, and GitHub's own events at …/github are all understood.
 //
@@ -92,7 +92,7 @@ function listOf(v, path, max) {
   if (v.length > max) invalid(path, 'BASE_TYPE_MAX_LENGTH', `Must be ${max} or fewer in length.`);
   return v;
 }
-// A link to show (http or https only; Hearth's Markdown turns it into a link by itself).
+// A link to show (http or https only; Cindrly's Markdown turns it into a link by itself).
 const link = (v) => {
   if (typeof v !== 'string' || v.length > 2048 || !/^https?:\/\/\S+$/i.test(v)) return '';
   try { return new URL(v).href; } catch { return ''; }
@@ -116,7 +116,7 @@ function stamp(v) {
   return when(Date.parse(NO_ZONE.test(s) ? `${s.replace(' ', 'T')}Z` : s));
 }
 
-// Discord Markdown into Hearth's: masked links show where they go (Hearth has no hidden links, which is safer),
+// Discord Markdown into Cindrly's: masked links show where they go (Cindrly has no hidden links, which is safer),
 // timestamps become dates, headings become bold lines.
 const MASKED = /\[([^\]\n]{1,256})\]\( ?<?(https?:\/\/[^\s<>()]{1,2048})>?(?: "[^"\n]{0,256}")? ?\)/g;
 const fromDiscordMd = (s) => clean(s)
@@ -138,7 +138,7 @@ const fromSlackMd = (s) => clean(s)
   .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,!?:;])/gm, '$1**$2**')
   .replace(/(^|[\s(])~([^~\n]+)~(?=$|[\s).,!?:;])/gm, '$1~~$2~~');
 
-// An embed's colour as a coloured dot (Hearth's Markdown has no colours): red, green… is what alerts use it for.
+// An embed's colour as a coloured dot (Cindrly's Markdown has no colours): red, green… is what alerts use it for.
 function colorNum(v) {
   if (typeof v === 'number' && Number.isInteger(v) && v > 0 && v <= 0xffffff) return v;
   if (typeof v !== 'string') return null;
@@ -538,7 +538,7 @@ module.exports = function setupWebhooks(ctx) {
   function gate(req, res, next) {
     try {
       if (ipBanned(req.ip)) throw new HookError(403, { message: bannedMsg, code: 0 });
-      if (maintenance()) throw new HookError(503, { message: 'This Hearth is under maintenance. Try again later.', code: 0 });
+      if (maintenance()) throw new HookError(503, { message: 'This Cindrly is under maintenance. Try again later.', code: 0 });
       // Per network (limitNet: an IPv4 address, or an IPv6 /64, so rotating addresses inside one changes nothing).
       limitNet(req, 'hookip', 300, 60000);
       const w = hookFor(req.params.id, req.params.token);
@@ -659,7 +659,7 @@ module.exports = function setupWebhooks(ctx) {
     const t = newToken(id);
     db.transaction(() => {
       db.prepare(`INSERT INTO users (id, username, auth_hash, public_key, enc_private_key, profile, created_at, is_bot) VALUES (?, ?, ?, '', '', ?, ?, 1)`)
-        .run(userId, freeUsername(name), `!${crypto.randomBytes(16).toString('hex')}`, JSON.stringify({ displayName: name, bio: 'A webhook: it posts what a program outside Hearth sends.' }), now());
+        .run(userId, freeUsername(name), `!${crypto.randomBytes(16).toString('hex')}`, JSON.stringify({ displayName: name, bio: 'A webhook: it posts what a program outside Cindrly sends.' }), now());
       db.prepare('INSERT INTO channel_webhooks (id, channel_id, server_id, bot_user_id, name, token_hash, allow_mentions, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(id, c.id, s.id, userId, name, t.hash, pings ? 1 : 0, req.userId, now());
     })();

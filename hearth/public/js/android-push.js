@@ -1,4 +1,4 @@
-// Notifications while the Hearth Android app is closed. The app gets a Web Push address from a UnifiedPush push
+// Notifications while the Cindrly Android app is closed. The app gets a Web Push address from a UnifiedPush push
 // app on the phone (usually ntfy) and hands it, with its public keys, to this page; the page subscribes it with
 // the server exactly as a browser subscribes its own (POST /api/push/subscribe). The sign-in token never leaves
 // the page. No DOM here, so it's tested in Node (test/android-push.test.js).
@@ -12,16 +12,16 @@ export const safeInviteHash = (code) => (/^[A-Za-z0-9]{2,64}$/.test(String(code 
 
 // What the person is told when it doesn't work, by the app's reason code.
 export const reasonText = {
-  noDistributor: 'To get notifications when Hearth is closed, install a push app such as ntfy (from F-Droid or Google Play), then turn this on again. ntfy only passes on encrypted notifications; it can\u2019t read them.',
-  blocked: 'Notifications are turned off for Hearth. Turn them on in Android Settings \u2192 Apps \u2192 Hearth \u2192 Notifications.',
+  noDistributor: 'To get notifications when Cindrly is closed, install a push app such as ntfy (from F-Droid or Google Play), then turn this on again. ntfy only passes on encrypted notifications; it can\u2019t read them.',
+  blocked: 'Notifications are turned off for Cindrly. Turn them on in Android Settings \u2192 Apps \u2192 Cindrly \u2192 Notifications.',
   NETWORK: 'The push app couldn\u2019t reach its server. Check your connection and try again.',
   ACTION_REQUIRED: 'Open your push app (for example ntfy) and finish setting it up, then try again.',
-  VAPID_REQUIRED: 'That push app can\u2019t be used with Hearth. Pick another one.',
-  VAPID_INVALID: 'That push app can\u2019t be used with Hearth. Pick another one.',
+  VAPID_REQUIRED: 'That push app can\u2019t be used with Cindrly. Pick another one.',
+  VAPID_INVALID: 'That push app can\u2019t be used with Cindrly. Pick another one.',
   INTERNAL_ERROR: 'Something went wrong setting up notifications. Try again.',
   NO_KEYS: 'Something went wrong setting up notifications. Try again.',
   DISTRIBUTOR_GONE: 'Your push app was removed. Install one (such as ntfy) and turn notifications on again.',
-  UNREGISTERED: 'Your push app stopped delivering Hearth\u2019s notifications. Turn them on again.',
+  UNREGISTERED: 'Your push app stopped delivering Cindrly\u2019s notifications. Turn them on again.',
   CANCELLED: '',
   timeout: 'The push app didn\u2019t answer. Open it once, then try again.',
 };

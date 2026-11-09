@@ -1,12 +1,12 @@
-# CasaOS / ZimaOS app store entry for Hearth (v2 store format: a standard compose file plus a top-level x-casaos
+# CasaOS / ZimaOS app store entry for Cindrly (v2 store format: a standard compose file plus a top-level x-casaos
 # block). Staging copy: it goes to Apps/Hearth/docker-compose.yml in IceWhaleTech/CasaOS-AppStore, see ../README.md.
-# Hearth keeps its own self-signed HTTPS on: browsers only allow its encryption and microphones on https pages, and
+# Cindrly keeps its own self-signed HTTPS on: browsers only allow its encryption and microphones on https pages, and
 # CasaOS opens apps on http://<device>:<port> otherwise. The first account to sign up becomes the owner.
 name: hearth
 services:
-  # Runs once at start: CasaOS creates /DATA/AppData/hearth as root, Hearth runs as uid 1000.
+  # Runs once at start: CasaOS creates /DATA/AppData/hearth as root, Cindrly runs as uid 1000.
   hearth-perms:
-    image: ghcr.io/pandabear445/hearth:1.45.0
+    image: ghcr.io/pandabear445/hearth:1.46.0
     user: "0:0"
     entrypoint:
       - /bin/sh
@@ -22,7 +22,7 @@ services:
     restart: "no"
 
   hearth:
-    image: ghcr.io/pandabear445/hearth:1.45.0
+    image: ghcr.io/pandabear445/hearth:1.46.0
     restart: unless-stopped
     user: "1000:1000"
     depends_on:
@@ -30,7 +30,7 @@ services:
         condition: service_completed_successfully
     environment:
       DATA_DIR: /data
-      # This device's address or name, so Hearth's own certificate names it (comma-separated; optional).
+      # This device's address or name, so Cindrly's own certificate names it (comma-separated; optional).
       PUBLIC_HOSTS: ""
     ports:
       - target: 3000
@@ -58,12 +58,12 @@ x-casaos:
   scheme: https
   icon: https://raw.githubusercontent.com/Pandabear445/Hearth-chat/main/hearth/public/icons/icon-512.png
   title:
-    en_US: Hearth
+    en_US: Cindrly
   tagline:
     en_US: Self-hosted, end-to-end encrypted chat for friend groups
   description:
     en_US: >-
-      Hearth is a chat app for friend groups and small communities that you host yourself: servers with text and
+      Cindrly is a chat app for friend groups and small communities that you host yourself: servers with text and
       voice channels, roles, threads, direct messages and group chats, voice and video calls with screen sharing,
       and watching videos together. Messages, files and calls are end-to-end encrypted in the app, so the server
       stores only encrypted data (it still sees who talks to whom, and when). Desktop apps for Windows, Mac and
@@ -71,7 +71,7 @@ x-casaos:
   tips:
     before_install:
       en_US: >-
-        Hearth opens on https with a certificate it makes itself, so your browser warns once: choose Advanced and
+        Cindrly opens on https with a certificate it makes itself, so your browser warns once: choose Advanced and
         continue. Plain http won't work (encryption and microphones need https). The first account to sign up
         becomes the owner, so sign up before sharing the address. Friends outside your home network need a domain
         or a tunnel (Cloudflare Tunnel, Tailscale Funnel); see the README.
@@ -81,7 +81,7 @@ x-casaos:
   architectures:
     - amd64
     - arm64
-  version: "1.45.0"
+  version: "1.46.0"
   update_at: "2026-10-18"
   release_notes:
     en_US: First release in the CasaOS store.

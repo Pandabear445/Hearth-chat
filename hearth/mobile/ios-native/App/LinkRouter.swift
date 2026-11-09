@@ -3,11 +3,11 @@ import HearthKit
 
 /// Places the app is asked to open, held until the server's page is ready for them (MainActivity's pendingOpen,
 /// pendingInvite and pendingShare):
-///  - a tapped notification: one of Hearth's own addresses (PushPolicy.safeOpenPath), as hearth-open
+///  - a tapped notification: one of Cindrly's own addresses (PushPolicy.safeOpenPath), as hearth-open
 ///  - an invite link, hearth://invite/CODE or (a Universal Link, for an app built for one server)
 ///    https://<server>/invite/CODE: only the code travels (InviteLinks), as hearth-invite
-///  - a TikTok or Instagram link shared to Hearth: the share extension leaves it in the App Group ("pendingShare")
-///    and it's picked up when Hearth comes on screen, as hearth-share
+///  - a TikTok or Instagram link shared to Cindrly: the share extension leaves it in the App Group ("pendingShare")
+///    and it's picked up when Cindrly comes on screen, as hearth-share
 /// A page that says hello gets what's waiting in its info answer instead (HearthBridge). SceneDelegate and
 /// AppDelegate hand links here; Capacitor's own proxies still get them too.
 @MainActor
@@ -35,9 +35,9 @@ final class LinkRouter: NSObject {
         return true
     }
 
-    /// An invite for another Hearth server: it opens in Safari, on that server's own site, if the person wants. (The
+    /// An invite for another Cindrly server: it opens in Safari, on that server's own site, if the person wants. (The
     /// app stays on its own server: the wording doesn't suggest switching, which an app built for one server can't.)
-    /// Hearth just starting (a link that launched it): asked once its screen is up.
+    /// Cindrly just starting (a link that launched it): asked once its screen is up.
     private func otherServer(_ invite: Invite, tries: Int = 0) {
         guard let page = page, let top = page.topController(), page.view.window != nil else {
             if tries < 10 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.otherServer(invite, tries: tries + 1) } }
@@ -45,7 +45,7 @@ final class LinkRouter: NSObject {
         }
         guard let url = URL(string: InviteLinks.target(serverOrigin: invite.origin, code: invite.code)) else { return }
         let host = url.host ?? invite.origin
-        let alert = UIAlertController(title: "This invite is for \(host)", message: "It\u{2019}s for a different Hearth server than the one this app uses. You can open it in Safari.", preferredStyle: .alert)
+        let alert = UIAlertController(title: "This invite is for \(host)", message: "It\u{2019}s for a different Cindrly server than the one this app uses. You can open it in Safari.", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Open in Safari", style: .default) { [weak page] _ in page?.openOutside(url) })
         alert.preferredAction = alert.actions.last
@@ -74,7 +74,7 @@ final class LinkRouter: NSObject {
         if pendingShare != nil { deliverShare() }
     }
 
-    /// Hearth on screen: a link shared to it from another app (ShareViewController) is waiting.
+    /// Cindrly on screen: a link shared to it from another app (ShareViewController) is waiting.
     func sceneDidBecomeActive() {
         let group = HearthViewController.group
         guard let link = group.string(forKey: "pendingShare") else { return }
@@ -111,7 +111,7 @@ final class LinkRouter: NSObject {
         if page.pageApi >= 3 {
             page.toServerPage("hearth-share", jsonText(link))
         } else {
-            page.notice("This Hearth server is too old to share to. Paste the link in a conversation instead.")
+            page.notice("This Cindrly server is too old to share to. Paste the link in a conversation instead.")
         }
     }
 }

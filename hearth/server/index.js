@@ -52,7 +52,7 @@ const MAX_UPLOAD_MB = parseInt(process.env.MAX_UPLOAD_MB || '25', 10);
 const REGISTRATION_CODE = process.env.REGISTRATION_CODE || '';
 const REGISTRATION_OPEN = (process.env.REGISTRATION_OPEN || 'true').toLowerCase() !== 'false';
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY || '';
-const INSTANCE_NAME = process.env.INSTANCE_NAME || 'Hearth';
+const INSTANCE_NAME = process.env.INSTANCE_NAME || 'Cindrly';
 const VERSION = require('../package.json').version;
 
 const iceServers = [{ urls: (process.env.STUN_URLS || 'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302').split(',') }];
@@ -936,7 +936,7 @@ app.use(express.json({ limit: '2mb', type: jsonBody, verify: (req, res, buf) => 
 // Strict browser security policy for the app's own pages:
 //   scripts       only files from this server (+ WebAssembly for password hashing) — no inline or injected code
 //   connections   fetch/XHR/WebSocket go only back to this server (its API and live connection)
-//   fonts         only from this server (public/fonts), so no font host learns who opens Hearth
+//   fonts         only from this server (public/fonts), so no font host learns who opens Cindrly
 //   styles        this server's files, plus inline styles: style attributes (the UI sets colours and sizes that way)
 //                 and <style> elements (a profile page's custom CSS is one, with url() taken out). CSS can't run
 //                 code, though an outside url() in injected CSS would load like any https: image (below)
@@ -948,7 +948,7 @@ app.use(express.json({ limit: '2mb', type: jsonBody, verify: (req, res, buf) => 
 //                 impossible.
 //   frames        Recall (this server) and the YouTube, Vimeo, Twitch, TikTok and Instagram players only (the last
 //                 two: exactly www.tiktok.com and www.instagram.com, server/social.js FRAME_ORIGINS)
-//   framing       nobody can put Hearth inside their page (clickjacking); no plugins; forms only post here
+//   framing       nobody can put Cindrly inside their page (clickjacking); no plugins; forms only post here
 const CSP_BASE = [
   "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "script-src-attr 'none'", "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:", "img-src 'self' data: blob: https:", "media-src 'self' blob: data: https:",
@@ -1482,7 +1482,7 @@ app.get('/manifest.webmanifest', (req, res) => {
       { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
       { src: '/icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
-    // Chrome on Android, with Hearth installed: Hearth in the share sheet. The link opens the share picker (share.js).
+    // Chrome on Android, with Cindrly installed: Cindrly in the share sheet. The link opens the share picker (share.js).
     share_target: { action: '/share', method: 'GET', params: { title: 'title', text: 'text', url: 'url' } },
     shortcuts: [
       { name: 'Direct messages', url: '/?open=messages', icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }] },
@@ -1529,7 +1529,7 @@ const MODULE_PRELOADS = (() => {
 // The app's page carries the instance's name and tagline for link previews (server/invitepreview.js, set up below
 // with the other routes); it's answered here, before the static files.
 let appPage = null;
-// (/share: a link shared to Hearth, from an installed web app's share sheet or the bookmarklet; the app reads it.)
+// (/share: a link shared to Cindrly, from an installed web app's share sheet or the bookmarklet; the app reads it.)
 app.get(['/', '/index.html', '/share'], (req, res, next) => (appPage ? appPage(req, res) : next()));
 app.get('/download', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'download.html')));
 app.get('/terms', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'terms.html')));
@@ -1542,7 +1542,7 @@ const PRIVACY_URL = (() => {
   log.warn('config', 'privacy_url_ignored', { msg: 'PRIVACY_URL must be an https:// address; it is ignored.' });
   return null;
 })();
-// Android App Links: with this file, a phone that has a Hearth app built for this server (HEARTH_SERVER in the
+// Android App Links: with this file, a phone that has a Cindrly app built for this server (HEARTH_SERVER in the
 // apps workflow) opens https://this-server/invite/... links straight in the app instead of the browser. Android
 // only believes it for apps signed with a key listed here: ANDROID_CERT_SHA256 is that key's SHA-256
 // fingerprint (comma-separated for several, e.g. your own key and Google Play's app signing key).
@@ -1586,9 +1586,9 @@ app.get('/downloads/:file', (req, res) => {
   if (!hit) return res.status(404).send('Not found');
   res.download(path.join(DOWNLOADS_DIR, hit.name), hit.name);
 });
-// Recall (the study tools, public/recall/) runs inside Hearth in a sandboxed frame: it gets an origin of its own,
-// so it can't read Hearth's sign-in or storage, can't connect anywhere, and only Hearth itself may embed it.
-// Hearth hands it your decrypted decks and encrypts whatever it sends back (see public/js/recall-host.js).
+// Recall (the study tools, public/recall/) runs inside Cindrly in a sandboxed frame: it gets an origin of its own,
+// so it can't read Cindrly's sign-in or storage, can't connect anywhere, and only Cindrly itself may embed it.
+// Cindrly hands it your decrypted decks and encrypts whatever it sends back (see public/js/recall-host.js).
 const RECALL_CSP = ["default-src 'none'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "font-src 'self' data:", "img-src data: blob:",
   "media-src data: blob:", "connect-src 'none'", "form-action 'none'", "base-uri 'none'", "frame-ancestors 'self'", 'sandbox allow-scripts allow-modals allow-downloads'].join('; ');
 app.use('/recall', (req, res, next) => {
@@ -2053,7 +2053,7 @@ function pushFailed(endpoint) {
   if (row.fails >= PUSH_MAX_FAILS) { dropPushSub(endpoint); return; }
   db.prepare('UPDATE push_subs SET retry_at = ? WHERE endpoint = ?').run(now() + Math.min(60000 * 2 ** (row.fails - 1), 3600000), endpoint);
 }
-// Notify people who have no Hearth window open. Message contents are end-to-end encrypted, so the
+// Notify people who have no Cindrly window open. Message contents are end-to-end encrypted, so the
 // notification only says who and where — never what. It's worked out after the request that caused it has
 // been answered and sent a few at a time, so a big group or a slow push service never holds anyone up.
 // what: { kind, serverId, channelId, dmId } — checked against each person's notification preferences and Do Not
@@ -2549,7 +2549,7 @@ api.delete('/me', auth, wrap(async (req, res) => {
   rateLimit('deleteme:' + req.userId, 5, 60 * 60 * 1000);
   const mayGo = (row) => {
     if ((req.body || {}).confirm !== row.username) fail(400, 'Type your username to confirm.', 'confirm');
-    if (ownerId() === row.id) fail(400, 'You own this Hearth server. Hand ownership to someone else first (Admin → Team & roles).', 'is_owner');
+    if (ownerId() === row.id) fail(400, 'You own this Cindrly server. Hand ownership to someone else first (Admin → Team & roles).', 'is_owner');
     const owned = ownedServers(row.id);
     if (owned.length) fail(400, `First delete or hand over the servers you own: ${owned.map((x) => x.name).join(', ')}.`, 'owns_servers');
   };
@@ -2980,7 +2980,7 @@ api.delete('/friends/:id', auth, (req, res) => {
 });
 
 // ---------------------------------------------------------------- servers
-api.post('/servers', auth, (req, res, next) => (features().createServers === 'staff' && !isStaff(req.userId) ? next(new HttpError(403, 'On this Hearth, only staff can create servers. Ask an admin.')) : next()), limited('image', uploadImage, 'icon'), (req, res) => {
+api.post('/servers', auth, (req, res, next) => (features().createServers === 'staff' && !isStaff(req.userId) ? next(new HttpError(403, 'On this Cindrly, only staff can create servers. Ask an admin.')) : next()), limited('image', uploadImage, 'icon'), (req, res) => {
   const name = String((req.body || {}).name || '').trim().slice(0, 64);
   if (!name) fail(400, 'Give your server a name.');
   // A template (server/templates.js) sets up channels and roles; none means the Blank one, as before templates.
@@ -6424,7 +6424,7 @@ api.post('/admin/owner', auth, ownerOnly, wrap(async (req, res) => {
   adminLog(req, 'ownership_transferred', row.id, `${me.username} \u2192 ${row.username}`);
   secEvent('ownership_transferred', req.ip, `${me.username} -> ${row.username}`);
   ACCT.notify(me, 'you handed over ownership', `${me.username} handed ownership of ${brand().name} to ${row.username} (from ${cleanIp(req.ip)}). You're now an admin, and only ${row.username} can give ownership back.`);
-  ACCT.notify(row, 'you now own this Hearth', `${me.username} made ${row.username} the owner of ${brand().name}.`);
+  ACCT.notify(row, 'you now own this Cindrly', `${me.username} made ${row.username} the owner of ${brand().name}.`);
   res.json({ ok: true });
 }));
 // IP bans
@@ -6577,7 +6577,7 @@ function canCommentOn(viewerId, row, page) {
 }
 const commentOut = (c) => ({ id: c.id, text: c.text, createdAt: c.created_at, author: publicUser(getUserRow(c.author_id)) });
 // "Last seen", as the app shows it: the day only. Nothing at all while the person is invisible, or when
-// either of you has blocked the other: the exact time would tell a watcher when they're using Hearth.
+// either of you has blocked the other: the exact time would tell a watcher when they're using Cindrly.
 const DAY_MS = 86400000;
 function lastSeenFor(viewerId, row, blocked = row && viewerId !== row.id && isBlocked(viewerId, row.id)) {
   if (!row || !row.last_seen_at || row.status === 'invisible' || row.is_bot || blocked) return null;
@@ -7426,7 +7426,7 @@ require('./health').setupHealth({ api, auth, adminOnly, wrap, fail, rateLimit, l
   app, getSetting, setSetting, sealSecret, openSecret, brandName: () => brand().name, emitAdmins, countHit, hitsSoFar, netOf });
 
 // The address people use for this server, for what leaves it (the invite card's picture): Admin → Email's public
-// address, PUBLIC_URL, or the first PUBLIC_HOSTS name when Hearth serves https itself. Never the request's Host header.
+// address, PUBLIC_URL, or the first PUBLIC_HOSTS name when Cindrly serves https itself. Never the request's Host header.
 function publicOrigin() {
   let v = {};
   try { v = JSON.parse(getSetting('mail') || '{}') || {}; } catch { /* none */ }

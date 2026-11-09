@@ -5,7 +5,7 @@ import java.security.MessageDigest;
 import java.util.regex.Pattern;
 
 /**
- * The rules for notifications that arrive while Hearth is closed. Plain Java (no Android classes), so it can be
+ * The rules for notifications that arrive while Cindrly is closed. Plain Java (no Android classes), so it can be
  * tested on any JVM (test/android-push.test.js compiles and runs it; the Android build runs PushPolicyTest).
  *
  * A notification only ever opens an address inside the app (never another site), each server gets its own push
@@ -47,7 +47,7 @@ final class PushPolicy {
 
     /**
      * Where a ringing call's notification (tag "call:<room>") leads: "/#call/<room>", or null for any other tag.
-     * Hearth opened some other way while it rings goes there too (MainActivity.onResume).
+     * Cindrly opened some other way while it rings goes there too (MainActivity.onResume).
      */
     static String ringingCallPath(String tag) {
         if (tag == null || !tag.startsWith("call:")) return null;

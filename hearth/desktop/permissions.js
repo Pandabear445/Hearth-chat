@@ -52,8 +52,8 @@ function prompt(kinds, host) {
     title: 'Permission',
     message: `Let ${host} use ${list(kinds.map((k) => NAMES[k] || k))}?`,
     detail: clip
-      ? 'Hearth asks because a page wants to read what you copied, for example when you press a Paste button. Only allow this if you just did that: the clipboard can hold passwords.'
-      : 'Hearth needs this for calls and voice messages. You can change your mind later under Help → Reset permissions.',
+      ? 'Cindrly asks because a page wants to read what you copied, for example when you press a Paste button. Only allow this if you just did that: the clipboard can hold passwords.'
+      : 'Cindrly needs this for calls and voice messages. You can change your mind later under Help → Reset permissions.',
     checkboxLabel: `Remember this for ${host}`,
     checkboxChecked: !clip,
   };

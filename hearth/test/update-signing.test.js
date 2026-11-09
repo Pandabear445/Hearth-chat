@@ -73,7 +73,7 @@ test('update-key.js keygen keeps the private key private, never overwrites it, a
     assert.doesNotMatch(r.stdout + r.stderr, /PRIVATE KEY|MC4CAQAwBQYDK2Vw/, 'the private key is never printed');
     const p = K.readPublicKey(fs.readFileSync(pub, 'utf8'));
     assert.equal(p, K.publicKeyOf(K.loadPrivateKey(pem)), 'update-signing.pub is the matching public half');
-    assert.match(fs.readFileSync(pub, 'utf8'), /^# Hearth server update signing key/);
+    assert.match(fs.readFileSync(pub, 'utf8'), /^# Cindrly server update signing key/);
     assert.ok(r.stdout.includes(p));
     // A second keygen refuses: replacing the key would lock out every server that pinned it.
     const again = cli(['keygen', '--key', key, '--pub', pub]);
@@ -404,12 +404,12 @@ test('the installed Hearth\'s own key is pinned on the first run, and a signed s
     let r = L.run('--verify', z);
     assert.notEqual(r.status, 0);
     assert.match(r.out, /isn't signed/);
-    assert.match(r.out, /it came with the installed Hearth/);
+    assert.match(r.out, /it came with the installed Cindrly/);
     assert.equal(L.pinned(), null);
     // An update pins it (it came with what's running), then refuses the unsigned zip.
     r = L.run('--yes', z);
     assert.notEqual(r.status, 0);
-    assert.match(r.out, /Pinned the update signing key that came with this Hearth/);
+    assert.match(r.out, /Pinned the update signing key that came with this Cindrly/);
     assert.equal(L.pinned(), a.pub);
     L.unchanged(before);
     // An older, properly signed version: refused unless asked for.
@@ -417,7 +417,7 @@ test('the installed Hearth\'s own key is pinned on the first run, and a signed s
     signZip(old, a);
     r = L.run('--yes', old);
     assert.notEqual(r.status, 0);
-    assert.match(r.out, /is Hearth 1\.4\.9, older than the installed 1\.5\.0/);
+    assert.match(r.out, /is Cindrly 1\.4\.9, older than the installed 1\.5\.0/);
     assert.match(r.out, /hearth-update --rollback/);
     L.unchanged(before);
     for (const [v, older] of [['1.5.0-beta.2', true], ['1.5.0', false], ['1.10.0', false], ['0.99.99', true]]) {
@@ -525,7 +525,7 @@ test('a server that can\'t check signatures pins no key and stays on checksums, 
     signZip(z, a);
     const r = L.run('--yes', z);
     assert.equal(r.status, 0, r.out);
-    assert.match(r.out, /The installed Hearth has an update signing key, but this server can't check Ed25519 signatures .*so it isn't pinned/);
+    assert.match(r.out, /The installed Cindrly has an update signing key, but this server can't check Ed25519 signatures .*so it isn't pinned/);
     assert.match(r.out, /This update brings an update signing key .*so it isn't pinned: updates stay checked against their checksum only/);
     assert.doesNotMatch(r.out, /now only installs updates signed/);
     assert.equal(L.pinned(), null, 'nothing pinned that every later update would fail against');
@@ -543,7 +543,7 @@ test('the installed Hearth\'s key is only trusted when it is root\'s alone', { s
     const L = lab({ installedKey: foreign });
     try {
       loosen(path.join(L.app, 'update-signing.pub'));
-      assert.match(L.run('--status').out, /none pinned yet \(this Hearth's update-signing\.pub isn't root's alone/, what);
+      assert.match(L.run('--status').out, /none pinned yet \(this Cindrly's update-signing\.pub isn't root's alone/, what);
       // The owner's genuine signed release, carrying the owner's key: installed, and the owner's key is pinned.
       const z = L.zip({ key: owner });
       signZip(z, owner);
@@ -615,7 +615,7 @@ test('hearth-update --status names the pinned key', { skip: shellSkip }, () => {
   const a = keyPair();
   const L = lab({ installedKey: a });
   try {
-    assert.match(L.run('--status').out, /update key: none pinned yet \(the next update pins the one this Hearth came with\)/);
+    assert.match(L.run('--status').out, /update key: none pinned yet \(the next update pins the one this Cindrly came with\)/);
     fs.writeFileSync(L.pin, K.pubFileText(a.pub));
     assert.ok(L.run('--status').out.includes(`update key: ${a.pub} (pinned in ${L.pin}`));
     fs.rmSync(L.pin); fs.rmSync(path.join(L.app, 'update-signing.pub'));

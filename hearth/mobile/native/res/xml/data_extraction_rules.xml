@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Nothing of Hearth's leaves the phone through Android's own backup or a phone-to-phone transfer: the web view's
+<!-- Nothing of Cindrly's leaves the phone through Android's own backup or a phone-to-phone transfer: the web view's
      storage holds the session and the unlocked encryption keys. The manifest also says android:allowBackup="false";
      from Android 12 on, only these rules stop a phone-to-phone transfer. Copied into the app, and named in the
      manifest, by mobile/scripts/patch-android.js. -->

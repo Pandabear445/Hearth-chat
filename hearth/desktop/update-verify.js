@@ -99,8 +99,8 @@ const NOT_INSTALLED = 'so it wasn’t installed.';
 function verifyFeed({ name, yml, sig, publicKey, version, currentVersion }) {
   const key = typeof publicKey === 'string' ? loadPublicKey(publicKey) : publicKey;
   if (yml == null) return { ok: false, error: `Your server doesn’t offer the update’s details (${name}), ${NOT_INSTALLED}` };
-  if (sig == null || !String(sig).trim()) return { ok: false, error: `This update isn’t signed by Hearth’s publisher, ${NOT_INSTALLED}` };
-  if (!verifySignature(name, yml, sig, key)) return { ok: false, error: `This update’s signature doesn’t match Hearth’s publisher, ${NOT_INSTALLED}` };
+  if (sig == null || !String(sig).trim()) return { ok: false, error: `This update isn’t signed by Cindrly’s publisher, ${NOT_INSTALLED}` };
+  if (!verifySignature(name, yml, sig, key)) return { ok: false, error: `This update’s signature doesn’t match Cindrly’s publisher, ${NOT_INSTALLED}` };
   const meta = readMetadata(yml);
   if (!meta.version || !meta.hashes.size) return { ok: false, error: `This update’s signed details are incomplete, ${NOT_INSTALLED}` };
   if (version != null && compareVersions(meta.version, version) !== 0) return { ok: false, error: `The downloaded update (${version}) isn’t the signed one (${meta.version}), ${NOT_INSTALLED}` };
@@ -121,7 +121,7 @@ function sha512File(file) {
   });
 }
 
-// The native "install now?" dialog. Hearth never installs an update without the person saying so.
+// The native "install now?" dialog. Cindrly never installs an update without the person saying so.
 function installPrompt({ version, verified, host }) {
   return {
     type: verified ? 'question' : 'warning',
@@ -129,10 +129,10 @@ function installPrompt({ version, verified, host }) {
     defaultId: verified ? 1 : 0,
     cancelId: 0,
     title: 'Install update',
-    message: `Install Hearth ${version} now?`,
+    message: `Install Cindrly ${version} now?`,
     detail: verified
-      ? 'This update is signed by Hearth’s publisher and its download checked out. Hearth closes, installs it and opens again.'
-      : `This update can’t be verified: this copy of Hearth was built without an update signing key, so all it can check is that the download matches what ${host || 'your server'} says. Only install it if you trust that server. Hearth closes, installs it and opens again.`,
+      ? 'This update is signed by Cindrly’s publisher and its download checked out. Cindrly closes, installs it and opens again.'
+      : `This update can’t be verified: this copy of Cindrly was built without an update signing key, so all it can check is that the download matches what ${host || 'your server'} says. Only install it if you trust that server. Cindrly closes, installs it and opens again.`,
   };
 }
 

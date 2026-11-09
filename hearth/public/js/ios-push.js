@@ -1,4 +1,4 @@
-// Notifications while the Hearth iPhone app is closed. The app gets a device token from Apple's push service (APNs)
+// Notifications while the Cindrly iPhone app is closed. The app gets a device token from Apple's push service (APNs)
 // and makes this server's own encryption keys (a P-256 key and an auth secret, kept in the phone's Keychain); this
 // page subscribes them with the server like a browser's push address (POST /api/push/subscribe, type 'apns'). The
 // server sends Apple a notice that says only "New message" plus the real notification encrypted to those keys, and
@@ -15,12 +15,12 @@ export { OPEN_RE, safeOpenHash, safeInviteHash } from './android-push.js';
 
 // What the person is told when it doesn't work, by reason code.
 export const reasonText = {
-  blocked: 'Notifications are off for Hearth in iPhone Settings. Turn them on in Settings → Notifications → Hearth, then try again.',
+  blocked: 'Notifications are off for Cindrly in iPhone Settings. Turn them on in Settings → Notifications → Cindrly, then try again.',
   noApns: 'This server can’t send iPhone notifications (apnsEnabled is false). Its owner has to set up Apple push first.',
   NETWORK: 'Couldn’t reach Apple’s push service. Check your connection and try again.',
   INTERNAL_ERROR: 'Something went wrong setting up notifications. Try again.',
   NO_KEYS: 'Something went wrong setting up notifications. Try again.',
-  UNREGISTERED: 'Apple stopped delivering Hearth’s notifications to this iPhone. Turn them on again.',
+  UNREGISTERED: 'Apple stopped delivering Cindrly’s notifications to this iPhone. Turn them on again.',
   CANCELLED: '',
   timeout: 'Couldn’t reach Apple’s push service. Check your connection and try again.',
 };

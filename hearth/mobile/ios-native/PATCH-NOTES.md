@@ -28,7 +28,7 @@ the project `npx cap add ios` makes with `@capacitor/ios` 8.6 (Swift Package Man
 
 ### How the push token gets through
 Capacitor's `ApplicationDelegateProxy` does **not** forward Apple's token callbacks. Only
-`@capacitor/push-notifications` would, and Hearth doesn't use it. So our `AppDelegate` implements
+`@capacitor/push-notifications` would, and Cindrly doesn't use it. So our `AppDelegate` implements
 `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)` and `...didFailToRegister...`, and posts them as
 Capacitor's own notifications:
 - `.capacitorDidRegisterForRemoteNotifications` with the token `Data` as `object`;

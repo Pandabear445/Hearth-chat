@@ -14,7 +14,7 @@ export const THEMES = [
 // `css` is any CSS background value. Presets can use theme variables (rgb(var(--bg)), var(--accent-rgb)),
 // so the adaptive ones follow your theme and accent color automatically.
 export const BACKGROUNDS = [
-  { id: 'glow', name: 'Hearth glow', group: 'Adaptive', css: 'radial-gradient(55% 45% at 0% 0%, rgb(var(--accent-rgb) / .20), transparent 70%), radial-gradient(45% 45% at 100% 100%, rgb(var(--accent-rgb) / .13), transparent 70%), rgb(var(--bg))' },
+  { id: 'glow', name: 'Cindrly glow', group: 'Adaptive', css: 'radial-gradient(55% 45% at 0% 0%, rgb(var(--accent-rgb) / .20), transparent 70%), radial-gradient(45% 45% at 100% 100%, rgb(var(--accent-rgb) / .13), transparent 70%), rgb(var(--bg))' },
   { id: 'plain', name: 'Plain', group: 'Adaptive', css: 'rgb(var(--bg))', solid: true },
   { id: 'dots', name: 'Dots', group: 'Adaptive', pattern: true, css: 'radial-gradient(rgb(var(--text-rgb) / .10) 1.2px, transparent 1.4px) 0 0 / 22px 22px, rgb(var(--bg))' },
   { id: 'grid', name: 'Grid', group: 'Adaptive', pattern: true, css: 'linear-gradient(rgb(var(--text-rgb) / .05) 1px, transparent 1px) 0 0 / 32px 32px, linear-gradient(90deg, rgb(var(--text-rgb) / .05) 1px, transparent 1px) 0 0 / 32px 32px, rgb(var(--bg))' },
@@ -39,7 +39,7 @@ export const BACKGROUNDS = [
   { id: 'cotton', name: 'Cotton candy', group: 'Bright gradients', css: 'radial-gradient(60% 60% at 20% 20%, #ffd1ff, transparent 70%), radial-gradient(60% 60% at 80% 80%, #a1c4fd, transparent 70%), #fbc2eb' },
 ];
 
-// Interface fonts. All are fonts every device already has (or Hearth already loads), so nothing extra downloads.
+// Interface fonts. All are fonts every device already has (or Cindrly already loads), so nothing extra downloads.
 export const UI_FONTS = [
   { id: 'default', name: 'Figtree', hint: 'The default', css: null },
   { id: 'system', name: 'System', hint: "Your device's own font", css: "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif" },
@@ -134,7 +134,7 @@ export function cleanAppearance(src) {
   }
   return clean;
 }
-// Accepts what exportAppearance made. Returns false if the file isn't a Hearth look.
+// Accepts what exportAppearance made. Returns false if the file isn't a Cindrly look.
 export function importAppearance(data) {
   const src = data && data.hearthAppearance && data.settings;
   if (!src || typeof src !== 'object') return false;

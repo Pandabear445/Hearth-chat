@@ -43,7 +43,7 @@ export async function openMemberships(server) {
           !m.cancelAtEnd && m.status !== 'pending' ? h('button', { class: 'btn ghost sm', onclick: () => cancel(m) }, 'Cancel membership') : null)
           : h('button', { class: 'btn primary', onclick: (e) => join(t, e.currentTarget) }, `Join for ${money(t.priceCents, t.currency)}/month`)));
     }
-    body.append(h('p', { class: 'field-hint mb-fine' }, icon('lock', 'ic'), 'Payments are handled by Stripe. Hearth never sees your card.'));
+    body.append(h('p', { class: 'field-hint mb-fine' }, icon('lock', 'ic'), 'Payments are handled by Stripe. Cindrly never sees your card.'));
   };
   const join = async (t, btn) => {
     btn.disabled = true; btn.textContent = 'Opening Stripe…';
@@ -68,9 +68,9 @@ export async function membershipsTab(s, body, { roles }) {
   const redraw = () => membershipsTab(s, body, { roles });
   clear(body);
   body.append(h('div', { class: 'admin-head' }, h('h3', null, 'Memberships')),
-    h('p', { class: 'field-hint' }, `Let people support you with a monthly membership, like Patreon inside your server. Each membership gives a role, and roles can open private channels (Roles, then a channel’s permissions). The money goes to your own Stripe account. This Hearth keeps ${d.feePercent}%, and Stripe charges its usual card fee. Everything else in your server stays free for everyone.`));
+    h('p', { class: 'field-hint' }, `Let people support you with a monthly membership, like Patreon inside your server. Each membership gives a role, and roles can open private channels (Roles, then a channel’s permissions). The money goes to your own Stripe account. This Cindrly keeps ${d.feePercent}%, and Stripe charges its usual card fee. Everything else in your server stays free for everyone.`));
   if (!d.available) {
-    body.append(h('div', { class: 'mb-note' }, icon('info', 'ic'), 'Memberships aren’t turned on for this Hearth yet. Its owner can turn them on in Admin → Money.'));
+    body.append(h('div', { class: 'mb-note' }, icon('info', 'ic'), 'Memberships aren’t turned on for this Cindrly yet. Its owner can turn them on in Admin → Money.'));
     return;
   }
 

@@ -15,4 +15,4 @@ host = "${main_domain}"
 # choice, or closed). The generated domain is plain http: use your own domain with HTTPS on.
 [config.env]
 REGISTRATION_CODE = "${registration_code}"
-INSTANCE_NAME = "Hearth"
+INSTANCE_NAME = "Cindrly"

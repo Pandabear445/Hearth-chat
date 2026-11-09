@@ -1,6 +1,6 @@
 # Getting rid of the "Windows protected your PC" and "unknown app" warnings
 
-This page explains, in plain language, why Windows and Android warn people before they install the Hearth
+This page explains, in plain language, why Windows and Android warn people before they install the Cindrly
 apps, what you can buy or set up to make those warnings go away (or get smaller), what it costs, and exactly
 which GitHub settings to fill in. It also covers signing the desktop app's updates, which protects people's apps
 from a server that's been broken into, signing server updates, which protects servers from a swapped update
@@ -18,7 +18,7 @@ Prices and rules below were checked in October 2026. They change, so check the l
 
 | Warning | What fixes it | Cost | Effort |
 |---|---|---|---|
-| Windows: "Windows protected your PC", "Unknown publisher" | Sign the installer for free through the **SignPath Foundation** (Hearth is open source) | **free** | an application, then an evening; approval can take days to weeks |
+| Windows: "Windows protected your PC", "Unknown publisher" | Sign the installer for free through the **SignPath Foundation** (Cindrly is open source) | **free** | an application, then an evening; approval can take days to weeks |
 | Windows, same | or: **Azure Artifact Signing** (your own name as publisher) | about **$9.99 / month** | an evening, plus a few days for the ID check |
 | Windows: SmartScreen still warns about a *signed* installer for a while | Nothing to buy; it fades as people download it (reputation) | free | wait |
 | Android: "Install unknown apps", Play Protect "unrecognised app" | Install from **Google Play** (internal testing for friends) | **$25 once** | an evening, plus Google's ID check |
@@ -29,7 +29,7 @@ Prices and rules below were checked in October 2026. They change, so check the l
 
 ## First: the website certificate is a different thing
 
-Your Hearth website (for example `https://cindrly.com`) already has a real **TLS certificate**
+Your Cindrly website (for example `https://cindrly.com`) already has a real **TLS certificate**
 (what people often call "SSL"). Caddy gets it from Let's Encrypt and renews it by itself. That's what makes
 the padlock appear and keeps the connection private.
 
@@ -65,9 +65,9 @@ Good to know:
   Foundation", which every project SignPath signs shares. Linux builds have no code signature at all. What really
   protects updates is the separate **update signing key** (see [Signing desktop updates](#signing-desktop-updates)).
 
-### Option S (free, recommended for Hearth): SignPath Foundation
+### Option S (free, recommended for Cindrly): SignPath Foundation
 
-The [SignPath Foundation](https://signpath.org/) signs open-source apps for free. Hearth qualifies: it's MIT
+The [SignPath Foundation](https://signpath.org/) signs open-source apps for free. Cindrly qualifies: it's MIT
 licensed (every part of it, no closed-source pieces), its code is public, and the installers are built by GitHub
 Actions straight from that code. Windows then shows **SignPath Foundation** as the publisher (their certificate,
 not your name), and the build's signing requests come from GitHub, so SignPath can check each file really was
@@ -144,7 +144,7 @@ Foundation's certificate for real releases.
 6. **Test signing.** Before the Foundation has accepted the project: in SignPath, *Sign artifact* with the
    `test-signing` policy and a ZIP of a Windows installer from a build's artifacts (a ZIP, as the artifact
    configuration expects); that shows the certificate, policy and configuration work. Once GitHub.com is available
-   to your organization: *Actions → Hearth apps → Run workflow*, tick **SignPath test signing**, run. (Pick the branch
+   to your organization: *Actions → Cindrly apps → Run workflow*, tick **SignPath test signing**, run. (Pick the branch
    whose workflow has that box; the default branch has it once this change is merged.) The Windows job says
    **"Test signing with SignPath"** and sends two requests, the app, then a minute later the installer. If the
    policy needs approval, approve them on [app.signpath.io](https://app.signpath.io) → *Signing requests*. The
@@ -230,7 +230,7 @@ still works.)
    | Variable | `AZURE_SIGNING_PROFILE` | the certificate profile name from step 5, e.g. `hearth` |
    | Variable | `AZURE_SIGNING_PUBLISHER` | the publisher name from step 5, exactly, e.g. `Jane Q Doe` (without `CN=`) |
 
-9. **Build:** *Actions → Hearth apps → Run workflow*. In the Windows job you should see a note
+9. **Build:** *Actions → Cindrly apps → Run workflow*. In the Windows job you should see a note
    **"Signing with Azure Artifact Signing"** and a **Check the signature** step that prints `Valid` and your
    name. Download the installer and check: right-click → *Properties → Digital Signatures*.
 10. Once a signed version is out, set the variable **`WINDOWS_REQUIRE_SIGNING`** to `true` (see below).
@@ -257,7 +257,7 @@ an "OV" certificate in 2026: about $200–$450 per year (Sectigo through reselle
 $440/year, Certum's cloud certificate less), and since March 2026 a certificate is valid for at most about 15
 months, so you renew yearly. For one person, option A is cheaper and simpler.
 
-If Hearth stays open source, the free SignPath route (option S above) is the better deal.
+If Cindrly stays open source, the free SignPath route (option S above) is the better deal.
 
 ### Option C: stay unsigned
 
@@ -347,7 +347,7 @@ files you built yourself:
 
 ## Signing server updates
 
-Also free, and separate from the desktop key: an **update signing key for server updates** (Ed25519). A Hearth
+Also free, and separate from the desktop key: an **update signing key for server updates** (Ed25519). A Cindrly
 server sends every browser and app the code that does the encryption, so whoever gets a server to install their
 update zip can quietly take that encryption apart for everyone on it. The `.sha256` next to each zip only catches
 a damaged download: someone who can swap the zip (on the download page, in a chat, on the way) can swap the
@@ -359,10 +359,10 @@ a damaged download: someone who can swap the zip (on the download page, in a cha
   next to it: an Ed25519 signature over `hearth-server-update-v1`, a newline, the zip's SHA-256 (hex) and a
   newline. The label keeps a signature made for anything else (a desktop update, say) from passing as one.
 - The public half is committed as `hearth/update-signing.pub`, so it's inside every update and every install.
-- Each server trusts one key, pinned in **`/etc/hearth-update.pub`**: root's, outside the Hearth folder, so once
-  it's pinned neither Hearth itself nor an npm install script can replace it. It's the key the installed Hearth
+- Each server trusts one key, pinned in **`/etc/hearth-update.pub`**: root's, outside the Cindrly folder, so once
+  it's pinned neither Cindrly itself nor an npm install script can replace it. It's the key the installed Cindrly
   came with (pinned at its first update, and only when that `update-signing.pub` and every folder above it can
-  be changed by root alone: in a plain install the Hearth folder is Hearth's own account's, and that account
+  be changed by root alone: in a plain install the Cindrly folder is Cindrly's own account's, and that account
   mustn't choose the key), or else the key the first update that brings one carries.
 - From then on `hearth-update` refuses a zip without a valid signature by that key, before anything in it is
   unpacked or run: it says why and "Nothing was changed". The operator runs the updater that's already on the
@@ -373,7 +373,7 @@ a damaged download: someone who can swap the zip (on the download page, in a cha
   `sudo hearth-update --allow-downgrade <zip>` on the server installs an older signed zip on purpose.
 - Servers check with **OpenSSL 3.0 or newer** (Debian 12, Ubuntu 22.04 and later), so Docker hosts don't need
   Node. OpenSSL 1.1.1 (Debian 11, Ubuntu 20.04) can't check Ed25519 signatures at all; there the updater uses
-  Node instead, which Hearth needs outside Docker anyway. A server with neither pins no key and stays on
+  Node instead, which Cindrly needs outside Docker anyway. A server with neither pins no key and stays on
   checksums only (it says so in the update log and in `hearth-update --status`); one that already pinned a key
   refuses updates until one of them is installed. `hearth-update --status` shows the pinned key, and
   `hearth-update --verify <zip>` checks a zip without installing anything.
@@ -422,7 +422,7 @@ installs it once with `sudo hearth-update --allow-unsigned <zip>`, which pins th
 away: until they move to the new key, a zip signed with the leaked one would be accepted.
 
 **Switching it off:** removing `update-signing.pub` from the repository unpins nothing (a release can't switch the
-check off). On each server: `sudo rm /etc/hearth-update.pub`, and delete `update-signing.pub` from the Hearth folder,
+check off). On each server: `sudo rm /etc/hearth-update.pub`, and delete `update-signing.pub` from the Cindrly folder,
 or the next update pins it again.
 
 **Checking a signature by hand** (what the server does, with OpenSSL 3.0 or newer; with Node anywhere:
@@ -440,7 +440,7 @@ openssl pkeyutl -verify -pubin -inkey key.pem -rawin -in msg -sigfile sig.bin
 - The first key a server pins is trusted the first time it's seen. Before that, only the checksum protects the
   update that brings it, so compare the pinned key (in the update log and `hearth-update --status`) with yours.
 - Updates rely on the updater already installed on the server. On a server that has never run `hearth-update`,
-  install it from your current Hearth once (in the Hearth folder:
+  install it from your current Cindrly once (in the Cindrly folder:
   `sudo install -m 755 scripts/hearth-update.sh /usr/local/bin/hearth-update`), rather than running the copy inside
   a new zip, which would only be checking itself. An updater from before signed updates (put back by running an
   old copy of the script) doesn't check signatures at all: if `hearth-update --status` shows no "update key" line,
@@ -461,9 +461,9 @@ browser or file manager, and **Google Play Protect** may say the app is unrecogn
 Those warnings come with installing outside Google Play; signing the APK can't remove them. (The APK is
 already signed, so updates install over the top; that part is fine.)
 
-The way to avoid them: **install through Google Play.** You don't have to publish Hearth to the whole world:
+The way to avoid them: **install through Google Play.** You don't have to publish Cindrly to the whole world:
 Play's **internal testing** track lets you invite up to 100 people by email. They tap a link once, install
-Hearth from the Play Store with no warnings, and get updates automatically.
+Cindrly from the Play Store with no warnings, and get updates automatically.
 
 ### Google's developer verification (2026)
 
@@ -471,7 +471,7 @@ Google is also starting to require that apps on certified Android phones come fr
 From 30 September 2026 that applies in Brazil, Indonesia, Singapore and Thailand, to apps installed or updated
 from participating app stores (Google Play and some phone makers' stores). Google's FAQ says an APK people install
 directly (from your server or GitHub) isn't covered yet; that's planned for every country in 2027, with no exact
-date. What it means for Hearth:
+date. What it means for Cindrly:
 
 - If you use Google Play (below), you're verified through your Play Console account. Creating the app there
   registers the package name `app.hearth.mobile`; with Play using your own key (step 4 below), the APK from your
@@ -505,7 +505,7 @@ hand (*Promote release*).
    `hearth/mobile/README.md` first.
 2. **Create the developer account** at [play.google.com/console](https://play.google.com/console) (*personal*
    account is fine), pay the $25 and finish identity verification.
-3. **Create the app:** *Create app →* name `Hearth`, *App*, *Free*. The package name is fixed by the first upload
+3. **Create the app:** *Create app →* name `Cindrly`, *App*, *Free*. The package name is fixed by the first upload
    and must be unique on all of Google Play: it's `app.hearth.mobile`. (If Play says it's taken, the app id in
    `hearth/mobile/capacitor.config.json`, the folder in the workflow's `cp native/MainActivity.java …` line, the
    `package` line in `MainActivity.java` and `packageName` in the workflow all have to change together.)
@@ -521,13 +521,13 @@ hand (*Promote release*).
    content rating, target audience, foreground service (microphone, for calls) and app access (give a test login,
    since the app needs an account). The answers, ready to paste: [ANDROID-STORES.md](ANDROID-STORES.md#46-app-content-the-forms-with-answers).
 7. **Add testers:** *Internal testing → Testers →* create an email list with your friends' Google account
-   emails, save, and send them the **opt-in link**. They accept once, then install Hearth from the Play Store.
+   emails, save, and send them the **opt-in link**. They accept once, then install Cindrly from the Play Store.
 8. **Automatic uploads from GitHub:**
    1. In [Google Cloud Console](https://console.cloud.google.com/), create a project, enable the
       **Google Play Android Developer API**, then *IAM & Admin → Service accounts → Create service account*
       (no roles needed). Open it → *Keys → Add key → JSON*: a `.json` file downloads.
    2. In Play Console → *Users and permissions → Invite new users*, enter the service account's email
-      (`…@….iam.gserviceaccount.com`), and under *App permissions* add Hearth with **Release to testing tracks**.
+      (`…@….iam.gserviceaccount.com`), and under *App permissions* add Cindrly with **Release to testing tracks**.
    3. In GitHub add the secret **`PLAY_SERVICE_ACCOUNT_JSON`** to the `production` environment, with the whole
       contents of that `.json` file, then delete the file from your computer.
    4. If Play still shows the app as a *draft* (it hasn't finished step 5), add the variable
@@ -538,7 +538,7 @@ hand (*Promote release*).
    themselves. (Manual runs on other branches never upload.)
 
 **Version numbers:** Android and Play only accept an update with a higher *versionCode*. The workflow sets it
-to `(major × 100 + minor) × 100000 + run number`, e.g. `12100457` for Hearth 1.21 in workflow run 457, so it
+to `(major × 100 + minor) × 100000 + run number`, e.g. `12100457` for Cindrly 1.21 in workflow run 457, so it
 always goes up.
 
 **Invite links that open in the app (Android App Links):** an app built for your server (`HEARTH_SERVER`) asks
@@ -548,10 +548,10 @@ app's signing key: set `ANDROID_CERT_SHA256` in the server's `.env` to the key's
 add Play's *app signing key* too (Play Console → your app → App integrity → App signing: the app signing key
 certificate's SHA-256), comma-separated: Play re-signs what it installs. The server then serves `/.well-known/assetlinks.json`.
 
-**Things Google's review might flag:** Hearth's Android app lets people trust a self-signed server certificate
+**Things Google's review might flag:** Cindrly's Android app lets people trust a self-signed server certificate
 after showing its fingerprint. Google Play's automated checks sometimes flag apps that can accept certificate
 errors. If that happens, servers with a real domain (Caddy) don't need that feature, and it can be left out of
-the Play build. Play also asks every app with a foreground service to say what it's for: Hearth's `CallService`
+the Play build. Play also asks every app with a foreground service to say what it's for: Cindrly's `CallService`
 (type `microphone`) keeps a call going while the screen is off; it runs only during a call the person joined.
 
 ---
@@ -574,7 +574,7 @@ There are **two different keys**, and they go to different places:
 
 | Key | What it does | Where it goes |
 |---|---|---|
-| **APNs key** (`AuthKey_….p8` from *Keys*, "Apple Push Notifications service") | Your server sends notifications to iPhones with it | **The server only**: `/etc/hearth/`, mode 600, owned by the user Hearth runs as, outside the image; `APNS_KEY_FILE` in `.env` ([OPERATIONS.md](OPERATIONS.md#8-iphone-notifications-apns)). Never GitHub. |
+| **APNs key** (`AuthKey_….p8` from *Keys*, "Apple Push Notifications service") | Your server sends notifications to iPhones with it | **The server only**: `/etc/hearth/`, mode 600, owned by the user Cindrly runs as, outside the image; `APNS_KEY_FILE` in `.env` ([OPERATIONS.md](OPERATIONS.md#8-iphone-notifications-apns)). Never GitHub. |
 | **App Store Connect API key** (`AuthKey_….p8` from App Store Connect → *Integrations*) | GitHub signs the app and uploads it to TestFlight with it | **GitHub only**: the `production` environment's secrets. Never the server. |
 
 ### Option A (recommended): Xcode's cloud-managed signing
@@ -641,7 +641,7 @@ the secrets before then.
 - **`IOS_REQUIRE_SIGNING`** (variable, optional): `true` makes `ios-archive` fail instead of skipping when the
   secrets are missing.
 
-**Version numbers:** the version people see is `major.minor.patch` from the `app-v*` tag (or Hearth's
+**Version numbers:** the version people see is `major.minor.patch` from the `app-v*` tag (or Cindrly's
 `package.json`); the build number uses Android's formula, `(major × 100 + minor) × 100000 + run number`, so it
 always goes up, which App Store Connect requires.
 

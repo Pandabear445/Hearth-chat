@@ -77,7 +77,7 @@ function blockedIp(ip) {
 // This server's own addresses. A public one is still this machine: a request to it comes back in through the
 // loopback interface, which firewalls (ufw, iptables) usually let through untouched, so it could reach
 // services that are firewalled off from the internet. So they're refused too, except on the ordinary web
-// ports (80, 443): those serve the public anyway, and a blog with a feed may well run next to Hearth.
+// ports (80, 443): those serve the public anyway, and a blog with a feed may well run next to Cindrly.
 // OUTBOUND_BLOCK adds addresses or ranges that are refused on every port, such as this server's public
 // address when it sits behind NAT, or a router's.
 const WEB_PORTS = new Set([80, 443]);

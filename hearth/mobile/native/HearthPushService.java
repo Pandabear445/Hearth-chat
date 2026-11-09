@@ -6,7 +6,7 @@ import org.unifiedpush.android.connector.data.PushEndpoint;
 import org.unifiedpush.android.connector.data.PushMessage;
 
 /**
- * Notifications from Hearth while the app is closed. The UnifiedPush library hands over each message after
+ * Notifications from Cindrly while the app is closed. The UnifiedPush library hands over each message after
  * decrypting it with this phone's keys (RFC 8291); anything it couldn't decrypt (sent by someone who only knows
  * the push address) is dropped here. A notification never includes message text: the server never has it.
  * Declared in the manifest unexported, for the library's PUSH_EVENT only (mobile/scripts/patch-android.js).

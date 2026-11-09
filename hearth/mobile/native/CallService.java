@@ -13,9 +13,9 @@ import android.os.Build;
 import android.os.IBinder;
 
 /**
- * Keeps a call going when the screen locks or Hearth goes to the background.
+ * Keeps a call going when the screen locks or Cindrly goes to the background.
  *
- * The call itself runs in the web view. Without this, Android treats a backgrounded Hearth like any other app in
+ * The call itself runs in the web view. Without this, Android treats a backgrounded Cindrly like any other app in
  * the background: it may freeze or end it, and since Android 11 it cuts off the microphone. A foreground service
  * of type "microphone", started while the person is in the app (joining the call), keeps the app and its mic
  * going, with a notification that says so and offers Hang up. The page starts it when a call starts and stops it

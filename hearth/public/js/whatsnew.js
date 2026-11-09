@@ -1,4 +1,4 @@
-// "What's new": the update notes the server's owner publishes (Admin → Owner; server/updatenotes.js). Hearth comes
+// "What's new": the update notes the server's owner publishes (Admin → Owner; server/updatenotes.js). Cindrly comes
 // with none of its own: nothing about an update is shown unless the owner publishes it. Each note shows on each device
 // until its window is closed (app.js showUpdateNotes): right away if the app is open and the person isn't in the middle
 // of something, otherwise as soon as they aren't, or the next time the app opens. A device that has never been here

@@ -1,4 +1,4 @@
-// Small admin command line, used by scripts (e.g. setup-turn.sh). Safe to run while Hearth is running.
+// Small admin command line, used by scripts (e.g. setup-turn.sh). Safe to run while Cindrly is running.
 //   node server/cli.js set-turn "turn:203.0.113.7:3478?transport=udp,turn:203.0.113.7:3478?transport=tcp" --secret-stdin
 //   node server/cli.js get-turn
 //   node server/cli.js get-turn-secret             (for setting up a relay in another region)
@@ -13,7 +13,7 @@
 //   node server/cli.js verify-backup FILE [KEY]    restore it into a scratch folder and check the database
 //   node server/cli.js restore FILE NEW_DATA_DIR [KEY] [--sign-out-everyone]
 //                                                  unpack it into an empty folder; then point DATA_DIR there (or
-//                                                  move it to data/) and start Hearth. KEY = the 64-character backup
+//                                                  move it to data/) and start Cindrly. KEY = the 64-character backup
 //                                                  key, if this machine doesn't have the original data/backup.key.
 //                                                  --sign-out-everyone ends every session in the restored copy (use
 //                                                  it after a break-in; see docs/RECOVERY.md).
@@ -21,7 +21,7 @@
 //                                                  are missing, and files nothing refers to
 //   node server/cli.js who PSEUDONYM               the account behind a pseudonym in the logs: the access log's
 //                                                  uid, or a relay login (<expiry>:<pseudonym>) from a relay's log
-// Exit codes: 0 done; 1 failed; 2 restore refused (backup from a newer Hearth); 3 done, but files are missing.
+// Exit codes: 0 done; 1 failed; 2 restore refused (backup from a newer Cindrly); 3 done, but files are missing.
 // Checking an install (server/doctor.js; read-only unless a --fix flag is given):
 //   node server/cli.js doctor [--relays] [--integrity] [--json] [--fix-permissions]
 //                                                  exit status 0 = all passed, 1 = warnings, 2 = failures
@@ -42,9 +42,9 @@ const keyFrom = (hex) => {
 // The newest database version this code understands. Read from db.js as text: requiring it would open (and upgrade)
 // the live database, which verifying or restoring a backup mustn't touch.
 const codeSchema = () => Number((/const SCHEMA_VERSION = (\d+);/.exec(fs.readFileSync(path.join(__dirname, 'db.js'), 'utf8')) || [])[1]) || 0;
-// A backup from a newer Hearth can't be started with this code (it refuses to run on a newer database).
+// A backup from a newer Cindrly can't be started with this code (it refuses to run on a newer database).
 const newerWarning = (schema) => (codeSchema() && schema > codeSchema()
-  ? `Warning: this backup is from a newer version of Hearth (database version ${schema}; this version understands up to ${codeSchema()}). Install that version (or newer) before starting Hearth on it.`
+  ? `Warning: this backup is from a newer version of Cindrly (database version ${schema}; this version understands up to ${codeSchema()}). Install that version (or newer) before starting Cindrly on it.`
   : '');
 // Files the database refers to but that aren't there: those attachments and pictures can't be opened.
 const missingNote = (n, names, what) => `Warning: ${n} file${n === 1 ? '' : 's'} the database refers to ${what}: ${names.slice(0, 10).join(', ')}${n > 10 ? ', …' : ''}. Those attachments or pictures will show as unavailable.`;
@@ -115,7 +115,7 @@ const settings = () => {
       if (e.code !== 'HEARTH_BACKUP_TOO_NEW') throw e;
       console.error(e.message); process.exitCode = 2; return;
     }
-    console.log(`Restored ${r.entries.length} files into ${target} (database version ${r.schema}). Start Hearth with DATA_DIR=${target} (or move it to data/).`);
+    console.log(`Restored ${r.entries.length} files into ${target} (database version ${r.schema}). Start Cindrly with DATA_DIR=${target} (or move it to data/).`);
     if (flags.has('--sign-out-everyone')) console.log(`Signed out ${r.sessionsRevoked} session${r.sessionsRevoked === 1 ? '' : 's'}: everyone signs in again with their password.`);
     else console.log('Everyone stays signed in as they were when the backup was made. After a break-in, restore again with --sign-out-everyone.');
     console.log(`Files: ${r.files.referenced} the database refers to, ${r.files.present} restored, ${r.files.unreferencedCount} not referred to by anything.`);
@@ -135,7 +135,7 @@ const settings = () => {
     if (!hits.length) { console.log('No account has that pseudonym on this server.'); process.exitCode = 1; }
     hits.forEach((u) => console.log(`${u.username} (id ${u.id})${u.deleted_at ? ', deleted' : ''}`));
   } else if (cmd === 'doctor') {
-    // Same .env as the server reads, so the checks see the configuration Hearth runs with.
+    // Same .env as the server reads, so the checks see the configuration Cindrly runs with.
     require('dotenv').config({ quiet: true });
     const { runDoctor, printReport } = require('./doctor');
     const r = await runDoctor({ dataDir: path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data')), flags });

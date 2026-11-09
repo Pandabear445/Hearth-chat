@@ -1,4 +1,4 @@
-// Hearth desktop: a secure window onto your Hearth server, with tray, badge, notifications and auto-start.
+// Cindrly desktop: a secure window onto your Cindrly server, with tray, badge, notifications and auto-start.
 // All chat code (including end-to-end encryption) runs from your server exactly as in the browser.
 const {
   app, BrowserWindow, Menu, Tray, shell, session, ipcMain, nativeImage, dialog, net, desktopCapturer, powerMonitor,
@@ -8,7 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const CONFIG = require('./hearth.config.json');
 
-const APP_NAME = CONFIG.appName || 'Hearth';
+const APP_NAME = CONFIG.appName || 'Cindrly';
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 const IS_LINUX = process.platform === 'linux';
@@ -233,10 +233,10 @@ function createWindow() {
   win.on('closed', () => { win = null; });
   // A page can't stop the app from leaving it ("Leave site?" / beforeunload): the reload that ends an
   // old-style screen capture (chooseScreen) must happen, and so must closing, quitting and changing server.
-  // Hearth's own pages never ask.
+  // Cindrly's own pages never ask.
   win.webContents.on('will-prevent-unload', (e) => e.preventDefault());
   // A reload or a new page starts outside any call until the page says otherwise. The server being down
-  // behind a proxy (Caddy answers 502 while Hearth restarts) gets the "can't reach" screen too.
+  // behind a proxy (Caddy answers 502 while Cindrly restarts) gets the "can't reach" screen too.
   win.webContents.on('did-navigate', (e, url, code) => {
     call = { inCall: false, muted: false, deafened: false }; drawThumbar();
     applyZoom();
@@ -315,8 +315,8 @@ function redirectedAway(url) {
   let host = '';
   try { const u = new URL(url); if (/^https?:$/.test(u.protocol)) host = u.host; } catch { /* not a web address */ }
   return host
-    ? `Your server sent the app on to ${host}, which was opened in your browser instead. The app only shows your Hearth server’s own pages.`
-    : 'Your server sent the app to an address it can’t open. The app only shows your Hearth server’s own pages.';
+    ? `Your server sent the app on to ${host}, which was opened in your browser instead. The app only shows your Cindrly server’s own pages.`
+    : 'Your server sent the app to an address it can’t open. The app only shows your Cindrly server’s own pages.';
 }
 // The server didn't answer: a friendly screen that keeps trying and comes back by itself.
 function loadOffline(reason = '') {
@@ -417,7 +417,7 @@ function resetPermissions() {
 // desktop at once, without the display-media handler. So the person picks what to share right at that
 // permission (the picker below); getDisplayMedia then carries on into the display-media handler, which shares
 // exactly that choice. If that handler doesn't follow within a few seconds, it was the old kind of request,
-// which Hearth never makes: the page's renderer is stopped and the page loaded again, which ends that capture.
+// which Cindrly never makes: the page's renderer is stopped and the page loaded again, which ends that capture.
 let pendingShare = null; // { origin, source, at }: the person's choice, waiting for the display-media handler
 const SHARE_HANDOFF_MS = 3000;
 // Stopping the renderer process (rather than asking the page to reload) means nothing the page runs can keep
@@ -466,7 +466,7 @@ app.whenReady().then(() => {
   // the server's page can't see or script; see chooseScreen above), on every system: macOS's own picker
   // would come after the app's and skip this handler. The server's page only asks to share: it never gets
   // the list of windows or their previews, and nothing is shared until the person picks. getDisplayMedia
-  // shares exactly that pick; the old getUserMedia desktop capture (which Hearth never uses) gets the whole
+  // shares exactly that pick; the old getUserMedia desktop capture (which Cindrly never uses) gets the whole
   // screen, but only until chooseScreen stops the page, about 3 seconds later. On Windows the computer's
   // audio can be shared too.
   session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
@@ -564,7 +564,7 @@ function setBadge(n) {
 }
 
 // ---------------------------------------------------------------- calls: taskbar buttons + global keys
-// While you're in a call, the taskbar preview (hover Hearth's taskbar button) gets Mute and Deafen buttons.
+// While you're in a call, the taskbar preview (hover Cindrly's taskbar button) gets Mute and Deafen buttons.
 let call = { inCall: false, muted: false, deafened: false };
 function drawThumbar() {
   if (!IS_WIN || !win) return;
@@ -578,7 +578,7 @@ const sendToPage = (ch, data) => { if (win && !win.isDestroyed()) win.webContent
 const hotkeys = require('./hotkeys');
 
 // ---------------------------------------------------------------- updates
-// The app updates itself from your own Hearth server (data/downloads, filled by GitHub Actions or by hand):
+// The app updates itself from your own Cindrly server (data/downloads, filled by GitHub Actions or by hand):
 // it downloads in the background, then asks before installing (a native dialog; never silently on quit).
 // Builds made with a signing key only install updates signed by their publisher (update-verify.js), so
 // whoever controls a server's downloads folder can't get their own program run on your computer.
@@ -663,11 +663,11 @@ async function fetchUpdateFile(name) {
 // it's marked unverified (and the install dialog says so).
 async function vetUpdate(info) {
   const file = installerFile(info);
-  if (!info || !file) return { ok: false, error: 'The update didn’t finish downloading. Hearth will try again later.' };
+  if (!info || !file) return { ok: false, error: 'The update didn’t finish downloading. Cindrly will try again later.' };
   if (!UPDATE_KEY) return { ok: true, verified: false, version: info.version, file };
   try {
     if (!updateFeed) return { ok: false, error: 'Couldn’t check the update’s signature right now.' };
-    // Never a "web installer" with a separate package: Hearth's releases don't use one.
+    // Never a "web installer" with a separate package: Cindrly's releases don't use one.
     if (updater && updater.downloadedUpdateHelper && updater.downloadedUpdateHelper.packageFile) return { ok: false, error: UPDATES.NOT_SIGNED_FILE };
     const name = UPDATES.channelFile(process.platform, process.arch);
     const [yml, sig] = await Promise.all([fetchUpdateFile(name), fetchUpdateFile(`${name}.sig`)]);
@@ -676,7 +676,7 @@ async function vetUpdate(info) {
     if (!UPDATES.fileMatches(await UPDATES.sha512File(file), feed.hashes)) return { ok: false, error: UPDATES.NOT_SIGNED_FILE };
     return { ok: true, verified: true, version: info.version, file, hashes: feed.hashes };
   } catch {
-    return { ok: false, error: 'Couldn’t check the update’s signature right now. Hearth will try again later.' };
+    return { ok: false, error: 'Couldn’t check the update’s signature right now. Cindrly will try again later.' };
   }
 }
 // "Restart to update" (Settings, the tray, the page's banner): checks the file once more, then asks.
@@ -729,7 +729,7 @@ function refreshTrayMenu() {
     { label: 'Quit', click: () => { quitting = true; app.quit(); } },
   ].filter(Boolean)));
 }
-// The first time the window goes to the tray, say so (otherwise it looks like Hearth quit).
+// The first time the window goes to the tray, say so (otherwise it looks like Cindrly quit).
 function trayHintOnce() {
   if (settings.trayHintShown) return;
   settings.trayHintShown = true; saveSettings();
@@ -766,7 +766,7 @@ function buildAppMenu() {
       ...(CONFIG.lockServer ? [] : [{ label: 'Change server…', click: () => { showWindow(); loadConnect(); } }]),
       { label: 'Reset permissions', click: () => {
         resetPermissions();
-        const o = { type: 'info', message: 'Hearth will ask again before using your microphone, camera or clipboard.' };
+        const o = { type: 'info', message: 'Cindrly will ask again before using your microphone, camera or clipboard.' };
         (win && !win.isDestroyed() ? dialog.showMessageBox(win, o) : dialog.showMessageBox(o)).catch(() => {});
       } },
       { type: 'separator' },
@@ -787,7 +787,7 @@ ipcMain.on('focus', (e) => { if (fromOurPage(e)) showWindow(); });
 ipcMain.on('change-server', (e) => { if (fromOurPage(e) && !CONFIG.lockServer) loadConnect(); });
 // Keybinds from Settings → Keybinds: push-to-talk / mute / deafen, even while a game has focus.
 ipcMain.handle('keybinds', (e, b) => (fromOurPage(e) ? hotkeys.set(b, (ev) => sendToPage('hotkey', ev)) : { ok: false }));
-// A @mention while Hearth isn't focused: flash the taskbar button until it is.
+// A @mention while Cindrly isn't focused: flash the taskbar button until it is.
 ipcMain.on('flash', (e) => { if (fromOurPage(e) && win && !win.isFocused()) win.flashFrame(true); });
 ipcMain.on('call-state', (e, s) => {
   if (!fromOurPage(e)) return;
@@ -801,7 +801,7 @@ ipcMain.handle('desktop-settings:get', (e) => (fromOurPage(e) ? desktopSettings(
 ipcMain.handle('desktop-settings:set', (e, key, value) => (fromOurPage(e) ? setDesktopSetting(String(key), value) : { ok: false, error: 'Not allowed.' }));
 ipcMain.handle('check-updates', (e) => (fromOurPage(e) ? checkForUpdates() : { state: 'error', message: 'Not allowed.' }));
 ipcMain.on('restart', (e) => { if (fromOurPage(e)) restartApp(); });
-// Automatic Away: seconds since the last input anywhere on the computer, so someone playing a game with Hearth in
+// Automatic Away: seconds since the last input anywhere on the computer, so someone playing a game with Cindrly in
 // the background isn't shown as away. The page asks every 15 seconds; it gets the number and nothing else.
 ipcMain.handle('idle-time', (e) => (fromOurPage(e) ? powerMonitor.getSystemIdleTime() : null));
 // Game / music detection (detect.js), only while the person shares it.
@@ -811,7 +811,7 @@ ipcMain.on('detect', (e, o) => {
   if (o && (o.games || o.songs)) detect.start((a) => { if (win && !win.isDestroyed()) win.webContents.send('activity', a); }, o);
   else detect.stop();
 });
-// Is it a Hearth server? (/api/config answers with its name.) A certificate error counts as "there": the
+// Is it a Cindrly server? (/api/config answers with its name.) A certificate error counts as "there": the
 // certificate prompt handles it when the page loads.
 async function probe(origin) {
   try {
@@ -827,7 +827,7 @@ async function probe(origin) {
     return { ok: false, error: name ? name[1] : 'ERR_FAILED' };
   }
 }
-// The connect screen checks that the address really is a Hearth server before saving it. A failure answers with
+// The connect screen checks that the address really is a Cindrly server before saving it. A failure answers with
 // a code (ERR_NAME_NOT_RESOLVED, NOT_HEARTH, HTTP_404, BAD_ADDRESS…), which the screen puts into words.
 ipcMain.handle('connect', async (e, raw) => {
   if (!fromConnectScreen(e)) return { ok: false, error: 'NOT_ALLOWED' };

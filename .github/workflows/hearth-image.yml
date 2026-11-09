@@ -1,4 +1,4 @@
-# Publishes the Hearth server as a Docker image on GitHub's container registry, for linux/amd64 and linux/arm64
+# Publishes the Cindrly server as a Docker image on GitHub's container registry, for linux/amd64 and linux/arm64
 # (64-bit ARM: Raspberry Pi 4 and 5, ARM VPSes, most home-server boxes):
 #   ghcr.io/<owner, lower case>/hearth:<version>, :<major.minor> and :latest
 #   Runs on tags like `hearth-v1.29.0` (the version must match hearth/package.json; `app-v*` tags are the apps'),
@@ -20,7 +20,7 @@
 #     docker buildx imagetools inspect ghcr.io/pandabear445/hearth:<version> --format '{{ json .Provenance }}'
 #   After the first publish: GitHub > your profile > Packages > hearth > Package settings > Change visibility to
 #   public, and link it to this repository, so people can pull it without signing in.
-name: Hearth image
+name: Cindrly image
 
 on:
   push:
@@ -164,12 +164,12 @@ jobs:
             type=semver,pattern={{version}},match=^hearth-v(\d+\.\d+\.\d+)$
             type=semver,pattern={{major}}.{{minor}},match=^hearth-v(\d+\.\d+\.\d+)$
           labels: |
-            org.opencontainers.image.title=Hearth
+            org.opencontainers.image.title=Cindrly
             org.opencontainers.image.description=Self-hosted chat for friend groups and small communities: servers, voice, video and screen sharing, with messages, files and calls end-to-end encrypted in the app.
             org.opencontainers.image.licenses=MIT
             org.opencontainers.image.url=https://pandabear445.github.io/Hearth-chat
           annotations: |
-            org.opencontainers.image.title=Hearth
+            org.opencontainers.image.title=Cindrly
             org.opencontainers.image.description=Self-hosted chat for friend groups and small communities: servers, voice, video and screen sharing, with messages, files and calls end-to-end encrypted in the app.
             org.opencontainers.image.licenses=MIT
       - name: Log in to ghcr.io

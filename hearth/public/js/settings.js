@@ -475,7 +475,7 @@ function profileTab(app, setDirty, go, start = null) {
   const drawSongHint = () => {
     const u = (draft.songLink.url || '').trim();
     const svc = u ? songService(u) : '';
-    songHint.textContent = !u ? 'A Spotify, Apple Music, YouTube, SoundCloud, Bandcamp, TIDAL, Deezer or Amazon Music link.' : svc ? `Shows as a ${svc} card.` : 'That link isn\u2019t from a music service Hearth shows (it needs to start with https://).';
+    songHint.textContent = !u ? 'A Spotify, Apple Music, YouTube, SoundCloud, Bandcamp, TIDAL, Deezer or Amazon Music link.' : svc ? `Shows as a ${svc} card.` : 'That link isn\u2019t from a music service Cindrly shows (it needs to start with https://).';
   };
   drawSongHint();
   const songUrl = h('input', { class: 'input', maxlength: '300', placeholder: 'https://open.spotify.com/track/\u2026', value: draft.songLink.url || '', 'aria-label': 'Song link', oninput: (e) => { draft.songLink = { ...draft.songLink, url: e.target.value.trim() }; drawSongHint(); changed(); } });
@@ -1072,7 +1072,7 @@ function securitySections(app) {
     tagged(section('Email', emailBox), 'email'),
     tagged(section('Recovery key', recBox), 'recovery'),
     section('Two-factor sign-in', tfaBox),
-    section('Check my encryption', h('p', { class: 'muted-p' }, 'Runs every lock Hearth uses on this device — including that changed or forged messages are refused — and checks your own keys.'),
+    section('Check my encryption', h('p', { class: 'muted-p' }, 'Runs every lock Cindrly uses on this device — including that changed or forged messages are refused — and checks your own keys.'),
       h('div', null, h('button', { class: 'btn', onclick: (e) => runCheck(e.currentTarget) }, icon('shield'), 'Run the check')), checkBox),
   ];
 }
@@ -1265,8 +1265,8 @@ function keybindsEditor() {
     keyRow('mute', 'Mute / unmute'),
     keyRow('deafen', 'Deafen / undeafen'),
     h('p', { class: 'field-hint' }, d && d.setKeybinds
-      ? 'These work everywhere, even while a game is focused. On a Mac, allow Hearth under System Settings \u2192 Privacy & Security \u2192 Accessibility.'
-      : 'In the browser these work while Hearth is the focused window. The desktop app makes them work everywhere, even in games.'),
+      ? 'These work everywhere, even while a game is focused. On a Mac, allow Cindrly under System Settings \u2192 Privacy & Security \u2192 Accessibility.'
+      : 'In the browser these work while Cindrly is the focused window. The desktop app makes them work everywhere, even in games.'),
     h('div', null, h('button', { class: 'btn ghost sm', type: 'button', onclick: async () => { await saveKeybinds({ ...DEFAULT_KEYBINDS }); root.replaceWith(keybindsEditor()); toast('Keybinds reset.'); } }, 'Reset to defaults')));
   return root;
 }
@@ -1274,7 +1274,7 @@ function keybindsTab(app) {
   return h('div', { class: 'set-form narrow' },
     h('h2', { class: 'set-title' }, 'Keybinds'),
     section('Voice', keybindsEditor()),
-    section('Everywhere in Hearth',
+    section('Everywhere in Cindrly',
       ...[['Search everything', 'Ctrl + K'], ['Previous / next channel', 'Alt + \u2191 / \u2193'], ['Mark the server you\u2019re in as read', 'Shift + Esc'], ['Close menus, cancel a reply or an edit', 'Esc'], ['New line in a message', 'Shift + Enter'], ['Edit your last message', '\u2191 in an empty box']]
         .map(([a, k]) => h('div', { class: 'kv' }, h('span', null, a), h('kbd', null, k))),
       app && app.openShortcuts ? h('div', null, h('button', { class: 'btn ghost sm', type: 'button', onclick: () => app.openShortcuts() }, icon('info'), 'See all shortcuts (Ctrl + /)')) : null));
@@ -1557,10 +1557,10 @@ function appearanceTab(app) {
     const f = lookInput.files[0];
     lookInput.value = '';
     if (!f) return;
-    if (f.size > 64 * 1024) return toast("That file is too big to be a Hearth look.", 'error');
+    if (f.size > 64 * 1024) return toast("That file is too big to be a Cindrly look.", 'error');
     let data = null;
     try { data = JSON.parse(await f.text()); } catch { /* handled below */ }
-    if (!importAppearance(data)) return toast("That file isn't a Hearth look (export one with “Save my look”).", 'error');
+    if (!importAppearance(data)) return toast("That file isn't a Cindrly look (export one with “Save my look”).", 'error');
     app.rerender();
     Object.assign(a, loadAppearance());
     draw();
@@ -1573,14 +1573,14 @@ function appearanceTab(app) {
         h('button', { class: 'btn ghost sm', onclick: () => {
           const blob = new Blob([JSON.stringify(exportAppearance(), null, 2)], { type: 'application/json' });
           const url = URL.createObjectURL(blob);
-          h('a', { href: url, download: 'hearth-look.json' }).click();
+          h('a', { href: url, download: 'cindrly-look.json' }).click();
           setTimeout(() => URL.revokeObjectURL(url), 5000);
         } }, 'Save my look'),
         h('button', { class: 'btn ghost sm', onclick: () => lookInput.click() }, 'Load a look…'),
         lookInput));
   }
 
-  // When the device itself asks for less motion, Hearth already follows it everywhere (app.css): the switch shows that,
+  // When the device itself asks for less motion, Cindrly already follows it everywhere (app.css): the switch shows that,
   // on and greyed out, rather than an off switch that seems to do nothing.
   function reduceMotionRow() {
     const os = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1614,7 +1614,7 @@ function appearanceTab(app) {
         reduceMotionRow()),
       fontSection(),
       section('Performance',
-        h('p', { class: 'set-sub' }, 'If Hearth feels slow or your fans spin up, turn this on. It switches off the frosted-glass blur, moving backgrounds and decorative animations (spinning rings, name and profile effects) on this device.'),
+        h('p', { class: 'set-sub' }, 'If Cindrly feels slow or your fans spin up, turn this on. It switches off the frosted-glass blur, moving backgrounds and decorative animations (spinning rings, name and profile effects) on this device.'),
         chips([['auto', 'Automatic'], ['on', 'On \u2014 faster'], ['off', 'Off \u2014 all effects']], a.performance || 'auto', (v) => { a.performance = v; commit(); })),
       shareSection(),
       section(null, h('button', { class: 'btn ghost', onclick: async () => {
@@ -1658,11 +1658,11 @@ function notificationsTab(app) {
         localStorage.setItem('hearth.notify', on ? 'on' : 'off');
         if (on && supported && Notification.permission === 'default') await Notification.requestPermission();
         drawState();
-      }, device ? 'For DMs and @mentions while Hearth is open but you’re somewhere else. Do Not Disturb silences them.' : 'For DMs and @mentions while this tab is in the background. Do Not Disturb silences them.'),
+      }, device ? 'For DMs and @mentions while Cindrly is open but you’re somewhere else. Do Not Disturb silences them.' : 'For DMs and @mentions while this tab is in the background. Do Not Disturb silences them.'),
       state),
     soundsSection(),
     quietHoursSection(app),
-    section('Push (when Hearth is closed)', ...pushRows(app), previewsRow(app)),
+    section('Push (when Cindrly is closed)', ...pushRows(app), previewsRow(app)),
     perServerNotifications(app),
   );
 }
@@ -1731,7 +1731,7 @@ function linkPreviewSection(app, c, set) {
     h('div', { class: 'toggle-row' },
       h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'When I send a link'),
         h('span', { class: 'field-hint' }, off ? 'This server has link previews turned off.'
-          : 'To build a preview, your Hearth server fetches the page for you, so it sees the link (not your message). The site sees the server, not you. “Always” also asks first for links that look private, like sign-in or reset links.')),
+          : 'To build a preview, your Cindrly server fetches the page for you, so it sees the link (not your message). The site sees the server, not you. “Always” also asks first for links that look private, like sign-in or reset links.')),
       mode),
     toggle('Show link previews in messages', c.linkCards !== false, (v) => set('linkCards', v), 'Built by the sender and sent inside the encrypted message: your device never contacts the linked site.'));
 }
@@ -1744,23 +1744,23 @@ function socialPlayersSection(c, set) {
   return section('TikTok and Instagram',
     h('div', { class: 'toggle-row' },
       h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Play videos in the chat'),
-        h('span', { class: 'field-hint' }, 'TikTok videos and Instagram reels play right in the message. The player loads from TikTok or Instagram, which then see your IP address (and may set their own cookies in the player), so by default it waits for a tap. “Always load” loads them as messages show, except short TikTok links, which your Hearth server has to look up first.')),
+        h('span', { class: 'field-hint' }, 'TikTok videos and Instagram reels play right in the message. The player loads from TikTok or Instagram, which then see your IP address (and may set their own cookies in the player), so by default it waits for a tap. “Always load” loads them as messages show, except short TikTok links, which your Cindrly server has to look up first.')),
       mode));
 }
 
-// Reels (docs/design/SCROLL-TOGETHER.md › Getting videos in): how TikToks and reels get into Hearth without copying
+// Reels (docs/design/SCROLL-TOGETHER.md › Getting videos in): how TikToks and reels get into Cindrly without copying
 // links by hand. The players' own setting stays in Chat (TikTok and Instagram).
 function reelsTab(app) {
   let mark = '';
   try { mark = bookmarklet(location.origin); } catch { /* an origin the bookmarklet can't name */ }
-  const link = mark ? h('a', { class: 'bookmarklet', href: mark, draggable: 'true', onclick: (e) => { e.preventDefault(); toast('Drag it to your bookmarks bar, then press it on a TikTok or Instagram video.'); } }, icon('play'), 'Send to Hearth') : null;
-  const phoneShare = window.HearthAndroid || iosApp.on ? 'In the Hearth app, Share → Hearth on a TikTok or Instagram video picks where it goes.'
-    : 'On Android, install Hearth (the app, or Chrome’s Install app / Add to Home screen for this page) and Share → Hearth on a TikTok or Instagram video picks where it goes. An iPhone can’t share to a web page: copy the link and paste it on a Reels tab instead.';
+  const link = mark ? h('a', { class: 'bookmarklet', href: mark, draggable: 'true', onclick: (e) => { e.preventDefault(); toast('Drag it to your bookmarks bar, then press it on a TikTok or Instagram video.'); } }, icon('play'), 'Send to Cindrly') : null;
+  const phoneShare = window.HearthAndroid || iosApp.on ? 'In the Cindrly app, Share → Cindrly on a TikTok or Instagram video picks where it goes.'
+    : 'On Android, install Cindrly (the app, or Chrome’s Install app / Add to Home screen for this page) and Share → Cindrly on a TikTok or Instagram video picks where it goes. An iPhone can’t share to a web page: copy the link and paste it on a Reels tab instead.';
   return h('div', { class: 'set-form narrow' },
     h('h2', { class: 'set-title' }, 'Reels'),
     section('Share from TikTok and Instagram', h('p', { class: 'set-sub' }, phoneShare)),
     section('On a computer',
-      h('p', { class: 'set-sub' }, 'Drag this to your bookmarks bar. On a TikTok or Instagram video, press it: Hearth opens with that video, and you pick where it goes. It only reads the address of the page you’re on.'),
+      h('p', { class: 'set-sub' }, 'Drag this to your bookmarks bar. On a TikTok or Instagram video, press it: Cindrly opens with that video, and you pick where it goes. It only reads the address of the page you’re on.'),
       link || h('p', { class: 'field-hint' }, 'Not available for this server’s address.'),
       h('p', { class: 'set-sub' }, 'On any Reels tab you can also paste a link (Ctrl/⌘+V) or drop one on it.')),
     section('Liked and saved videos',
@@ -1778,7 +1778,7 @@ function spellingSection(c, set) {
   const check = toggle('Check spelling', c.spellcheck !== false, (v) => {
     set('spellcheck', v);
     if (desktop) D.setDesktopSetting('spellcheck', v).catch(() => {});
-  }, 'Words your browser (or the Hearth app) doesn\u2019t know are underlined, with fixes when you right-click them.');
+  }, 'Words your browser (or the Cindrly app) doesn\u2019t know are underlined, with fixes when you right-click them.');
   if (desktop && c.spellcheck !== false && typeof D.getDesktopSettings === 'function') {
     D.getDesktopSettings().then((d) => {
       if (d && d.spellcheck === false) { check.querySelector('input').checked = false; set('spellcheck', false); }
@@ -1822,7 +1822,7 @@ function studyTab(app) {
 // signed out from here (it's disconnected right away), or all of them except this one.
 const deviceOf = (ua) => {
   ua = String(ua || '');
-  const app = /Electron\//.test(ua) ? 'Hearth desktop app' : /HearthiOS/.test(ua) ? 'Hearth iPhone app' : /HearthAndroid|; wv\)/.test(ua) ? 'Hearth Android app' : '';
+  const app = /Electron\//.test(ua) ? 'Cindrly desktop app' : /HearthiOS/.test(ua) ? 'Cindrly iPhone app' : /HearthAndroid|; wv\)/.test(ua) ? 'Cindrly Android app' : '';
   const b = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : ua ? 'Browser' : 'Unknown device';
   const o = /Windows/.test(ua) ? 'Windows' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS X/.test(ua) ? 'macOS' : /Android/.test(ua) ? 'Android' : /CrOS/.test(ua) ? 'ChromeOS' : /Linux/.test(ua) ? 'Linux' : '';
   return { name: app || b, os: o, icon: /Android|iPhone|iPad/.test(ua) ? 'phone' : 'monitor' };
@@ -2008,7 +2008,7 @@ function privacyTab(app) {
     exportSection(app),
   );
 }
-// Automatic Away (server/presence.js): how long without using Hearth before people see you as Away. Kept on the
+// Automatic Away (server/presence.js): how long without using Cindrly before people see you as Away. Kept on the
 // account, so every device uses the same time.
 const AWAY_AFTER = [[5, '5 minutes'], [10, '10 minutes'], [15, '15 minutes'], [30, '30 minutes'], [0, 'Never']];
 function awaySection(app) {
@@ -2025,7 +2025,7 @@ function awaySection(app) {
   return section('Online status',
     h('div', { class: 'toggle-row' },
       h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, 'Show me as Away after'),
-        h('span', { class: 'field-hint' }, `When you haven\u2019t used Hearth for this long, people see you as Away, and Online again as soon as you\u2019re back. ${desktop ? 'In the desktop app, using anything on your computer counts.' : 'In a browser, using this tab counts; the desktop app counts anything you do on your computer.'} Being in a call counts too. With Hearth open on several devices, you\u2019re Away once none of them is in use. Only while your status is Online: Do Not Disturb and Invisible never change. Like Online, everyone signed in on this Hearth sees it, so they can tell when you stop and start using it.`)),
+        h('span', { class: 'field-hint' }, `When you haven\u2019t used Cindrly for this long, people see you as Away, and Online again as soon as you\u2019re back. ${desktop ? 'In the desktop app, using anything on your computer counts.' : 'In a browser, using this tab counts; the desktop app counts anything you do on your computer.'} Being in a call counts too. With Cindrly open on several devices, you\u2019re Away once none of them is in use. Only while your status is Online: Do Not Disturb and Invisible never change. Like Online, everyone signed in on this Cindrly sees it, so they can tell when you stop and start using it.`)),
       sel));
 }
 
@@ -2046,7 +2046,7 @@ function exportSection(app) {
       const { blob, manifest } = await underWay(runExport({ token: res.token, S: app.S, sec: app.sec, decryptMessage: app.decryptMessage, signal: ctl.signal, wordFilter: app.wordFilter ? app.wordFilter.exportable() : null, personalNicknames: app.personalNames ? app.personalNames.exportable() : null,
         onProgress: (text, f) => { status.textContent = text; bar.firstChild.style.width = Math.round(f * 100) + '%'; } }));
       const url = URL.createObjectURL(blob);
-      h('a', { href: url, download: `hearth-export-${app.S.me.username}-${new Date().toISOString().slice(0, 10)}.zip` }).click();
+      h('a', { href: url, download: `cindrly-export-${app.S.me.username}-${new Date().toISOString().slice(0, 10)}.zip` }).click();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
       status.textContent = `Done: ${manifest.totals.messages.toLocaleString()} messages and ${manifest.totals.attachments} files (${fmtBytes(blob.size)}).${manifest.skipped.length ? ` ${manifest.skipped.length} item(s) were skipped; see manifest.json.` : ''}`;
     } catch (e) { status.textContent = ctl.signal.aborted ? 'Export cancelled.' : `The export stopped: ${e.message}`; }
@@ -2098,15 +2098,15 @@ function activityTab(app) {
       section('Detect it automatically',
         desktop && desktop.detectActivity
           ? h('p', { class: 'muted-p' }, '\u2705 The desktop app detects the game you\u2019re playing (Steam games and popular others like Fortnite, Valorant, League, Minecraft, Roblox) and your music (Spotify app, Apple Music app on Mac, any player on Linux).')
-          : h('p', { class: 'muted-p' }, 'The Hearth desktop app detects your game and music by itself. In a browser or on your phone, use Last.fm below for music, or set it by hand.'),
+          : h('p', { class: 'muted-p' }, 'The Cindrly desktop app detects your game and music by itself. In a browser or on your phone, use Last.fm below for music, or set it by hand.'),
         h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Last.fm (works with Spotify, Apple Music, YouTube Music, TIDAL, Deezer\u2026)'),
           st.lastfmEnabled
             ? h('div', { class: 'row gap' }, lastfm, h('button', { class: 'btn', onclick: async () => { try { await save({ lastfm: lastfm.value.trim() }, true); toast(lastfm.value.trim() ? 'Connected to Last.fm.' : 'Last.fm disconnected.'); } catch { /* shown */ } } }, 'Save'))
             : h('p', { class: 'field-hint' }, 'Ask the server owner to add a free Last.fm API key (Admin \u2192 Owner \u2192 Games & music).'),
-          h('p', { class: 'field-hint' }, 'Connect Spotify to Last.fm once at last.fm \u2192 Settings \u2192 Applications. Apple Music and others need a scrobbler app. Hearth only reads what you\u2019re playing right now.')),
+          h('p', { class: 'field-hint' }, 'Connect Spotify to Last.fm once at last.fm \u2192 Settings \u2192 Applications. Apple Music and others need a scrobbler app. Cindrly only reads what you\u2019re playing right now.')),
         h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Where I listen'),
           chips(st.platforms.map((x) => [x.id, x.name]), st.platform, (v) => save({ platform: v })),
-          h('span', { class: 'field-hint' }, 'Used for "Listening on \u2026" and the "Open in" button when Hearth can\u2019t tell.'))),
+          h('span', { class: 'field-hint' }, 'Used for "Listening on \u2026" and the "Open in" button when Cindrly can\u2019t tell.'))),
       (st.recent || []).length ? section('Recently played', h('p', { class: 'set-sub' }, st.recent.map((r) => r.name).join(', ')),
         h('div', null, h('button', { class: 'btn ghost sm', onclick: async () => { await save({ clearRecent: true }); draw(); } }, 'Clear the list'))) : '');
   };
@@ -2160,7 +2160,7 @@ function hostTab(app) {
     section('What your relay can and can\u2019t see',
       h('ul', { class: 'perk-list' },
         h('li', null, 'It sees the IP address of everyone whose call goes through it, when, and how much they send. Also the IP address of everyone whose app measures it: apps measure relays to pick the nearest.'),
-        h('li', null, 'It never sees what\u2019s said or shown. Call audio, video and screen shares are encrypted between the people in the call (DTLS-SRTP, with fingerprints Hearth signs, so a relay can\u2019t step in the middle). Your relay only passes the packets along.'),
+        h('li', null, 'It never sees what\u2019s said or shown. Call audio, video and screen shares are encrypted between the people in the call (DTLS-SRTP, with fingerprints Cindrly signs, so a relay can\u2019t step in the middle). Your relay only passes the packets along.'),
         h('li', null, 'Logins carry no names or user ids. Each person logs in to it under a made-up name that\u2019s different on every member\u2019s relay, so two relays can\u2019t tell they\u2019re seeing the same person. On yours, though, the same person always has the same one, and whoever sees when people join calls can often work out whose it is, and from then on knows their IP address whenever they use it.'),
         h('li', null, 'Your machine\u2019s IP address goes to everyone\u2019s app, since it\u2019s a relay address. Its name doesn\u2019t: only you and the owner see that, and everyone else\u2019s app just says \u201cMember relay\u201d.'),
         h('li', null, 'Backup copies, if it keeps them, are .hbk files locked with this server\u2019s backup key, which never leaves the server. You can\u2019t open them. Anyone who someday got that key could, so the owner decides whether your relay gets copies.'),
@@ -2200,7 +2200,7 @@ function hostTab(app) {
   const uninstall = (name, command) => showCommand(`Uninstall ${name}`, command || 'sudo hearth-relay-uninstall', {
     steps: ['On the machine, run:'],
     notes: [
-      'It stops and removes the relay and its check-in, the backup account with any copies on it, and the firewall rules the installer added. coturn itself is uninstalled only if Hearth installed it. It lists what it removed, and running it twice does no harm.',
+      'It stops and removes the relay and its check-in, the backup account with any copies on it, and the firewall rules the installer added. coturn itself is uninstalled only if Cindrly installed it. It lists what it removed, and running it twice does no harm.',
       'If you don\u2019t run it, the relay switches itself off about a day after this server starts telling it it\u2019s gone. The backup account, any copies and the firewall rules stay until you do.',
     ],
   });
@@ -2368,7 +2368,7 @@ function pushRows(app) {
 }
 function pushToggleRow(app, onChanged = () => {}) {
   const note = h('span', { class: 'field-hint' }, 'Checking\u2026');
-  const label = h('span', { class: 'toggle-label' }, androidApp.on || iosApp.on ? 'Notifications when Hearth is closed' : 'Push notifications on this device');
+  const label = h('span', { class: 'toggle-label' }, androidApp.on || iosApp.on ? 'Notifications when Cindrly is closed' : 'Push notifications on this device');
   const box = h('input', { type: 'checkbox', disabled: true });
   const row = h('label', { class: 'toggle-row' },
     h('span', { class: 'toggle-text' }, label, note),
@@ -2382,16 +2382,16 @@ function pushToggleRow(app, onChanged = () => {}) {
     box.disabled = st === 'unsupported' || st === 'blocked';
     if (iosApp.on) { note.textContent = iosPushNote(app, st); return; }
     note.textContent = {
-      on: inApp ? 'You\u2019ll get notifications even after you swipe Hearth away. They say \u201cNew message\u201d (or who, if you show names below), never what a message says.'
-        : 'You\u2019ll get notified about DMs, mentions and replies even when Hearth is closed. Notifications say who and where, never what \u2014 messages stay encrypted.',
-      off: inApp ? 'Get notified about DMs, mentions, replies and calls even after you swipe Hearth away. Needs a push app such as ntfy.'
-        : 'Get notified about DMs, mentions and replies even when Hearth is closed.',
+      on: inApp ? 'You\u2019ll get notifications even after you swipe Cindrly away. They say \u201cNew message\u201d (or who, if you show names below), never what a message says.'
+        : 'You\u2019ll get notified about DMs, mentions and replies even when Cindrly is closed. Notifications say who and where, never what \u2014 messages stay encrypted.',
+      off: inApp ? 'Get notified about DMs, mentions, replies and calls even after you swipe Cindrly away. Needs a push app such as ntfy.'
+        : 'Get notified about DMs, mentions and replies even when Cindrly is closed.',
       nodistributor: reasonText.noDistributor,
       failed: reasonText[(app.push.android && app.push.android.last && app.push.android.last.reason) || ''] || reasonText.INTERNAL_ERROR,
       blocked: inApp ? reasonText.blocked : 'Notifications are blocked for this site. Allow them in your browser\u2019s site settings.',
       unsupported: androidApp.on && !(app.S.config && app.S.config.pushEnabled) ? 'Push notifications are turned off on this server.'
-        : androidApp.on ? 'Update the Hearth app to get notifications after you swipe it away.'
-          : /iPhone|iPad/.test(navigator.userAgent) && !app.isInstalled ? 'On iPhone and iPad, add Hearth to your Home Screen first, then turn this on inside the app.'
+        : androidApp.on ? 'Update the Cindrly app to get notifications after you swipe it away.'
+          : /iPhone|iPad/.test(navigator.userAgent) && !app.isInstalled ? 'On iPhone and iPad, add Cindrly to your Home Screen first, then turn this on inside the app.'
             : !(app.S.config && app.S.config.pushEnabled) ? 'Push notifications are turned off on this server.' : 'This browser doesn\u2019t support push notifications.',
     }[st] || '';
   };
@@ -2400,7 +2400,7 @@ function pushToggleRow(app, onChanged = () => {}) {
     const inApp = !!app.push.android || !!app.push.ios;
     try {
       if (box.checked) await app.push.enable(); else await app.push.disable();
-      toast(box.checked ? (inApp ? 'Notifications are on, even when Hearth is closed.' : 'Push notifications are on for this device.') : (inApp ? 'Notifications when Hearth is closed are off.' : 'Push notifications are off for this device.'));
+      toast(box.checked ? (inApp ? 'Notifications are on, even when Cindrly is closed.' : 'Push notifications are on for this device.') : (inApp ? 'Notifications when Cindrly is closed are off.' : 'Push notifications are off for this device.'));
     } catch (e) { if (e.code !== 'CANCELLED') toast(e.message, 'error'); }
     await refresh();
     onChanged();
@@ -2413,14 +2413,14 @@ function pushToggleRow(app, onChanged = () => {}) {
 function iosPushNote(app, st) {
   const p = app.push.ios;
   return {
-    on: 'You\u2019ll get notifications even when Hearth is closed. They say \u201cNew message\u201d (or who, if you show names below), never what a message says: the app decrypts them on this iPhone.',
-    off: 'Get notified about DMs, mentions, replies and calls even when Hearth is closed.',
+    on: 'You\u2019ll get notifications even when Cindrly is closed. They say \u201cNew message\u201d (or who, if you show names below), never what a message says: the app decrypts them on this iPhone.',
+    off: 'Get notified about DMs, mentions, replies and calls even when Cindrly is closed.',
     failed: iosReasonText[(p && p.last && p.last.reason) || ''] || iosReasonText.INTERNAL_ERROR,
     blocked: iosReasonText.blocked,
-    unsupported: !p ? 'Update the Hearth app to get notifications while it\u2019s closed.' : iosReasonText.noApns,
+    unsupported: !p ? 'Update the Cindrly app to get notifications while it\u2019s closed.' : iosReasonText.noApns,
   }[st] || '';
 }
-// Android app: which push app delivers Hearth's notifications while it's closed, and what that means.
+// Android app: which push app delivers Cindrly's notifications while it's closed, and what that means.
 function androidPushAppRow(app, onChanged = () => {}) {
   const box = h('div', { class: 'stack' });
   const cfg = app.S.config || {};
@@ -2444,7 +2444,7 @@ function androidPushAppRow(app, onChanged = () => {}) {
           onChanged();
         } }, 'Change')));
     }
-    box.append(h('p', { class: 'field-hint' }, 'How it works: a push app on your phone (such as ntfy, free on F-Droid and Google Play) keeps one connection open for all your apps and wakes Hearth when something happens. It only passes on notifications encrypted for this phone, and never sees what anyone writes. For notifications without delay, let the push app run without battery limits.'));
+    box.append(h('p', { class: 'field-hint' }, 'How it works: a push app on your phone (such as ntfy, free on F-Droid and Google Play) keeps one connection open for all your apps and wakes Cindrly when something happens. It only passes on notifications encrypted for this phone, and never sees what anyone writes. For notifications without delay, let the push app run without battery limits.'));
     if (cfg.pushNtfy) {
       box.append(h('p', { class: 'field-hint' }, 'This server runs its own ntfy, so no outside service is involved: in the ntfy app, open Settings \u2192 Default server and enter ',
         h('code', null, cfg.pushNtfy), ', then turn notifications off and on here.'));
@@ -2462,10 +2462,10 @@ function androidNotifyRow() {
     const st = window.Notification ? Notification.permission : 'default';
     box.append(h('p', { class: 'muted-p' }, st === 'granted'
       ? 'Notifications are on. The app notifies you about messages while it\u2019s open or in the background (not after you swipe it away).'
-      : st === 'denied' ? 'Notifications are blocked. Turn them on in Android Settings \u2192 Apps \u2192 Hearth \u2192 Notifications.'
+      : st === 'denied' ? 'Notifications are blocked. Turn them on in Android Settings \u2192 Apps \u2192 Cindrly \u2192 Notifications.'
         : 'Allow the app to notify you about new messages.'));
     if (st === 'default') box.append(h('div', null, h('button', { class: 'btn primary', onclick: async () => { await Notification.requestPermission(); draw(); } }, 'Allow notifications')));
-    box.append(h('p', { class: 'field-hint' }, 'Update the Hearth app to get notifications after you swipe it away, and calls that keep going with the screen locked.'));
+    box.append(h('p', { class: 'field-hint' }, 'Update the Cindrly app to get notifications after you swipe it away, and calls that keep going with the screen locked.'));
   };
   draw();
   return box;
@@ -2478,26 +2478,26 @@ function appsTab(app) {
   const installBox = h('div', { class: 'stack' });
   const drawInstall = () => {
     clear(installBox);
-    if (window.hearthDesktop) { installBox.append(h('p', { class: 'muted-p' }, 'You\u2019re using the Hearth desktop app. Its settings are below.')); return; }
+    if (window.hearthDesktop) { installBox.append(h('p', { class: 'muted-p' }, 'You\u2019re using the Cindrly desktop app. Its settings are below.')); return; }
     if (androidApp.on) {
-      installBox.append(h('p', { class: 'muted-p' }, `You\u2019re using the Hearth Android app${androidApp.version ? ` (version ${androidApp.version})` : ''}. Files you save go to Downloads/Hearth.`),
+      installBox.append(h('p', { class: 'muted-p' }, `You\u2019re using the Cindrly Android app${androidApp.version ? ` (version ${androidApp.version})` : ''}. Files you save go to Downloads/Cindrly.`),
         h('div', null, h('button', { class: 'btn', onclick: () => androidApp.switchServer() }, 'Switch server')));
       return;
     }
     if (iosApp.on) {
-      installBox.append(h('p', { class: 'muted-p' }, `You\u2019re using the Hearth iPhone app${iosApp.version ? ` (version ${iosApp.version})` : ''}. Files you save open the share sheet: pick Save to Files to keep them.`));
+      installBox.append(h('p', { class: 'muted-p' }, `You\u2019re using the Cindrly iPhone app${iosApp.version ? ` (version ${iosApp.version})` : ''}. Files you save open the share sheet: pick Save to Files to keep them.`));
       return;
     }
-    if (app.isInstalled) { installBox.append(h('p', { class: 'muted-p' }, 'Hearth is installed on this device. \uD83C\uDF89')); return; }
+    if (app.isInstalled) { installBox.append(h('p', { class: 'muted-p' }, 'Cindrly is installed on this device. \uD83C\uDF89')); return; }
     if (app.canInstall) {
-      installBox.append(h('p', { class: 'muted-p' }, 'Install Hearth as an app: it gets its own window and icon, opens instantly and can send notifications.'),
+      installBox.append(h('p', { class: 'muted-p' }, 'Install Cindrly as an app: it gets its own window and icon, opens instantly and can send notifications.'),
         h('div', null, h('button', { class: 'btn primary', onclick: async () => { await app.install(); drawInstall(); } }, icon('download'), 'Install app')));
     } else if (ios) {
       installBox.append(h('p', { class: 'muted-p' }, 'On iPhone and iPad: open this site in Safari, tap the Share button, then "Add to Home Screen".'));
     } else if (android) {
       installBox.append(h('p', { class: 'muted-p' }, 'On Android: open the browser menu (\u22ee) and tap "Install app" or "Add to Home screen".'));
     } else {
-      installBox.append(h('p', { class: 'muted-p' }, 'In Chrome or Edge, use the install icon at the right end of the address bar, or the browser menu \u2192 "Install Hearth". Firefox and Safari on desktop: use the desktop app below.'));
+      installBox.append(h('p', { class: 'muted-p' }, 'In Chrome or Edge, use the install icon at the right end of the address bar, or the browser menu \u2192 "Install Cindrly". Firefox and Safari on desktop: use the desktop app below.'));
     }
   };
   drawInstall();
@@ -2551,7 +2551,7 @@ function instanceTab(app) {
     rating.value = st.giphyRating;
     clear(root).append(
       h('h2', { class: 'set-title' }, 'Instance'),
-      h('p', { class: 'muted-p' }, 'Settings for this whole Hearth server. Only you see this page.'),
+      h('p', { class: 'muted-p' }, 'Settings for this whole Cindrly server. Only you see this page.'),
       h('div', null, h('button', { class: 'btn primary', onclick: () => { document.querySelector('.set-close')?.click(); app.openAdmin(); } }, icon('shield'), 'Open admin dashboard')),
       section('GIF search',
         h('p', { class: 'muted-p' }, st.gifProvider === 'library' ? 'Only this server\u2019s own GIF library is used: free, no key, no limits. Add GIFs from the GIF picker \u2192 This server tab.'

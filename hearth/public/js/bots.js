@@ -1,6 +1,6 @@
 // Bots in the app (server/bots.js has the rules):
 //  - Server settings → Bots: the built-in news bot, installed bots (health, access, deliveries, remove), adding
-//    one from this Hearth's list after approving its scopes and channels, and the bots you made (tokens shown
+//    one from this Cindrly's list after approving its scopes and channels, and the bots you made (tokens shown
 //    once, webhook secret, delete).
 //  - Slash commands in the composer: suggestions, argument hints and checks, the "goes to the bot without
 //    end-to-end encryption" warning, and answers only you can see (kept in memory, never stored).
@@ -135,7 +135,7 @@ export async function botsTab(s, body, { confirm }) {
     if (!got) return;
     try { await api('POST', `/servers/${s.id}/bots`, { botId: b.id, ...got, confirm: true }); toast(`${b.name} was added.`); } catch (e) { toast(e.message, 'error'); }
     redraw();
-  } }, 'Review and add')) : h('p', { class: 'field-hint' }, 'No other bots are listed on this Hearth yet.');
+  } }, 'Review and add')) : h('p', { class: 'field-hint' }, 'No other bots are listed on this Cindrly yet.');
 
   // One block that keeps its full height (the settings pane is a shrinking flex column).
   clear(body).append(h('div', { class: 'stack bots-panel' },
@@ -156,7 +156,7 @@ export async function botsTab(s, body, { confirm }) {
 // ------------------------------------------------------------------ the bots you made
 function myBots(all, { confirm, redraw }) {
   const wrap = h('div', { class: 'stack' }, h('h4', null, 'Your bots'));
-  if (!all.mine.length) wrap.append(h('p', { class: 'field-hint' }, all.canCreate ? 'You haven’t made any bots.' : 'On this Hearth, only some people can make bots.'));
+  if (!all.mine.length) wrap.append(h('p', { class: 'field-hint' }, all.canCreate ? 'You haven’t made any bots.' : 'On this Cindrly, only some people can make bots.'));
   for (const b of all.mine) {
     const url = h('input', { class: 'input', value: b.webhookUrl, placeholder: 'https://bot.example.com/hearth' });
     const listed = h('input', { type: 'checkbox', checked: b.listed });
@@ -166,7 +166,7 @@ function myBots(all, { confirm, redraw }) {
       h('summary', null, h('b', null, b.name), ` @${b.username || ''} · in ${b.installations.length} server${b.installations.length === 1 ? '' : 's'}${b.disabled ? ' · turned off by an admin' : ''}`),
       h('div', { class: 'stack' },
         field('Webhook address', url, 'Where events and slash commands are sent: https only, on the public internet.'),
-        h('label', { class: 'row gap tight' }, listed, h('span', null, 'List it on this Hearth, so other servers can add it')),
+        h('label', { class: 'row gap tight' }, listed, h('span', null, 'List it on this Cindrly, so other servers can add it')),
         h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Access it asks for'), h('div', { class: 'bot-scopes' }, ...asks.map(({ sc, box }) => h('label', { class: 'row gap tight' }, box, h('span', null, sc)))),
           h('span', { class: 'field-hint' }, 'Servers approve new access before it applies there.')),
         h('div', null, h('button', { class: 'btn primary sm', onclick: async () => {
@@ -205,12 +205,12 @@ function myBots(all, { confirm, redraw }) {
         field('Webhook address (optional)', url, 'https only. See docs/BOTS.md for what it receives.'),
         h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Access it will ask for'),
           ...asks.map(({ sc, box, about }) => h('label', { class: 'bot-perm' }, box, h('span', { class: 'toggle-text' }, h('span', { class: 'toggle-label' }, sc), h('span', { class: 'field-hint' }, about))))),
-        h('label', { class: 'row gap tight' }, listed, h('span', null, 'List it on this Hearth, so other servers can add it')),
+        h('label', { class: 'row gap tight' }, listed, h('span', null, 'List it on this Cindrly, so other servers can add it')),
         h('div', null, h('button', { class: 'btn primary', onclick: async (e) => {
           const btn = e.currentTarget; btn.disabled = true;
           try {
             const r = await api('POST', '/bots', { name: name.value, description: desc.value, webhookUrl: url.value.trim() || null, listed: listed.checked, scopes: asks.filter((x) => x.box.checked).map((x) => x.sc) });
-            await secretsOnce(`${r.bot.name} is ready`, 'These are shown once. The token lets your program act as the bot; the webhook secret lets it check that webhooks really come from this Hearth.', [['Token', r.token], ['Webhook secret', r.webhookSecret]]);
+            await secretsOnce(`${r.bot.name} is ready`, 'These are shown once. The token lets your program act as the bot; the webhook secret lets it check that webhooks really come from this Cindrly.', [['Token', r.token], ['Webhook secret', r.webhookSecret]]);
             redraw();
           } catch (x) { toast(x.message, 'error'); btn.disabled = false; }
         } }, 'Make bot')))));

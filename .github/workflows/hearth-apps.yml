@@ -1,4 +1,4 @@
-# Builds the Hearth apps: Windows, macOS and Linux (hearth/desktop), Android and iPhone (hearth/mobile).
+# Builds the Cindrly apps: Windows, macOS and Linux (hearth/desktop), Android and iPhone (hearth/mobile).
 #   Runs on every push that changes the apps, on tags like `app-v1.17.0` (attached to a GitHub release),
 #   and from the Actions tab ("Run workflow").
 #   Result: download them from the run's "Artifacts" section, or the release for tags.
@@ -60,7 +60,7 @@
 #       send it to TestFlight (testflight-upload); without a HEARTH_SERVER of the form https://host there's no signed
 #       iPhone app, and a manual run's "server" never changes it. The .ipa is never attached to a release or copied
 #       to your server.
-name: Hearth apps
+name: Cindrly apps
 
 on:
   push:
@@ -118,7 +118,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - name: Set the version (from the tag, or Hearth's own version)
+      - name: Set the version (from the tag, or Cindrly's own version)
         run: |
           if [[ "$GITHUB_REF" == refs/tags/app-v* ]]; then v="${GITHUB_REF_NAME#app-v}"; else v="$(node -p "require('../package.json').version")"; fi
           npm version --no-git-tag-version --allow-same-version "$v"
@@ -347,7 +347,7 @@ jobs:
           IFS=. read -r major minor _ <<< "${v%%-*}"
           code=$(( (10#${major:-0} * 100 + 10#${minor:-0}) * 100000 + GITHUB_RUN_NUMBER % 100000 ))
           echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "Hearth $v, Android versionCode $code"
+          echo "Cindrly $v, Android versionCode $code"
       - name: Bake in the server address
         if: env.SERVER != ''
         run: node -e "const f='www/config.json';const c=require('./'+f);c.defaultServer=process.env.SERVER;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
@@ -451,7 +451,7 @@ jobs:
             cp app/build/outputs/apk/release/app-release-unsigned.apk "../unsigned/Hearth-$VERSION_NAME-UNSIGNED.apk"
           fi
           if [ -n "$BUNDLE" ]; then cp app/build/outputs/bundle/release/app-release.aab "../play/Hearth-$VERSION_NAME-$VERSION_CODE.aab"; fi
-      # What actually went into the APK: the push library's receiver, Hearth's unexported push service, the call
+      # What actually went into the APK: the push library's receiver, Cindrly's unexported push service, the call
       # service with its type and permissions, and the invite link filter.
       - name: Check the merged manifest
         run: |
@@ -478,7 +478,7 @@ jobs:
           path: hearth/mobile/play/*.aab
           if-no-files-found: error
 
-  # Google Play internal testing: friends you add as testers install and update Hearth from the Play Store,
+  # Google Play internal testing: friends you add as testers install and update Cindrly from the Play Store,
   # without the "unknown apps" and Play Protect warnings. Tags and the default branch only (pushed or run by hand),
   # as the production environment's rules allow, with a bundle signed with your own key. A job of its own, in the
   # production environment, so the Play account's key never shares a runner with the build's npm and Gradle code.
@@ -574,7 +574,7 @@ jobs:
           IFS=. read -r major minor _ <<< "${v%%-*}"
           code=$(( (10#${major:-0} * 100 + 10#${minor:-0}) * 100000 + GITHUB_RUN_NUMBER % 100000 ))
           echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "Hearth $v, iPhone build $code"
+          echo "Cindrly $v, iPhone build $code"
       # Pure logic shared by the app and its extensions (link rules, push decryption, the keys), on macOS for CryptoKit.
       - name: HearthKit tests
         working-directory: hearth/mobile/ios-native/HearthKit
@@ -592,7 +592,7 @@ jobs:
           VERSION_CODE: ${{ steps.v.outputs.code }}
         run: |
           npx cap add ios
-          # Hearth's Swift sources, the notification and share extensions, HearthKit, Info.plist, entitlements and
+          # Cindrly's Swift sources, the notification and share extensions, HearthKit, Info.plist, entitlements and
           # the ring sound. Fails if Capacitor's template changed.
           bundle exec ruby scripts/patch-ios.rb ios
       - name: App icon
@@ -664,7 +664,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/screens"
           xcrun simctl io "$UDID" screenshot "$RUNNER_TEMP/screens/launch.png"
           if ! xcrun simctl spawn "$UDID" launchctl list | grep -q 'UIKitApplication:app\.hearth\.mobile'; then
-            echo "::error::Hearth quit (or crashed) within 20 seconds of opening in the simulator."
+            echo "::error::Cindrly quit (or crashed) within 20 seconds of opening in the simulator."
             exit 1
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -899,7 +899,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # TestFlight: you and the testers you add install Hearth from Apple's TestFlight app; App Review for the store
+  # TestFlight: you and the testers you add install Cindrly from Apple's TestFlight app; App Review for the store
   # starts from a build here. A job of its own, in the production environment, that runs only fastlane's upload
   # (pinned in Gemfile.lock) on the .ipa.
   testflight-upload:

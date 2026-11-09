@@ -28,7 +28,7 @@ All code references are to files under `hearth/` and were checked against the cu
 
 | Question | Decision |
 |---|---|
-| Who fetches the page? | The sender's own Hearth server fetches it, only when the sender asks, through a new `POST /api/link-previews` that uses `netguard.request` (no changes to netguard). Readers' devices never fetch anything. |
+| Who fetches the page? | The sender's own Cindrly server fetches it, only when the sender asks, through a new `POST /api/link-previews` that uses `netguard.request` (no changes to netguard). Readers' devices never fetch anything. |
 | Default behaviour | The person's setting defaults to **"Ask each time"**: nothing leaves the device until they press **Preview** on the chip. The owner switch `features.linkPreviews` defaults to on. |
 | Preview image | The sender's device decodes it, shrinks it and re-encodes it as WebP (JPEG fallback) of at most **16 KiB**. It travels **inline in the ciphertext** as base64. It is not uploaded as an encrypted attachment (weighed in §6). |
 | Payload change | One new optional top-level key, `l: [ { v: 1, url, title, desc, site, kind, img? } ]`, next to the existing `t` (text), `f` (files) and `p` (poll). At most one preview per message. |
@@ -50,12 +50,12 @@ All code references are to files under `hearth/` and were checked against the cu
    - readers' devices never contact the linked site or any third party;
    - the server can't read the card in storage.
 2. The fetch is SSRF-safe: `server/netguard.js` is reused as it is. It is bounded in bytes, time and concurrency, and remote HTML is never executed or rendered as HTML.
-3. Privacy is explicit. Before the first request for a link, the person is told that their Hearth server will see that link.
+3. Privacy is explicit. Before the first request for a link, the person is told that their Cindrly server will see that link.
 4. No schema change, and messages stay readable by clients still running the previous JavaScript.
 5. The browser, PWA, Electron desktop app and Android app behave identically, because all of them run the client code the server serves (ARCHITECTURE §1). There are no native or CI changes.
 
 ### Non-goals (v1)
-- **Hiding the URL from the Hearth server.** Page JavaScript can't fetch other sites (§3.5). A native desktop or Android fetch path is listed in §14 as an open question.
+- **Hiding the URL from the Cindrly server.** Page JavaScript can't fetch other sites (§3.5). A native desktop or Android fetch path is listed in §14 as an open question.
 - **Previews built by readers**, or built by the server from stored messages (it can't read them).
 - **Players, iframes or oEmbed `html` rendering.** Watch together keeps its own `watchChips()` button.
 - **Replacing hot-linked image-URL embeds** (`extractImageUrls`) with thumbnails built by the sender. This is a Phase 2 candidate (§14).
@@ -133,11 +133,11 @@ All code references are to files under `hearth/` and were checked against the cu
 
 | Party | Learns | Does not learn |
 |---|---|---|
-| **Hearth server, honest operator** | The **full URL** the person asked about (path, query and anything after `#`; only the part before `#` is fetched); the account, session, IP and time of the request; the page metadata and image it fetched. The encrypted message usually follows seconds later and is about 20–30 KB instead of about 0.5 KB, so the server can **tie URL → conversation → sender → time**. The data is kept in memory for at most 10 minutes and is never written to disk or logged (§5.8). | The message text, or links the person never chose to preview (in "Ask" mode). |
+| **Cindrly server, honest operator** | The **full URL** the person asked about (path, query and anything after `#`; only the part before `#` is fetched); the account, session, IP and time of the request; the page metadata and image it fetched. The encrypted message usually follows seconds later and is about 20–30 KB instead of about 0.5 KB, so the server can **tie URL → conversation → sender → time**. The data is kept in memory for at most 10 minutes and is never written to disk or logged (§5.8). | The message text, or links the person never chose to preview (in "Ask" mode). |
 | **Compromised or malicious server** | All of the above, kept forever. It can also: answer the sender with a fake preview (the sender's app trusts its server here, just as it already trusts the server's JavaScript); silently refuse previews for chosen URLs; fingerprint which links people share. | It can't change a preview once it is encrypted. Channel messages are ECDSA-signed over the whole ciphertext; DMs are bound to the DM and author through the AEAD associated data. It can't add previews to other people's messages. |
-| **The linked site** | The Hearth server's IP; the User-Agent `HearthLinkPreview/<version>`; the instance-wide `Accept-Language`; the time. There is one fetch per previewing account (no cache shared between accounts), so a small site can tell that someone on that Hearth server previewed its link just now. | The sender's IP, cookies or identity. Anything about readers. |
+| **The linked site** | The Cindrly server's IP; the User-Agent `HearthLinkPreview/<version>`; the instance-wide `Accept-Language`; the time. There is one fetch per previewing account (no cache shared between accounts), so a small site can tell that someone on that Cindrly server previewed its link just now. | The sender's IP, cookies or identity. Anything about readers. |
 | **Readers' devices** | Whatever the sender put in the card. | They make **no** network request for the card: the picture is an inline `data:` URL. |
-| **Readers' Hearth server** | Nothing new: it already serves this ciphertext. | — |
+| **Readers' Cindrly server** | Nothing new: it already serves this ciphertext. | — |
 
 ### 3.2 Change to the published guarantees
 Today SECURITY.md §4 and ARCHITECTURE §4 say the server cannot read message text, and that includes links. After this change, **links a person chooses to preview become visible to the server.**
@@ -159,14 +159,14 @@ The "Ask each time" default keeps the old guarantee unless the person opts in, o
 
 ### 3.4 Abuse of the fetch endpoint
 - **SSRF.** netguard checks every hop, pins DNS, and refuses this server's own addresses and `OUTBOUND_BLOCK`. On top of that: https only, port 443 only, no IP literals, reserved names refused, and this server's own host names refused by name (§5.2).
-- **Using Hearth as a fetching proxy, or to flood a site.** Requests are GET only with fixed headers. The answer is cut down to metadata plus at most 2 MiB of image. Limits apply per user, per network, instance-wide, and per target host (§5.6). This is the same class of risk as the existing trackers and `/media/news`, which already fetch any public URL for a signed-in user.
+- **Using Cindrly as a fetching proxy, or to flood a site.** Requests are GET only with fixed headers. The answer is cut down to metadata plus at most 2 MiB of image. Limits apply per user, per network, instance-wide, and per target host (§5.6). This is the same class of risk as the existing trackers and `/media/news`, which already fetch any public URL for a signed-in user.
 - **One-time links** (magic sign-in links, password resets, unsubscribe links, invite tokens) can be used up by a server-side GET.
   - "Ask" is the default.
   - In "Always" mode, `looksPrivate(url)` stops automatic previews of URLs whose query has keys like `token`, `code`, `key`, `sig`, `signature`, `auth`, `session`, `password`, `otp`, `reset`, `invite`, `magic`, `ticket`, and of known share hosts: `docs.google.com`, `drive.google.com`, `dropbox.com`, `*.zoom.us`, `meet.google.com`, `1drv.ms`, `onedrive.live.com`, `icloud.com`, `wetransfer.com`. For those the chip asks again.
 - **Illegal content.** The server downloads whatever page or picture a member asks about. It holds it in memory only and returns it only to that member. Operators must be told (README and OPERATIONS) and can switch the feature off.
 
 ### 3.5 Why the server has to fetch, and how others do it
-- **Hearth.** The page can't fetch other sites: the CSP has `connect-src 'self'` (`cspFor` in `server/index.js`), and CORS stops scripts from reading cross-origin answers anyway ([MDN: CORS](https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS)). A browser can't open a raw TLS tunnel either, so the Hearth server necessarily sees the URL. That is the honest difference from Signal.
+- **Cindrly.** The page can't fetch other sites: the CSP has `connect-src 'self'` (`cspFor` in `server/index.js`), and CORS stops scripts from reading cross-origin answers anyway ([MDN: CORS](https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS)). A browser can't open a raw TLS tunnel either, so the Cindrly server necessarily sees the URL. That is the honest difference from Signal.
 - **Signal.**
   - The sender builds the preview. The protocol message is `Preview { url, title, image: AttachmentPointer, description, date }`, so the picture travels as an encrypted attachment ([SignalService.proto](https://github.com/signalapp/Signal-Android/blob/main/lib/libsignal-service/src/main/protowire/SignalService.proto)).
   - Signal-Android fetches with OkHttp, the User-Agent `WhatsApp/2`, 2 MB caps on both text and image, and a redirect-checking interceptor ([LinkPreviewRepository.java](https://github.com/signalapp/Signal-Android/blob/main/app/src/main/java/org/thoughtcrime/securesms/linkpreview/LinkPreviewRepository.java)).
@@ -174,7 +174,7 @@ The "Ask each time" default keeps the old guarantee unless the person opts in, o
   - Signal Desktop shows a preview only if its URL is in the body, and treats links longer than 4096 characters as suspicious ([LinkPreview.std.ts](https://github.com/signalapp/Signal-Desktop/blob/main/ts/types/LinkPreview.std.ts)).
   - Signal's help text says previews go through a privacy-enhancing proxy so the site never sees the user's IP ([How-To Geek summary](https://www.howtogeek.com/708607/how-to-turn-on-link-previews-in-signal-or-turn-them-off/)).
 - **Matrix / Synapse.** The homeserver builds previews. `url_preview_enabled` is off by default and requires an IP blocklist. `url_preview_accept_language` defaults to a fixed `en`, and `max_spider_size` defaults to 10M ([Synapse config docs](https://github.com/element-hq/synapse/blob/develop/docs/usage/configuration/config_documentation.md)). Previews are commonly left off in encrypted rooms for exactly the "homeserver sees the URL" reason (secondary source: a [forum post quoting the Synapse 1.45.1 notes](https://lemm.ee/post/9955859)).
-- **Hearth's position.** The server fetches, like Synapse. The result is stored end-to-end encrypted inside the sender's message, like Signal. Fetching is opt-in per link by default.
+- **Cindrly's position.** The server fetches, like Synapse. The result is stored end-to-end encrypted inside the sender's message, like Signal. Fetching is opt-in per link by default.
 
 ---
 
@@ -184,7 +184,7 @@ The "Ask each time" default keeps the old guarantee unless the person opts in, o
 sequenceDiagram
   autonumber
   participant A as Sender app (app.js createComposer, linkpreview.js, media.js)
-  participant S as Hearth server (server/linkpreview.js)
+  participant S as Cindrly server (server/linkpreview.js)
   participant W as Parser worker
   participant X as Linked site
   participant B as Reader app
@@ -423,7 +423,7 @@ The per-host counter is shared across accounts but only counts. It answers with 
 | Quotas and cleanup | None needed. | Counts toward `user_files`; needs `attachBlobs` raised past 20 and the 24 h cleanup. |
 | Picture quality | Up to 400 px, ladder of quality settings. | Could be full size. |
 
-**Decision: inline.** Signal uses attachments because its CDN and protocol are built around them. Hearth's 64 KB ciphertext ceiling, its unauthenticated `/uploads/` (which turns each view into server-side metadata) and the ATTACH_FILES and PATCH gaps all make inline the simpler and more private choice. If a later version needs full-size pictures, add an optional `img.att` attachment pointer next to the inline thumbnail (§14).
+**Decision: inline.** Signal uses attachments because its CDN and protocol are built around them. Cindrly's 64 KB ciphertext ceiling, its unauthenticated `/uploads/` (which turns each view into server-side metadata) and the ATTACH_FILES and PATCH gaps all make inline the simpler and more private choice. If a later version needs full-size pictures, add an optional `img.att` attachment pointer next to the inline thumbnail (§14).
 
 ---
 
@@ -591,7 +591,7 @@ function linkCardEl(l) {
   5. If `image` is present: `img = await previewThumb(base64ToBytes(image.data), image.type)`.
   6. Status `ready`, or `none` / `error` with a message such as the 429 text.
 - **Chip.** `linkChip()` is drawn in `renderExtras()` after the reply bar and before `pending-files`, inside `role="status"` with `aria-live="polite"`:
-  - `ask`: "Preview example.org? Your Hearth server fetches the page, so it sees this link. People reading don't contact the site." with buttons [Preview], [Always] (sets `hearth.chat.linkPreviews = 'always'`) and [×].
+  - `ask`: "Preview example.org? Your Cindrly server fetches the page, so it sees this link. People reading don't contact the site." with buttons [Preview], [Always] (sets `hearth.chat.linkPreviews = 'always'`) and [×].
   - `private`: "This link may be private (a sign-in, share or reset link)." with [Preview anyway] and [×].
   - `loading`: spinner, "Getting a preview…", [×].
   - `ready`: small thumbnail, the title, the host, and [×] with the label "Remove link preview".
@@ -626,7 +626,7 @@ Then encrypt through `encryptFitting`. No new preview is fetched for links added
 ### 8.6 `public/js/settings.js` → `chatTab()` (≈ line 1300)
 - Add `linkPreviews: 'ask', linkCards: true` to the `cur()` defaults.
 - New `section('Link previews', …)`:
-  - A `<select>`, built like the notification selects: "When I send a link" with *Ask each time* (default), *Always*, *Never*. Hint: "To build a preview, your Hearth server fetches the page for you, so it sees the link (not your message). The site sees the server, not you."
+  - A `<select>`, built like the notification selects: "When I send a link" with *Ask each time* (default), *Always*, *Never*. Hint: "To build a preview, your Cindrly server fetches the page for you, so it sees the link (not your message). The site sees the server, not you."
   - A toggle, "Show link previews in messages" (`linkCards`). Hint: "Built by the sender and sent inside the encrypted message: your device never contacts the linked site."
   - The existing "Show image links as previews" toggle and its IP warning stay as they are.
 
@@ -678,7 +678,7 @@ After `rec.text`: `if (m.dec.l && m.dec.l[0]) rec.link = { url: m.dec.l[0].url, 
 | Sending before the preview is ready | Sent without a preview; never blocks. |
 | Several links | Only the first eligible one gets a preview. |
 | Link inside code, inline code or a spoiler | Not offered; dropped by readers. |
-| Link to this Hearth server (invites, `/#m/` links) | Not offered (same origin), and the server answers 400 `own_server`. |
+| Link to this Cindrly server (invites, `/#m/` links) | Not offered (same origin), and the server answers 400 `own_server`. |
 | `http://` link, IP address, `.local`/`.lan`/`.test`/`.onion`, a port other than 443, credentials in the URL | Not offered; the server answers 400. |
 | Redirect to http, to a private address or to an odd port | netguard or `hopOk` refuse → `blocked`. |
 | Link shortener (bit.ly) | The card shows the destination's title, but the domain line shows `bit.ly` (from the URL in the text). Open question about showing "→ destination". |
@@ -824,7 +824,7 @@ Uses `import(pathToFileURL('public/js/linkpreview.js'))` and `e2ee.js`, as in `q
 8. **Existing payload-whitelist bug.** `editBox()` already drops `p` (polls) when rebuilding the payload. Don't copy that pattern for `l`: carry `l` explicitly. Consider fixing `p` in the same commit as a separate change.
 
 ### Open questions
-1. **Native fetch on desktop and Android.** The Electron main process or the Android bridge could fetch pages locally, as Signal does, so the Hearth server never sees the URL. The site would then see the person's IP. This needs a new `hearthDesktop` / `HearthAndroid` bridge method with exact origin checks.
+1. **Native fetch on desktop and Android.** The Electron main process or the Android bridge could fetch pages locally, as Signal does, so the Cindrly server never sees the URL. The site would then see the person's IP. This needs a new `hearthDesktop` / `HearthAndroid` bridge method with exact origin checks.
 2. **Phase 2: replace hot-linked image-URL embeds** with sender-built inline thumbnails (`kind: 'image'`), closing the remaining "image links in messages" IP leak. Possibly with a "Load original" button.
 3. **Previews for links newly added in an edit.** Allowed, or v1 rule (none)?
 4. **Should `findPreviewUrl` also support Discord's `<https://…>` "no embed" syntax?** It would need a change in `markdown.js`; today `URL_RE` would include the `>`.

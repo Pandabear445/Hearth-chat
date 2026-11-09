@@ -1,6 +1,6 @@
-# Hearth overhaul: engineering report
+# Cindrly overhaul: engineering report
 
-This report covers the October 2026 overhaul of Hearth 1.27.1 into 1.28.0: the security audit and the fixes that
+This report covers the October 2026 overhaul of Cindrly 1.27.1 into 1.28.0: the security audit and the fixes that
 followed (§1–§10), then the reliability and feature workstreams built on top of them (§11). It says what was found,
 what was changed, how each change is proven, what was left for later and why, and what is still risky. It only
 claims what was observed. Every result below carries one of these labels:
@@ -17,7 +17,7 @@ only by GitHub Actions (§6).
 
 ## 1. Baseline
 
-The audit started from commit `c55a9dc` (Hearth 1.27.1, merged as "Add Hearth: self-hosted chat platform with E2E
+The audit started from commit `c55a9dc` (Cindrly 1.27.1, merged as "Add Cindrly: self-hosted chat platform with E2E
 encryption").
 
 - **Tests:** 111 tests, 111 passing, 0 failing, across 12 test files (`npm test`, 161 s). This is the audit's own
@@ -233,8 +233,8 @@ where the docs now state the behaviour.
 
 | ID | Severity | Kind | Title | Status | Proving test |
 |---|---|---|---|---|---|
-| xss-3 | medium | vulnerability | Attachment URLs from E2EE payloads are trusted: one click on a file card navigates the Hearth tab or window to an attacker site, and image entries load from any host | Fixed | `files-hardening.test.js` |
-| xss-4 | medium | vulnerability | Desktop app checks navigation and IPC origins with startsWith(origin), so https://<server>@evil or https://<server>.evil counts as Hearth | Fixed | `client-hardening.test.js` |
+| xss-3 | medium | vulnerability | Attachment URLs from E2EE payloads are trusted: one click on a file card navigates the Cindrly tab or window to an attacker site, and image entries load from any host | Fixed | `files-hardening.test.js` |
+| xss-4 | medium | vulnerability | Desktop app checks navigation and IPC origins with startsWith(origin), so https://<server>@evil or https://<server>.evil counts as Cindrly | Fixed | `client-hardening.test.js` |
 | xss-1 | medium | vulnerability | Profile custom CSS can switch off the page's containment and cover the whole window, including the close controls; the comment box on the page can be disguised as a password prompt | Fixed | `client-hardening.test.js` |
 | xss-2 | medium | vulnerability | Invisible status leaks through lastSeen on profile pages and People, including to users the owner has blocked | Fixed | `client-hardening.test.js` |
 | xss-5 | medium | vulnerability | Profile writes have no rate limit, and each one pushes the full public profile to every connected socket on the instance | Fixed | `client-hardening.test.js` |
@@ -247,10 +247,10 @@ where the docs now state the behaviour.
 
 | ID | Severity | Kind | Title | Status | Proving test |
 |---|---|---|---|---|---|
-| infra-1 | high | vulnerability | Desktop app silently installs native code served by whatever server it is connected to; no signature check on Linux or on unsigned Windows builds, and the Hearth process can write its own update feed | Partly fixed | `client-hardening.test.js` |
+| infra-1 | high | vulnerability | Desktop app silently installs native code served by whatever server it is connected to; no signature check on Linux or on unsigned Windows builds, and the Cindrly process can write its own update feed | Partly fixed | `client-hardening.test.js` |
 | infra-2 | medium | vulnerability | Desktop app lets the remote page decide screen-capture consent (and sends it titles and thumbnails of every window); clipboard-read and mic/camera are auto-granted with no prompt | Partly fixed | `client-hardening.test.js` |
 | infra-3 | medium | vulnerability | hearth-apps.yml grants contents:write to every job, persists the token, runs unlocked npm/npx code and tag-pinned third-party actions that receive the root VPS SSH key | Partly fixed | `infra-hardening.test.js` |
-| infra-4 | medium | bug | hearth-update.sh restarts a plain-mode Hearth as root (and installs its deps as root) | Fixed | `infra-hardening.test.js` |
+| infra-4 | medium | bug | hearth-update.sh restarts a plain-mode Cindrly as root (and installs its deps as root) | Fixed | `infra-hardening.test.js` |
 | infra-5 | medium | vulnerability | README's TURN instructions produce an open, static-password relay that can reach private networks | Partly fixed | `infra-hardening.test.js` |
 | infra-6 | low | hardening | Desktop origin checks use string prefix (startsWith) and there is no will-redirect handler, so look-alike hosts pass as 'our server' | Fixed | `client-hardening.test.js` |
 | infra-7 | low | vulnerability | Android bridge accepts setServer from the remote server page, so a compromised server or XSS can permanently re-point the app | Fixed | `client-hardening.test.js` |
@@ -264,9 +264,9 @@ where the docs now state the behaviour.
 
 | ID | Severity | Kind | Title | Status | Proving test |
 |---|---|---|---|---|---|
-| platform-2 | medium | vulnerability | Web push subscription endpoint is a server-side SSRF: any account can make Hearth POST to an arbitrary internal https URL | Partly fixed | `outbound-hardening.test.js` |
+| platform-2 | medium | vulnerability | Web push subscription endpoint is a server-side SSRF: any account can make Cindrly POST to an arbitrary internal https URL | Partly fixed | `outbound-hardening.test.js` |
 | platform-3 | high | vulnerability | Push fan-out is a single-user event-loop DoS: no per-user subscription cap, no subscribe rate limit, synchronous crypto fan-out, no send timeout | Partly fixed | `outbound-hardening.test.js` |
-| platform-1 | medium | vulnerability | Default `trust proxy` trusts any private-range hop, so a client reaching Hearth from a private source address (Docker quick-start) fully spoofs its IP, bypassing IP bans and per-network rate limits | Fixed | `infra-hardening.test.js` |
+| platform-1 | medium | vulnerability | Default `trust proxy` trusts any private-range hop, so a client reaching Cindrly from a private source address (Docker quick-start) fully spoofs its IP, bypassing IP bans and per-network rate limits | Fixed | `infra-hardening.test.js` |
 | platform-4 | low | hardening | Rate-limiter keys grow unboundedly from attacker-chosen input on routes with no global cap (notably /auth/params) | Partly fixed | `auth-hardening.test.js` |
 | platform-5 | info | limitation | In-memory rate limits and security log are per-process: incorrect under multi-instance and lost on restart (disclosed) | Documented | — (SECURITY.md §4) |
 | platform-6 | low | limitation | No access or structured security logging; SSRF/ban/rate-limit events are not durably recorded | Documented | — (SECURITY.md §4) |
@@ -312,7 +312,7 @@ where the docs now state the behaviour.
 | crypto-3 | `keyState` is not paged. | Growth is now bounded (strict 600-character bundles, rotation limits); paging fits the message-pagination work. |
 | crypto-5 | The member list isn't bound into a key handoff, and nothing stops a rollback across page reloads. | A persisted maximum epoch would lock everyone out after a legitimate backup restore until an admin restore flow exists. |
 | crypto-7 | Done since (1.29.0, `public/js/binding.js`): every new message carries a random id, its reply, its thread, its time and an edit count inside the encrypted payload, and readers' apps flag one the server moved, re-dated, showed twice or served from before an edit. What stays: it's detection, not prevention; messages from older apps carry none of it; a rollback is caught only by a device that saw the newer edit (each device remembers at most 2000 edited messages, the author with the most entries losing their oldest first, so a server with very many accounts can still wear that down), and a replay only while both copies are loaded; a reply shown without its original reads as "no longer available", not as moved, only if the server also denies that original to the app's lookup (a thread reply shown outside its thread is always flagged: this server never does that by itself); the time check trusts the clock correction the server gives the sender's app at start-up (clamped to a day; a device further off is warned), and allows a scheduled message a day's lateness; a scheduled message's time comes only from its sender (their own copy, a time they pick, Send now), never from the server, but its `sch` mark tells every recipient's app it was scheduled and when it was due. | A device-local check can't know what it never saw; syncing edit counts between devices goes through the server it guards against. Older apps' messages can't be bound after the fact. The lateness a scheduled message is allowed needs a mark readers can see. |
-| crypto-8 | Done since (1.29.0): pre-upgrade database copies are pruned once an upgrade goes through, keeping the newest `PRE_UPGRADE_KEEP` (3 by default; `0` keeps all), never the one that upgrade made, and only files named exactly as Hearth names them. What stays: no "replace my identity key" feature; the copies aren't encrypted. | A new user-facing feature. The copies are plain SQLite files like `data/hearth.db` beside them, so a key on the same disk would add little; the encrypted backups are the copies meant to leave the machine. |
+| crypto-8 | Done since (1.29.0): pre-upgrade database copies are pruned once an upgrade goes through, keeping the newest `PRE_UPGRADE_KEEP` (3 by default; `0` keeps all), never the one that upgrade made, and only files named exactly as Cindrly names them. What stays: no "replace my identity key" feature; the copies aren't encrypted. | A new user-facing feature. The copies are plain SQLite files like `data/hearth.db` beside them, so a key on the same disk would add little; the encrypted backups are the copies meant to leave the machine. |
 | crypto-11 | A contact's first signing key is still pinned silently. | Flagging it would show a false "security key changed" for every contact of every older account. Uploads now need proof of possession. |
 | crypto-13 | Done since (1.29.0): an option, "New members can't read messages from before they joined" (Server settings → Overview → Privacy, `server/joinhistory.js`). With it on, every join replaces the key before the next message (joins close together share one; a flood waits a minute per key made in the last hour; while an older member is online, that member's app makes it, not the newcomer's), the newcomer is only ever handed keys from after their join (keys/share, keyState, keys/self, rejoin), and nothing from before is served to them (messages, threads, pins, search, saved, unread and thread pings, export, quotes, timer changes, report evidence if they moderate later, live events; voice chats too). A thread started before stays closed, replies written since included. Changing it is limited per person (10 an hour), so one manager can't use up everyone's changes and leave it off. A member held back until verified (`crypto-2`) gets no key either way, and doesn't count as an older member who could make the newcomer's key. What stays: with it off (the default), a new member still reads the current key's backlog; a newcomer held back when they join is handed, once verified, only the key that's current at that point: keys made while they were held (the one their join asked for, if it has been replaced since) stay out of reach, so messages under those show as locked; the server still decides when keys change (`crypto-5`); file blobs aren't padded. | It's off by default because each join then replaces the key for everyone and many communities want newcomers to read back. Padding needs a versioned blob format. Same-account rejoin always forces a new key. |
 | crypto review-4/5 | A second account can make one account leave and rejoin to trigger rotations; a different account with a kept invite still gets the current key. | Needed rotations are never held up; broken keys are replaced after two reports. Documented: revoke invites after removing someone. |
@@ -324,9 +324,9 @@ where the docs now state the behaviour.
 | voice-4 | No per-session socket cap and no per-network handshake limit. | Tabs share one session; a NAT full of users reconnecting after a restart would be locked out. The per-user cap of 30 sockets and shared event budget cover it. |
 | voice-9 | Anyone who can sign up gets relay logins; no default total bandwidth cap; existing installs need `setup-turn.sh` again. | Product decision; the right total depends on each VPS plan. |
 | crypto-2 | Done since (1.29.0): a reset without the recovery key marks the account (`users.keys_reset_at`) when it shares a server or group with anyone, and holds it back in each of them. In a server or group where it's held, the server keeps no key for it (shares and rotations skip it; an older app's copy is dropped), it can't make a key for others, hand on a key it made alone (a newcomer then gets a fresh key instead), create or list invites, see invite codes in that server's audit log, or add people to the group; the apps skip it and show why. A member who was in a server or group with the person before the reset (and isn't marked) compares safety numbers and vouches for the key they compared: that lifts the hold only in the servers and groups the voucher is in now (`key_vouches`), keys they hold anyway, so a second account an attacker put in a public server beforehand opens only that server. Once every server and group the person was in before the reset (including any left since) has a vouch, or an instance admin verifies them from Admin → Users, the mark goes everywhere. While marked anywhere they can't start group chats, give out staff roles or hand over ownership. Everything is in the audit log. What stays: invite links made before the reset keep working; resets before 1.29.0 aren't marked; a member of a server or group who is fooled into vouching opens that one; once the mark has gone, servers joined afterwards aren't held; a device that never saw someone's old key still writes new direct messages to the new key (first-use trust, as for any contact), and calls aren't held back; if every server an instance admin was in before their reset holds a second account of the attacker's, those can lift the admin's mark, and the admin can then verify other taken-over accounts from Admin → Users. | Old links were made by the real owner and may be in use, and a held-back account can't list them. Marking old resets now would cut people off from keys they were given long ago and may have been verified for on each device. A vouch is a member's own judgement, like inviting someone. DMs and calls follow the safety-number model; holding them too is a separate change. Admin verification is the way out for someone nobody can vouch for; tying it to more than the admin's own mark needs a record of when roles were given. |
-| admin-11 | Done since: zips are signed (Ed25519, `scripts/update-key.js`) and each server pins one key in `/etc/hearth-update.pub`. What stays: the first key is trusted on first use, a server that never ran `hearth-update` has no trusted updater installed until its operator installs one from the current Hearth (README, "Upgrading"), and a server with neither OpenSSL 3.0+ nor Node stays on checksums. | The owner makes the key (none is committed); see docs/SIGNING.md, "Signing server updates". |
+| admin-11 | Done since: zips are signed (Ed25519, `scripts/update-key.js`) and each server pins one key in `/etc/hearth-update.pub`. What stays: the first key is trusted on first use, a server that never ran `hearth-update` has no trusted updater installed until its operator installs one from the current Cindrly (README, "Upgrading"), and a server with neither OpenSSL 3.0+ nor Node stays on checksums. | The owner makes the key (none is committed); see docs/SIGNING.md, "Signing server updates". |
 | xss-7 | Done since: the CSP comment says what the policy really does, and the policy no longer names Google Fonts or allows blob: frames (both unused). What stays: `img-src` and `media-src` still allow any https: site (an image link someone clicks open, a watch-together video file), so injected markup could still send data out in a picture address; the YouTube, Vimeo and Twitch frames and navigation stay too. | Narrowing them needs every outside picture and video to go through a proxy on the server, which would then fetch (and see) every link people open: a product decision. Image links now wait for a click by default (`xss-8`), so the everyday leak is gone. |
-| infra-1 | Updates come from whatever server the app is connected to; `data/downloads` is writable by Hearth; the SignPath certificate thumbprint isn't pinned. | Signed updates make the feed's origin irrelevant for builds with a key; the rest are deploy changes or need external information. Apps released before signing install the hop to the first signed build the old way. |
+| infra-1 | Updates come from whatever server the app is connected to; `data/downloads` is writable by Cindrly; the SignPath certificate thumbprint isn't pinned. | Signed updates make the feed's origin irrelevant for builds with a key; the rest are deploy changes or need external information. Apps released before signing install the hop to the first signed build the old way. |
 | infra-2 | No always-visible native "sharing your screen" indicator; an old-style capture request gets the whole screen for about 3 s after a pick. | UX work; Electron can't tell the two request kinds apart, so the window is shortened, not closed. |
 | infra-3 | Using a non-root deploy user is up to the operator. | The workflow can't enforce VPS and GitHub settings; the docs recommend it. |
 | infra-5 | Static `TURN_USERNAME`/`TURN_CREDENTIAL` still work. | Removing them would break existing deployments; the server warns at start-up. |
@@ -373,12 +373,12 @@ observed for this report).
 
 | Run | Commit | Job | Result |
 |---|---|---|---|
-| Hearth security #50 (38079189149) | `dec63ee` (code identical to this commit) | `tests` | passed: 358 tests, 355 pass, 0 fail, 3 skipped (the Electron test and, without Playwright in CI, the two browser tests) |
+| Cindrly security #50 (38079189149) | `dec63ee` (code identical to this commit) | `tests` | passed: 358 tests, 355 pass, 0 fail, 3 skipped (the Electron test and, without Playwright in CI, the two browser tests) |
 | | | `audit` (`npm audit`, server fails on high/critical) | passed |
 | | | `image` (Docker build, Trivy image and config scans) | passed |
 | | | `codeql` | passed |
 | | | `secrets` (gitleaks over full history) | **failed**: one finding, `generic-api-key` in `hearth/test/admin-hardening.test.js` line 266, commit `dde6609` — the made-up test value `GIPHY-KEY-1234`. A false positive, but the job is red until it is allow-listed (§9). |
-| Hearth apps #15 (38076649443) | `47fb2b5` (same app code) | `desktop (windows-latest)`, `desktop (macos-latest)`, `desktop (ubuntu-latest)`, `android` | all passed (installers and APK built; unsigned, because Windows signing and SignPath run only for release builds; `release` and `publish-to-vps` skipped on this branch) |
+| Cindrly apps #15 (38076649443) | `47fb2b5` (same app code) | `desktop (windows-latest)`, `desktop (macos-latest)`, `desktop (ubuntu-latest)`, `android` | all passed (installers and APK built; unsigned, because Windows signing and SignPath run only for release builds; `release` and `publish-to-vps` skipped on this branch) |
 
 Whether the repository has the `UPDATE_SIGNING_KEY` secret is **not verified**: the "Bake in the update signing key"
 and "Sign the update files" steps succeed either way. The signing and verification code itself is tested locally
@@ -497,7 +497,7 @@ The full list is [SECURITY.md](../SECURITY.md) §4. The ones that matter most:
    member there (or an instance admin) verifies it (`crypto-2`). Left: direct messages and calls, and resets from
    before 1.29.0.
 7. Per-region relay secrets and a rotate action (`voice-10`); a total bandwidth cap per region.
-8. Done: the app's fonts are served by Hearth itself and outside images wait for a click (`xss-8`). Still open:
+8. Done: the app's fonts are served by Cindrly itself and outside images wait for a click (`xss-8`). Still open:
    tighten `img-src` and `media-src` (`xss-7`), which needs a picture and video proxy on the server.
 9. Close the open review minors in §9 item 9.
 10. Run the Electron end-to-end test and the browser suites (`test:e2e`, `test:voice`, `test:a11y`) in CI (install
@@ -661,7 +661,7 @@ CodeQL (`security-extended`, the same queries as CI) was run locally on 1.28.0 w
   `hearth/scripts/*-drill.js` (`.github/codeql/codeql-config.yml`). That code never runs in a server, and it is
   meant to read files and send them to a throwaway local server.
 - **Rule turned off (437):** `js/missing-rate-limiting`. It only recognises a few npm packages, so it reported
-  every route, including ones that call Hearth's own `rateLimit()`. Two changes stand behind turning it off:
+  every route, including ones that call Cindrly's own `rateLimit()`. Two changes stand behind turning it off:
   - What was really missing was a limit for ordinary signed-in requests. That limit is now in `auth()`:
     `API_RATE_LIMIT`, 1200 a minute per account by default (SECURITY.md row 91).
   - Bots already had their own limit, and the routes that work without signing in limit themselves.
@@ -717,12 +717,12 @@ Built from `docs/design/ANDROID-PUSH.md` (NEXT.md picks 1 and 12). No schema cha
   Android 16 framework jar, the connector 3.3.5 classes and kotlin-stdlib (AndroidX/Capacitor stubbed), plus the
   JUnit tests. **Not checked here:** a Gradle build and anything on a device (mobile/README.md).
 - **After review.** Any new page load (a reload, switching server, an error page) stops the call service, and
-  the page also sends `callEnd` on `pagehide`. Opening Hearth while a call push rings cancels it (it's insistent)
+  the page also sends `callEnd` on `pagehide`. Opening Cindrly while a call push rings cancels it (it's insistent)
   and opens that call. Deviation from the design: *Change* no longer calls `removeDistributor` first (backing out
   lost the registration) and no longer goes through Android's `unifiedpush://link` resolution, which answers
-  silently with the default push app: it shows Hearth's own list of every distributor (legacy ones too), and a cancel
+  silently with the default push app: it shows Cindrly's own list of every distributor (legacy ones too), and a cancel
   restores the registration. Turning push on resolves the default first, so backing out of Android's list isn't
-  followed by Hearth's. `#call/` links ring only for a DM call with the other person in it or a group chat's call
+  followed by Cindrly's. `#call/` links ring only for a DM call with the other person in it or a group chat's call
   (the calls the server rings); a link to a server voice channel just opens the server. The lock-screen claim was
   wrong: Android shows the full notification there unless the phone hides sensitive content, so the call
   notification's title now follows the previews setting ("In a call" by default), like pushes already did.

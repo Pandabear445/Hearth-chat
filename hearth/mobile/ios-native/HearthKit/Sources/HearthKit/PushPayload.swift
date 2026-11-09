@@ -1,6 +1,6 @@
 import Foundation
 
-/// One decrypted push from the Hearth server: { title, body, tag, url, at, generic?, _ }. A port of
+/// One decrypted push from the Cindrly server: { title, body, tag, url, at, generic?, _ }. A port of
 /// mobile/native/PushPayload.java.
 ///
 /// Strict: anything that isn't a JSON object of at most 4096 bytes with a valid tag is dropped. Unknown keys are

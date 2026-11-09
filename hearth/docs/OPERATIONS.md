@@ -1,15 +1,15 @@
-# Running Hearth: logs, health, alerts and the doctor
+# Running Cindrly: logs, health, alerts and the doctor
 
-This page is for the person who runs a Hearth server. It covers what Hearth writes to its log, the health
+This page is for the person who runs a Cindrly server. It covers what Cindrly writes to its log, the health
 endpoints and what each one means, how to wire them into a reverse proxy or Docker, metrics for Prometheus, the
 `doctor` command, the alerts the owner gets and where else they can go, and how the updater checks an update. The
-last section lists what Hearth still doesn't do.
+last section lists what Cindrly still doesn't do.
 
 Paths are relative to `hearth/`.
 
 ## 1. Logs
 
-Hearth writes one line per event to standard output (warnings and errors to standard error). Docker keeps it with
+Cindrly writes one line per event to standard output (warnings and errors to standard error). Docker keeps it with
 its log driver (`docker compose logs hearth`); systemd sends it to the journal (`journalctl -u hearth`).
 
 ### Format
@@ -20,7 +20,7 @@ By default each line is a JSON object, which log tools (Loki, Vector, `jq`) read
 {"ts":"2026-10-10T19:31:29.184Z","level":"info","component":"http","op":"request","reqId":"abc-123","method":"GET","route":"/api/users/:id","status":200,"durationMs":3.2,"outcome":"ok","uid":"5f0c1d2e9a7b","ip":"198.51.100.0/24"}
 ```
 
-With `LOG_FORMAT=pretty` (the default when Hearth runs in a terminal) the same event reads:
+With `LOG_FORMAT=pretty` (the default when Cindrly runs in a terminal) the same event reads:
 
 ```text
 2026-10-10T19:31:29.184Z INFO  http request  reqId=abc-123 method=GET route=/api/users/:id status=200 durationMs=3.2 outcome=ok uid=5f0c1d2e9a7b ip=198.51.100.0/24
@@ -32,7 +32,7 @@ Fields:
 |---|---|---|
 | `ts` | yes | Time, ISO 8601, UTC. |
 | `level` | yes | `debug`, `info`, `warn`, `error` or `fatal`. |
-| `component` | yes | Which part of Hearth: `http`, `server`, `jobs`, `backup`, `security`, `alerts`, `db`, `socket`, `process`, … |
+| `component` | yes | Which part of Cindrly: `http`, `server`, `jobs`, `backup`, `security`, `alerts`, `db`, `socket`, `process`, … |
 | `op` | yes | What happened, as a short word: `request`, `slow_request`, `run_failed`, `listening`, `failed_login`, … |
 | `msg` | often | A plain-English sentence for people. |
 | `reqId` | in requests | The request id (see below). Every line written while a request is handled carries it. |
@@ -55,7 +55,7 @@ Settings (environment):
 ### Request ids
 
 Every HTTP response has an `X-Request-Id` header. If the request already had one (from Caddy, nginx or a load
-balancer) made of letters, digits and `._:-`, up to 64 characters, Hearth keeps it; otherwise it makes one up.
+balancer) made of letters, digits and `._:-`, up to 64 characters, Cindrly keeps it; otherwise it makes one up.
 When someone reports "it broke at 14:02", ask for the id from the browser's network tab and search the log for it.
 
 To pass Caddy's own id through:
@@ -105,7 +105,7 @@ each event also goes to the server log with the network only.
 
 ## 2. Background jobs
 
-Everything Hearth does on a timer runs through `server/jobs.js`: rate-limit sweeps, upload clean-up, session
+Everything Cindrly does on a timer runs through `server/jobs.js`: rate-limit sweeps, upload clean-up, session
 purge, each server's audit log retention (`serveraudit.prune`), event reminders, the news bot's feed and tracker polling, backups, Last.fm polling, supporter expiry,
 membership reconciliation and retries, the socket session sweep, alert checks, disappearing messages
 (`messages.expire`: a precise timer for the next deadline, a safety sweep every `DISAPPEAR_SWEEP_MS`, 60 s by
@@ -161,7 +161,7 @@ Ready checks four things, plus disk space:
 | `maintenance` | `degraded` | **503** | Maintenance mode is on: only staff can use the server. Not a fault, but don't send people here. |
 | `db` | `fail` | 503 | The database didn't answer a query. |
 | `schema` | `fail` | 503 | The database version isn't the one this code expects. |
-| `data_dir` | `fail` | 503 | Hearth couldn't write a small file in its data folder (permissions, read-only mount, full disk). |
+| `data_dir` | `fail` | 503 | Cindrly couldn't write a small file in its data folder (permissions, read-only mount, full disk). |
 | `disk_full` | `fail` | 503 | Under 3% (or 200 MB) free. |
 
 `HEALTH_DISK_WARN_PCT` and `HEALTH_DISK_FAIL_PCT` change the 10% and 3%.
@@ -241,7 +241,7 @@ and says so in the log. Off, it's a plain `404`.
   `WWW-Authenticate: Bearer`. The token is never accepted in the address. 20 wrong tokens from one network
   (an IPv4 address or an IPv6 /64) in 10 minutes and that network gets `429` for the rest of the window, the right
   token included, so guessing doesn't pay. 600 scrapes a minute per network. So scrape from an address that
-  visitors don't share: if people reach Hearth's published port directly, Docker can show them all as its gateway
+  visitors don't share: if people reach Cindrly's published port directly, Docker can show them all as its gateway
   (`172.x.0.1`), and someone sending wrong tokens could then lock out a scraper on that same address. Scraping
   `http://hearth:3000/metrics` from a container on the same Docker network, or through the proxy with
   `TRUST_PROXY` set, keeps the scraper's address its own.
@@ -267,7 +267,7 @@ and says so in the log. Off, it's a plain `404`.
 | `hearth_registered_users` | gauge | accounts (bots and webhooks not counted); counted at most once a minute |
 | `hearth_messages{kind="channel"\|"direct"}` | gauge | messages stored; counted at most once a minute |
 
-Counters start again at 0 when Hearth restarts (Prometheus's `rate()` and `increase()` handle that).
+Counters start again at 0 when Cindrly restarts (Prometheus's `rate()` and `increase()` handle that).
 
 A scrape config:
 
@@ -282,10 +282,10 @@ scrape_configs:
       - targets: ['chat.example.com']
 ```
 
-Behind Caddy with `HTTPS=false`, Hearth refuses plain-HTTP requests that come straight from the internet, so
+Behind Caddy with `HTTPS=false`, Cindrly refuses plain-HTTP requests that come straight from the internet, so
 Prometheus either goes through the proxy (as above) or scrapes `http://hearth:3000/metrics` from the same Docker
 network or machine. To keep `/metrics` off the public site, add `respond /metrics 404` before `reverse_proxy` in
-the Caddyfile and scrape Hearth directly.
+the Caddyfile and scrape Cindrly directly.
 
 Some alerting rules to start from: `hearth_ready == 0` for 5m; `hearth_backup_age_seconds > 26*3600`;
 `hearth_job_consecutive_failures >= 3`; `rate(hearth_http_requests_total{class="5xx"}[5m]) > 0.1`;
@@ -316,14 +316,14 @@ job or a monitoring script.
 
 What it checks:
 
-- Hearth, Node and SQLite versions.
+- Cindrly, Node and SQLite versions.
 - The data folder: exists, writable by this user, not readable by everyone; key files (`secret.key`,
   `backup.key`, `vapid.json`, `key.pem`, the region SSH key) owner-only.
 - The database: opens, its schema version against the code's (older: upgraded on next start; newer: fail).
 - Configuration, **never printing values** ("set" / "not set"): `PUBLIC_URL` (and that it's https), the at-rest
   key, email, `ADMIN_USERS`, TURN.
 - TLS and proxy assumptions: self-signed vs `SSL_CERT`; with `HTTPS=false`, that a proxy is expected and
-  `ALLOW_DIRECT_HTTP` isn't on; `TRUST_PROXY` valid and consistent with how Hearth is reached (trusting
+  `ALLOW_DIRECT_HTTP` isn't on; `TRUST_PROXY` valid and consistent with how Cindrly is reached (trusting
   forwarded addresses while serving HTTPS directly, or hop counts with `HOST=0.0.0.0`, are warnings).
 - Disk space, with the same thresholds as the health checks.
 - Backups: the backup key present (and a reminder that it isn't inside backups), the newest encrypted backup's
@@ -332,8 +332,8 @@ What it checks:
 - Background jobs as last recorded by the server: any job failing (3+ in a row is a failure).
 
 **Read-only**: it never creates folders or files and never changes the database. A database without a `-wal`
-file (Hearth stopped) of up to 256 MB is read from an in-memory copy, so not even SQLite's companion files
-appear; otherwise it opens it read-only. It's safe to run while Hearth is running. The only change it can make is
+file (Cindrly stopped) of up to 256 MB is read from an in-memory copy, so not even SQLite's companion files
+appear; otherwise it opens it read-only. It's safe to run while Cindrly is running. The only change it can make is
 `--fix-permissions`, which prints each `chmod` it does and why.
 
 ## 5. Alerts
@@ -444,7 +444,7 @@ token for a user with write access to the topic (`ntfy token add <user>`, `ntfy 
 1. **Checksum:** `<zip>.sha256` next to it must match. Without one it prints the SHA-256 for you to compare.
 2. **Signature**, once this server has an update signing key pinned in `/etc/hearth-update.pub`: `<zip>.sig` must
    be a valid signature by that key (docs/SIGNING.md, "Signing server updates"). The key is pinned from the
-   installed Hearth's `update-signing.pub` at its first update (when that file and the folders above it are
+   installed Cindrly's `update-signing.pub` at its first update (when that file and the folders above it are
    root's alone), or from the first update that brings one; after that it only changes when an update signed
    with the current key brings a new one. Checking takes OpenSSL 3.0 or newer (Debian 12, Ubuntu 22.04) or, on
    older systems, Node.js; a server with neither pins nothing and stays on checksums.
@@ -462,31 +462,31 @@ What the update log says, and what to do:
 | Message | Meaning |
 |---|---|
 | `isn't signed … This server has no update signing key pinned yet` | Checked against the checksum only, as before signing. Fine until the publisher signs updates. |
-| `now only installs updates signed with the key this update brought: …` / `Pinned the update signing key that came with this Hearth` | A key was pinned. Compare it with the one in the release notes. |
+| `now only installs updates signed with the key this update brought: …` / `Pinned the update signing key that came with this Cindrly` | A key was pinned. Compare it with the one in the release notes. |
 | `The update signing key is now …` | A key change, from an update the old key signed. |
 | `isn't signed (no ….sig next to it). Nothing was changed.` | Put the `.sig` from the release next to the zip and run again. |
 | `has a signature that doesn't match this server's update key` | Not the published zip, or signed with another key (a key change you skipped: install the release that changed it first). Don't override this unless you checked the zip some other way. |
 | `can't be checked: … isn't an update signing key` | `/etc/hearth-update.pub` is damaged. Every update is refused until it's fixed or deleted. |
-| `can't be checked: this server can't check Ed25519 signatures` | A key is pinned, but neither OpenSSL 3.0 or newer nor Node.js is installed (OpenSSL 1.1.1, as on Ubuntu 20.04 and Debian 11, can't check them). Install Node.js (Hearth's own, outside Docker) or a newer OpenSSL. |
+| `can't be checked: this server can't check Ed25519 signatures` | A key is pinned, but neither OpenSSL 3.0 or newer nor Node.js is installed (OpenSSL 1.1.1, as on Ubuntu 20.04 and Debian 11, can't check them). Install Node.js (Cindrly's own, outside Docker) or a newer OpenSSL. |
 | `… but this server can't check Ed25519 signatures …, so it isn't pinned` | No key is pinned yet and this server couldn't check one, so updates stay on checksums. Install Node.js or OpenSSL 3.0+ and the next key-carrying update pins its key. |
-| `update-signing.pub (or a folder it's in) can be changed by an account other than root, so it isn't trusted` | The installed Hearth's own key isn't pinned (its folder belongs to Hearth's account, as in plain installs); the first update that brings a key pins that one. Compare it with the release notes. |
-| `is Hearth X, older than the installed Y` | Use `hearth-update --rollback` to go back, or, if you really mean it, put the zip and its `.sig` on the server and run `sudo hearth-update --allow-downgrade <zip>` there. |
+| `update-signing.pub (or a folder it's in) can be changed by an account other than root, so it isn't trusted` | The installed Cindrly's own key isn't pinned (its folder belongs to Cindrly's account, as in plain installs); the first update that brings a key pins that one. Compare it with the release notes. |
+| `is Cindrly X, older than the installed Y` | Use `hearth-update --rollback` to go back, or, if you really mean it, put the zip and its `.sig` on the server and run `sudo hearth-update --allow-downgrade <zip>` there. |
 | `Going ahead anyway because of --allow-unsigned` / `installed WITHOUT a valid signature` | Someone overrode the check for this update. The full log stays in `/root/hearth-backups/last-update.log`. |
 
 Run the updater that's already installed (`sudo hearth-update <zip>`), not the copy inside a new zip: then the
 copy you already trust does the checking. On a server that has never run it, install it once from the current
-Hearth folder: `sudo install -m 755 scripts/hearth-update.sh /usr/local/bin/hearth-update`. An updater from before
+Cindrly folder: `sudo install -m 755 scripts/hearth-update.sh /usr/local/bin/hearth-update`. An updater from before
 signed updates doesn't check signatures; `hearth-update --status` without an "update key" line means it's one of
 those, so install the current one the same way.
 
 ### Database copies made before upgrades
 
-Before a database upgrade, Hearth saves `data/backups/hearth-before-v<version>-<date>.db` (see
+Before a database upgrade, Cindrly saves `data/backups/hearth-before-v<version>-<date>.db` (see
 [RECOVERY.md](RECOVERY.md), "Upgrades and rolling back"). Once the upgrade has gone through, older copies beyond the
 newest `PRE_UPGRADE_KEEP` (in `.env`, default `3`) are deleted, and the log says which (`db upgrade_backup_pruned`).
 
 - The copy that upgrade made, or found already made, always stays. While an upgrade keeps failing, nothing is pruned.
-- Only plain files named exactly the way Hearth names them are removed. A renamed copy, a link, a folder, the daily
+- Only plain files named exactly the way Cindrly names them are removed. A renamed copy, a link, a folder, the daily
   `hearth-auto-*.db` copies and the encrypted backups are never touched by this.
 - `PRE_UPGRADE_KEEP=0` keeps every copy (the behaviour before 1.29.0). A value that isn't a whole number logs
   `db upgrade_backup_keep` and uses 3.
@@ -498,7 +498,7 @@ newest `PRE_UPGRADE_KEEP` (in `.env`, default `3`) are deleted, and the log says
 The Android app gets notifications while it's closed through a UnifiedPush push app, usually ntfy, which by default
 uses the public ntfy.sh. That works, but ntfy.sh then learns that a phone gets notifications from your server, and
 when (never what: everything is encrypted for the phone), and it has daily limits. Running your own ntfy next to
-Hearth avoids both. The phone's ntfy app is the same; only its server changes.
+Cindrly avoids both. The phone's ntfy app is the same; only its server changes.
 
 1. **Run ntfy** (server 2.12 or newer) behind the same reverse proxy, on its own name, for example in
    `docker-compose.yml`:
@@ -519,26 +519,26 @@ Hearth avoids both. The phone's ntfy app is the same; only its server changes.
    cache-file: /var/cache/ntfy/cache.db
    auth-file: /var/cache/ntfy/user.db
    auth-default-access: deny-all
-   # Every notification comes from Hearth's address: don't rate-limit it like one visitor.
-   visitor-request-limit-exempt-hosts: <your Hearth server's public IP>
+   # Every notification comes from Cindrly's address: don't rate-limit it like one visitor.
+   visitor-request-limit-exempt-hosts: <your Cindrly server's public IP>
    ```
 
    and in the Caddyfile `ntfy.example.com { reverse_proxy ntfy:80 }`.
-2. **Access:** Hearth publishes without an account, to topics starting with `up`:
+2. **Access:** Cindrly publishes without an account, to topics starting with `up`:
    `docker compose exec ntfy ntfy access '*' 'up*' write-only`. People's ntfy apps need to read: create a user
    (`ntfy user add hearth`, then `ntfy access hearth 'up*' read-only`) and have people sign in with it in the ntfy
    app (Settings → Manage users). Without `deny-all` anyone could use your ntfy for anything.
-3. **Tell Hearth:** `PUSH_NTFY_URL=https://ntfy.example.com` in `.env`. Settings → Apps & devices then tells people
+3. **Tell Cindrly:** `PUSH_NTFY_URL=https://ntfy.example.com` in `.env`. Settings → Apps & devices then tells people
    to set it as the ntfy app's default server (and to turn notifications off and on once). Optionally
-   `PUSH_HOSTS=…,ntfy.example.com` so Hearth sends nowhere else (list the browser push services your people use too:
+   `PUSH_HOSTS=…,ntfy.example.com` so Cindrly sends nowhere else (list the browser push services your people use too:
    `fcm.googleapis.com,*.push.services.mozilla.com,*.notify.windows.com,web.push.apple.com`).
-4. **Same machine or LAN:** if `ntfy.example.com` resolves to a private address from where Hearth runs (a Docker
-   network, split DNS), Hearth refuses it like any private address; name it in `PUSH_PRIVATE_HOSTS=ntfy.example.com`
+4. **Same machine or LAN:** if `ntfy.example.com` resolves to a private address from where Cindrly runs (a Docker
+   network, split DNS), Cindrly refuses it like any private address; name it in `PUSH_PRIVATE_HOSTS=ntfy.example.com`
    (port 443 unless you write `name:port`). Nothing else private is let through.
 
-**Troubleshooting:** the log line `push refused host=ntfy.example.com status=403` means ntfy turned Hearth away
+**Troubleshooting:** the log line `push refused host=ntfy.example.com status=403` means ntfy turned Cindrly away
 (the `up*` write rule is missing); `status=507` means nobody listens on that topic any more (the phone unregistered:
-it's dropped after a few tries); `status=429` means ntfy's rate limit (Hearth waits as long as ntfy asks, and keeps
+it's dropped after a few tries); `status=429` means ntfy's rate limit (Cindrly waits as long as ntfy asks, and keeps
 the phone). Each host and answer is logged at most once an hour, and never the address itself.
 
 ## 8. iPhone notifications (APNs)
@@ -551,7 +551,7 @@ says notifications aren't available there.
 1. **The key:** developer.apple.com → Certificates, Identifiers & Profiles → Keys → a new key with Apple Push
    Notifications service (both environments, or production only). Download the `.p8` once.
 2. **Put it on the server, outside the image:** for example `/etc/hearth/AuthKey_ABC123DEFG.p8`, owned by the user
-   Hearth runs as, mode 600 (mount it read-only into the container). Then in `.env`:
+   Cindrly runs as, mode 600 (mount it read-only into the container). Then in `.env`:
    `APNS_KEY_FILE=/etc/hearth/AuthKey_ABC123DEFG.p8`, `APNS_KEY_ID=ABC123DEFG` (the key's ID), `APNS_TEAM_ID=…` (the
    team's 10-character ID) and `APNS_TOPIC=app.hearth.mobile` (the app's bundle ID). `APNS_KEY` can hold the key's
    text instead of a file. Leave `APNS_ALLOW_SANDBOX` unset unless you're testing a build run from Xcode.
@@ -570,27 +570,27 @@ decrypts them on the phone and shows them only if the person chose to see names.
 - `push apns_disabled why=…`: the key can't be read (`key_file_unreadable`, `key_unreadable`, `key_not_p256`) or an
   ID is missing or malformed (`bad_key_id`, `bad_team_id`, `bad_topic`). iPhone notifications are off; nothing else is.
 - `push apns_config reason=InvalidProviderToken` (or `BadTopic`, `TopicDisallowed`, `ExpiredProviderToken`…): Apple
-  refused the key, team or topic. Hearth stops sending to Apple for 15 minutes and tries again. No iPhone is
+  refused the key, team or topic. Cindrly stops sending to Apple for 15 minutes and tries again. No iPhone is
   unsubscribed for this, so fixing `.env` and restarting is enough.
-- `push apns_unreachable`: Apple couldn't be reached or answered with an error twice in a row; Hearth waits (30
+- `push apns_unreachable`: Apple couldn't be reached or answered with an error twice in a row; Cindrly waits (30
   seconds, doubling up to 15 minutes) before trying again. Usually the firewall.
 - `push apns_bug reason=…`: a request Apple called malformed. Please report it.
 - `push apns_unconfirmed reason=DeviceTokenNotForTopic` (or `BadDeviceToken`): Apple says a phone's token belongs to
-  another app or environment, but nothing has reached an iPhone since Hearth started, so it might be `APNS_TOPIC`
+  another app or environment, but nothing has reached an iPhone since Cindrly started, so it might be `APNS_TOPIC`
   instead. The phone is kept. Three different phones answered that way with nothing delivered is logged as
   `push apns_config` naming `APNS_TOPIC` and pauses sending for 15 minutes, again without unsubscribing anyone.
 - A phone whose app was removed is forgotten when Apple says so (`Unregistered`). A token from another app or a
   development build sent to production (`DeviceTokenNotForTopic`, `BadDeviceToken`) is forgotten too, once Apple has
-  accepted a notification for that environment since Hearth started (which shows the topic is right).
+  accepted a notification for that environment since Cindrly started (which shows the topic is right).
 
 ## 9. What's still missing
 
 - **Metrics history.** `/metrics` (section 3) is point-in-time like Admin → Health; keeping history is up to
   Prometheus (or whatever scrapes it). There's no OpenMetrics format, no per-route timings and no histograms.
 - **Multiple instances.** Job health, alert counters, rate limits and the security log live in one process (job
-  health and alert state are also saved in that instance's database). Running several Hearth processes against
+  health and alert state are also saved in that instance's database). Running several Cindrly processes against
   one database isn't supported anyway.
-- **External monitoring.** Hearth can't tell you it's down: if the process or the machine is gone, nothing sends
+- **External monitoring.** Cindrly can't tell you it's down: if the process or the machine is gone, nothing sends
   an alert. Point an external uptime monitor at `/api/health/ready` for that.
 - **More alert channels.** Email, the dashboard, ntfy, signed webhooks, Discord and Slack; no SMS, Matrix or
   Telegram (a webhook to a bridge works). A failed delivery isn't retried: the next alert, or Test, tries again.

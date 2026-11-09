@@ -158,7 +158,7 @@ module.exports = function setupRegions(ctx) {
   };
   const originFrom = (o, word = 'region') => {
     const origin = cleanOrigin(o);
-    if (!origin) fail(400, o ? `Open Hearth over https to make an install command: the new ${word} downloads its installer, which runs as root and carries the relay secret, from this address.` : 'Missing this server\u2019s address.');
+    if (!origin) fail(400, o ? `Open Cindrly over https to make an install command: the new ${word} downloads its installer, which runs as root and carries the relay secret, from this address.` : 'Missing this server\u2019s address.');
     return origin;
   };
 
@@ -432,9 +432,9 @@ module.exports = function setupRegions(ctx) {
     const token = !r ? null : r.install_hash ? (hashIs(r.install_hash, k) ? checkInToken(r.id, k) : null) : (checkToken(r, k) ? k : null);
     const where = isMemberRow(r) ? 'Settings → Help host' : 'Admin → Regions';
     res.type('text/plain');
-    if (!token || (r.setup_until || 0) < now()) return res.status(403).send(`echo "This install link has expired or was replaced. Make a new one in Hearth: ${where}." >&2; exit 1\n`);
+    if (!token || (r.setup_until || 0) < now()) return res.status(403).send(`echo "This install link has expired or was replaced. Make a new one in Cindrly: ${where}." >&2; exit 1\n`);
     const origin = cleanOrigin(parse(r.stats, {}).origin) || cleanOrigin(`${req.protocol}://${req.get('host')}`);
-    if (!origin) return res.status(403).send(`echo "This install link isn't on an https:// address. Make a new one in Hearth, opened over https: ${where}." >&2; exit 1\n`);
+    if (!origin) return res.status(403).send(`echo "This install link isn't on an https:// address. Make a new one in Cindrly, opened over https: ${where}." >&2; exit 1\n`);
     res.send(installScript(origin, r, token));
   });
   // The installer itself. Everything in it is settled when the install command is made (the command carries its
@@ -449,7 +449,7 @@ module.exports = function setupRegions(ctx) {
     const backups = !member || offer.backups;
     const word = member ? 'relay' : 'region';
     return `#!/usr/bin/env bash
-${member ? `# Hearth member relay: installs a call relay on this machine and offers it to ${origin}` : `# Hearth region: installs a call relay and links it to ${origin}`}
+${member ? `# Cindrly member relay: installs a call relay on this machine and offers it to ${origin}` : `# Cindrly region: installs a call relay and links it to ${origin}`}
 set -Eeuo pipefail
 [ "$(id -u)" = 0 ] || { echo "Run this as root (or with sudo)." >&2; exit 1; }
 MAIN=${q(origin)}
@@ -496,8 +496,8 @@ if command -v sshd >/dev/null 2>&1 && [ -f /etc/ssh/sshd_config ] && [ -f /etc/s
   install -d -m 700 -o hearth-backup -g hearth-backup /var/lib/hearth-backup/backups
   install -d -m 700 /etc/hearth-region
   touch /etc/ssh/hearth-backup.keys && chmod 644 /etc/ssh/hearth-backup.keys
-  # The SSH settings from before Hearth, for hearth-relay-uninstall: only the first install takes the copy (a reinstall
-  # finds Hearth's block already there). This run's own way back is a copy of its own.
+  # The SSH settings from before Cindrly, for hearth-relay-uninstall: only the first install takes the copy (a reinstall
+  # finds Cindrly's block already there). This run's own way back is a copy of its own.
   grep -q '^# BEGIN hearth-backup' /etc/ssh/sshd_config || cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.hearth-bak
   cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.hearth-prev
   sed -i '/^# BEGIN hearth-backup/,/^# END hearth-backup/d' /etc/ssh/sshd_config
@@ -528,14 +528,14 @@ else
   echo "  Skipped: no SSH server here."
 fi
 ` : ''}
-echo "▸ Linking this ${word} to Hearth…"
+echo "▸ Linking this ${word} to Cindrly…"
 install -d -m 700 /etc/hearth-region
 printf 'MAIN=%s\\nREGION=%s\\nTOKEN=%s\\nPIN=%s\\nKIND=%s\\n' "$MAIN" "$REGION" "$TOKEN" "$PIN" "$KIND" > /etc/hearth-region/env
 chmod 600 /etc/hearth-region/env
 rm -f /etc/hearth-region/state /etc/hearth-region/last-error /etc/hearth-region/refused-since # (a reinstall starts afresh)
 cat > /usr/local/bin/hearth-region-agent <<'AGENT_EOF'
 #!/usr/bin/env bash
-# Checks in with the main Hearth server: this relay's address, load and traffic. Runs every minute.
+# Checks in with the main Cindrly server: this relay's address, load and traffic. Runs every minute.
 set -u
 . /etc/hearth-region/env
 KIND="\${KIND:-region}"
@@ -550,7 +550,7 @@ fi
 # coturn's addresses: the one it hands out (external-ip: the public one, then this machine's own on its network after a
 # slash when they differ) and the one it relays from (relay-ip: this machine's own). Someone who avoids member relays
 # drops the other side's addresses on this machine by the address it checks in with, so a member relay's two must be the
-# same: Hearth refuses a check-in where they differ. A home connection's public address changes now and then, and so can
+# same: Cindrly refuses a check-in where they differ. A home connection's public address changes now and then, and so can
 # this machine's own on its network (the router's DHCP, a VPS provider), so coturn moves along with both: with a relay-ip
 # the machine no longer has, coturn would keep running but fail every call.
 RELAY_IP=""
@@ -608,8 +608,8 @@ checkin() {
   printf 'header = "X-Region-Token: %s"\\n' "$TOKEN" | curl -K - -sS "$@" \${PIN:+-k --pinnedpubkey "$PIN"} --max-time 15 -X POST -H 'Content-Type: application/json' \\
     -d "$BODY" -w '%{http_code}' -o "$STATE.new" "$MAIN/api/regions/$REGION/heartbeat"
 }
-# A member relay checks in over IPv4, so Hearth sees it come from the address it says it's at (where both work, curl
-# would go over IPv6, and Hearth would have to check the address another way). A Hearth without an IPv4 address is
+# A member relay checks in over IPv4, so Cindrly sees it come from the address it says it's at (where both work, curl
+# would go over IPv6, and Cindrly would have to check the address another way). A Cindrly without an IPv4 address is
 # reached any way that works.
 CODE=""
 [ "$KIND" = member ] && { CODE="$(checkin -4)" || true; }
@@ -633,8 +633,8 @@ if [ "$CODE" = 200 ] || [ "$CODE" = 403 ]; then
     : > /etc/ssh/hearth-backup.keys
   fi
 fi
-# A member relay that Hearth has called gone for a whole day (it was removed there, or replaced by a new install command)
-# switches itself off instead of relaying for nobody. Only that answer counts: a Hearth that doesn't know this relay at
+# A member relay that Cindrly has called gone for a whole day (it was removed there, or replaced by a new install command)
+# switches itself off instead of relaying for nobody. Only that answer counts: a Cindrly that doesn't know this relay at
 # all (rebuilt at the same address, before its backup is restored) changes nothing here. An owner's region never
 # switches itself off: it waits to be reinstalled.
 if [ "$CODE" = 403 ] && [ "$KIND" = member ] && ! grep -q '"code":"relay_gone"' /etc/hearth-region/last-error 2>/dev/null; then
@@ -643,7 +643,7 @@ elif [ "$CODE" = 403 ] && [ "$KIND" = member ]; then
   NOW="$(date +%s)"; SINCE="$(cat /etc/hearth-region/refused-since 2>/dev/null || true)"
   case "$SINCE" in ''|*[!0-9]*) SINCE="$NOW"; echo "$NOW" > /etc/hearth-region/refused-since ;; esac
   if [ $((NOW - SINCE)) -ge 86400 ]; then
-    logger -t hearth-relay "Hearth at $MAIN has refused this relay's check-ins for 24 hours (it was removed there, or a new install command replaced it), so the relay is switching itself off. Remove it with: sudo hearth-relay-uninstall"
+    logger -t hearth-relay "Cindrly at $MAIN has refused this relay's check-ins for 24 hours (it was removed there, or a new install command replaced it), so the relay is switching itself off. Remove it with: sudo hearth-relay-uninstall"
     systemctl disable --now coturn >/dev/null 2>&1 || true
     systemctl disable --now hearth-region.timer >/dev/null 2>&1 || true
   fi
@@ -656,22 +656,22 @@ AGENT_EOF
 chmod 755 /usr/local/bin/hearth-region-agent
 cat > /usr/local/bin/hearth-relay-uninstall <<'UNINSTALL_EOF'
 #!/usr/bin/env bash
-# Takes the Hearth relay off this machine: everything its installer set up. Safe to run again.
+# Takes the Cindrly relay off this machine: everything its installer set up. Safe to run again.
 set -u
 [ "$(id -u)" = 0 ] || { echo "Run this as root (or with sudo)." >&2; exit 1; }
 gone() { printf '  removed: %s\\n' "$*"; }
-echo "▸ Removing the Hearth relay from this machine…"
+echo "▸ Removing the Cindrly relay from this machine…"
 # The check-in every minute.
 if [ -e /etc/systemd/system/hearth-region.timer ] || [ -e /etc/systemd/system/hearth-region.service ]; then
   systemctl disable --now hearth-region.timer >/dev/null 2>&1 || true
   systemctl stop hearth-region.service >/dev/null 2>&1 || true
   rm -f /etc/systemd/system/hearth-region.timer /etc/systemd/system/hearth-region.service
   systemctl daemon-reload >/dev/null 2>&1 || true
-  gone "the check-in with Hearth every minute (hearth-region.timer)"
+  gone "the check-in with Cindrly every minute (hearth-region.timer)"
 fi
 [ -e /usr/local/bin/hearth-region-agent ] && { rm -f /usr/local/bin/hearth-region-agent; gone "the check-in agent (/usr/local/bin/hearth-region-agent)"; }
 # The upload-only account for backup copies, and its block in the SSH settings. sshd is reloaded only with settings
-# that pass its check (a reload with broken ones could lock everyone out of SSH). Settings that don't pass with Hearth's
+# that pass its check (a reload with broken ones could lock everyone out of SSH). Settings that don't pass with Cindrly's
 # block either have trouble of their own: the block goes and they're left as they are, changes made since and all.
 if grep -q '^# BEGIN hearth-backup' /etc/ssh/sshd_config 2>/dev/null; then
   cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.hearth-uninstall
@@ -688,10 +688,10 @@ if grep -q '^# BEGIN hearth-backup' /etc/ssh/sshd_config 2>/dev/null; then
     cp -p /etc/ssh/sshd_config.hearth-bak /etc/ssh/sshd_config
     systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
     rm -f /etc/ssh/sshd_config.hearth-bak
-    gone "the hearth-backup block: without it the SSH settings didn't pass their check, so they're back as they were before Hearth (/etc/ssh/sshd_config.hearth-bak)"
+    gone "the hearth-backup block: without it the SSH settings didn't pass their check, so they're back as they were before Cindrly (/etc/ssh/sshd_config.hearth-bak)"
   else
     cp -p /etc/ssh/sshd_config.hearth-uninstall /etc/ssh/sshd_config
-    echo "  Kept /etc/ssh/sshd_config as it was: without Hearth's block it didn't pass its check (sshd -t). Remove the lines from # BEGIN hearth-backup to # END hearth-backup yourself."
+    echo "  Kept /etc/ssh/sshd_config as it was: without Cindrly's block it didn't pass its check (sshd -t). Remove the lines from # BEGIN hearth-backup to # END hearth-backup yourself."
   fi
   rm -f /etc/ssh/sshd_config.hearth-uninstall
 fi
@@ -712,7 +712,7 @@ if [ -s /etc/hearth-region/ufw-opened ] && command -v ufw >/dev/null 2>&1 && ufw
   [ -n "$OPENED" ] && gone "the firewall openings the install made for the relay:$OPENED"
 fi
 # The relay (coturn): stopped and switched off. Its settings go back to the newest copy setup-turn.sh kept of what
-# was there before Hearth (copies of Hearth's own hold the relay secret, so they go), and coturn itself goes if this
+# was there before Cindrly (copies of Cindrly's own hold the relay secret, so they go), and coturn itself goes if this
 # install added it.
 if systemctl is-enabled --quiet coturn 2>/dev/null || systemctl is-active --quiet coturn 2>/dev/null; then
   systemctl disable --now coturn >/dev/null 2>&1 || true
@@ -741,8 +741,8 @@ if head -1 /etc/turnserver.conf 2>/dev/null | grep -q 'written by scripts/setup-
     if getent group turnserver >/dev/null 2>&1; then chgrp turnserver /etc/turnserver.conf; fi
     chmod 640 /etc/turnserver.conf
     RESTORED=yes
-    gone "Hearth's relay settings (/etc/turnserver.conf is back as it was before)"
-  else rm -f /etc/turnserver.conf; gone "Hearth's relay settings (/etc/turnserver.conf)"; fi
+    gone "Cindrly's relay settings (/etc/turnserver.conf is back as it was before)"
+  else rm -f /etc/turnserver.conf; gone "Cindrly's relay settings (/etc/turnserver.conf)"; fi
 fi
 INSTALLED="$(dpkg-query -W -f='\${Status}' coturn 2>/dev/null || true)"
 LEFT=""
@@ -751,30 +751,30 @@ if [ -f /etc/hearth-region/coturn-by-hearth ] && [ "$INSTALLED" = "install ok in
   if DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq -o DPkg::Lock::Timeout=120 coturn >/dev/null 2>&1; then gone "coturn (this install had added it)"
   else LEFT=yes; fi
 elif [ "$INSTALLED" = "install ok installed" ]; then
-  echo "  coturn was here before Hearth, so it stays installed\${RESTORED:+ with your own settings back}, switched off. To start it again: sudo systemctl enable --now coturn"
+  echo "  coturn was here before Cindrly, so it stays installed\${RESTORED:+ with your own settings back}, switched off. To start it again: sudo systemctl enable --now coturn"
 fi
 if [ -n "$LEFT" ]; then
-  # Everything else goes (the check-in token with it). The note that Hearth installed coturn, and this uninstaller,
+  # Everything else goes (the check-in token with it). The note that Cindrly installed coturn, and this uninstaller,
   # stay, so running it again finishes the job.
   find /etc/hearth-region -mindepth 1 ! -name coturn-by-hearth -exec rm -rf {} + 2>/dev/null || true
   echo "✗ Not quite done: coturn couldn't be uninstalled (is another install or update running?). It's stopped and switched off. Run sudo hearth-relay-uninstall again in a while to finish."
   exit 1
 fi
-[ -d /etc/hearth-region ] && { rm -rf /etc/hearth-region; gone "this relay's link to Hearth and its check-in token (/etc/hearth-region)"; }
+[ -d /etc/hearth-region ] && { rm -rf /etc/hearth-region; gone "this relay's link to Cindrly and its check-in token (/etc/hearth-region)"; }
 rm -f /usr/local/bin/hearth-relay-uninstall
-echo "✓ Done. Nothing of the Hearth relay is left running here."
+echo "✓ Done. Nothing of the Cindrly relay is left running here."
 UNINSTALL_EOF
 chmod 755 /usr/local/bin/hearth-relay-uninstall
 cat > /etc/systemd/system/hearth-region.service <<'UNIT_EOF'
 [Unit]
-Description=Hearth region check-in
+Description=Cindrly region check-in
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/hearth-region-agent
 UNIT_EOF
 cat > /etc/systemd/system/hearth-region.timer <<'UNIT_EOF'
 [Unit]
-Description=Hearth region check-in every minute
+Description=Cindrly region check-in every minute
 [Timer]
 OnBootSec=20
 OnUnitActiveSec=60
@@ -789,18 +789,18 @@ ${member ? `if grep -q '"ok":true' /etc/hearth-region/state 2>/dev/null; then
   if grep -q '"status":"approved"' /etc/hearth-region/state; then
     printf '\\033[1;32m✓ Installed.\\033[0m The owner already approved it: calls start using it within a minute.\\n'
   elif grep -q '"status":"paused"' /etc/hearth-region/state; then
-    printf '\\033[1;32m✓ Installed.\\033[0m The owner has paused it for now: see Hearth → Settings → Help host.\\n'
+    printf '\\033[1;32m✓ Installed.\\033[0m The owner has paused it for now: see Cindrly → Settings → Help host.\\n'
   else
-    printf '\\033[1;32m✓ Installed.\\033[0m It waits for the owner'"'"'s approval: see Hearth → Settings → Help host.\\n'
+    printf '\\033[1;32m✓ Installed.\\033[0m It waits for the owner'"'"'s approval: see Cindrly → Settings → Help host.\\n'
   fi
 else
-  printf '\\033[1;31m✗ The relay is installed but couldn'"'"'t reach Hearth at %s yet.\\033[0m It keeps trying every minute.\\n' "$MAIN"
+  printf '\\033[1;31m✗ The relay is installed but couldn'"'"'t reach Cindrly at %s yet.\\033[0m It keeps trying every minute.\\n' "$MAIN"
   cat /etc/hearth-region/last-error 2>/dev/null || true; echo
 fi
 echo "At home: forward UDP and TCP 3478 and UDP 49160–49400 to this machine in your router. On a VPS: open them in the provider's firewall."` : `if grep -q '"ok":true' /etc/hearth-region/state 2>/dev/null; then
-  printf '\\033[1;32m✓ This region is linked.\\033[0m It shows as online in Hearth → Admin → Regions, and calls start using it within a minute.\\n'
+  printf '\\033[1;32m✓ This region is linked.\\033[0m It shows as online in Cindrly → Admin → Regions, and calls start using it within a minute.\\n'
 else
-  printf '\\033[1;31m✗ The relay is installed but couldn'"'"'t reach Hearth at %s yet.\\033[0m It keeps trying every minute.\\n' "$MAIN"
+  printf '\\033[1;31m✗ The relay is installed but couldn'"'"'t reach Cindrly at %s yet.\\033[0m It keeps trying every minute.\\n' "$MAIN"
   cat /etc/hearth-region/last-error 2>/dev/null || true; echo
 fi
 echo "If this VPS provider has its own firewall (in their control panel), open UDP+TCP 3478 and UDP 49160-49400 there."`}
@@ -866,7 +866,7 @@ echo "To remove it from this machine later: sudo hearth-relay-uninstall"
     // what makes its machine switch itself off after a day (see the agent). A relay this server doesn't know at all
     // (a rebuilt server, before its backup is restored) is only refused.
     const gone = r ? isMemberRow(r) : !!db.prepare('SELECT 1 FROM member_relays_gone WHERE id = ?').get(String(id));
-    fail(403, gone ? (r ? 'A new install command replaced this relay’s link.' : 'This relay was removed in Hearth.') : 'Unknown region or token.', gone ? 'relay_gone' : undefined);
+    fail(403, gone ? (r ? 'A new install command replaced this relay’s link.' : 'This relay was removed in Cindrly.') : 'Unknown region or token.', gone ? 'relay_gone' : undefined);
   };
   api.post('/regions/:id/heartbeat', wrap(async (req, res) => {
     // Per network (an IPv6 /64 counts as one address, so moving around inside one changes nothing)…
@@ -976,11 +976,11 @@ echo "To remove it from this machine later: sudo hearth-relay-uninstall"
     const moves = movesOf(parse(r.stats, {}));
     if (moves.length < MOVES_MAX) return;
     const until = new Date(moves[0] + MOVES_MS).toISOString().slice(0, 16).replace('T', ' ');
-    fail(429, `This relay’s address has changed ${MOVES_MAX} times in 18 hours, as often as Hearth takes, so it stays at ${r.ip} until ${until} UTC: check-ins from ${ip.slice(0, 45)} are turned away until then.`);
+    fail(429, `This relay’s address has changed ${MOVES_MAX} times in 18 hours, as often as Cindrly takes, so it stays at ${r.ip} until ${until} UTC: check-ins from ${ip.slice(0, 45)} are turned away until then.`);
   }
 
   // ------------------------------------------------------------------ off-site backups on the regions
-  // Each region that has backup space (installed or reinstalled with Hearth 1.25+) keeps copies of this server's
+  // Each region that has backup space (installed or reinstalled with Cindrly 1.25+) keeps copies of this server's
   // encrypted backups, so losing this machine doesn't lose everything. Copies go over SFTP with this server's
   // own key, to an account that can only upload into one folder, and only to the host key the region reported
   // (checked strictly, so nobody can pretend to be the region). The region keeps the newest KEEP_COPIES.

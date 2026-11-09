@@ -1,6 +1,6 @@
 // Sharing an invite (app.js openInvite, the "Invite your people" welcome after creating or importing a server, and
 // the "It's just you here" card): the words people copy or share, kept here so they can be checked on their own.
-// Plain text only. Nothing is sent anywhere by Hearth: copying puts it on the clipboard, Share hands it to the
+// Plain text only. Nothing is sent anywhere by Cindrly: copying puts it on the clipboard, Share hands it to the
 // device's own share sheet. No contacts, no tracking, no counts.
 
 // How long a link lasts, as the invite dialog offers it (hours; 0 = never).
@@ -23,23 +23,23 @@ export function signUpMode(config) {
 // The last line of the invite message: where they'll make an account, and what that takes. Never the sign-up code
 // itself (that's the instance's to give out, and a copied message travels further than meant).
 function accountLine(instance, mode) {
-  const where = instance || 'Hearth';
+  const where = instance || 'Cindrly';
   if (mode === 'code') return `You’ll make an account on ${where} first, which needs a sign-up code: ask me for it.`;
   if (mode === 'closed') return `It only works with an account you already have on ${where} (it isn’t taking new sign-ups).`;
   return `You’ll make an account on ${where} first.`;
 }
 
-// "Join me in <server> on Hearth: <link>", then what Hearth is and where they'll make an account (mode: signUpMode).
+// "Join me in <server> on Cindrly: <link>", then what Cindrly is and where they'll make an account (mode: signUpMode).
 // With link: null (for the share sheet, which carries the link on its own) the first line ends at the server's name.
 export function inviteMessage({ serverName, link, instance, mode = 'open' }) {
-  const first = link ? `Join me in ${serverName} on Hearth: ${link}` : `Join me in ${serverName} on Hearth.`;
+  const first = link ? `Join me in ${serverName} on Cindrly: ${link}` : `Join me in ${serverName} on Cindrly.`;
   return `${first}\nIt’s free, private chat (messages are end-to-end encrypted). ${accountLine(instance, mode)}`;
 }
 
 // The invite dialog's line about new people (mode: signUpMode). manages: this person can change sign-ups (an
 // instance owner or admin), so they're told where.
 export function joinNote({ serverName, instance, mode = 'open', manages = false }) {
-  const where = instance || 'Hearth';
+  const where = instance || 'Cindrly';
   if (mode === 'code') {
     return `New people need ${where}’s sign-up code to make an account, then land right in ${serverName}. Send them the code separately; it isn’t in the link or the message. `
       + (manages ? 'It’s in Admin → Registration & Terms.' : `Whoever runs ${where} has it.`);
@@ -57,7 +57,7 @@ export function movingMessage({ link, hours, mode = 'open', instance }) {
   const lasts = expiryWords(hours);
   const needs = mode === 'code' ? ' Making an account there needs a sign-up code, so ask me for it.'
     : mode === 'closed' ? ` For now it only works for people who already have an account on ${instance || 'it'}.` : '';
-  return `We’re trying Hearth, a self-hosted chat where messages are end-to-end encrypted.${needs} Our channels and roles are already set up: ${link}${lasts ? ` (link expires in ${lasts})` : ''}`;
+  return `We’re trying Cindrly, a self-hosted chat where messages are end-to-end encrypted.${needs} Our channels and roles are already set up: ${link}${lasts ? ` (link expires in ${lasts})` : ''}`;
 }
 
 // The device's share sheet: phones and some desktop browsers. Not in the desktop app or the Android app's web view,

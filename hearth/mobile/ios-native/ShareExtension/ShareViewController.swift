@@ -2,11 +2,11 @@ import UIKit
 import UniformTypeIdentifiers
 import HearthKit
 
-/// Share → Hearth from another app (TikTok, Instagram, Safari): the iPhone side of MainActivity's ACTION_SEND.
+/// Share → Cindrly from another app (TikTok, Instagram, Safari): the iPhone side of MainActivity's ACTION_SEND.
 /// Only a TikTok or Instagram link goes on (ShareLinks, as on Android). It's left in the App Group's defaults
 /// ("pendingShare") and the app picks it up the next time it comes on screen (LinkRouter), where the page's share
 /// picker opens; nothing is sent until a conversation is picked. A share extension can't open its app through any
-/// supported API, so it says to open Hearth.
+/// supported API, so it says to open Cindrly.
 /// Info.plist: NSExtensionPrincipalClass "ShareViewController" (the @objc name below), no storyboard.
 @objc(ShareViewController)
 final class ShareViewController: UIViewController {
@@ -75,9 +75,9 @@ final class ShareViewController: UIViewController {
     private func show(_ text: String?, subject: String?) {
         if let link = ShareLinks.extract(text: text, subject: subject) {
             UserDefaults(suiteName: DeviceKeys.appGroup)?.set(link, forKey: "pendingShare")
-            label.text = "Open Hearth to share this link. It will be waiting there."
+            label.text = "Open Cindrly to share this link. It will be waiting there."
         } else {
-            label.text = "Hearth takes links to TikTok videos and Instagram reels and posts."
+            label.text = "Cindrly takes links to TikTok videos and Instagram reels and posts."
         }
         button.isHidden = false
     }

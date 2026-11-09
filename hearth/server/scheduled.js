@@ -98,7 +98,7 @@ const WHY = {
   blocked: 'You can’t message this person any more.',
   deleted: 'That account was deleted.',
   suspended: 'Your account was suspended when it was due.',
-  too_late: 'It was due more than a day ago, while your Hearth server was down, so it wasn’t sent that late.',
+  too_late: 'It was due more than a day ago, while your Cindrly server was down, so it wasn’t sent that late.',
   session_ended: 'It was scheduled from a session that has been signed out since, so it waits for you to confirm it (Keep, Send now or Edit) or cancel it.',
   token_renewed: 'Your sign-in got a new token after it was scheduled (a password change, two-factor turned on or other devices signed out). Your app re-encrypts it by itself once it confirms you wrote it; if it can’t, a copy of your old sign-in may have made it: cancel it.',
 };

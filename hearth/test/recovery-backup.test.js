@@ -147,7 +147,7 @@ test('damaged backups (bit flips anywhere, cut off anywhere, extra bytes) are ca
     const dir = target(`bad-${name.replace(/\W+/g, '-')}`);
     const res = cli(['restore', f, dir, key]);
     assert.equal(res.code, 1, `restore should fail: ${name}`);
-    assert.match(res.err, /damaged|changed|cut off|incomplete|Not a Hearth backup|Wrong backup key|Unexpected/, name);
+    assert.match(res.err, /damaged|changed|cut off|incomplete|Not a Cindrly backup|Wrong backup key|Unexpected/, name);
     // Nothing half-restored is left, only the marker saying why, so Hearth won't start on it.
     assert.deepEqual(fs.readdirSync(dir), ['RESTORE-INCOMPLETE'], name);
     assert.match(fs.readFileSync(path.join(dir, 'RESTORE-INCOMPLETE'), 'utf8'), /The restore stopped: /, name);
@@ -238,7 +238,7 @@ test('a backup from a newer Hearth is refused by restore, with a clear message a
   const dir = target('newer');
   const res = cli(['restore', newestBackup(), dir, key]);
   assert.equal(res.code, 2);
-  assert.match(res.err, /from a newer version of Hearth \(database version 99; this version understands up to \d+\)\. Nothing was restored/);
+  assert.match(res.err, /from a newer version of Cindrly \(database version 99; this version understands up to \d+\)\. Nothing was restored/);
   assert.doesNotMatch(res.out, /Restored/);
   assert.deepEqual(fs.readdirSync(dir), ['RESTORE-INCOMPLETE'], 'no database, no keys, no files');
   const err = await startOn(dir).then((s) => s.stop().then(() => null), (e) => e);

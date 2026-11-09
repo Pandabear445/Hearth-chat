@@ -1,4 +1,4 @@
-// Update notes ("What's new"), written and published by the server's owner in Admin → Owner. Hearth's updates come
+// Update notes ("What's new"), written and published by the server's owner in Admin → Owner. Cindrly's updates come
 // with none: nothing about an update is shown to anyone unless the owner publishes it here. A published note shows
 // once to everyone (public/js/whatsnew.js): right away in apps that are open, otherwise the next time theirs opens.
 //

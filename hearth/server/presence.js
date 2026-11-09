@@ -2,7 +2,7 @@
 //
 // Away: every open app (one Socket.IO connection) reports whether it has gone unused for the account's "Away after"
 // time (presence:idle { idle }). In a browser that means no input in the page; in the desktop app, no input on the
-// computer at all (Electron's system idle time), so someone playing a game with Hearth in the background isn't
+// computer at all (Electron's system idle time), so someone playing a game with Cindrly in the background isn't
 // Away. Someone whose status is Online shows as Away (presence 'idle') while EVERY one of their connections says
 // idle, and Online again as soon as one doesn't: the server combines them (index.js presenceFor), so one device
 // left alone never makes a person who's busy on another look away. A new connection starts out in use, and one

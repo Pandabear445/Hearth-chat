@@ -32,13 +32,13 @@ Porkbun → *Domain Management* → cindrly.com → **DNS**.
    | TXT | *(blank)* | `v=spf1 -all` |
    | TXT | `_dmarc` | `v=DMARC1; p=reject;` |
 
-   The two TXT records say "no mail is ever sent from cindrly.com" (Hearth's emails come from the Gmail address),
+   The two TXT records say "no mail is ever sent from cindrly.com" (Cindrly's emails come from the Gmail address),
    which fixes the SPF and DMARC warnings. Keep **WHOIS privacy** on.
 4. Wait a few minutes, then check on your computer: `nslookup cindrly.com` should answer with your server's address.
 
 ## 2. Caddy (HTTPS for the new name, forwarding from the old one)
 
-On the server, in the Hearth folder, edit `deploy/Caddyfile`. Your file has a block that starts with
+On the server, in the Cindrly folder, edit `deploy/Caddyfile`. Your file has a block that starts with
 `kappachat.duckdns.org {`. Change that first line to `cindrly.com {` and keep everything inside it as it is. Then add
 these two blocks at the end of the file:
 
@@ -67,16 +67,16 @@ kappachat.duckdns.org {
 }
 ```
 
-(If Hearth runs without Docker, use `localhost:3000` instead of `hearth:3000`, as in your existing block.)
+(If Cindrly runs without Docker, use `localhost:3000` instead of `hearth:3000`, as in your existing block.)
 
 Reload Caddy: `docker compose restart caddy` (or `sudo systemctl reload caddy` without Docker). It gets a free
 Let's Encrypt certificate for `cindrly.com` and `www.cindrly.com` within a minute. Check: open
-`https://cindrly.com` (padlock, Hearth's sign-in page) and `https://kappachat.duckdns.org` in a browser (it should
+`https://cindrly.com` (padlock, Cindrly's sign-in page) and `https://kappachat.duckdns.org` in a browser (it should
 land on `cindrly.com`).
 
-## 3. Hearth's settings
+## 3. Cindrly's settings
 
-1. In `.env` in the Hearth folder: `PUBLIC_URL=https://cindrly.com`. If there's a `TURN_URL` with the old name you can
+1. In `.env` in the Cindrly folder: `PUBLIC_URL=https://cindrly.com`. If there's a `TURN_URL` with the old name you can
    leave it (same machine) or change it to `turn:cindrly.com:3478`. Then `docker compose up -d` (or
    `sudo systemctl restart hearth`).
 2. **Admin → Owner → Email (password resets) → Your server's address:** `https://cindrly.com`, Save, and send a test

@@ -1,8 +1,8 @@
-// Imports into Hearth (docs/IMPORT.md). Phase 1: start a new server from a Discord server's structure. The person
-// pastes the server template's JSON (or just its serialized_source_guild); Hearth shows what it would make and what
+// Imports into Cindrly (docs/IMPORT.md). Phase 1: start a new server from a Discord server's structure. The person
+// pastes the server template's JSON (or just its serialized_source_guild); Cindrly shows what it would make and what
 // won't come over, then creates it in one go.
 //
-// Hearth never contacts Discord here: the person opens the template in their own browser and pastes what it shows.
+// Cindrly never contacts Discord here: the person opens the template in their own browser and pastes what it shows.
 // The mapping (server/discordmap.js) runs on the server for the preview and again on create, so an app can't send
 // back a plan that grants more than the template did.
 //
@@ -20,7 +20,7 @@
 //     of the server's time, so many at once would hold everyone else up). The instance ceiling bounds the server's
 //     time (every template read counts) and is shared fairly: past half of it, only accounts that have had few plans
 //     this window get more, so a handful of accounts can't use it up and lock everyone else out;
-//   - Hearth's own limits for one server: 99 roles besides @everyone, 50 categories, 100 overrides per channel, at
+//   - Cindrly's own limits for one server: 99 roles besides @everyone, 50 categories, 100 overrides per channel, at
 //     most 500 channels and 5,000 overrides per import. Requests are capped at 2 MB like every JSON request.
 const { ImportError, parseTemplate, planFromTemplate } = require('./discordmap');
 
@@ -32,9 +32,9 @@ const CREATIONS_PER_HOUR = 5;
 // long (hundreds of roles and channels with long names).
 const REPORT_MAX = 128 * 1024;
 const PROBLEM = {
-  too_many_channels: (p) => `That's ${p.count} channels; Hearth imports up to ${p.max} at once. Leave some out.`,
-  too_many_categories: (p) => `That's ${p.count} categories; a Hearth server has up to ${p.max}. Leave some channels out.`,
-  too_many_overrides: (p) => `That's ${p.count} channel permissions; Hearth imports up to ${p.max} at once. Leave some channels or roles out.`,
+  too_many_channels: (p) => `That's ${p.count} channels; Cindrly imports up to ${p.max} at once. Leave some out.`,
+  too_many_categories: (p) => `That's ${p.count} categories; a Cindrly server has up to ${p.max}. Leave some channels out.`,
+  too_many_overrides: (p) => `That's ${p.count} channel permissions; Cindrly imports up to ${p.max} at once. Leave some channels or roles out.`,
 };
 
 module.exports = function setupImports(ctx) {
@@ -43,7 +43,7 @@ module.exports = function setupImports(ctx) {
 
   // The same rule and words as POST /servers.
   function mayCreate(req) {
-    if (features().createServers === 'staff' && !isStaff(req.userId)) fail(403, 'On this Hearth, only staff can create servers. Ask an admin.');
+    if (features().createServers === 'staff' && !isStaff(req.userId)) fail(403, 'On this Cindrly, only staff can create servers. Ask an admin.');
   }
   function keySet(v, max) {
     if (v === undefined || v === null) return new Set();

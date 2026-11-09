@@ -3,7 +3,7 @@ import UserNotifications
 import Capacitor
 import HearthKit
 
-/// Notifications while Hearth is closed, through Apple's push service (APNs): the iPhone side of HearthPush.java.
+/// Notifications while Cindrly is closed, through Apple's push service (APNs): the iPhone side of HearthPush.java.
 /// Apple gives the phone a device token; the app makes this server's own encryption keys (a P-256 key and a 16-byte
 /// auth secret, DeviceKeys, in the Keychain shared with the notification extension, never backed up); the server's
 /// page subscribes the token and the public keys with the server (ios-push.js, POST /api/push/subscribe, type
@@ -162,7 +162,7 @@ final class HearthPushNative: NSObject {
         }
     }
 
-    /// Hearth on screen again: tells the page if notifications were turned off (or back on) in Settings meanwhile.
+    /// Cindrly on screen again: tells the page if notifications were turned off (or back on) in Settings meanwhile.
     func sceneDidBecomeActive() {
         state { [weak self] st in
             guard let self = self else { return }

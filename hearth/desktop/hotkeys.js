@@ -1,6 +1,6 @@
 // Global keys: push-to-talk, mute and deafen keep working while a game or any other app has focus.
 // Uses uiohook, which only listens: the key still reaches the game, unlike Electron's globalShortcut, which
-// would swallow it. Bindings come from Hearth's Settings → Keybinds and are sent here by the page.
+// would swallow it. Bindings come from Cindrly's Settings → Keybinds and are sent here by the page.
 //
 // A binding is { code, ctrl, shift, alt, meta } where code is a browser KeyboardEvent.code ("KeyV", "F13",
 // "Backquote", "ControlLeft"…) or a mouse button ("Mouse3" middle, "Mouse4"/"Mouse5" side buttons).
@@ -59,7 +59,7 @@ function onUp(ev) {
 
 let running = false;
 // Returns { ok, global } — global=false means this computer can't listen globally (the page then falls back
-// to keys that work while Hearth is focused).
+// to keys that work while Cindrly is focused).
 function set(next, onEvent) {
   bindings = {};
   for (const k of ['ptt', 'mute', 'deafen']) {

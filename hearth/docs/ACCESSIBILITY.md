@@ -10,7 +10,7 @@ phones to large screens, and the two browser suites that keep it that way. Paths
 | `npm run test:a11y` | `test/a11y/run.mjs`: 127 checks in headless Chromium. It drives the real app on a fresh server: signs up, creates a server, sends messages, opens every main screen, dialog, menu and admin tab, and asserts the properties below. Exits non-zero on any failure. | about 3 min |
 | `npm run test:visual` | `test/visual/run.mjs`: seven core screens at 1366×768 and 390×844, compared with baselines. | about 1 min |
 
-Neither runs as part of `npm test` or CI. Both need Playwright and Chromium, which aren't Hearth dependencies.
+Neither runs as part of `npm test` or CI. Both need Playwright and Chromium, which aren't Cindrly dependencies.
 `test/browser/harness.mjs` finds them in this order:
 - `PLAYWRIGHT_MODULE` (the path to Playwright's `index.mjs`), then a global `playwright`;
 - `CHROMIUM_PATH`, otherwise Playwright's own browser download.
@@ -29,7 +29,7 @@ machine that checks them:
 3. **When something changed:** `test/visual/output/` gets the new screenshot and a `.diff.png`, with changed pixels
    in magenta. If the change is intended, accept it with `npm run test:visual -- --update`.
 
-The app's fonts are served by Hearth itself (`public/fonts`), so results don't depend on the network. Baselines
+The app's fonts are served by Cindrly itself (`public/fonts`), so results don't depend on the network. Baselines
 made before 1.29.0 (when the fonts came from Google Fonts and were blocked during the run) need `--update` once.
 Times, avatar colours (made from random ids) and the time-of-day greeting are blanked by a test-only stylesheet.
 Masking alone wasn't enough, because dialog backdrops blur what's behind them, smearing those colours past any mask.
@@ -103,7 +103,7 @@ Each item is checked by `npm run test:a11y` unless marked otherwise.
   before.
 - On phones, Back (the gesture, or Android's back button) closes the menu or sheet, picture, message actions,
   dialog or side panel on top, like Esc, cancels a voice message being recorded, an edit or a reply, then takes the
-  conversation back to its list and another tab's page back to Home's, instead of leaving Hearth
+  conversation back to its list and another tab's page back to Home's, instead of leaving Cindrly
   (`public/js/phone-nav.js`; on touch tablets the same, except the side panel, which sits beside the chat there, and
   the levels, which only phones have). The swipe from the screen's left edge that goes back to the list, or closes
   the side panel, only adds a way: each has a button that does the same.

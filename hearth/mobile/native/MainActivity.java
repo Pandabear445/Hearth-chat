@@ -71,7 +71,7 @@ import java.util.Set;
 import javax.net.ssl.SSLException;
 
 /**
- * Hearth for Android: a web view showing your Hearth server, plus the few things a web view can't do alone:
+ * Cindrly for Android: a web view showing your Cindrly server, plus the few things a web view can't do alone:
  *  - self-signed certificates: asks once, shows the fingerprint, remembers that exact certificate
  *  - notifications while the app is open or in the background, and saving files to Downloads
  *  - notifications while the app is closed, through a UnifiedPush push app (HearthPush, HearthPushService)
@@ -87,7 +87,7 @@ public class MainActivity extends BridgeActivity {
     private static final String CHANNEL = HearthNotifications.MESSAGES;
     private static final int NOTIFY_PERMISSION = 7101;
 
-    // Whether Hearth is on screen (a push that arrives then is left to the open app), and the running activity
+    // Whether Cindrly is on screen (a push that arrives then is left to the open app), and the running activity
     // (for the push and call services, which outlive it).
     private static volatile boolean foreground;
     private static WeakReference<MainActivity> live = new WeakReference<>(null);
@@ -141,7 +141,7 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         foreground = true;
-        // A call rang while Hearth was closed, and Hearth was opened some other way than its notification (the
+        // A call rang while Cindrly was closed, and Cindrly was opened some other way than its notification (the
         // launcher, Recents): the ringtone stops, and the app goes to the call as a tap on the notification would
         // (the page shows its own ring card if the call is still on).
         String call = HearthNotifications.stopRinging(this);
@@ -166,9 +166,9 @@ public class MainActivity extends BridgeActivity {
 
     // ------------------------------------------------------------------ status bar, navigation bar, keyboard
     // Android 15+ draws every app edge to edge (behind the status and navigation bars) and no longer shrinks
-    // the window for the keyboard. Hearth's pages expect a normal window, so the web view's container is padded
+    // the window for the keyboard. Cindrly's pages expect a normal window, so the web view's container is padded
     // by the bars, the camera cutout and the keyboard, on every Android version alike, with light bar icons
-    // over Hearth's dark background. (Capacitor's own SystemBars handling is off in capacitor.config.json.)
+    // over Cindrly's dark background. (Capacitor's own SystemBars handling is off in capacitor.config.json.)
     private void fitBetweenSystemBars(WebView web) {
         EdgeToEdge.enable(this, SystemBarStyle.dark(Color.TRANSPARENT), SystemBarStyle.dark(Color.TRANSPARENT));
         View box = (View) web.getParent();
@@ -319,7 +319,7 @@ public class MainActivity extends BridgeActivity {
             showOffline(reasonCode(error.getErrorCode(), error.getDescription()), request.getUrl().toString());
         }
 
-        // The server being down behind a proxy (Caddy answers 502 while Hearth restarts) gets the same card, which
+        // The server being down behind a proxy (Caddy answers 502 while Cindrly restarts) gets the same card, which
         // loads the server again by itself once it's back (as the desktop app does).
         @Override
         public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
@@ -530,13 +530,13 @@ public class MainActivity extends BridgeActivity {
             openPath(open);
             return;
         }
-        // Share → Hearth: a link from another app. Only a TikTok or Instagram link goes on, to the page's picker.
+        // Share → Cindrly: a link from another app. Only a TikTok or Instagram link goes on, to the page's picker.
         if (Intent.ACTION_SEND.equals(intent.getAction()) && "text/plain".equals(intent.getType())) {
             String link = ShareLinks.extract(intent.getStringExtra(Intent.EXTRA_TEXT), intent.getStringExtra(Intent.EXTRA_SUBJECT));
             intent.setAction(Intent.ACTION_MAIN);
             intent.removeExtra(Intent.EXTRA_TEXT);
             if (link == null) {
-                Toast.makeText(this, "Hearth takes links to TikTok videos and Instagram reels and posts.", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Cindrly takes links to TikTok videos and Instagram reels and posts.", Toast.LENGTH_LONG).show();
                 return;
             }
             pendingShare = link;
@@ -563,8 +563,8 @@ public class MainActivity extends BridgeActivity {
         toPage("hearth-notification-click", JSONObject.quote(tag));
     }
 
-    // An invite for another Hearth server than this app's: offered, never done by itself. The other address is
-    // checked first (it must answer as a Hearth server), then it becomes the app's server and the invite opens.
+    // An invite for another Cindrly server than this app's: offered, never done by itself. The other address is
+    // checked first (it must answer as a Cindrly server), then it becomes the app's server and the invite opens.
     // A build for one server never switches: the invite can open in the browser instead (as on iOS).
     private void askToSwitch(String[] invite) {
         String newOrigin = InviteLinks.normalOrigin(invite[0]);
@@ -574,7 +574,7 @@ public class MainActivity extends BridgeActivity {
             Uri target = Uri.parse(InviteLinks.target(newOrigin, invite[1]));
             new AlertDialog.Builder(this)
                     .setTitle("This invite is for " + host)
-                    .setMessage("It\u2019s for a different Hearth server than the one this app uses. You can open it in your browser.")
+                    .setMessage("It\u2019s for a different Cindrly server than the one this app uses. You can open it in your browser.")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Open in browser", (d, w) -> {
                         try {
@@ -588,13 +588,13 @@ public class MainActivity extends BridgeActivity {
         }
         new AlertDialog.Builder(this)
                 .setTitle("Switch to " + host + " and join?")
-                .setMessage("This invite is for a different Hearth server than the one this app uses (" + current + "). Switching signs you in there instead; you can switch back in Settings \u2192 Apps & devices.")
+                .setMessage("This invite is for a different Cindrly server than the one this app uses (" + current + "). Switching signs you in there instead; you can switch back in Settings \u2192 Apps & devices.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Switch and join", (d, w) -> probe(newOrigin, (r) -> {
                     if (!r.optBoolean("ok")) {
                         String e = r.optString("error");
                         Toast.makeText(this, "NOT_HEARTH".equals(e)
-                                ? host + " isn't a Hearth server."
+                                ? host + " isn't a Cindrly server."
                                 : "Couldn't reach " + host + ". Check your connection and try the link again.", Toast.LENGTH_LONG).show();
                         return;
                     }
@@ -604,10 +604,10 @@ public class MainActivity extends BridgeActivity {
                 .show();
     }
 
-    // ------------------------------------------------------------------ is it a Hearth server?
+    // ------------------------------------------------------------------ is it a Cindrly server?
     interface ProbeDone { void done(JSONObject result); }
 
-    // GET <origin>/api/config off the main thread (8 seconds at most): { ok, name } for a Hearth server, else
+    // GET <origin>/api/config off the main thread (8 seconds at most): { ok, name } for a Cindrly server, else
     // { ok: false, error } with a code the connect screen explains (desktop main.js's probe). A certificate the
     // phone doesn't trust counts as "there": the certificate question comes when the page loads.
     private void probe(String origin, ProbeDone then) {
@@ -680,7 +680,7 @@ public class MainActivity extends BridgeActivity {
         if (link == null || serverOrigin().isEmpty()) return;
         pendingShare = null;
         if (pageApi >= 3) toServerPage("hearth-share", JSONObject.quote(link));
-        else runOnUiThread(() -> Toast.makeText(this, "This Hearth server is too old to share to. Paste the link in a conversation instead.", Toast.LENGTH_LONG).show());
+        else runOnUiThread(() -> Toast.makeText(this, "This Cindrly server is too old to share to. Paste the link in a conversation instead.", Toast.LENGTH_LONG).show());
     }
 
     // The page is already open: a current page shows the "Join a server" box in place (a call keeps going); an
@@ -692,7 +692,7 @@ public class MainActivity extends BridgeActivity {
         else getBridge().getWebView().loadUrl(InviteLinks.target(serverOrigin(), code));
     }
 
-    // ------------------------------------------------------------------ saving files to Downloads/Hearth
+    // ------------------------------------------------------------------ saving files to Downloads/Cindrly
     private void saveStart(String id, String name, String mime) {
         String safe = name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
         if (safe.isEmpty()) safe = "file";
@@ -703,13 +703,13 @@ public class MainActivity extends BridgeActivity {
                 ContentValues v = new ContentValues();
                 v.put(MediaStore.Downloads.DISPLAY_NAME, safe);
                 v.put(MediaStore.Downloads.MIME_TYPE, mime);
-                v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Hearth");
+                v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Cindrly");
                 Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
                 if (uri == null) throw new Exception("no uri");
                 savingUris.put(id, uri);
                 out = getContentResolver().openOutputStream(uri);
             } else {
-                File dir = new File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Hearth");
+                File dir = new File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Cindrly");
                 dir.mkdirs();
                 out = new FileOutputStream(new File(dir, safe));
             }
@@ -733,7 +733,7 @@ public class MainActivity extends BridgeActivity {
         if (out == null) return;
         try {
             out.close();
-            String where = Build.VERSION.SDK_INT >= 29 ? "Downloads/Hearth" : "the app's Downloads folder";
+            String where = Build.VERSION.SDK_INT >= 29 ? "Downloads/Cindrly" : "the app's Downloads folder";
             runOnUiThread(() -> Toast.makeText(this, "Saved " + name + " to " + where, Toast.LENGTH_LONG).show());
         } catch (Exception e) {
             runOnUiThread(() -> Toast.makeText(this, "Couldn't save the file", Toast.LENGTH_SHORT).show());

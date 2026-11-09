@@ -226,7 +226,7 @@ export class Voice {
       case 'connecting': return { state: this.state, tone: 'wait', label: 'Connecting\u2026', detail: `Setting up audio with ${plural(peers.length - up)}.` };
       case 'connected': return { state: this.state, tone: 'ok', label: 'Connected', detail: peers.length ? `Audio is flowing with ${plural(up)}.` : 'You\u2019re the only one here.' };
       case 'degraded': return { state: this.state, tone: 'warn', label: failed ? 'Connection trouble' : 'Reconnecting audio\u2026', detail: failed ? `Can\u2019t reach ${plural(failed)}. Try again from their tile.` : 'A connection dropped. Trying to restore it.' };
-      case 'reconnecting': return { state: this.state, tone: 'warn', label: 'Reconnecting\u2026', detail: up ? 'Lost the server. Audio may still be getting through while Hearth reconnects.' : 'Lost the connection. Trying again\u2026' };
+      case 'reconnecting': return { state: this.state, tone: 'warn', label: 'Reconnecting\u2026', detail: up ? 'Lost the server. Audio may still be getting through while Cindrly reconnects.' : 'Lost the connection. Trying again\u2026' };
       case 'switching': return { state: this.state, tone: 'wait', label: 'Switching region\u2026', detail: 'Moving the call to the new relay. A short blip is normal.' };
       case 'failed': return { state: this.state, tone: 'bad', label: 'Disconnected', detail: this.failReason || 'The call couldn\u2019t be restored.' };
       case 'leaving': return { state: this.state, tone: 'wait', label: 'Leaving\u2026', detail: '' };
@@ -581,7 +581,7 @@ export class Voice {
       if (gone) {
         this.log('The microphone in use went away');
         const ok = await this.swapMic({ preferDefault: true });
-        if (ok === 'mic') this.onNotice('Your microphone was disconnected, so Hearth switched to the default one.');
+        if (ok === 'mic') this.onNotice('Your microphone was disconnected, so Cindrly switched to the default one.');
         else if (ok === 'none') this.onNotice('Your microphone was disconnected and there\u2019s no other one, so you\u2019re listen-only for now.', 'error');
       }
     } else if (this.noMic && !this.micDenied && ins.some((d) => d.deviceId) && why === 'devicechange') {

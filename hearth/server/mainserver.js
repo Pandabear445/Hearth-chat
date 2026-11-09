@@ -120,7 +120,7 @@ module.exports = function setupMainServer(ctx) {
       const m = CODE.exec(b.invite.trim());
       const inv = m && db.prepare('SELECT * FROM invites WHERE code = ?').get(m[1]);
       const why = inviteProblem(inv);
-      if (why === 'gone') fail(404, 'That invite does not exist on this Hearth.', 'bad_invite');
+      if (why === 'gone') fail(404, 'That invite does not exist on this Cindrly.', 'bad_invite');
       if (why === 'expired') fail(410, 'That invite has expired. Make one that never expires.', 'bad_invite');
       if (why === 'used_up') fail(410, 'That invite has been used up. Use an invite with no use limit.', 'bad_invite');
       if (why === 'limited') fail(400, 'That invite can only be used a few times. Use an invite with no use limit.', 'bad_invite');

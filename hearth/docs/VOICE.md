@@ -1,6 +1,6 @@
 # Voice and video
 
-How Hearth calls work, how they recover when something breaks, and what each party can and can't see. Paths are
+How Cindrly calls work, how they recover when something breaks, and what each party can and can't see. Paths are
 relative to `hearth/`. The call engine is `public/js/voice.js`; the call UI is in `public/js/app.js` (search for
 `callStage`, `renderVoicePanel`, `applyCallRegion`) and `public/js/call-diagnostics.js`; the server side is the
 `voice:*` socket handlers near the end of `server/index.js`, plus `/api/ice`, `/api/calls/region` and
@@ -248,7 +248,7 @@ panel and the raw output for IP-address patterns).
 This section is about calls. The general threat model is in `SECURITY.md`.
 
 **Media encryption ends at the peers.** Each `RTCPeerConnection` runs DTLS-SRTP between the two browsers, with a
-fresh certificate per connection (in Chromium: DTLS 1.2 and SRTP `AES_CM_128_HMAC_SHA1_80`). Hearth has no media
+fresh certificate per connection (in Chromium: DTLS 1.2 and SRTP `AES_CM_128_HMAC_SHA1_80`). Cindrly has no media
 server, so there is no point where media is decrypted. SRTP encrypts and authenticates the audio and video, not the
 RTP headers, and the DTLS 1.2 handshake (with both certificates) is in the clear too. So a TURN relay, or anyone on
 the network path, can't read or change the media, but it sees:

@@ -29,7 +29,7 @@ export const TIKTOK_ORIGIN = 'https://www.tiktok.com';
 export const INSTAGRAM_ORIGIN = 'https://www.instagram.com';
 export const FRAME_ORIGINS = [TIKTOK_ORIGIN, INSTAGRAM_ORIGIN];
 // Scripts and their own storage (both players need them), fullscreen and "open on TikTok/Instagram" popups
-// (which open in the browser), but never navigating the Hearth tab, forms, downloads or modals.
+// (which open in the browser), but never navigating the Cindrly tab, forms, downloads or modals.
 export const SOCIAL_SANDBOX = 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox';
 export const SOCIAL_ALLOW = 'autoplay; encrypted-media; fullscreen; picture-in-picture';
 

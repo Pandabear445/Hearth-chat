@@ -1,5 +1,5 @@
-// Finds the game you're playing and the song you're listening to, so Hearth can show it on your profile.
-// Runs only while "Show the game / music" is on in Hearth (Settings → Games & music), every 20 seconds.
+// Finds the game you're playing and the song you're listening to, so Cindrly can show it on your profile.
+// Runs only while "Show the game / music" is on in Cindrly (Settings → Games & music), every 20 seconds.
 // Nothing leaves this computer except the game's name or Steam number and the song's title/artist/album.
 //
 //  - Steam games: Steam itself records which game is running (RunningAppID), on Windows, Mac and Linux.

@@ -35,21 +35,21 @@ public enum BridgePolicy {
         return s + "://" + h + (isDefault ? "" : ":" + String(port))
     }
 
-    /// Hearth's own website, where the connect screen's privacy policy link goes.
+    /// Cindrly's own website, where the connect screen's privacy policy link goes.
     public static let site = "https://pandabear445.github.io/Hearth-chat/"
 
     /// Whether a link the connect screen opens goes to the browser. Any other https:// address the connect screen
-    /// goes to is the server the person chose, so a link to Hearth's website must not become the server.
+    /// goes to is the server the person chose, so a link to Cindrly's website must not become the server.
     public static func opensInBrowser(_ url: String?) -> Bool {
         guard let url = url else { return false }
         return url.utf16.starts(with: site.utf16)
     }
 
-    /// Where Hearth's ways to pay lead: Stripe's checkout, payment links and billing pages, and Ko-fi.
+    /// Where Cindrly's ways to pay lead: Stripe's checkout, payment links and billing pages, and Ko-fi.
     public static let paymentHosts = ["checkout.stripe.com", "buy.stripe.com", "donate.stripe.com", "billing.stripe.com"]
 
     /// Whether a link goes to a page for paying. The app doesn't open those (the App Store doesn't allow an app to
-    /// send people to pay outside Apple's in-app purchase). Hearth 1.29.1 and newer show no way to pay in the app, but
+    /// send people to pay outside Apple's in-app purchase). Cindrly 1.29.1 and newer show no way to pay in the app, but
     /// a server on an older version still does, and anyone can post such a link in a message. Only the host counts,
     /// so a link that merely mentions one of these addresses still opens.
     public static func isPaymentPage(_ url: String?) -> Bool {

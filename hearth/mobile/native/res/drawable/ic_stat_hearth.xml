@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Hearth's flame (public/favicon.svg) in one colour, for the status bar: Android draws notification icons as a
+<!-- Cindrly's flame (public/favicon.svg) in one colour, for the status bar: Android draws notification icons as a
      white silhouette, so the colour launcher icon would show as a blob. Copied into the app by
      mobile/scripts/patch-android.js. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"

@@ -1,6 +1,6 @@
 # Files, attachments and media storage
 
-How Hearth stores files: the upload pipeline, its limits, the resumable upload protocol, downloads, retention
+How Cindrly stores files: the upload pipeline, its limits, the resumable upload protocol, downloads, retention
 and cleanup, backups, and what the server can and can't see. Paths are relative to `hearth/`.
 
 Code: `server/storage.js` (resumable uploads, reports, cleanup), `server/index.js` (one-request uploads, quotas,

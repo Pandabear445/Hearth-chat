@@ -107,7 +107,7 @@ const localInput = (t) => { const d = new Date(t - new Date(t).getTimezoneOffset
 //   withKeyRetry(serverId, fn) runs fn again once if the server says the key is out of date
 //   clock()                    now, by the server's clock as this app knows it (the time a message says it went out)
 //   refreshTimer(key)          fetches the conversation's disappearing timer (the server said it changed)
-//   placeOf(item)              where it goes: { label, dm } ("#general · Hearth HQ", "Ana", a group's name)
+//   placeOf(item)              where it goes: { label, dm } ("#general · Cindrly HQ", "Ana", a group's name)
 //   onChange(key)              the list for that conversation changed (the composer bar redraws; the header's ⋯ menu
 //                              counts them when it opens)
 //   openKey(key)               show that conversation
@@ -350,7 +350,7 @@ export function createScheduled(deps) {
       title, size: 'sm',
       body: h('div', { class: 'stack' },
         field('Send it at', input, `In your time zone${zone ? ` (${zone})` : ''}. Up to ${MAX_DAYS} days ahead.`),
-        h('p', { class: 'field-hint' }, 'Your app encrypts it now, as if you sent it now; your Hearth server keeps it, still encrypted, and posts it then. You can change or cancel it until then.')),
+        h('p', { class: 'field-hint' }, 'Your app encrypts it now, as if you sent it now; your Cindrly server keeps it, still encrypted, and posts it then. You can change or cancel it until then.')),
       actions: [{ label: 'Cancel' }, {
         label: 'Schedule', kind: 'primary', action: () => {
           const t = new Date(input.value).getTime();

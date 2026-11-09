@@ -1,12 +1,12 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Adds Hearth's own parts to the iPhone project that `npx cap add ios` generates (there's no committed ios/
-# folder; the "Hearth apps" workflow builds it fresh every time, like Android's with patch-android.js):
+# Adds Cindrly's own parts to the iPhone project that `npx cap add ios` generates (there's no committed ios/
+# folder; the "Cindrly apps" workflow builds it fresh every time, like Android's with patch-android.js):
 #   - the App target's Swift sources (ios-native/App/*.swift; AppDelegate.swift and SceneDelegate.swift replace
-#     Capacitor's, so the window shows HearthViewController and push tokens and links reach Hearth's code);
+#     Capacitor's, so the window shows HearthViewController and push tokens and links reach Cindrly's code);
 #   - the NotificationService extension (decrypts what a push really says, on the phone) and the ShareExtension
-#     (Share > Hearth for a TikTok or Instagram link), both embedded in the app;
+#     (Share > Cindrly for a TikTok or Instagram link), both embedded in the app;
 #   - the HearthKit Swift package (ios-native/HearthKit) linked into all three;
 #   - Info.plist keys (microphone and camera, background audio for calls, hearth:// links, light status bar, the
 #     export compliance answer, saved files in the Files app), the entitlements (push, Time Sensitive rings, the
@@ -53,17 +53,17 @@ EXTENSIONS = [
 # What the App's Info.plist must say. No NSAppTransportSecurity exceptions: the App Store build only talks to its
 # one server over https with a publicly trusted certificate.
 APP_PLIST = {
-  'NSMicrophoneUsageDescription' => 'Hearth uses the microphone for voice and video calls and voice messages.',
-  'NSCameraUsageDescription' => 'Hearth uses the camera for video calls and for photos you choose to send.',
+  'NSMicrophoneUsageDescription' => 'Cindrly uses the microphone for voice and video calls and voice messages.',
+  'NSCameraUsageDescription' => 'Cindrly uses the camera for video calls and for photos you choose to send.',
   # Keeps a call that's already going alive with the screen locked (CallAudio); no silent pushes, so no
   # remote-notification.
   'UIBackgroundModes' => ['audio'],
   'CFBundleURLTypes' => [{ 'CFBundleURLName' => 'app.hearth.mobile.invite', 'CFBundleURLSchemes' => ['hearth'] }],
   'UIStatusBarStyle' => 'UIStatusBarStyleLightContent',
   'UIViewControllerBasedStatusBarAppearance' => false,
-  # Hearth's encryption is standard and exempt (docs/IOS-STORE.md, export compliance): TestFlight stops asking.
+  # Cindrly's encryption is standard and exempt (docs/IOS-STORE.md, export compliance): TestFlight stops asking.
   'ITSAppUsesNonExemptEncryption' => false,
-  # Files saved through the share sheet's "Save to Files" show up under On My iPhone > Hearth.
+  # Files saved through the share sheet's "Save to Files" show up under On My iPhone > Cindrly.
   'UIFileSharingEnabled' => true,
   'LSSupportsOpeningDocumentsInPlace' => true,
 }.freeze

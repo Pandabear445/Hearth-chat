@@ -1,6 +1,6 @@
 {
   "appId": "app.hearth.mobile",
-  "appName": "Hearth",
+  "appName": "Cindrly",
   "webDir": "www",
   "server": {
     "androidScheme": "https"

@@ -58,7 +58,7 @@ export function socialEmbedEl(p, { key, card = null, mode = 'ask', blurred = fal
         h('span', { class: 'soc-site' }, KIND_NAME[p.kind]),
         card && card.title ? h('span', { class: 'soc-title' }, card.title) : null,
         play,
-        h('span', { class: 'soc-note' }, p.id ? `Loads from ${site}, which sees your IP address.` : `A short link: your Hearth server looks up where it goes, then it loads from ${site}, which sees your IP address.`),
+        h('span', { class: 'soc-note' }, p.id ? `Loads from ${site}, which sees your IP address.` : `A short link: your Cindrly server looks up where it goes, then it loads from ${site}, which sees your IP address.`),
         external));
   };
   // "Always" loads straight away, except a short link (opening one asks this server, so that waits for a tap).

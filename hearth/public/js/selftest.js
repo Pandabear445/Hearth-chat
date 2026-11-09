@@ -1,4 +1,4 @@
-// "Check my encryption": runs every lock Hearth uses on this device, including that tampered or misaddressed
+// "Check my encryption": runs every lock Cindrly uses on this device, including that tampered or misaddressed
 // messages are refused, then checks this account's own keys and server keys. Nothing is sent anywhere.
 import * as E2EE from './e2ee.js';
 

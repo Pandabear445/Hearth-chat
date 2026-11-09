@@ -11,14 +11,14 @@ const shuffle = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { cons
 const dayKey = (d = new Date()) => { const z = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()); };
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const wait = ms => new Promise(r => setTimeout(r, reduceMotion ? 0 : ms));
-/* ---------------- Hearth ----------------
-   Inside Hearth, Recall runs in a sandboxed frame with no storage and no network of its own. Hearth (the parent
+/* ---------------- Cindrly ----------------
+   Inside Cindrly, Recall runs in a sandboxed frame with no storage and no network of its own. Cindrly (the parent
    page) loads your decks, encrypts every change with a key only your devices have, and syncs it; this frame only
-   talks to it through messages. Everything that comes in (from Hearth, a backup or an imported file) is cleaned
+   talks to it through messages. Everything that comes in (from Cindrly, a backup or an imported file) is cleaned
    first, because a shared deck file is someone else's data. */
 const HB = window.parent !== window ? { theme:null } : null;
 function hbSend(t, data){ if (HB) parent.postMessage({ recall:1, t, ...data }, '*'); }
-// Keys, clicks and touches in here never reach Hearth's page, so Hearth wouldn't know you're studying and could show
+// Keys, clicks and touches in here never reach Cindrly's page, so Cindrly wouldn't know you're studying and could show
 // you as Away. It's told "in use" (nothing about what was pressed) on input, at most every 30 seconds.
 if (HB){
   let lastActive = 0;
@@ -159,7 +159,7 @@ const Store = {
   saveLocal(){ clearTimeout(this.lt); this.lt = setTimeout(() => this.flush(), 150); },
   flush(){
     clearTimeout(this.lt); this.lt = null;
-    if (HB) return; // Hearth keeps your decks (encrypted); nothing is left in this browser
+    if (HB) return; // Cindrly keeps your decks (encrypted); nothing is left in this browser
     const json = JSON.stringify(S); let ok = false;
     if (window.recallDesktop){ try { window.recallDesktop.save(json); ok = true; } catch(e){} }
     if (IDB.db){ IDB.set('state', json).catch(() => {}); ok = true; }
@@ -2003,7 +2003,7 @@ addEventListener('scroll', () => $('#bar').classList.toggle('scrolled', scrollY 
 addEventListener('resize', () => placeThumbs());
 
 /* ---------------- boot ---------------- */
-// Hearth sends your decks once it has decrypted them, then any changes made on your other devices.
+// Cindrly sends your decks once it has decrypted them, then any changes made on your other devices.
 function hbInit(){
   return new Promise(res => {
     addEventListener('message', e => {

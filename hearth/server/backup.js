@@ -1,4 +1,4 @@
-// Encrypted backups: everything needed to bring Hearth back on a new machine, in one file that's useless
+// Encrypted backups: everything needed to bring Cindrly back on a new machine, in one file that's useless
 // without the backup key.
 //
 //   What's inside   the database (a consistent snapshot taken while running), data/secret.key, data/vapid.json
@@ -215,7 +215,7 @@ async function openBackup(file, master, onEntry) {
   const entries = [];
   try {
     const head = Buffer.alloc(MAGIC.length + 39);
-    if ((await fh.read(head, 0, head.length, 0)).bytesRead !== head.length || !head.subarray(0, MAGIC.length).equals(MAGIC)) throw new Error('Not a Hearth backup file.');
+    if ((await fh.read(head, 0, head.length, 0)).bytesRead !== head.length || !head.subarray(0, MAGIC.length).equals(MAGIC)) throw new Error('Not a Cindrly backup file.');
     const salt = head.subarray(MAGIC.length, MAGIC.length + 32); const prefix = head.subarray(MAGIC.length + 32);
     const key = fileKey(master, salt);
     let pos = head.length; let n = 0; let done = false;
@@ -301,7 +301,7 @@ function schemaOf(file) {
   return head.readInt32BE(60);
 }
 
-// While a restore is unpacking, this file sits in the new data folder. Hearth refuses to start on a folder that
+// While a restore is unpacking, this file sits in the new data folder. Cindrly refuses to start on a folder that
 // has it (see db.js), so a restore that was cut off (killed, disk full, power cut) can never pass for a complete
 // data folder that's quietly missing files. It's removed only once everything is in place and checked.
 const RESTORE_MARKER = 'RESTORE-INCOMPLETE';
@@ -317,7 +317,7 @@ async function restoreBackup(file, master, targetDir, { maxSchema = 0, signOutEv
   if (there.length) throw new Error(`${targetDir} isn't empty. Restore into a new, empty folder.`);
   const marker = path.join(targetDir, RESTORE_MARKER);
   fs.writeFileSync(marker, `A restore of ${path.basename(file)} into this folder started ${new Date().toISOString()} and hasn't finished.\n`
-    + 'Hearth won\'t start here until it has. If the restore was interrupted, delete this folder and restore again.\n', { mode: 0o600 });
+    + 'Cindrly won\'t start here until it has. If the restore was interrupted, delete this folder and restore again.\n', { mode: 0o600 });
   try {
     fs.mkdirSync(path.join(targetDir, 'uploads'));
     const entries = await openBackup(file, master, (name) => path.join(targetDir, name));
@@ -325,7 +325,7 @@ async function restoreBackup(file, master, targetDir, { maxSchema = 0, signOutEv
     if (!entries.some((e) => e.name === 'hearth.db')) throw new Error('There is no database in this backup.');
     const schema = schemaOf(dbFile);
     if (maxSchema && schema > maxSchema) {
-      const err = new Error(`This backup is from a newer version of Hearth (database version ${schema}; this version understands up to ${maxSchema}). Nothing was restored. Install that version (or newer) and restore with its server/cli.js.`);
+      const err = new Error(`This backup is from a newer version of Cindrly (database version ${schema}; this version understands up to ${maxSchema}). Nothing was restored. Install that version (or newer) and restore with its server/cli.js.`);
       err.code = 'HEARTH_BACKUP_TOO_NEW'; err.schema = schema;
       throw err;
     }

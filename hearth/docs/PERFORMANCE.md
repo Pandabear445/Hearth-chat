@@ -1,6 +1,6 @@
-# Hearth performance
+# Cindrly performance
 
-This page records how Hearth's performance was measured, what was changed because of it, and the numbers before
+This page records how Cindrly's performance was measured, what was changed because of it, and the numbers before
 and after. The server sections cover schema version 18. Paths are relative to `hearth/`.
 
 ## Server
@@ -189,7 +189,7 @@ removed, and kept because it helped.
    - Measured on its own: join 72 → 62 ms; leave 37 → 33 ms; heavy start-up data 115 → 109 ms.
 
 EXPLAIN QUERY PLAN for the statements that changed. Before is v17; after is v18. Plans are the same with and without
-data, because Hearth never runs ANALYZE.
+data, because Cindrly never runs ANALYZE.
 
 | Statement | Before | After |
 |---|---|---|
@@ -413,7 +413,7 @@ per message. The "after" run removed 0. No change was made to this path.
   only the decorative one would save just the difference between the two requests, and the UI font has to block to
   avoid a flash of fallback text. Not changed. This is the biggest load-time lever left; self-hosting the fonts would
   remove the third-party round trip. (Done since, in 1.29.0, for privacy: the fonts are in `public/fonts`, served by
-  Hearth, and the interface fonts are kept in the offline copy. Not re-measured.)
+  Cindrly, and the interface fonts are kept in the offline copy. Not re-measured.)
 - **Lazy-loading `settings.js` (121 KB) and `admin.js` (91 KB).** Not attempted. The CPU profile of a signed-in load
   at 4× showed only ~60 ms of JS in total. Most of the time is native work (module loading, style, layout), so
   splitting these two wouldn't be measurable at this scale.
@@ -422,7 +422,7 @@ per message. The "after" run removed 0. No change was made to this path.
 
 - Only the sizes above were measured, on one shared machine, in Chromium, over loopback. Real networks add latency
   that the 37-module waterfall would feel more. (The Google Fonts request measured here is gone: since 1.29.0 the
-  fonts are served by Hearth.)
+  fonts are served by Cindrly.)
 - Phones weren't measured on real devices; 4× CPU throttling is a stand-in.
 - The member list still redraws all rows when someone's presence changes. That's batched per frame, and the server
   flushes presence once a second; it costs ~45 ms of JS per redraw at 1,000 members. An incremental update would

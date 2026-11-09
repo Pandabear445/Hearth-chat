@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Hearth updater — installs an update zip on this server, safely.
+# Cindrly updater — installs an update zip on this server, safely.
 #
 #   hearth-update path/to/update.zip         install an update (checked against update.zip.sha256 next to it, and
 #                                            update.zip.sig once this server has an update signing key)
 #   hearth-update --verify path/to/update.zip    only check an update (checksum, signature, version); changes nothing
 #   hearth-update --rollback [backup]        go back to the version before the last update (or a chosen backup)
-#   hearth-update --status                   where Hearth is, how it runs, its version, health, backups, disk space
-#   hearth-update --logs                     Hearth's last 80 log lines (handy when reporting a problem)
+#   hearth-update --status                   where Cindrly is, how it runs, its version, health, backups, disk space
+#   hearth-update --logs                     Cindrly's last 80 log lines (handy when reporting a problem)
 #   hearth-update --list                     the saved backups
 #   add --yes to skip the "are you sure?" question (for scripts)
 #   add --allow-unsigned to install an update without a valid signature anyway (only one you checked yourself)
@@ -14,7 +14,7 @@
 #
 # What it does:
 #   0. Checks the update is the published one: its checksum, and its signature by the key this server pinned.
-#   1. Finds your Hearth folder and how it runs (Docker, systemd, pm2 or plain node).
+#   1. Finds your Cindrly folder and how it runs (Docker, systemd, pm2 or plain node).
 #   2. Saves a copy of the current program files and database.
 #   3. Copies in the new files — never touching data/, .env, docker-compose.yml or deploy/Caddyfile.
 #   4. Builds the new version while the old one keeps running (a failed build changes nothing).
@@ -27,7 +27,7 @@ BACKUP_ROOT="${HEARTH_BACKUP_ROOT:-/root/hearth-backups}"
 CONF="${HEARTH_UPDATE_CONF:-/etc/hearth-update.conf}"
 BIN="${HEARTH_UPDATE_BIN:-/usr/local/bin/hearth-update}"
 LOCK="${HEARTH_UPDATE_LOCK:-/run/lock/hearth-update.lock}"
-# The update signing key this server trusts: root's, outside the Hearth folder (see "is it the published update?").
+# The update signing key this server trusts: root's, outside the Cindrly folder (see "is it the published update?").
 PIN="${HEARTH_UPDATE_PUBKEY:-/etc/hearth-update.pub}"
 KEEP=5
 
@@ -58,7 +58,7 @@ for a in "$@"; do
   esac
 done
 # A zip named from where you are stays that zip (and its .sha256 and .sig stay the ones next to it): everything
-# below runs from the Hearth folder.
+# below runs from the Cindrly folder.
 if [ -n "$ARG" ] && { [ "$ACTION" = update ] || [ "$ACTION" = verify ]; } && [[ "$ARG" != /* ]]; then ARG="$PWD/$ARG"; fi
 
 mkdir -p "$BACKUP_ROOT"
@@ -67,7 +67,7 @@ if [ "$ACTION" = update ] || [ "$ACTION" = rollback ]; then
   # Everything an update prints is also saved, so a failed run can always be looked at afterwards.
   # (--status, --logs and --list don't overwrite it.)
   exec > >(tee "$LOG") 2>&1
-  printf 'Hearth updater started %s (log: %s)\n' "$(date)" "$LOG"
+  printf 'Cindrly updater started %s (log: %s)\n' "$(date)" "$LOG"
   # Only one update at a time (a double-click or a second terminal can't start another one halfway through).
   if command -v flock >/dev/null 2>&1; then
     # (Fallback: root's own backup folder, never a fixed name in /tmp that another account could plant.)
@@ -103,7 +103,7 @@ need unzip; need rsync; need curl
 # Puts $1 in place as the installed updater: a new file renamed over the old one, never written into it, because a
 # running hearth-update (often this very one) keeps reading its script as it goes and would run pieces of the new
 # file. Always 755, whatever the umask: a program any account may read (copies of the old update tools, no longer
-# part of Hearth, read it as the login user before using sudo).
+# part of Cindrly, read it as the login user before using sudo).
 install_updater() {
   local t; t="$(mktemp "$BIN.XXXXXX" 2>/dev/null)" || return 1
   if cp -- "$1" "$t" && chmod 755 "$t" && mv -fT "$t" "$BIN"; then return 0; fi
@@ -126,7 +126,7 @@ find_install() {
   [ ${#list[@]} -eq 0 ] && return 1
   if [ ${#list[@]} -gt 1 ]; then
     if [ -t 0 ]; then
-      echo "Found more than one Hearth install:" >&2
+      echo "Found more than one Cindrly install:" >&2
       local i=1; for x in "${list[@]}"; do echo "  $i) $x" >&2; i=$((i+1)); done
       local pick; read -rp "Which one? [1] " pick </dev/tty || pick=1; pick="${pick:-1}"
       [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le ${#list[@]} ] || { echo "Not a choice: $pick" >&2; return 1; }
@@ -136,7 +136,7 @@ find_install() {
   fi
   echo "${list[0]}"
 }
-DIR="$(find_install)" || die "Couldn't find Hearth on this server. Tell me where it is: HEARTH_DIR=/path/to/hearth hearth-update <zip>"
+DIR="$(find_install)" || die "Couldn't find Cindrly on this server. Tell me where it is: HEARTH_DIR=/path/to/hearth hearth-update <zip>"
 echo "$DIR" > "$CONF"
 cd "$DIR"
 
@@ -171,11 +171,11 @@ plain_pid() {
   return 0
 }
 
-# Plain mode (started by hand with npm start / node): Hearth usually runs as an ordinary user. Restart it as
+# Plain mode (started by hand with npm start / node): Cindrly usually runs as an ordinary user. Restart it as
 # that same user, never as root, or an update would quietly turn it into a root process (and its new files in
 # data/ would be root's). Whose it is: data/'s owner. A running process only changes that when it's root's
-# (only root can start one; Hearth then stays root, as before): any account that can enter this folder could
-# start a look-alike "node server/index.js" here, and Hearth must never come back as that account.
+# (only root can start one; Cindrly then stays root, as before): any account that can enter this folder could
+# start a look-alike "node server/index.js" here, and Cindrly must never come back as that account.
 # The program files keep their owner: when they're that user's (the usual case), that user also installs the
 # libraries, so their install scripts never run as root. Root-owned program files stay root's.
 RUN_AS=root; STAGE_AS=root; RUN_PFX=(); STAGE_PFX=()
@@ -184,7 +184,7 @@ RUN_AS=root; STAGE_AS=root; RUN_PFX=(); STAGE_PFX=()
 prefix_for() {
   local pw gid home
   pw="$(getent passwd "$1" || true)"
-  [ -n "$pw" ] || die "Couldn't look up the account $1 (Hearth runs as it)."
+  [ -n "$pw" ] || die "Couldn't look up the account $1 (Cindrly runs as it)."
   gid="$(cut -d: -f4 <<< "$pw")"; home="$(cut -d: -f6 <<< "$pw")"
   if command -v setpriv >/dev/null 2>&1; then PFX=(env HOME="$home" setpriv --reuid="$1" --regid="$gid" --init-groups --)
   else PFX=(runuser -u "$1" -- env HOME="$home"); fi
@@ -200,9 +200,9 @@ if [ "$MODE" = plain ] && { [ "$ACTION" = update ] || [ "$ACTION" = rollback ]; 
     esac
   done
   [ -z "$others" ] || warn "Ignoring node processes in this folder that run as another account than data/'s owner ($data_owner):$others. They're stopped along with the old version."
-  [ "$owner" != UNKNOWN ] || die "Hearth runs as a user ID that has no account name, so it can't be restarted as that user. Give data/ to a real account first."
+  [ "$owner" != UNKNOWN ] || die "Cindrly runs as a user ID that has no account name, so it can't be restarted as that user. Give data/ to a real account first."
   if [ "$owner" = root ]; then
-    warn "Hearth runs as root. It will be restarted the same way; to give it its own user, see scripts/harden-vps.sh."
+    warn "Cindrly runs as root. It will be restarted the same way; to give it its own user, see scripts/harden-vps.sh."
   else
     RUN_AS="$owner"; prefix_for "$RUN_AS"; RUN_PFX=("${PFX[@]}")
     if [ "$(stat -c %U . 2>/dev/null || true)" = "$RUN_AS" ]; then STAGE_AS="$RUN_AS"; STAGE_PFX=("${PFX[@]}"); fi
@@ -224,7 +224,7 @@ start_app() {
     systemd) systemctl start "$UNIT" ;;
     pm2) pm2 restart hearth >/dev/null ;;
     plain)
-      # In a folder Hearth's user owns, the log is opened as that user too, so root never writes through a
+      # In a folder Cindrly's user owns, the log is opened as that user too, so root never writes through a
       # hearth.log that was swapped for a link to somewhere else. (exec: nothing stays behind as root.)
       if [ "$STAGE_AS" = "$RUN_AS" ]; then
         ( exec ${RUN_PFX[@]+"${RUN_PFX[@]}"} sh -c 'exec nohup node server/index.js >> hearth.log 2>&1 < /dev/null' ) & disown
@@ -232,7 +232,7 @@ start_app() {
         ( exec ${RUN_PFX[@]+"${RUN_PFX[@]}"} nohup node server/index.js >> hearth.log 2>&1 < /dev/null ) & disown
       fi ;;
   esac
-} 9>&- # Hearth (or a pm2 daemon) must not inherit the update lock, or the next update would think one is still running.
+} 9>&- # Cindrly (or a pm2 daemon) must not inherit the update lock, or the next update would think one is still running.
 show_logs() {
   case $MODE in
     docker) $DC logs --tail 40 hearth 2>&1 ;;
@@ -241,7 +241,7 @@ show_logs() {
     plain) tail -n 40 hearth.log 2>/dev/null ;;
   esac
 }
-# Is Hearth answering? Tries plain HTTP and HTTPS (self-signed) on its port.
+# Is Cindrly answering? Tries plain HTTP and HTTPS (self-signed) on its port.
 # In Docker it also asks from inside the container, in case the port isn't published (only Caddy is).
 INSIDE_CHECK="const u=['http','https'].map(s=>s+'://127.0.0.1:'+(process.env.PORT||3000)+'/api/config');Promise.any(u.map(x=>fetch(x).then(r=>r.ok?r.json():Promise.reject()))).then(j=>process.exit(j.name?0:1),()=>process.exit(1))"
 healthy() { # $1 = attempts, 2 s apart (default 45 = 90 s)
@@ -273,8 +273,8 @@ zip_version() { local pj; pj="$(unzip -p "$1" hearth/package.json 2>/dev/null)" 
 
 # ---------------------------------------------------------------- is it the published update?
 # Signed updates (docs/SIGNING.md, "Signing server updates"). This server trusts one Ed25519 key, pinned in $PIN:
-# root's file, outside the Hearth folder, so neither Hearth nor an npm install script can swap it. It comes from
-# the installed Hearth's update-signing.pub the first time (only when that file is root's alone), and afterwards
+# root's file, outside the Cindrly folder, so neither Cindrly nor an npm install script can swap it. It comes from
+# the installed Cindrly's update-signing.pub the first time (only when that file is root's alone), and afterwards
 # only from an update that passed the check against the key before it: changing the key takes an update signed by
 # the old one (or --allow-unsigned). Nothing is pinned on a server that can't check signatures: it stays on
 # checksums, as before signing. Everything here reads a private copy of the zip, before anything in it is unpacked
@@ -288,7 +288,7 @@ key_in() { # stdin: an update-signing.pub ('#' comment lines, then one line of b
   echo "$k"
 }
 # Checks an Ed25519 signature with $1: openssl (pkeyutl -rawin, OpenSSL 3.0 and newer) or node (OpenSSL 1.1.1, as
-# on Ubuntu 20.04 and Debian 11, can't check them at all; Hearth needs Node outside Docker anyway).
+# on Ubuntu 20.04 and Debian 11, can't check them at all; Cindrly needs Node outside Docker anyway).
 NODE_VERIFY='const c=require("node:crypto"),f=require("node:fs"),[k,m,s]=process.argv.slice(1);process.exit(c.verify(null,f.readFileSync(m),c.createPublicKey({key:Buffer.from(k,"base64"),format:"der",type:"spki"}),f.readFileSync(s))?0:1)'
 ed25519_with() { # $1 = openssl or node, $2 = public key (base64), $3 = message file, $4 = signature file
   local v rc=1
@@ -298,7 +298,7 @@ ed25519_with() { # $1 = openssl or node, $2 = public key (base64), $3 = message 
       printf -- '-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----\n' "$2" > "$v/key.pem"
       openssl pkeyutl -verify -pubin -inkey "$v/key.pem" -rawin -in "$3" -sigfile "$4" >/dev/null 2>&1 && rc=0
       rm -rf "$v" ;;
-    node) (cd / && NODE_OPTIONS='' node -e "$NODE_VERIFY" "$2" "$3" "$4") >/dev/null 2>&1 && rc=0 ;; # (nothing from the Hearth folder)
+    node) (cd / && NODE_OPTIONS='' node -e "$NODE_VERIFY" "$2" "$3" "$4") >/dev/null 2>&1 && rc=0 ;; # (nothing from the Cindrly folder)
   esac
   return "$rc"
 }
@@ -328,8 +328,8 @@ sig_ok() { # $1 = the zip's SHA-256, $2 = signature (base64), $3 = public key: i
 }
 # Is file $1 root's alone: root's, not a link, not writable by anyone else, and in folders only root can change all
 # the way up? (A folder everyone may write to is fine when it's sticky, like /tmp: others can't rename root's files
-# in it.) The installed Hearth's update-signing.pub is only trusted like that: a Hearth folder that belongs to
-# Hearth's own account (plain installs) would let that account choose the key root pins.
+# in it.) The installed Cindrly's update-signing.pub is only trusted like that: a Cindrly folder that belongs to
+# Cindrly's own account (plain installs) would let that account choose the key root pins.
 root_only() {
   [ -f "$1" ] && [ ! -L "$1" ] || return 1
   local d u m; d="$(readlink -f "$(dirname "$1")")" && [ -n "$d" ] || return 1
@@ -344,7 +344,7 @@ root_only() {
 }
 write_pin() { # $1 = key, $2 = where it came from. Replaces $PIN in one step, never writing through a link.
   local t; t="$(mktemp "$PIN.XXXXXX" 2>/dev/null)" || return 1
-  if printf '# Hearth server update signing key, pinned by hearth-update on %s (%s).\n# This server only installs updates signed with it (docs/SIGNING.md). Delete this file to stop checking.\n%s\n' \
+  if printf '# Cindrly server update signing key, pinned by hearth-update on %s (%s).\n# This server only installs updates signed with it (docs/SIGNING.md). Delete this file to stop checking.\n%s\n' \
        "$(date +%F)" "$2" "$1" > "$t" && chmod 644 "$t" && mv -fT "$t" "$PIN"; then return 0; fi
   rm -f "$t"; return 1
 }
@@ -379,15 +379,15 @@ check_update() { # $1 = the zip as given (its .sha256 and .sig are next to it), 
     from="pinned in $PIN"
     key="$(key_in < "$PIN" 2>/dev/null)" || { key=""; bad="can't be checked: $PIN isn't an update signing key (fix it, or delete it to stop checking)"; }
   elif [ -f "$DIR/update-signing.pub" ]; then
-    from="it came with the installed Hearth"
+    from="it came with the installed Cindrly"
     if ! root_only "$DIR/update-signing.pub"; then
-      warn "The installed Hearth's update-signing.pub (or a folder it's in) can be changed by an account other than root, so it isn't trusted: the first update that brings a key pins that one."
+      warn "The installed Cindrly's update-signing.pub (or a folder it's in) can be changed by an account other than root, so it isn't trusted: the first update that brings a key pins that one."
     elif ! key="$(key_in < "$DIR/update-signing.pub")"; then
-      key=""; bad="can't be checked: the installed Hearth's update-signing.pub isn't an update signing key"
+      key=""; bad="can't be checked: the installed Cindrly's update-signing.pub isn't an update signing key"
     elif ! can_verify; then
-      key=""; warn "The installed Hearth has an update signing key, but $CANT_VERIFY, so it isn't pinned: updates are only checked against their checksum."
+      key=""; warn "The installed Cindrly has an update signing key, but $CANT_VERIFY, so it isn't pinned: updates are only checked against their checksum."
     elif [ "$ACTION" = update ]; then
-      if write_pin "$key" "$from"; then ok "Pinned the update signing key that came with this Hearth ($key): this server now only installs updates signed with it."
+      if write_pin "$key" "$from"; then ok "Pinned the update signing key that came with this Cindrly ($key): this server now only installs updates signed with it."
       else warn "Couldn't save the update signing key to $PIN, so it's only used for this update."; fi
     fi
   fi
@@ -415,7 +415,7 @@ check_update() { # $1 = the zip as given (its .sha256 and .sig are next to it), 
     loud "Going ahead anyway because of --allow-unsigned. Only do this with an update you checked yourself: its SHA-256 is"
     loud "$SUM. Compare it with the one its publisher posted somewhere other than the download."
   fi
-  unzip -Z1 "$2" 'hearth/server/index.js' >/dev/null 2>&1 || die "$name doesn't look like a Hearth update."
+  unzip -Z1 "$2" 'hearth/server/index.js' >/dev/null 2>&1 || die "$name doesn't look like a Cindrly update."
   # A server that checks signatures never goes back to an older version by itself: an old, signed update could
   # bring back problems fixed since. (The zip's contents are only read once its signature checked out.)
   if [ -n "$key$bad" ]; then
@@ -425,7 +425,7 @@ check_update() { # $1 = the zip as given (its .sha256 and .sig are next to it), 
       else
         warn "To undo an update, use hearth-update --rollback (it puts back your own backup). To install this older one anyway,"
         warn "  put it and its .sig on the server and run there: sudo hearth-update --allow-downgrade /path/to/the.zip."
-        die "$name is Hearth $new, older than the installed $(version). Nothing was changed."
+        die "$name is Cindrly $new, older than the installed $(version). Nothing was changed."
       fi
     fi
   fi
@@ -439,13 +439,13 @@ pin_key() {
   [ "$new" != "$old" ] || return 0
   # A key this server can't check would refuse every later update, so it stays on checksums instead.
   if ! can_verify; then warn "This update brings an update signing key ($new), but $CANT_VERIFY, so it isn't pinned: updates stay checked against their checksum only."; return 0; fi
-  if ! write_pin "$new" "it came with Hearth $(version)"; then warn "Couldn't save the update signing key to $PIN."; return 0; fi
+  if ! write_pin "$new" "it came with Cindrly $(version)"; then warn "Couldn't save the update signing key to $PIN."; return 0; fi
   if [ -z "$old" ]; then ok "This server now only installs updates signed with the key this update brought: $new (pinned in $PIN)."
   elif [ "$UNVERIFIED" = 1 ]; then loud "The update signing key is now $new: it came with an update installed with --allow-unsigned."
   else ok "The update signing key is now $new. This update was signed with the previous key, so the change is trusted."; fi
 }
 
-# Behind Caddy (Docker setup): make Caddy hold requests for a moment while Hearth restarts, instead of
+# Behind Caddy (Docker setup): make Caddy hold requests for a moment while Cindrly restarts, instead of
 # showing "502 Bad Gateway". Only touches that one setting, validates with Caddy, and undoes it on any doubt.
 patch_caddy() {
   [ "$MODE" = docker ] || return 0
@@ -464,7 +464,7 @@ patch_caddy() {
     if ($0 ~ /^[[:space:]]*reverse_proxy[[:space:]]+hearth:3000[[:space:]]*$/) {
       match($0, /^[[:space:]]*/); ind = substr($0, 1, RLENGTH)
       print ind "reverse_proxy hearth:3000 {"
-      print ind "\t# Hold requests while Hearth restarts (updates) instead of showing an error page."
+      print ind "\t# Hold requests while Cindrly restarts (updates) instead of showing an error page."
       print ind "\tlb_try_duration 30s"
       print ind "\tlb_try_interval 250ms"
       print ind "}"
@@ -479,18 +479,18 @@ patch_caddy() {
     warn "Couldn't update Caddy's settings automatically, so they were left exactly as they were."
   fi
 }
-# Who may tell Hearth a visitor's address (TRUST_PROXY). Older versions believed X-Forwarded-For from every
+# Who may tell Cindrly a visitor's address (TRUST_PROXY). Older versions believed X-Forwarded-For from every
 # private address; from this version on only from this machine, unless TRUST_PROXY says more. The update never
 # replaces docker-compose.yml, and older ones don't name Caddy's network, so without this every visitor behind
 # Caddy would share Caddy's address: one set of login and sign-up limits for everyone, and an IP ban on that
 # address would lock everyone out.
-trust_set() { # is TRUST_PROXY set anywhere Hearth would read it?
+trust_set() { # is TRUST_PROXY set anywhere Cindrly would read it?
   grep -Eq '^[[:space:]]*(export[[:space:]]+)?TRUST_PROXY[[:space:]]*=' .env 2>/dev/null && return 0
   [ "$MODE" = docker ] && grep -Eq '^[[:space:]]*(-[[:space:]]*)?"?TRUST_PROXY"?[[:space:]]*[:=]' docker-compose.yml 2>/dev/null && return 0
   [ "$MODE" = systemd ] && systemctl show -p Environment --value "$UNIT" 2>/dev/null | grep -q 'TRUST_PROXY=' && return 0
   return 1
 }
-behind_proxy() { # HTTPS=false: something in front of Hearth handles HTTPS
+behind_proxy() { # HTTPS=false: something in front of Cindrly handles HTTPS
   [ "$(envval HTTPS | tr '[:upper:]' '[:lower:]')" = false ] && return 0
   [ "$MODE" = docker ] && grep -Eiq '^[[:space:]]*(-[[:space:]]*)?"?HTTPS"?[[:space:]]*[:=][[:space:]]*"?false' docker-compose.yml 2>/dev/null && return 0
   [ "$MODE" = systemd ] && systemctl show -p Environment --value "$UNIT" 2>/dev/null | grep -Eiq '(^|[[:space:]])HTTPS=false' && return 0
@@ -501,38 +501,38 @@ trust_proxy_upgrade() {
   if [ "$MODE" != docker ]; then
     # Only when coming from the old rule, and only behind a proxy: a proxy on this machine needs nothing.
     [ "$OLD_TRUST_RULE" = 1 ] && behind_proxy && ! trust_set || return 0
-    warn "Heads-up: Hearth now only believes the visitor address a reverse proxy passes on (X-Forwarded-For) when"
+    warn "Heads-up: Cindrly now only believes the visitor address a reverse proxy passes on (X-Forwarded-For) when"
     warn "  the proxy runs on this machine. If yours runs anywhere else (another server, or nginx/Caddy in a container),"
-    warn "  add TRUST_PROXY=<its address or subnet> to $DIR/.env and restart Hearth. Otherwise every visitor shares"
-    warn "  the proxy's address (one set of login limits for everyone). Hearth's log names the address once it sees it."
+    warn "  add TRUST_PROXY=<its address or subnet> to $DIR/.env and restart Cindrly. Otherwise every visitor shares"
+    warn "  the proxy's address (one set of login limits for everyone). Cindrly's log names the address once it sees it."
     return 0
   fi
   # A number of proxies (the old instructions said TRUST_PROXY=1) believes whoever connects, so it's only safe
   # while port 3000 answers on this machine alone.
   local hops; hops="$(envval TRUST_PROXY | tr '[:upper:]' '[:lower:]')"
   if [[ "$hops" =~ ^([1-9][0-9]*|true|yes|on)$ ]] && [[ ! "$(envval HEARTH_BIND)" =~ ^(127\.0\.0\.1|localhost|::1|\[::1\])$ ]]; then
-    warn "TRUST_PROXY=$(envval TRUST_PROXY) in .env believes any address in front of Hearth, but port 3000 isn't limited to this"
+    warn "TRUST_PROXY=$(envval TRUST_PROXY) in .env believes any address in front of Cindrly, but port 3000 isn't limited to this"
     warn "  machine (HEARTH_BIND=127.0.0.1), so someone reaching it directly could pick their own address. With the bundled"
     warn "  Caddy, delete the TRUST_PROXY line (docker-compose.yml already trusts Caddy's network); otherwise set HEARTH_BIND=127.0.0.1."
   fi
   trust_set && return 0
-  # Trust the private network Hearth shares with Caddy ("proxy" in docker-compose.yml): only those two are on it.
+  # Trust the private network Cindrly shares with Caddy ("proxy" in docker-compose.yml): only those two are on it.
   local cid net sub=""
   cid="$($DC ps -a -q hearth 2>/dev/null | head -1 || true)"
   net="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "$cid" 2>/dev/null | grep -E '(^|_)proxy$' | head -1 || true)"
   [ -n "$net" ] && sub="$(docker network inspect -f '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' "$net" 2>/dev/null | grep -E '^[0-9A-Fa-f.:]+/[0-9]+$' | paste -sd, - || true)"
-  # (.env is passed to Hearth by docker-compose.yml's env_file. Never written through a link; a new one is private.)
+  # (.env is passed to Cindrly by docker-compose.yml's env_file. Never written through a link; a new one is private.)
   if [ -n "$sub" ] && grep -q 'env_file' docker-compose.yml && [ ! -L .env ] \
      && { [ -e .env ] || (umask 077 && : > .env); } \
      && { if [ -s .env ] && [ -n "$(tail -c 1 .env)" ]; then echo; fi
-          printf '# Added by hearth-update on %s: only Caddy, on the private "%s" network, may tell Hearth\n# who a visitor is (older versions believed every private address).\nTRUST_PROXY=%s\n' "$(date +%F)" "$net" "$sub"; } >> .env; then
-    ok "Visitors' addresses: Hearth now only believes Caddy's network, $sub (added TRUST_PROXY=$sub to .env)."
+          printf '# Added by hearth-update on %s: only Caddy, on the private "%s" network, may tell Cindrly\n# who a visitor is (older versions believed every private address).\nTRUST_PROXY=%s\n' "$(date +%F)" "$net" "$sub"; } >> .env; then
+    ok "Visitors' addresses: Cindrly now only believes Caddy's network, $sub (added TRUST_PROXY=$sub to .env)."
     if behind_proxy && [ -z "$($DC --profile domain ps -q caddy 2>/dev/null || true)" ]; then
-      warn "Hearth is behind a proxy, but this folder's Caddy isn't running. If your proxy is something else, add its address or"
-      warn "  subnet to TRUST_PROXY in .env (comma-separated) and run: docker compose up -d. Hearth's log names it once it sees it."
+      warn "Cindrly is behind a proxy, but this folder's Caddy isn't running. If your proxy is something else, add its address or"
+      warn "  subnet to TRUST_PROXY in .env (comma-separated) and run: docker compose up -d. Cindrly's log names it once it sees it."
     fi
   else
-    warn "Heads-up: Hearth now only believes the visitor address a reverse proxy passes on (X-Forwarded-For) from the proxy"
+    warn "Heads-up: Cindrly now only believes the visitor address a reverse proxy passes on (X-Forwarded-For) from the proxy"
     warn "  named in TRUST_PROXY, none is named here, and this update couldn't add it to .env by itself. Add TRUST_PROXY=<your"
     warn "  proxy's address or subnet> to .env (for this folder's Caddy: the subnet of its \"proxy\" network, see docker network"
     warn "  inspect), then run: docker compose up -d. Otherwise every visitor shares the proxy's address (one set of login"
@@ -574,8 +574,8 @@ if [ "$ACTION" = verify ]; then
   WORK="$(mktemp -d)"
   cp -- "$ARG" "$WORK/update.zip" || die "Couldn't copy the update into a private folder (is the disk full?)."
   check_update "$ARG" "$WORK/update.zip"
-  if [ "$UNVERIFIED" = 1 ]; then loud "$(basename "$ARG") (Hearth $(zip_version "$WORK/update.zip")) is NOT verified; it would only be installed because of --allow-unsigned."
-  else ok "$(basename "$ARG") (Hearth $(zip_version "$WORK/update.zip")) passed the checks for this server (installed: $(version))."; fi
+  if [ "$UNVERIFIED" = 1 ]; then loud "$(basename "$ARG") (Cindrly $(zip_version "$WORK/update.zip")) is NOT verified; it would only be installed because of --allow-unsigned."
+  else ok "$(basename "$ARG") (Cindrly $(zip_version "$WORK/update.zip")) passed the checks for this server (installed: $(version))."; fi
   exit 0
 fi
 
@@ -589,7 +589,7 @@ if [ "$ACTION" = list ]; then
 fi
 
 if [ "$ACTION" = logs ]; then
-  printf 'Last log lines of Hearth (%s, %s):\n\n' "$DIR" "$MODE"
+  printf 'Last log lines of Cindrly (%s, %s):\n\n' "$DIR" "$MODE"
   case $MODE in
     docker) $DC logs --tail 80 hearth 2>&1 || true ;;
     systemd) journalctl -u "$UNIT" -n 80 --no-pager || true ;;
@@ -602,7 +602,7 @@ fi
 if [ "$ACTION" = status ]; then
   printf '\n%sHearth status%s\n' "$c_b" "$c_0"
   printf '  folder:    %s\n  runs as:   %s%s\n  version:   %s\n  port:      %s\n' "$DIR" "$MODE" "${UNIT:+ ($UNIT)}" "$(version)" "$PORT"
-  if healthy 3; then ok "Hearth is answering."; else warn "Hearth is not answering right now. See: hearth-update --logs"; fi
+  if healthy 3; then ok "Cindrly is answering."; else warn "Cindrly is not answering right now. See: hearth-update --logs"; fi
   printf '  free disk: %s MB\n' "$(free_mb "$DIR")"
   printf '  database:  %s\n' "$(du -sh data/hearth.db 2>/dev/null | cut -f1 || echo '?')"
   printf '  backups:   %s in %s (newest: %s)\n' "$(backups | wc -l)" "$BACKUP_ROOT" "$(basename "$(backups | head -1)" 2>/dev/null || echo none)"
@@ -610,11 +610,11 @@ if [ "$ACTION" = status ]; then
     printf '  update key: %s (pinned in %s: only updates signed with it are installed)\n' "$(key_in < "$PIN" 2>/dev/null || echo 'not a key, so every update is refused')" "$PIN"
     can_verify || warn "But $CANT_VERIFY, so every update is refused until one of them is installed (or $PIN is deleted)."
   elif ! can_verify; then printf "  update key: none (%s, so updates are only checked against their .sha256)\n" "$CANT_VERIFY"
-  elif [ -f update-signing.pub ] && root_only "$DIR/update-signing.pub"; then printf '  update key: none pinned yet (the next update pins the one this Hearth came with)\n'
-  elif [ -f update-signing.pub ]; then printf "  update key: none pinned yet (this Hearth's update-signing.pub isn't root's alone, so the first update that brings a key pins that one)\n"
+  elif [ -f update-signing.pub ] && root_only "$DIR/update-signing.pub"; then printf '  update key: none pinned yet (the next update pins the one this Cindrly came with)\n'
+  elif [ -f update-signing.pub ]; then printf "  update key: none pinned yet (this Cindrly's update-signing.pub isn't root's alone, so the first update that brings a key pins that one)\n"
   else printf '  update key: none (updates are only checked against their .sha256)\n'; fi
   [ -f .env ] || warn "There's no .env file, so every setting is at its default (that's fine for a quick start)."
-  # How many connections Hearth may hold open (each open app window is one).
+  # How many connections Cindrly may hold open (each open app window is one).
   HPID=""
   case $MODE in
     docker) HPID="$(docker inspect -f '{{.State.Pid}}' "$($DC ps -q hearth 2>/dev/null | head -1)" 2>/dev/null || true)" ;;
@@ -625,7 +625,7 @@ if [ "$ACTION" = status ]; then
     NOFILE="$(awk '/Max open files/ { print $4 }' "/proc/$HPID/limits")"
     printf '  max connections: about %s\n' "$NOFILE"
     if [ "${NOFILE:-0}" -lt 10000 ] 2>/dev/null; then
-      warn "Hearth can only keep about $NOFILE connections open, so roughly that many people can be online. Raise it: systemd: add LimitNOFILE=65535 under [Service] in $UNIT; Docker: add 'ulimits: nofile: 65535' to the hearth service in docker-compose.yml. Then restart."
+      warn "Cindrly can only keep about $NOFILE connections open, so roughly that many people can be online. Raise it: systemd: add LimitNOFILE=65535 under [Service] in $UNIT; Docker: add 'ulimits: nofile: 65535' to the hearth service in docker-compose.yml. Then restart."
     fi
   fi
   if [ "$MODE" = docker ] && [ -f deploy/Caddyfile ] && grep -q 'chat.example.com' deploy/Caddyfile && [ -n "$($DC --profile domain ps -q caddy 2>/dev/null || true)" ]; then
@@ -679,7 +679,7 @@ NEW="$WORK/hearth"
 ok "New version: $(version "$NEW")"
 # Keep the updater itself up to date too (when run as "hearth-update <zip>", the old copy is what's running).
 if [ -f "$NEW/scripts/hearth-update.sh" ]; then install_updater "$NEW/scripts/hearth-update.sh" || warn "Couldn't update $BIN; it stays the old version."; fi
-# Plain mode with the program files owned by Hearth's user: that user prepares the new version, and the files
+# Plain mode with the program files owned by Cindrly's user: that user prepares the new version, and the files
 # it ends up with stay that user's, as they were before the update.
 if [ "$STAGE_AS" != root ]; then chmod 711 "$WORK"; chown -R "$STAGE_AS:" "$NEW"; fi
 
@@ -715,7 +715,7 @@ ok "Ready."
 trust_proxy_upgrade
 patch_caddy || true
 
-step "Switching over (people with Hearth open see \"Updating…\" for a moment)…"
+step "Switching over (people with Cindrly open see \"Updating…\" for a moment)…"
 T0=$(date +%s%N)
 stop_app
 mkdir -p "$BK/data"
@@ -730,14 +730,14 @@ start_app
 step "Checking the new version answers…"
 if healthy; then
   T1=$(date +%s%N)
-  ok "Hearth $(version) is running. Offline for $(awk "BEGIN { printf \"%.1f\", ($T1 - $T0) / 1e9 }") seconds."
+  ok "Cindrly $(version) is running. Offline for $(awk "BEGIN { printf \"%.1f\", ($T1 - $T0) / 1e9 }") seconds."
   ok "Your database was backed up to $BK"
   pin_key || true
   if [ "$UNVERIFIED" = 1 ]; then loud "This update was installed WITHOUT a valid signature (--allow-unsigned)."; fi
   if [ "$MODE" = docker ]; then docker image prune -f >/dev/null 2>&1 || true; fi
   backups | tail -n +$((KEEP + 1)) | xargs -r -d '\n' rm -rf
   printf 'Log saved to %s\n' "$LOG"
-  printf '\nPeople with Hearth open saw "Updating…" briefly and were switched to the new version automatically.\nTo undo this update later: %shearth-update --rollback%s   (status: hearth-update --status)\n' "$c_b" "$c_0"
+  printf '\nPeople with Cindrly open saw "Updating…" briefly and were switched to the new version automatically.\nTo undo this update later: %shearth-update --rollback%s   (status: hearth-update --status)\n' "$c_b" "$c_0"
 else
   warn "The new version didn't come up. Its last log lines:"
   show_logs || true

@@ -1,6 +1,6 @@
 # Bots and integrations
 
-Hearth bots are programs that act in a server with only the access its owner approves. A bot can post
+Cindrly bots are programs that act in a server with only the access its owner approves. A bot can post
 messages, add reactions, offer slash commands and hear about what happens through signed webhooks. The code is
 in `server/bots.js` (server), `public/js/bots.js` (app) and `scripts/example-bot.js` (a working example).
 
@@ -26,7 +26,7 @@ readable to give a bot, and bots never get the server key (they aren't members).
 | **Scopes** | What an installation may do. Nothing by default. A server can only grant scopes the bot asks for. |
 | **Channel allow-list** | `"*"` (every channel @everyone can see, including ones made later) or a list of channel ids the installer picked. Private channels must be listed by someone who can see them. |
 | **Token** | `hb_<16 hex>.<43 base64url>`, 256 random bits. Whole-bot, or limited to one installation. |
-| **Webhook** | An https address Hearth POSTs signed events to. |
+| **Webhook** | An https address Cindrly POSTs signed events to. |
 | **Built-in news bot** | `server/newsbot.js`, unchanged. It keeps its own tables (`feeds`) and tab, and is listed under "Built in" in Server settings → Bots. |
 
 Who can do what:
@@ -65,11 +65,11 @@ Every API call and every event checks the scope and the channel allow-list on th
 - **One-server tokens** (`installationId`) only work for that installation. They can't register commands.
   They're deleted when the bot is removed from that server.
 - Making, rotating and revoking tokens is recorded in the audit log, by token id, never the token.
-- Hearth never logs tokens. Keep them out of git, chat and URLs.
+- Cindrly never logs tokens. Keep them out of git, chat and URLs.
 
 ## 5. Bot API reference
 
-Base URL: `https://<your hearth>/api/bot/v1`. JSON in and out. Every error looks like
+Base URL: `https://<your server>/api/bot/v1`. JSON in and out. Every error looks like
 `{ "error": "A sentence for people", "code": "machine_code" }`.
 
 | Code | Status | Meaning |
@@ -123,7 +123,7 @@ Content is Markdown, up to 2000 characters, and goes through the instance word f
 
 ## 6. Events (webhooks)
 
-Hearth POSTs each event to the bot's webhook address as JSON:
+Cindrly POSTs each event to the bot's webhook address as JSON:
 
 ```json
 {
@@ -152,7 +152,7 @@ each attempt), `X-Hearth-Signature: v1=<hex>`, `Content-Type: application/json`.
 | `bot.uninstalled` | always | `serverId` |
 | `command.invoked` | `commands`, channel allowed | `interactionId, command, args, channelId, userId, respondBy` |
 
-Rules Hearth keeps:
+Rules Cindrly keeps:
 
 - **Never about a channel the installation can't see.** With `"*"`, a channel that @everyone can't view is left
   out, even if it was public when the bot was added.
@@ -184,7 +184,7 @@ A new webhook secret (shown once, needs your password) takes effect on the next 
 
 ### Delivery, retries and dead letters
 
-- Hearth answers only to **https** addresses on the **public internet**. Webhook addresses go through
+- Cindrly answers only to **https** addresses on the **public internet**. Webhook addresses go through
   `server/netguard.js` when they're saved and again on every request: private, loopback, link-local (cloud
   metadata) and this server's own addresses are refused, DNS answers are pinned, and redirects aren't followed
   (a 3xx counts as a failure). `BOT_WEBHOOK_ALLOW_PRIVATE=1` lets an admin allow private addresses (for a bot
@@ -224,7 +224,7 @@ and says that the text goes to the bot without end-to-end encryption. The first 
 command, a dialog asks them to confirm. The server refuses the call unless the app says the warning was shown
 (`ack: true`) and checks the arguments again.
 
-Hearth then sends `command.invoked` **once** (no retries: the person is waiting) and is not stored. The bot answers
+Cindrly then sends `command.invoked` **once** (no retries: the person is waiting) and is not stored. The bot answers
 within **10 seconds**:
 
 ```json
@@ -236,7 +236,7 @@ POST /api/bot/v1/interactions/<interactionId>/callback
 An ephemeral answer goes over the invoker's own connection and is never stored. If nothing arrives in time, the
 person sees "Dice didn't answer". One answer per interaction.
 
-No bot code ever runs inside Hearth: commands are only forwarded to the bot's own server.
+No bot code ever runs inside Cindrly: commands are only forwarded to the bot's own server.
 
 ## 8. Rate limits
 
@@ -249,7 +249,7 @@ No bot code ever runs inside Hearth: commands are only forwarded to the bot's ow
 | Requests with a bad token | 30 per minute per address |
 | Running commands | 20 per 10 s per person, 60 per 10 s per bot |
 
-Limits are in memory (like the rest of Hearth's) and reset when the server restarts.
+Limits are in memory (like the rest of Cindrly's) and reset when the server restarts.
 
 ## 9. Local development
 
@@ -264,11 +264,11 @@ Limits are in memory (like the rest of Hearth's) and reset when the server resta
 
 3. Set the bot's webhook address to where it listens, then add it to a server and try `/roll 20`.
 
-For a Hearth and a bot on the same machine or network (development only):
+For a Cindrly and a bot on the same machine or network (development only):
 
-- `BOT_WEBHOOK_ALLOW_PRIVATE=1` in Hearth's environment allows private addresses such as `https://127.0.0.1:8443/`.
-- For a self-signed certificate, start Hearth with `NODE_EXTRA_CA_CERTS=/path/to/cert.pem` so it trusts it.
-  Hearth never turns certificate checks off.
+- `BOT_WEBHOOK_ALLOW_PRIVATE=1` in Cindrly's environment allows private addresses such as `https://127.0.0.1:8443/`.
+- For a self-signed certificate, start Cindrly with `NODE_EXTRA_CA_CERTS=/path/to/cert.pem` so it trusts it.
+  Cindrly never turns certificate checks off.
 
 Tuning (rarely needed): `BOT_WEBHOOK_TIMEOUT_MS` (5000), `BOT_RETRY_BASE_MS` (15000),
 `BOT_INTERACTION_TIMEOUT_MS` (10000), `BOT_MAX_CONCURRENCY` (4).
@@ -280,13 +280,13 @@ Tests: `test/bots.test.js` (the platform, against local mock HTTPS servers) and 
 
 For programs that only need to **post**, a channel can have webhook addresses, like Discord's. Uptime Kuma,
 Grafana, Home Assistant, Jellyfin, GitHub Actions and most CI tools already post to Discord webhook URLs: paste a
-Hearth one instead and they keep working, with no bot to write. The code is in `server/webhooks.js` (server) and
+Cindrly one instead and they keep working, with no bot to write. The code is in `server/webhooks.js` (server) and
 `public/js/webhooks.js` (Channel settings → Webhooks).
 
 ```
-https://<your hearth>/api/webhooks/<id>/<secret>          Discord-style JSON, Slack-style JSON or form, plain text
-https://<your hearth>/api/webhooks/<id>/<secret>/slack    Slack-style (text, attachments, blocks)
-https://<your hearth>/api/webhooks/<id>/<secret>/github   a GitHub repository webhook (content type application/json)
+https://<your server>/api/webhooks/<id>/<secret>          Discord-style JSON, Slack-style JSON or form, plain text
+https://<your server>/api/webhooks/<id>/<secret>/slack    Slack-style (text, attachments, blocks)
+https://<your server>/api/webhooks/<id>/<secret>/github   a GitHub repository webhook (content type application/json)
 ```
 
 **Who:** people with **Manage Channels** in that channel (and server-wide), or **Manage Server**, can make, rename,
@@ -299,13 +299,13 @@ in group chats. Up to 10 per channel and 50 per server.
 - A webhook belongs to whoever made its **current address** (`created_by`; re-keying moves it to the person who
   re-keyed). Anyone else can rename, re-key, delete it or change its pings only if their highest role is above that
   person's, or that person has left the server. Roles members pick themselves don't count here, on either side, so
-  picking one neither protects your webhook nor gets you past someone else's. Hearth has no separate Manage
+  picking one neither protects your webhook nor gets you past someone else's. Cindrly has no separate Manage
   Webhooks permission.
 
 **The address is the password.** Its secret (256 random bits) is shown once; only `SHA-256(id.secret)` is kept.
 "New address" replaces it at once (the old one stops working). Making, changing, re-keying and deleting are in the
 audit log (`webhook_created`, `webhook_changed`, `webhook_token_rotated`, `webhook_deleted`), by id, never the
-secret. A wrong id and a wrong secret get the same `404 Unknown Webhook`. Hearth doesn't log full request
+secret. A wrong id and a wrong secret get the same `404 Unknown Webhook`. Cindrly doesn't log full request
 addresses, but a proxy in front of it might: keep its access log private, or re-key a webhook if it leaks.
 
 **What a post looks like.** It comes from the webhook's own bot account (`users.is_bot = 1`, no `bots` row: it

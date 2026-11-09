@@ -1,4 +1,4 @@
-// Import from Discord, phase 1: a Discord server template becomes a plan for a new Hearth server (roles,
+// Import from Discord, phase 1: a Discord server template becomes a plan for a new Cindrly server (roles,
 // categories, channels and channel permissions). See docs/design/DISCORD-IMPORT.md and docs/IMPORT.md.
 //
 // Pure: no database, no network, no clock. The same input always gives the same plan, so server/imports.js runs
@@ -9,16 +9,16 @@
 // known fields are read, each with a type check; input objects are never spread or used as maps, so keys like
 // __proto__ and constructor are inert.
 //
-// The permission rule: grant no more than Discord did where Hearth can say so, and list everything else before
+// The permission rule: grant no more than Discord did where Cindrly can say so, and list everything else before
 // anything is created.
-//   - A role gets a Hearth permission only if it had every Discord permission behind it.
-//   - In a channel override, Hearth allows a permission only if Discord allowed every permission behind it, and
+//   - A role gets a Cindrly permission only if it had every Discord permission behind it.
+//   - In a channel override, Cindrly allows a permission only if Discord allowed every permission behind it, and
 //     denies it if Discord denied any of them. Only per-channel permissions are kept (as PUT /channels/:id/overrides).
-//   - What Hearth has no equivalent for is listed ("lost" for roles, "dropped" for overrides).
-//   - What Hearth allows anyway is listed as "widened": things Discord could withhold but Hearth can't (reading
-//     history, screen share, polls…) whenever @everyone lacks them or an override denies them; what a Hearth
+//   - What Cindrly has no equivalent for is listed ("lost" for roles, "dropped" for overrides).
+//   - What Cindrly allows anyway is listed as "widened": things Discord could withhold but Cindrly can't (reading
+//     history, screen share, polls…) whenever @everyone lacks them or an override denies them; what a Cindrly
 //     permission bundles that the role didn't have in Discord (Kick members also times out, Manage channels also
-//     manages webhooks…); and per-channel denies of what Hearth only has server-wide (Create invite, Mute members).
+//     manages webhooks…); and per-channel denies of what Cindrly only has server-wide (Create invite, Mute members).
 const { PERMS: P, CHANNEL_SCOPED } = require('./perms');
 
 class ImportError extends Error {
@@ -48,7 +48,7 @@ const MASK64 = (1n << 64n) - 1n;
 const split = (b) => [Number(b & 0xffffffffn), Number((b >> 32n) & 0xffffffffn)];
 const u32 = (x) => x >>> 0;
 
-// Hearth permission ← the Discord permissions behind it (all of them, for a role or an allow).
+// Cindrly permission ← the Discord permissions behind it (all of them, for a role or an allow).
 const MAP = [
   ['VIEW_CHANNEL', ['VIEW_CHANNEL']],
   ['SEND_MESSAGES', ['SEND_MESSAGES']],
@@ -65,7 +65,7 @@ const MAP = [
   ['MANAGE_ROLES', ['MANAGE_ROLES']],
   ['MANAGE_SERVER', ['MANAGE_GUILD']],
   ['MANAGE_EMOJIS', ['MANAGE_GUILD_EXPRESSIONS']],
-  // Hearth's "Reply in threads" both starts threads and posts in them.
+  // Cindrly's "Reply in threads" both starts threads and posts in them.
   ['CREATE_THREADS', ['SEND_MESSAGES_IN_THREADS', 'CREATE_PUBLIC_THREADS']],
   ['EMBED_LINKS', ['EMBED_LINKS']],
   ['MUTE_MEMBERS', ['MUTE_MEMBERS']],
@@ -81,18 +81,18 @@ const MAP = [
   ['ADMINISTRATOR', ['ADMINISTRATOR']],
 ].map(([h, ds]) => { const [lo, hi] = split(ds.reduce((m, d) => m | D(d), 0n)); return { hearth: P[h], lo, hi }; });
 
-// Things Discord can withhold but Hearth always allows to anyone who can see the channel (or post, or join the
+// Things Discord can withhold but Cindrly always allows to anyone who can see the channel (or post, or join the
 // call). Having them in Discord loses nothing; lacking them is a widening, and gets a warning.
 const WIDENED = ['READ_MESSAGE_HISTORY', 'STREAM', 'USE_VAD', 'USE_APPLICATION_COMMANDS', 'USE_EMBEDDED_ACTIVITIES',
   'SEND_VOICE_MESSAGES', 'SEND_POLLS', 'CREATE_EVENTS'];
 const WIDENED_MASK = WIDENED.reduce((m, d) => m | D(d), 0n);
 const [WIDE_LO, WIDE_HI] = split(WIDENED_MASK);
-// Also always allowed, but harmless: custom emoji from any server can be used anywhere in Hearth.
+// Also always allowed, but harmless: custom emoji from any server can be used anywhere in Cindrly.
 const [ALWAYS_LO, ALWAYS_HI] = split(WIDENED_MASK | D('USE_EXTERNAL_EMOJIS'));
-// Discord permissions that are part of a broader Hearth one: not lost when the role ends up with it.
+// Discord permissions that are part of a broader Cindrly one: not lost when the role ends up with it.
 const COVERED = [
   ['PIN_MESSAGES', P.MANAGE_MESSAGES], ['BYPASS_SLOWMODE', P.MANAGE_MESSAGES],
-  ['MODERATE_MEMBERS', P.KICK_MEMBERS], // Hearth timeouts need Kick Members
+  ['MODERATE_MEMBERS', P.KICK_MEMBERS], // Cindrly timeouts need Kick Members
   ['MANAGE_EVENTS', P.MANAGE_SERVER | P.MANAGE_CHANNELS], // so do editing and deleting others' events
   ['MANAGE_WEBHOOKS', P.MANAGE_SERVER | P.MANAGE_CHANNELS], // channel webhooks (server/webhooks.js)
   ['CREATE_GUILD_EXPRESSIONS', P.MANAGE_EMOJIS],
@@ -111,12 +111,12 @@ function small(bits) {
   return out;
 }
 const smallNames = (v) => SMALL.filter((n, i) => v & (1 << i));
-// The other way round: what a Hearth permission lets someone do beyond its Discord namesake, in those terms.
-// base: Hearth permissions server-wide; chan: in one channel (or base again).
+// The other way round: what a Cindrly permission lets someone do beyond its Discord namesake, in those terms.
+// base: Cindrly permissions server-wide; chan: in one channel (or base again).
 //   - Kick members also times people out (server/usability.js).
 //   - Manage channels or Manage server also manage webhooks (server/webhooks.js) and anyone's events (index.js).
 //   - Manage messages also pins; Manage messages or Manage channels (in that channel) also skip slowmode.
-//   - Create invites and Mute members exist only server-wide in Hearth: no channel can take them away.
+//   - Create invites and Mute members exist only server-wide in Cindrly: no channel can take them away.
 function abilities(base, chan) {
   let d = 0;
   if (base & P.KICK_MEMBERS) d |= S.MODERATE_MEMBERS;
@@ -140,7 +140,7 @@ function namesOf(lo, hi) {
   return out;
 }
 const names = (bits) => (bits ? namesOf(...split(bits)) : []);
-// Rest less what a broader Hearth permission in `granted` covers, as [lo, hi].
+// Rest less what a broader Cindrly permission in `granted` covers, as [lo, hi].
 function uncovered(lo, hi, granted) {
   for (const c of COVERED) if (((lo & c.lo) || (hi & c.hi)) && (granted & c.by)) { lo &= ~c.lo; hi &= ~c.hi; }
   return [lo, hi];
@@ -154,18 +154,18 @@ function discordBits(v) {
   return null;
 }
 
-// A role's server-wide permissions. { permissions: Hearth bits, lost: Discord names it had that Hearth can't give }
+// A role's server-wide permissions. { permissions: Cindrly bits, lost: Discord names it had that Cindrly can't give }
 function mapRolePermissions(bits) {
   const [lo, hi] = split(bits);
   let hearth = 0; let uLo = 0; let uHi = 0;
   for (const m of MAP) if (hasAll(lo, hi, m)) { hearth |= m.hearth; uLo |= m.lo; uHi |= m.hi; }
-  // An Administrator can do everything Hearth has, so nothing it had is missing.
+  // An Administrator can do everything Cindrly has, so nothing it had is missing.
   if (hearth & P.ADMINISTRATOR) return { permissions: hearth, lost: [] };
   return { permissions: hearth, lost: namesOf(...uncovered(lo & ~uLo & ~ALWAYS_LO, hi & ~uHi & ~ALWAYS_HI, hearth)) };
 }
 
-// One channel override. { allow, deny: Hearth bits; dropped: Discord names that couldn't be set; widened: Discord
-// names it denied that Hearth always allows }. Allow and deny never overlap.
+// One channel override. { allow, deny: Cindrly bits; dropped: Discord names that couldn't be set; widened: Discord
+// names it denied that Cindrly always allows }. Allow and deny never overlap.
 function mapOverwrite(allow, deny) {
   const m = overwriteBits(allow, deny);
   return { allow: m.allow, deny: m.deny, dropped: namesOf(m.dropLo, m.dropHi), widened: namesOf(m.wideLo, m.wideHi) };
@@ -331,7 +331,7 @@ function parseTemplate(input) {
 
 // ------------------------------------------------------------------ the plan
 // The same rules as the server's own routes (server/index.js): names, colours, icons and categories end up exactly
-// as if someone had typed them into Hearth.
+// as if someone had typed them into Cindrly.
 const cleanChannelName = (name, type) => {
   let n = String(name || '').trim().slice(0, 48);
   if (type === 'text') n = n.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\-_]/g, '');
@@ -339,9 +339,9 @@ const cleanChannelName = (name, type) => {
 };
 const cleanCategory = (c) => String(c || '').trim().slice(0, 32);
 const cleanIcon = (i) => [...String(i || '')].slice(0, 2).join('');
-// Hearth's limits for one server: 100 roles counting @everyone (POST /servers/:id/roles), 50 categories in the
+// Cindrly's limits for one server: 100 roles counting @everyone (POST /servers/:id/roles), 50 categories in the
 // saved order (PATCH /servers/:id), 100 overrides per channel (PUT /channels/:id/overrides). Channels have no cap
-// of their own in Hearth; an import brings at most Discord's 500. Overrides in all, counting the ones a stage adds
+// of their own in Cindrly; an import brings at most Discord's 500. Overrides in all, counting the ones a stage adds
 // for its speakers, are capped too: every member's app loads all of them with the server.
 const LIMITS = Object.freeze({ roles: 99, channels: 500, categories: 50, overrides: 100, overridesTotal: 5000 });
 
@@ -351,7 +351,7 @@ const VOICE_TYPES = new Map([[2, null], [13, 'stage']]);
 // in that stage (Discord's rule for unsuppressing yourself), and Speak.
 const STAGE_SPEAKER = S.MUTE_MEMBERS | S.SPEAK;
 const speaksOnStage = (dp) => !!(dp & S.ADMINISTRATOR) || (dp & STAGE_SPEAKER) === STAGE_SPEAKER;
-// Moderator powers that @everyone shouldn't have without the person importing knowing. The same ones Hearth keeps
+// Moderator powers that @everyone shouldn't have without the person importing knowing. The same ones Cindrly keeps
 // out of roles people buy or pick themselves (memberships.js POWERFUL): renaming the people below you (Manage
 // Nicknames) and reading the audit log (who moderated whom) count too.
 const EVERYONE_MANAGE = P.MANAGE_SERVER | P.MANAGE_ROLES | P.MANAGE_CHANNELS | P.MANAGE_MESSAGES | P.MANAGE_EMOJIS
@@ -386,7 +386,7 @@ function planFromTemplate(guild, opts = {}) {
   const evBits = evRole.bits ?? 0n;
   const ev = mapRolePermissions(evBits);
   const dangerous = !!(ev.permissions & P.ADMINISTRATOR);
-  // What @everyone lacked in Discord but gets in Hearth (an Administrator lacked nothing).
+  // What @everyone lacked in Discord but gets in Cindrly (an Administrator lacked nothing).
   const everyone = { key: evRole.key, permissions: ev.permissions, lost: ev.lost, widened: dangerous ? [] : names(~evBits & WIDENED_MASK), dangerous };
   if (everyone.dangerous) warnings.push({ code: 'everyone_admin' });
   else if (ev.permissions & EVERYONE_MANAGE) warnings.push({ code: 'everyone_manage' });
@@ -405,7 +405,7 @@ function planFromTemplate(guild, opts = {}) {
       skip: r.managed ? 'managed' : skipRoles.has(r.key) ? 'excluded' : null, imageIcon: r.imageIcon && !r.emoji, bits: r.bits ?? 0n,
     };
   });
-  // Over Hearth's limit, the lowest roles stay behind (the person importing can untick others instead).
+  // Over Cindrly's limit, the lowest roles stay behind (the person importing can untick others instead).
   let room = lim.roles;
   for (let i = roles.length - 1; i >= 0; i--) if (!roles[i].skip) { if (room > 0) room--; else roles[i].skip = 'limit'; }
   const kept = roles.filter((r) => !r.skip);
@@ -416,8 +416,8 @@ function planFromTemplate(guild, opts = {}) {
   }
   const keptRoles = new Map(kept.map((r) => [r.key, r]));
   const allRoles = new Set(roles.map((r) => r.key));
-  // For @everyone ('everyone') and each kept role, someone holding just that role: Hearth and Discord permissions
-  // server-wide, what Hearth lets them do in Discord's terms (abilities), and what of that Discord didn't (wide).
+  // For @everyone ('everyone') and each kept role, someone holding just that role: Cindrly and Discord permissions
+  // server-wide, what Cindrly lets them do in Discord's terms (abilities), and what of that Discord didn't (wide).
   const facts = new Map();
   const evAbility = abilities(ev.permissions, ev.permissions); const evSmall = small(evBits);
   facts.set('everyone', { hBase: ev.permissions, dBase: evSmall, ability: evAbility, wide: dangerous ? 0 : evAbility & ~evSmall, admin: dangerous });
@@ -443,13 +443,13 @@ function planFromTemplate(guild, opts = {}) {
     if (skipChannels.has(c.key) || (parent && skipChannels.has(parent))) { ch.skip = 'excluded'; continue; }
     plain.push(ch);
     // Channels without a (known) category: text ones go first under "Text", voice ones last under "Voice", as
-    // Hearth does for new channels.
+    // Cindrly does for new channels.
     const g = parent || (kind === 'text' ? '' : '~');
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g).push(ch);
   }
   const groupOrder = [...(groups.has('') ? [''] : []), ...cats.map((c) => c.key).filter((k) => groups.has(k)), ...(groups.has('~') ? ['~'] : [])];
-  // Names: Discord categories keep theirs (made unique without regard to case, since Hearth groups channels by the
+  // Names: Discord categories keep theirs (made unique without regard to case, since Cindrly groups channels by the
   // name); "Text" and "Voice" for channels without one give way if a category already has that name.
   const taken = new Set();
   const unique = (base) => {
@@ -499,7 +499,7 @@ function planFromTemplate(guild, opts = {}) {
       // Overrides: one per target (Discord has one per target too; a repeat is merged). Discord's own are kept
       // alongside, merged the same way, to work out what each role could do here in Discord.
       const byTarget = new Map(); const raw = new Map();
-      // What couldn't be set (dropped) and what Hearth allows anyway (widened), as Discord bits.
+      // What couldn't be set (dropped) and what Cindrly allows anyway (widened), as Discord bits.
       let dropLo = 0; let dropHi = 0; let wideLo = 0; let wideHi = 0;
       for (const o of c.overwrites) {
         if (o.type === 'member' || (o.type === null && o.id !== null && !allRoles.has(o.id) && o.id !== everyoneKey)) { if (!notes.includes('member_overwrite_dropped')) notes.push('member_overwrite_dropped'); continue; }
@@ -545,8 +545,8 @@ function planFromTemplate(guild, opts = {}) {
       if (c.overwritesCut || overrides.slice(lim.overrides).some((o) => o.deny)) cutDenies.push(name);
       if (overrides.length > lim.overrides) { overrides = overrides.slice(0, lim.overrides); if (!notes.includes('override_limit')) notes.push('override_limit'); }
       if (!dangerous && (raw.size || overrides.length)) {
-        // What Hearth lets someone do here that Discord's overrides took away: a deny Hearth can't set per channel
-        // (Create invite, Mute members), or of something a Hearth permission bundles (Pin messages, Bypass
+        // What Cindrly lets someone do here that Discord's overrides took away: a deny Cindrly can't set per channel
+        // (Create invite, Mute members), or of something a Cindrly permission bundles (Pin messages, Bypass
         // slowmode, webhooks, events). Only where Discord let them see the channel: invites, say, still go
         // through the channels they could see. What's already listed for the role server-wide isn't repeated.
         const hBy = new Map(overrides.map((o) => [o.target, o]));
@@ -570,7 +570,7 @@ function planFromTemplate(guild, opts = {}) {
           const more = abilities(f.hBase, hIn(t)) & ~dp & PER_CHANNEL_ABILITY & ~f.wide & ~evWide;
           if (more) for (let i = 0; i < SMALL_AT.length; i++) if (more & (1 << i)) { const b = SMALL_AT[i]; if (b < 32) wideLo |= 1 << b; else wideHi |= 1 << (b - 32); }
         }
-        // Hearth honours Manage channels and Manage roles in a channel only for someone who has them server-wide
+        // Cindrly honours Manage channels and Manage roles in a channel only for someone who has them server-wide
         // (editing the channel, its permissions): granted just here, they don't do what they did in Discord.
         // Show link previews is the same: readers' apps check the sender's server-wide permission (perms.js
         // mayEmbed), so a channel override can turn previews off, never on.
@@ -588,7 +588,7 @@ function planFromTemplate(guild, opts = {}) {
       // Private: @everyone can't see it (the lock in the preview).
       const eo = overrides.find((o) => o.target === 'everyone');
       const evView = eo ? (everyone.permissions & ~eo.deny) | eo.allow : everyone.permissions;
-      // Slowmode comes over for voice channels too: in Discord it's their text chat's, and Hearth's voice channels
+      // Slowmode comes over for voice channels too: in Discord it's their text chat's, and Cindrly's voice channels
       // have a chat with slowmode (v19, voice chat).
       channels.push({
         key: c.key, name, sourceName: c.name, type: kind, group: g, category: catName.get(g), topic: c.topic,
@@ -604,7 +604,7 @@ function planFromTemplate(guild, opts = {}) {
     warnings.push({ code: 'added_default_channel' });
   }
 
-  // ---- what doesn't come over (and what Hearth allows anyway), gathered for the report
+  // ---- what doesn't come over (and what Cindrly allows anyway), gathered for the report
   // A list of names, cut at WHERE_MAX with a count of the rest.
   const listed = (o, key, all) => { const { list, more } = capped(all); o[key] = list; if (more) o.more = more; return o; };
   const gather = (pairs) => {
@@ -633,7 +633,7 @@ function planFromTemplate(guild, opts = {}) {
     guild.iconHash ? { field: 'icon', value: null } : null,
   ].filter(Boolean);
 
-  // Over Hearth's limits: the preview shows it and asks to untick some; creating refuses.
+  // Over Cindrly's limits: the preview shows it and asks to untick some; creating refuses.
   const problems = [];
   const overrideCount = channels.reduce((n, c) => n + c.overrides.length, 0);
   if (channels.length > lim.channels) problems.push({ code: 'too_many_channels', count: channels.length, max: lim.channels });

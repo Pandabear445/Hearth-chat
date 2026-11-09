@@ -1,6 +1,6 @@
 // Attachment entries arrive inside encrypted messages, so whoever sent the message chose every field of them,
 // including the address. The server can't check (it only sees ciphertext), so the app does: only files stored on
-// this Hearth server (/uploads/<name>) are kept. An address anywhere else would let the sender see who opened the
+// this Cindrly server (/uploads/<name>) are kept. An address anywhere else would let the sender see who opened the
 // message and from where (a "tracking pixel"), or turn a click on a file card into a jump to a look-alike site.
 
 const UPLOAD_PATH = /^\/uploads\/[a-z0-9]+(\.[a-z0-9]{1,8})?$/i;

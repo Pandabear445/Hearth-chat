@@ -1,4 +1,4 @@
-// Inside the Hearth Android app, gives the page what a phone web view lacks on its own:
+// Inside the Cindrly Android app, gives the page what a phone web view lacks on its own:
 // notifications (window.Notification) and saving files (<a download> links), and with a current app also
 // notifications while it's closed (androidApp.push, see android-push.js), calls that keep going with the
 // screen locked (androidApp.callState) and invite links that open in the app.
@@ -51,7 +51,7 @@ if (A) {
     } else if (m.type === 'pushState' && androidApp.push) androidApp.push._reply(m);
   };
   // v: 2 tells the app this page takes notification taps and invites in place (older pages get reloaded); v: 3, links
-  // shared to the app too (Share → Hearth: the share picker, share.js).
+  // shared to the app too (Share → Cindrly: the share picker, share.js).
   send({ type: 'hello', v: 3 });
   androidApp.switchServer = () => send({ type: 'changeServer' });
   androidApp.cancel = (tag) => send({ type: 'cancel', tag: String(tag) });
@@ -96,7 +96,7 @@ if (A) {
       });
     }
     constructor(title, opts = {}) {
-      this.title = String(title || 'Hearth');
+      this.title = String(title || 'Cindrly');
       this.body = String(opts.body || '');
       this.tag = String(opts.tag || `n${Date.now()}${Math.random().toString(36).slice(2, 6)}`);
       this.onclick = null;

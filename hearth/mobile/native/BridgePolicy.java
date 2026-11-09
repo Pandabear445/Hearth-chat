@@ -25,24 +25,24 @@ final class BridgePolicy {
         return local || server;
     }
 
-    /** Hearth's own website, where the connect screen's privacy policy link goes. */
+    /** Cindrly's own website, where the connect screen's privacy policy link goes. */
     static final String SITE = "https://pandabear445.github.io/Hearth-chat/";
 
     /**
      * Whether a link the connect screen opens goes to the browser. Any other https:// address the connect screen
      * goes to is the server the person chose (that's how an old web view without window.HearthAndroid says so),
-     * so a link to Hearth's website must not become the server.
+     * so a link to Cindrly's website must not become the server.
      */
     static boolean opensInBrowser(String url) {
         return url != null && url.startsWith(SITE);
     }
 
-    /** Where Hearth's ways to pay lead: Stripe's checkout, payment links and billing pages, and Ko-fi. */
+    /** Where Cindrly's ways to pay lead: Stripe's checkout, payment links and billing pages, and Ko-fi. */
     private static final String[] PAYMENT_HOSTS = { "checkout.stripe.com", "buy.stripe.com", "donate.stripe.com", "billing.stripe.com" };
 
     /**
      * Whether a link goes to a page for paying. The app doesn't open those (Google Play doesn't allow an app to send
-     * people to pay outside Play's own billing). Hearth 1.29.1 and newer show no way to pay in the app, but a server
+     * people to pay outside Play's own billing). Cindrly 1.29.1 and newer show no way to pay in the app, but a server
      * on an older version still does, and anyone can post such a link in a message. Only the host counts, so a link
      * that merely mentions one of these addresses still opens.
      */
