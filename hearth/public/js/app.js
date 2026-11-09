@@ -326,7 +326,9 @@ async function bootUp() {
   // signed in, then the share picker opens (share.js). The address bar goes back to / at once.
   const shared = shareFromLocation(location);
   if (shared.found) { sessionStorage.setItem('hearth.pendingShare', shared.link ? shared.link.url : ''); history.replaceState(null, '', '/'); }
-  try { S.config = await api('GET', '/config', undefined, { timeout: BOOT_WAIT_MS }); } catch { S.config = { name: 'Cindrly', iceServers: [] }; }
+  try { S.config = await api('GET', '/config', undefined, { timeout: BOOT_WAIT_MS }); } catch { S.config = null; }
+  // A body cut off by the time limit reads as {}: start with the same fallback as a failed request.
+  if (!S.config || typeof S.config.name !== 'string') S.config = { name: 'Cindrly', iceServers: [] };
   // A disappearing timer inside a message counts only if it's one this server offers (disappear.js).
   setTimerChoices((S.config.disappearing || {}).choices);
   document.title = S.config.name;
