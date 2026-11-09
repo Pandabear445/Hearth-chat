@@ -329,7 +329,32 @@ function serverKeyInfo(serverId) {
   // Older keys owed to members left out of them (key_owed), for the apps that hold them: { epoch: [userId] }.
   const owed = {};
   for (const r of db.prepare('SELECT o.epoch, o.user_id FROM key_owed o JOIN members m ON m.server_id = o.server_id AND m.user_id = o.user_id WHERE o.server_id = ? ORDER BY o.epoch DESC LIMIT 500').all(serverId)) (owed[r.epoch] ||= []).push(r.user_id);
-  return { keyEpoch: s.key_epoch, needsRotation: !!s.needs_rotation, missing, held, waiting, owed, keyCreatorId: cur ? cur.creator_id : null, keyCreatedAt: cur ? cur.created_at : null };
+  const [keyLead = null, ...keyBackups] = leadFor(serverId, s, held, missing, waiting, cur);
+  return { keyEpoch: s.key_epoch, needsRotation: !!s.needs_rotation, missing, held, waiting, owed, keyCreatorId: cur ? cur.creator_id : null, keyCreatedAt: cur ? cur.created_at : null, keyLead, keyBackups };
+}
+// Whose app makes the next key, or hands the current one to whoever is missing it, when there's that to do: one member
+// who is online, so every other open app doesn't do the same work at once (each one wrapping the key for everyone, the
+// server keeping the first and refusing the rest). Then up to two more, in order, whose apps step in one after the
+// other if it's still not done (secure.js maintain); everyone else's apps wait longer still, so a lead whose app can't
+// do it holds nobody up for long and the rest don't all step in at the same moment. Only a hint: it changes nothing
+// about who may make or share a key, nor any check on either. Only people others can already see are online (never
+// someone Invisible: naming them would tell everyone they're here). Someone who'd be refused for having caused the
+// need for a new key (causedRotation) comes last; then anyone shown as Away (their app may be in the background) after
+// those who aren't; then the key's maker (their app holds it as its own), then whoever has been here longest.
+function leadFor(serverId, s, held, missing, waiting, cur) {
+  const rotate = !s.key_epoch || !!s.needs_rotation;
+  if (!rotate && !missing.length) return [];
+  const skip = new Set([...held, ...(rotate ? [] : [...missing, ...waiting])]);
+  const shown = db.prepare(`SELECT u.id, u.is_bot, u.status, u.away_after FROM members m JOIN users u ON u.id = m.user_id
+      WHERE m.server_id = ? AND u.is_bot = 0 ORDER BY m.joined_at, m.user_id`).all(serverId)
+    .filter((r) => !skip.has(r.id) && isOnline(r.id)).map((r) => ({ id: r.id, presence: presenceFor(r) }))
+    .filter((r) => r.presence !== 'offline');
+  if (!shown.length) return [];
+  const creator = shown.findIndex((r) => cur && r.id === cur.creator_id);
+  if (creator > 0) shown.unshift(...shown.splice(creator, 1));
+  const caused = rotate && s.key_epoch ? new Set(shown.filter((r) => causedRotation(serverId, s.key_epoch, r.id)).map((r) => r.id)) : new Set();
+  const rank = (r) => (caused.has(r.id) ? 2 : 0) + (r.presence === 'idle' ? 1 : 0);
+  return shown.sort((a, b) => rank(a) - rank(b)).slice(0, 3).map((r) => r.id); // sort keeps the order within a rank
 }
 // createdAt: when the key was handed out, so an app only checks it against keys the sharer had back then.
 const keyOut = (k) => ({ epoch: k.epoch, wrapped: k.wrapped, wrapperId: k.wrapper_id, check: k.key_check, createdAt: k.created_at });
@@ -337,6 +362,7 @@ const keyOut = (k) => ({ epoch: k.epoch, wrapped: k.wrapped, wrapperId: k.wrappe
 // (server/joinhistory.js): their history starts then, with keys from that epoch (their app says it's waiting for
 // that key while the current one is older). Absent for everyone else.
 const keyStateFrom = (serverId, info, keys, since = null) => ({ serverId, keyEpoch: info.keyEpoch, needsRotation: info.needsRotation, keys, missing: info.missing, held: info.held, keyCreatorId: info.keyCreatorId, keyCreatedAt: info.keyCreatedAt,
+  ...(info.keyLead ? { keyLead: info.keyLead } : {}), ...(info.keyBackups.length ? { keyBackups: info.keyBackups } : {}),
   ...(info.waiting.length ? { waiting: info.waiting } : {}), ...(Object.keys(info.owed || {}).length ? { owed: info.owed } : {}), ...(since ? { since } : {}) });
 // Your own wrapped keys, from the first epoch you may hold: someone who joined with that setting on never gets older
 // rows back, even ones of their own from an earlier membership.
@@ -3554,6 +3580,8 @@ api.post('/servers/:id/keys/rotate', auth, (req, res) => {
   const deferred = new Set(deferIds.filter((id) => noPq.has(id)));
   if (typeof check !== 'string' || !/^[A-Za-z0-9+/=]{16,64}$/.test(check)) fail(400, 'Bad key check.');
   if (!wraps || typeof wraps !== 'object' || Array.isArray(wraps)) fail(400, 'Missing wrapped keys.');
+  // Someone else's new key already went in (checked again below, where it counts): refused before looking at every copy.
+  if (Number(epoch) !== db.prepare('SELECT key_epoch FROM servers WHERE id = ?').get(s.id).key_epoch + 1) fail(409, 'Someone else just refreshed the key.', 'epoch');
   if (!Object.values(wraps).every(isWrapped)) fail(400, 'Those wrapped keys aren\u2019t in the right format.', 'bad_wraps');
   const tx = db.transaction(() => {
     const cur = db.prepare('SELECT key_epoch, needs_rotation FROM servers WHERE id = ?').get(s.id);
@@ -3605,10 +3633,13 @@ api.post('/servers/:id/keys/share', auth, (req, res) => {
   let n = 0;
   const stale = staleWraps(pubs, Object.keys(wraps || {}), pqs, wraps);
   const waiting = new Set(HIST.waitingFor(s.id, cur));
-  for (const [uid, w] of Object.entries(wraps || {}).slice(0, 200)) {
-    if (stale.includes(uid) || held.includes(uid) || waiting.has(uid) || (!isCur && !owedTo.has(uid))) continue;
-    if (isMember(s.id, uid) && isWrapped(w)) n += ins.run(s.id, cur, uid, w, req.userId, now()).changes;
-  }
+  // (All in one go: one write to the database instead of one for each copy.)
+  db.transaction(() => {
+    for (const [uid, w] of Object.entries(wraps || {}).slice(0, 200)) {
+      if (stale.includes(uid) || held.includes(uid) || waiting.has(uid) || (!isCur && !owedTo.has(uid))) continue;
+      if (isMember(s.id, uid) && isWrapped(w)) n += ins.run(s.id, cur, uid, w, req.userId, now()).changes;
+    }
+  })();
   db.prepare('DELETE FROM key_owed WHERE server_id = ? AND user_id IN (SELECT user_id FROM server_keys WHERE server_id = key_owed.server_id AND epoch = key_owed.epoch)').run(s.id);
   if (n) emitKeyState(s.id);
   res.json({ shared: n, stale, held: held.filter((uid) => wraps && Object.hasOwn(wraps, uid)) });

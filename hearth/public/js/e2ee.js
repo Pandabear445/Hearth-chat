@@ -303,12 +303,22 @@ export function pqKeyPair(seed) {
   return k;
 }
 // A published ML-KEM-768 public key: the right size and accepted by the encapsulation-key check (FIPS 203 7.2), or null.
+// The check (the modulus check: decoding the key's 12-bit numbers and encoding them again gives the same bytes, so
+// each one is below q) is done here directly. It's all an encapsulation would test of the key before using it, which
+// is how this was checked before: a whole encapsulation for each new key, about as slow as wrapping a key to it.
 const pqPubCache = new Map();
+export function pqModulusOk(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length !== PQ_PUBLIC_BYTES) return false;
+  for (let i = 0; i < 1152; i += 3) { // the 3 × 256 numbers, two in every 3 bytes, least significant bits first
+    if ((bytes[i] | ((bytes[i + 1] & 0x0f) << 8)) >= 3329 || ((bytes[i + 1] >> 4) | (bytes[i + 2] << 4)) >= 3329) return false;
+  }
+  return true;
+}
 function pqPublicBytes(pqPubB64) {
   if (typeof pqPubB64 !== 'string' || pqPubB64.length !== 1580) return null;
   if (!pqPubCache.has(pqPubB64)) {
     let bytes = null;
-    try { bytes = unb64(pqPubB64); if (bytes.length !== PQ_PUBLIC_BYTES) bytes = null; else ml_kem768.encapsulate(bytes); } catch { bytes = null; }
+    try { bytes = unb64(pqPubB64); if (!pqModulusOk(bytes)) bytes = null; } catch { bytes = null; }
     if (pqPubCache.size > 2000) pqPubCache.clear();
     pqPubCache.set(pqPubB64, bytes);
   }

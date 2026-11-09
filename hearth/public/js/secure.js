@@ -9,6 +9,7 @@ import { cleanFiles } from './attachments.js';
 import { cleanLinks } from './linkpreview.js';
 import { cleanX } from './disappear.js';
 import { bindingOf, photoOf } from './binding.js';
+import { mapLimit } from './limit.js';
 // A quote the server sent without its ciphertext (server/index.js quoteOf): nothing to open here.
 export const BIG_QUOTE = Object.freeze({ t: '', f: [], big: true });
 
@@ -116,6 +117,10 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   const states = new Map(); // serverId -> key state from the server
   const waiters = new Map(); // serverId -> [resolve]
   const busy = new Set();
+  const again = new Map(); // serverId -> a state came in while busy (true: one past waiting for the lead, see maintain)
+  const backups = new Map(); // serverId -> timer for stepping in when the member the server named hasn't done it
+  const LEAD_WAIT = 3000; // before stepping in to make a new key (each one wraps the key for everyone)
+  const SHARE_WAIT = 1000; // before stepping in to hand the current key out (cheap, and the server ignores repeats)
   const warned = new Set();
   const fetching = new Map();
   const generation = new Map(); // serverId -> bumps whenever new keys arrive
@@ -737,15 +742,25 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   }
 
   // Keep a server's keys healthy: rotate if needed, hand the current key to anyone missing it.
-  function maintain(serverId) {
+  // A state that comes in while this app is already at it (another member joined meanwhile; the server sends the
+  // state a share brings about before it answers the share) is looked at again once that's done, never just dropped:
+  // whoever it names would otherwise wait for the next change, however long that takes.
+  // The server names one online member's app to do it (keyLead), so the others don't all wrap the key for everyone
+  // at once; they step in later if it's still to do (late, see backUp), or right away when it names nobody.
+  function maintain(serverId, late = false) {
     const st = states.get(serverId);
-    if (!st || busy.has(serverId)) return;
+    if (!st) return;
+    if (busy.has(serverId)) { again.set(serverId, late || !!again.get(serverId)); return; }
     const server = S.servers.find((s) => s.id === serverId);
     if (!server) return;
-    const needsRotate = (st.needsRotation || !st.keyEpoch) && !held(serverId) && mayMakeKey(server);
+    const waitForLead = !late && !!st.keyLead && st.keyLead !== S.me.id;
+    const rotateDue = (st.needsRotation || !st.keyEpoch) && !held(serverId) && mayMakeKey(server);
     const shareWith = (st.missing || []).filter((id) => id !== S.me.id && !heldBack(serverId, id));
     // Held back here yourself: the server takes no key from you to pass on (it might be one you made alone).
-    const needsShare = !needsRotate && !isHeld(serverId, S.me.id) && shareWith.length > 0 && currentKey(serverId);
+    const shareDue = !rotateDue && !isHeld(serverId, S.me.id) && shareWith.length > 0 && !!currentKey(serverId);
+    if (waitForLead && (rotateDue || shareDue)) backUp(serverId, rotateDue ? LEAD_WAIT : SHARE_WAIT);
+    const needsRotate = rotateDue && !waitForLead;
+    const needsShare = shareDue && !waitForLead;
     // Older keys owed to members who were left out of them (their post-quantum key wasn't listed then), that we hold.
     // Only to those this device's own rotation left out (its local record, never just the server's word: a server
     // could otherwise list a member of its own as owed every old key), and only keys it holds as its own.
@@ -763,8 +778,22 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
         for (const o of owed) await share(serverId, o.ids, { epoch: o.epoch, raw: o.raw });
       } catch (e) {
         if (!['epoch', 'members', 'keys_unverified', ...LIMITED].includes(e.code)) console.warn('Key maintenance failed', e.message);
-      } finally { busy.delete(serverId); }
+      } finally {
+        busy.delete(serverId);
+        if (again.has(serverId)) { const l = again.get(serverId); again.delete(serverId); maintain(serverId, l); }
+      }
     })();
+  }
+  // One after the other, not all at once: the backups the server named (keyBackups) step in a wait apart, in their
+  // order; everyone else after all of them, spread over a couple of seconds. When the timer fires, maintain looks at
+  // the state as it is by then, so once one of them has done it the rest do nothing.
+  function backUp(serverId, wait) {
+    if (backups.has(serverId)) return;
+    const b = states.get(serverId).keyBackups;
+    const named = Array.isArray(b) ? b.slice(0, 2) : [];
+    const rank = named.indexOf(S.me.id) + 1;
+    const delay = rank ? wait * rank : wait * (named.length + 1) + Math.random() * 2000;
+    backups.set(serverId, setTimeout(() => { backups.delete(serverId); maintain(serverId, true); }, delay));
   }
   // While you wait to be verified here yourself, you can only make the key of a server nobody else is in (the server
   // refuses otherwise: the others would be handed a key that your unverified keys chose).
@@ -779,15 +808,17 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   // Someone whose post-quantum key this device has seen but which doesn't check out now (left out, or not signed by
   // them) gets no copy at all, rather than a P-256 one: they're deferred (the server shares them the key later, once
   // it's back), so they don't hold the key up for everyone else.
+  // Several members at once (WRAP_AT_ONCE), each with every check it had one at a time, in the same order; nothing is
+  // returned (so nothing sent) unless all of them went through, and a failure is the one the first member to fail in
+  // the list gives (mapLimit), as before.
   async function wrapFor(serverId, epoch, raw, userIds) {
     const wraps = {};
     const pubs = {}; // the public key each one is wrapped for, so the server can refuse stale ones
     const pqs = {}; // …and the post-quantum key's fingerprint (null: none), likewise (not for our own copy)
     const deferred = [];
-    const users = [];
-    for (const uid of userIds) users.push(uid === S.me.id ? S.me : await userWithKeys(uid));
+    const users = await mapLimit(userIds, WRAP_AT_ONCE, (uid) => (uid === S.me.id ? S.me : userWithKeys(uid)));
     await prefetchPq(users);
-    for (const u of users) {
+    const done = await mapLimit(users, WRAP_AT_ONCE, async (u) => {
       const uid = u && u.id;
       if (!u || !u.publicKey) throw new Error(`Missing encryption key for a member.`);
       if (!trust(u)) {
@@ -805,17 +836,22 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
       let recipientPq;
       try { recipientPq = await pqKeyOf(u); } catch (e) {
         if (self || e.code !== 'untrusted') throw e;
-        deferred.push(uid);
-        continue;
+        return { uid, deferred: true };
       }
-      wraps[uid] = await E2EE.wrapGroupKey({ raw, serverId, epoch, recipientId: uid, recipientPub, recipientPq, wrapperId: S.me.id, signKey: S.signKey });
-      pubs[uid] = recipientPub;
-      if (uid !== S.me.id) pqs[uid] = recipientPq ? u.pq : null;
+      const wrapped = await E2EE.wrapGroupKey({ raw, serverId, epoch, recipientId: uid, recipientPub, recipientPq, wrapperId: S.me.id, signKey: S.signKey });
+      return { uid, wrapped, recipientPub, pq: recipientPq ? u.pq : null };
+    });
+    for (const d of done) {
+      if (d.deferred) { deferred.push(d.uid); continue; }
+      wraps[d.uid] = d.wrapped;
+      pubs[d.uid] = d.recipientPub;
+      if (d.uid !== S.me.id) pqs[d.uid] = d.pq;
     }
     // (As in keepForMyself: a batch with our own copy isn't sent once the server lists another key for us.)
     if (pubs[S.me.id] && S.me.publicKey !== pubs[S.me.id]) throw ownKeysMismatch();
     return { wraps, pubs, pqs, deferred };
   }
+  const WRAP_AT_ONCE = 8;
   // Someone's keys changed under us: fetch them fresh before trying again.
   async function refreshUsers(ids) {
     await Promise.all(ids.map((id) => api('GET', '/users/' + id).then((x) => { S.users[id] = mergeUser(S.users[id], sameAccount(id, x)); }).catch(() => {})));
@@ -870,7 +906,10 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
         // Refused for us (see holds): another member's app makes the new key, so wait for it like for a share.
         try { await rotate(serverId); } catch (e) {
           if (!['epoch', 'members', ...LIMITED].includes(e.code)) throw e;
-        } finally { busy.delete(serverId); }
+        } finally {
+          busy.delete(serverId);
+          if (again.has(serverId)) { const l = again.get(serverId); again.delete(serverId); maintain(serverId, l); }
+        }
         if (currentKey(serverId)) return currentKey(serverId);
       }
       await refresh(serverId);
@@ -1398,7 +1437,7 @@ export function createSecure({ S, onKeysChanged = () => {}, onKeyWarning = () =>
   const verifySdp = async (channelId, fromUserId, desc, sig) => (await checkSdp(channelId, fromUserId, desc, sig)).ok;
 
   function reset() {
-    groupKeys.clear(); states.clear(); busy.clear(); warned.clear(); rewrapped.clear(); keeping.clear(); unverified.clear(); holds.clear();
+    groupKeys.clear(); states.clear(); busy.clear(); again.clear(); backups.forEach(clearTimeout); backups.clear(); warned.clear(); rewrapped.clear(); keeping.clear(); unverified.clear(); holds.clear();
     waitingPq.clear(); pqFetched.clear(); pqChecked.clear();
     ownCheck = null; proven = null; ownPq = null; pqBusy = null; pqNeed = null; adopted = null; E2EE.clearCaches();
     peers = { key: '', map: new Map() }; peerStore = { key: '', raw: null, all: {} };
