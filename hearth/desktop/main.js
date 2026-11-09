@@ -1,7 +1,7 @@
 // Cindrly desktop: a secure window onto your Cindrly server, with tray, badge, notifications and auto-start.
 // All chat code (including end-to-end encryption) runs from your server exactly as in the browser.
 const {
-  app, BrowserWindow, Menu, Tray, shell, session, ipcMain, nativeImage, dialog, net, desktopCapturer, powerMonitor,
+  app, BaseWindow, BrowserWindow, WebContentsView, Menu, Tray, shell, session, ipcMain, nativeImage, dialog, net, desktopCapturer, powerMonitor,
   screen, clipboard, Notification,
 } = require('electron');
 const path = require('path');
@@ -25,7 +25,9 @@ const saveSettings = (soon) => { if (soon) { if (!saveTimer) saveTimer = setTime
 const HW_ACCEL_AT_START = settings.hardwareAcceleration !== false;
 if (!HW_ACCEL_AT_START) app.disableHardwareAcceleration();
 
-let win = null;
+let win = null; // the window (a BaseWindow: the title bar strip and the page are two views in it)
+let page = null; // the page's webContents: your server's page, or the connect screen
+let bar = null; // the title bar strip's view (titlebar.html)
 let tray = null;
 let quitting = false;
 let unread = 0;
@@ -34,10 +36,11 @@ let unread = 0;
 const { normalize, isServerUrl, isAppFile, isHttpsUpgrade } = require('./origin');
 const CONNECT_FILE = path.join(__dirname, 'connect.html');
 const PICKER_FILE = path.join(__dirname, 'picker.html');
+const TITLEBAR_FILE = path.join(__dirname, 'titlebar.html');
 const serverOrigin = () => normalize((CONFIG.lockServer ? CONFIG.defaultServer : settings.server || CONFIG.defaultServer) || '') || null;
 const isServer = (url) => isServerUrl(url, serverOrigin());
 const isConnectScreen = (url) => isAppFile(url, CONNECT_FILE);
-const onServerPage = () => !!(win && !win.isDestroyed() && isServer(win.webContents.getURL()));
+const onServerPage = () => !!(win && !win.isDestroyed() && isServer(page.getURL()));
 
 // ---------------------------------------------------------------- desktop settings (Settings → Apps & devices)
 const CAN_START_AT_LOGIN = IS_WIN || IS_MAC; // Linux desktops each do this differently
@@ -123,7 +126,7 @@ function setDesktopSetting(key, value) {
   return { ok: true, settings: desktopSettings() };
 }
 
-function applyZoom() { if (win && !win.isDestroyed()) win.webContents.setZoomFactor(zoom()); }
+function applyZoom() { if (win && !win.isDestroyed()) page.setZoomFactor(zoom()); }
 function stepZoom(dir) {
   const z = zoom();
   const next = dir > 0 ? (ZOOM_STEPS.find((s) => s > z + 0.001) ?? 2) : ([...ZOOM_STEPS].reverse().find((s) => s < z - 0.001) ?? 0.5);
@@ -155,7 +158,7 @@ function openLink(raw) {
   const parts = `${u.hostname}${u.pathname}`.split('/').filter(Boolean);
   showWindow();
   if (!origin || !win) { pendingLink = raw; return; }
-  if (parts[0] === 'invite' && /^[A-Za-z0-9_-]{2,64}$/.test(parts[1] || '')) win.loadURL(`${origin}/invite/${parts[1]}`);
+  if (parts[0] === 'invite' && /^[A-Za-z0-9_-]{2,64}$/.test(parts[1] || '')) page.loadURL(`${origin}/invite/${parts[1]}`);
 }
 app.on('second-instance', (e, argv) => {
   const link = (argv || []).find((a) => a.startsWith(`${PROTOCOL}://`));
@@ -170,6 +173,7 @@ function showWindow() {
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+  if (page && !page.isDestroyed()) page.focus();
 }
 
 // The saved position, if its title bar is still on a connected screen; otherwise (a monitor was
@@ -196,22 +200,97 @@ function keepOnScreen() {
   if (!onScreen(win.getBounds())) win.setBounds(centeredOnPrimary(win.getBounds()));
 }
 
+// ---------------------------------------------------------------- the title bar
+// No system title bar or menu bar: a thin dark strip of the app's own across the top (titlebar.html, a local
+// page in a view of its own), with the system's own minimize / maximize / close buttons drawn on it
+// (titleBarOverlay on Windows and Linux; the traffic lights on macOS). The server's page sits in a second
+// view right below it, so the strip never covers the page's header, works with any server version, and the
+// page gets no new powers: there is no "minimize/close the window" message for anything to send. Windows
+// keeps Snap Layouts on the maximize button, Alt+Space, the red close button and the top resize edge.
+// Some Linux window managers (tiling ones) do better with their own bar: tray → "Use the system title bar".
+const CUSTOM_BAR = !(IS_LINUX && settings.systemTitleBar === true); // read once: changing it needs a restart
+const BAR_H = CUSTOM_BAR ? 32 : 0; // 32px: Windows draws its buttons 46px wide at this height
+const BAR_BG = '#100e16';
+const BAR_FG = '#b6afc6';
+const BAR_FG_BLURRED = '#6f6880';
+function layout() {
+  if (!win || win.isDestroyed()) return;
+  const { width, height } = win.getContentBounds();
+  const full = win.isFullScreen(); // full screen: no bar, the page fills the screen
+  const top = full ? 0 : BAR_H;
+  if (bar) { bar.setVisible(!full); bar.setBounds({ x: 0, y: 0, width, height: BAR_H }); }
+  win.contentView.children[0].setBounds({ x: 0, y: top, width, height: Math.max(0, height - top) });
+}
+function barState(extra) {
+  if (!bar || !win || win.isDestroyed() || bar.webContents.isDestroyed()) return;
+  bar.webContents.send('titlebar:state', { focused: win.isFocused(), maximized: win.isMaximized(), fullscreen: win.isFullScreen(), ...extra });
+}
+function barSymbols(focused) {
+  if (!bar || IS_MAC) return;
+  try { win.setTitleBarOverlay({ color: BAR_BG, symbolColor: focused ? BAR_FG : BAR_FG_BLURRED, height: BAR_H }); } catch { /* not on this system */ }
+}
+// The app's menu (File, Edit, View, Window, Help), from the Cindrly button or a lone Alt press.
+function popAppMenu() {
+  const menu = Menu.getApplicationMenu();
+  if (!menu || !win || win.isDestroyed()) return;
+  menu.popup({ window: win, x: 8, y: BAR_H, callback: () => { barState({ menuOpen: false }); if (page && !page.isDestroyed()) page.focus(); } });
+}
+// Only the title bar's own page may ask for the menu.
+const fromTitleBar = (e) => !!(bar && win && !win.isDestroyed() && e.sender === bar.webContents && e.senderFrame && !e.senderFrame.parent && isAppFile(e.senderFrame.url, TITLEBAR_FILE));
+ipcMain.on('titlebar:menu', (e) => { if (fromTitleBar(e)) popAppMenu(); });
+
 function createWindow() {
   const saved = settings.bounds || null;
   const b = onScreen(saved) || centeredOnPrimary(saved || DEFAULT_SIZE);
-  win = new BrowserWindow({
+  win = new BaseWindow({
     width: b.width, height: b.height, x: b.x, y: b.y,
     minWidth: 900, minHeight: 580, show: false, title: APP_NAME,
-    backgroundColor: '#100e16', autoHideMenuBar: true,
+    backgroundColor: BAR_BG,
     icon: path.join(__dirname, 'build', 'icon.png'),
+    ...(!CUSTOM_BAR ? { autoHideMenuBar: true }
+      : IS_MAC ? { titleBarStyle: 'hidden', trafficLightPosition: { x: 12, y: 10 } }
+        : { titleBarStyle: 'hidden', titleBarOverlay: { color: BAR_BG, symbolColor: BAR_FG, height: BAR_H } }),
+  });
+  if (CUSTOM_BAR) win.setMenuBarVisibility(false);
+  const pageView = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true,
       spellcheck: spellcheckOn(), zoomFactor: zoom(),
     },
   });
+  pageView.setBackgroundColor(BAR_BG);
+  page = pageView.webContents;
+  win.contentView.addChildView(pageView);
+  if (CUSTOM_BAR) {
+    // Its own in-memory session, so zooming the connect screen (also a local file) never zooms the bar,
+    // and it can't ask for any permission.
+    bar = new WebContentsView({
+      webPreferences: {
+        preload: path.join(__dirname, 'titlebar-preload.js'), contextIsolation: true, sandbox: true,
+        spellcheck: false, devTools: !app.isPackaged, partition: 'hearth-titlebar',
+      },
+    });
+    bar.setBackgroundColor(BAR_BG);
+    win.contentView.addChildView(bar);
+    const bwc = bar.webContents;
+    bwc.session.setPermissionRequestHandler((wc, perm, cb) => cb(false));
+    bwc.session.setPermissionCheckHandler(() => false);
+    bwc.on('will-navigate', (e) => e.preventDefault());
+    bwc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    bwc.setVisualZoomLevelLimits(1, 1).catch(() => {});
+    bwc.on('did-finish-load', () => barState());
+    bwc.loadFile(TITLEBAR_FILE, { query: { name: APP_NAME, platform: process.platform } }).catch(() => {});
+  }
+  layout();
+  for (const ev of ['resize', 'maximize', 'unmaximize', 'restore', 'enter-full-screen', 'leave-full-screen']) {
+    win.on(ev, () => { layout(); barState(); });
+  }
   if (settings.maximized) win.maximize();
   const openedAtLogin = IS_MAC && startHidden() && (() => { try { return app.getLoginItemSettings().wasOpenedAtLogin; } catch { return false; } })();
-  win.once('ready-to-show', () => { if (!process.argv.includes('--hidden') && !openedAtLogin) win.show(); });
+  // The connect screen draws at once (see load()), so the window shows as soon as it has.
+  page.once('did-finish-load', () => { if (!process.argv.includes('--hidden') && !openedAtLogin) showWindow(); });
+  // The window's name in the taskbar and Alt+Tab follows the page's title, as a browser window's does.
+  page.on('page-title-updated', (e, title) => { if (win && !win.isDestroyed()) win.setTitle(title || APP_NAME); });
 
   const remember = () => {
     if (!win || win.isMinimized() || win.isFullScreen()) return;
@@ -221,7 +300,14 @@ function createWindow() {
   };
   win.on('resize', remember);
   win.on('move', remember);
-  win.on('focus', () => win.flashFrame(false));
+  win.on('focus', () => {
+    win.flashFrame(false);
+    barSymbols(true); barState();
+    // Typing goes to the page, not the strip above it (a click on the Cindrly button gives it focus).
+    if (page && !page.isDestroyed() && !page.isFocused()) page.focus();
+  });
+  win.on('blur', () => { altAlone = false; barSymbols(false); barState(); });
+  // The close button (the system's own, on the bar) and Alt+F4 come here exactly as before.
   win.on('close', (e) => {
     remember();
     if (!quitting && (closeToTray() || IS_MAC)) {
@@ -230,14 +316,18 @@ function createWindow() {
       if (!IS_MAC) trayHintOnce();
     }
   });
-  win.on('closed', () => { win = null; });
+  // A BaseWindow doesn't close the pages in it by itself.
+  win.on('closed', () => {
+    for (const wc of [page, bar && bar.webContents]) { try { if (wc && !wc.isDestroyed()) wc.close(); } catch { /* gone */ } }
+    win = null; page = null; bar = null;
+  });
   // A page can't stop the app from leaving it ("Leave site?" / beforeunload): the reload that ends an
   // old-style screen capture (chooseScreen) must happen, and so must closing, quitting and changing server.
   // Cindrly's own pages never ask.
-  win.webContents.on('will-prevent-unload', (e) => e.preventDefault());
+  page.on('will-prevent-unload', (e) => e.preventDefault());
   // A reload or a new page starts outside any call until the page says otherwise. The server being down
   // behind a proxy (Caddy answers 502 while Cindrly restarts) gets the "can't reach" screen too.
-  win.webContents.on('did-navigate', (e, url, code) => {
+  page.on('did-navigate', (e, url, code) => {
     call = { inCall: false, muted: false, deafened: false }; drawThumbar();
     applyZoom();
     if (isServer(url) && [502, 503, 504, 520, 521, 522, 523, 524].includes(code)) loadOffline(`HTTP_${code}`);
@@ -245,7 +335,7 @@ function createWindow() {
 
   // Links to other sites open in the normal browser, never inside the app (which has no address bar, and
   // whose bridge only your server's pages may use). Same for a redirect away from your server.
-  win.webContents.setWindowOpenHandler(({ url }) => {
+  page.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
@@ -253,11 +343,11 @@ function createWindow() {
     e.preventDefault();
     if (/^https?:/i.test(url)) shell.openExternal(url);
   };
-  win.webContents.on('will-navigate', (e, url) => {
+  page.on('will-navigate', (e, url) => {
     if (isServer(url) || isConnectScreen(url)) return;
     elsewhere(e, url);
   });
-  win.webContents.on('will-redirect', (e, legacyUrl, legacyInPlace, legacyMainFrame) => {
+  page.on('will-redirect', (e, legacyUrl, legacyInPlace, legacyMainFrame) => {
     const url = (e && e.url) || legacyUrl;
     const mainFrame = e && typeof e.isMainFrame === 'boolean' ? e.isMainFrame : legacyMainFrame;
     if (!mainFrame || isServer(url) || isHttpsUpgrade(url, serverOrigin())) return;
@@ -266,7 +356,7 @@ function createWindow() {
     // would stay empty. The connect screen says what happened, so the person can try again or switch servers.
     setImmediate(() => { if (win && !win.isDestroyed() && !onServerPage()) loadConnect(redirectedAway(url)); });
   });
-  win.webContents.on('did-fail-load', (e, code, desc, url, isMain) => {
+  page.on('did-fail-load', (e, code, desc, url, isMain) => {
     if (!isMain || code === -3) return; // -3: the load was replaced by another one
     // Certificate problems: the connect screen says the certificate isn't trusted, with "Review certificate" (the
     // certificate prompt below takes it from there). Only the code goes to the page, which has the words for it.
@@ -275,12 +365,13 @@ function createWindow() {
   });
 
   // Right-click menu, zoom keys / Ctrl+wheel, Ctrl+, for Settings.
-  win.webContents.on('context-menu', (e, params) => {
-    const menu = contextMenu(win.webContents, params);
+  page.on('context-menu', (e, params) => {
+    const menu = contextMenu(page, params);
     if (menu) menu.popup({ window: win, frame: params.frame || undefined });
   });
-  win.webContents.on('zoom-changed', (e, dir) => stepZoom(dir === 'in' ? 1 : -1));
-  win.webContents.on('before-input-event', (e, input) => {
+  page.on('zoom-changed', (e, dir) => stepZoom(dir === 'in' ? 1 : -1));
+  page.on('before-input-event', (e, input) => {
+    if (CUSTOM_BAR && !IS_MAC) altMenuKey(input);
     if (IS_MAC || input.type !== 'keyDown' || !input.control || input.alt || input.meta) return; // macOS: the menu handles these
     const k = input.key;
     if (k === ',') { e.preventDefault(); openSettings(); }
@@ -289,7 +380,22 @@ function createWindow() {
     else if ((k === '0' || input.code === 'Numpad0') && !input.shift) { e.preventDefault(); setDesktopSetting('zoom', 1); }
   });
 
+  // The server's page can't make its own content move the window (only the bar above it does that).
+  page.on('dom-ready', () => { if (onServerPage()) page.insertCSS('*{-webkit-app-region:no-drag!important}', { cssOrigin: 'user' }).catch(() => {}); });
+
   load({ coldStart: true });
+}
+// Alt on its own (pressed and let go with nothing in between) opens the app's menu, as the hidden menu bar
+// used to; Help → Reset permissions is only there. Not when Alt is one of the person's call keybinds.
+let altAlone = false;
+let keybindCodes = [];
+function altMenuKey(input) {
+  const isAlt = input.key === 'Alt' && !input.control && !input.shift && !input.meta;
+  if (input.type === 'keyDown') altAlone = isAlt && !input.isAutoRepeat ? true : (isAlt && altAlone);
+  else if (input.type === 'keyUp' && isAlt && altAlone) {
+    altAlone = false;
+    if (!keybindCodes.some((c) => /^Alt(Left|Right)$/.test(c))) popAppMenu();
+  }
 }
 
 // Starting the app shows the "Connecting to <host>…" screen first (it draws at once, so the window can show
@@ -298,17 +404,17 @@ function createWindow() {
 function load({ coldStart = false } = {}) {
   const origin = serverOrigin();
   if (!origin) return loadConnect();
-  if (!coldStart) return win.loadURL(origin + '/');
-  win.loadFile(CONNECT_FILE, { query: connectQuery({ connecting: '1' }) });
-  win.webContents.once('did-finish-load', () => {
-    if (win && !win.isDestroyed() && isConnectScreen(win.webContents.getURL()) && serverOrigin() === origin) win.loadURL(origin + '/');
+  if (!coldStart) return page.loadURL(origin + '/');
+  page.loadFile(CONNECT_FILE, { query: connectQuery({ connecting: '1' }) });
+  page.once('did-finish-load', () => {
+    if (win && !win.isDestroyed() && isConnectScreen(page.getURL()) && serverOrigin() === origin) page.loadURL(origin + '/');
   });
 }
 function connectQuery(extra) {
   return { locked: CONFIG.lockServer ? '1' : '', name: APP_NAME, server: serverOrigin() || '', ...extra };
 }
 function loadConnect(error = '') {
-  win.loadFile(path.join(__dirname, 'connect.html'), { query: connectQuery({ error }) });
+  page.loadFile(path.join(__dirname, 'connect.html'), { query: connectQuery({ error }) });
 }
 // What the connect screen says when the server sent the app somewhere else (a sign-in page in front of it, say).
 function redirectedAway(url) {
@@ -322,7 +428,7 @@ function redirectedAway(url) {
 function loadOffline(reason = '') {
   if (!win || win.isDestroyed()) return;
   if (!serverOrigin()) return loadConnect(reason);
-  win.loadFile(path.join(__dirname, 'connect.html'), { query: connectQuery({ offline: '1', reason }) });
+  page.loadFile(path.join(__dirname, 'connect.html'), { query: connectQuery({ offline: '1', reason }) });
 }
 
 // ---------------------------------------------------------------- right-click menu
@@ -425,7 +531,7 @@ const SHARE_HANDOFF_MS = 3000;
 // again in a new one (a reload sent any sooner is lost with the old process).
 function restartPage() {
   if (!win || win.isDestroyed()) return;
-  const wc = win.webContents;
+  const wc = page;
   const again = () => setImmediate(() => { if (!wc.isDestroyed()) wc.reload(); });
   wc.once('render-process-gone', again);
   try { wc.forcefullyCrashRenderer(); } catch { wc.removeListener('render-process-gone', again); wc.reload(); }
@@ -441,7 +547,7 @@ async function chooseScreen(origin) {
   setTimeout(() => {
     if (pendingShare !== mine) return; // taken by the display-media handler, as it should be
     pendingShare = null;
-    if (win && !win.isDestroyed() && isServer(win.webContents.getURL())) restartPage();
+    if (win && !win.isDestroyed() && isServer(page.getURL())) restartPage();
   }, SHARE_HANDOFF_MS);
   return true;
 }
@@ -449,7 +555,7 @@ async function chooseScreen(origin) {
 app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb, details = {}) => {
     const origin = serverOrigin();
-    const fromServer = !!(win && !win.isDestroyed() && wc && wc.id === win.webContents.id) && isServerUrl(details.requestingUrl || wc.getURL(), origin);
+    const fromServer = !!(win && !win.isDestroyed() && wc && wc.id === page.id) && isServerUrl(details.requestingUrl || wc.getURL(), origin);
     const d = consent.decide(perm, details, { fromServer, granted: granted(origin) });
     if (d.result === 'screen') return chooseScreen(origin).then((yes) => cb(!!yes), () => cb(false));
     if (d.result !== 'ask') return cb(d.result === 'allow');
@@ -574,7 +680,7 @@ function drawThumbar() {
     { tooltip: call.deafened ? 'Undeafen' : 'Deafen', icon: buildImage(call.deafened ? 'thumb-deafen-off' : 'thumb-deafen'), click: () => sendToPage('hotkey', { action: 'deafen' }) },
   ]);
 }
-const sendToPage = (ch, data) => { if (win && !win.isDestroyed()) win.webContents.send(ch, data); };
+const sendToPage = (ch, data) => { if (win && !win.isDestroyed()) page.send(ch, data); };
 const hotkeys = require('./hotkeys');
 
 // ---------------------------------------------------------------- updates
@@ -724,6 +830,7 @@ function refreshTrayMenu() {
     CAN_START_AT_LOGIN ? { label: 'Start when I log in', type: 'checkbox', checked: login, click: (i) => setDesktopSetting('startAtLogin', i.checked) } : null,
     CAN_START_AT_LOGIN && login ? { label: 'Start minimised in the tray', type: 'checkbox', checked: startHidden(), click: (i) => setDesktopSetting('startHidden', i.checked) } : null,
     !IS_MAC ? { label: 'Keep running in the tray when closed', type: 'checkbox', checked: closeToTray(), click: (i) => setDesktopSetting('closeToTray', i.checked) } : null,
+    IS_LINUX ? { label: 'Use the system title bar (after a restart)', type: 'checkbox', checked: settings.systemTitleBar === true, click: (i) => { settings.systemTitleBar = i.checked; saveSettings(); refreshTrayMenu(); } } : null,
     CONFIG.lockServer ? null : { label: 'Change server…', click: () => { showWindow(); loadConnect(); } },
     { type: 'separator' },
     { label: 'Quit', click: () => { quitting = true; app.quit(); } },
@@ -758,8 +865,9 @@ function buildAppMenu() {
       { label: 'Zoom in', ...shown('CmdOrCtrl+='), click: () => stepZoom(1) },
       { label: 'Zoom out', ...shown('CmdOrCtrl+-'), click: () => stepZoom(-1) },
       { type: 'separator' },
-      { role: 'togglefullscreen' }, { role: 'toggleDevTools' },
-    ] },
+      // Developer tools (Ctrl+Shift+I) only in a development copy, never in the installed app.
+      { role: 'togglefullscreen' }, app.isPackaged ? null : { role: 'toggleDevTools' },
+    ].filter(Boolean) },
     { role: 'windowMenu' },
     { label: 'Help', submenu: [
       { label: 'Open in browser', click: () => { const o = serverOrigin(); if (o) shell.openExternal(o); } },
@@ -778,7 +886,7 @@ function buildAppMenu() {
 // ---------------------------------------------------------------- IPC from the page (see preload.js)
 // A message counts only from the main window's top frame, showing your server's page (exact origin) or the
 // built-in connect screen. A look-alike address (https://your.server.evil.net) is not your server.
-const fromMainWindow = (e) => !!(win && !win.isDestroyed() && e.sender === win.webContents && e.senderFrame && !e.senderFrame.parent);
+const fromMainWindow = (e) => !!(win && !win.isDestroyed() && e.sender === page && e.senderFrame && !e.senderFrame.parent);
 const fromOurPage = (e) => fromMainWindow(e) && (isServer(e.senderFrame.url) || isConnectScreen(e.senderFrame.url));
 const fromConnectScreen = (e) => fromMainWindow(e) && isConnectScreen(e.senderFrame.url);
 ipcMain.on('version', (e) => { e.returnValue = app.getVersion(); });
@@ -786,7 +894,11 @@ ipcMain.on('badge', (e, n) => { if (fromOurPage(e)) setBadge(n); });
 ipcMain.on('focus', (e) => { if (fromOurPage(e)) showWindow(); });
 ipcMain.on('change-server', (e) => { if (fromOurPage(e) && !CONFIG.lockServer) loadConnect(); });
 // Keybinds from Settings → Keybinds: push-to-talk / mute / deafen, even while a game has focus.
-ipcMain.handle('keybinds', (e, b) => (fromOurPage(e) ? hotkeys.set(b, (ev) => sendToPage('hotkey', ev)) : { ok: false }));
+ipcMain.handle('keybinds', (e, b) => {
+  if (!fromOurPage(e)) return { ok: false };
+  keybindCodes = Object.values(b || {}).map((k) => String((k && k.code) || ''));
+  return hotkeys.set(b, (ev) => sendToPage('hotkey', ev));
+});
 // A @mention while Cindrly isn't focused: flash the taskbar button until it is.
 ipcMain.on('flash', (e) => { if (fromOurPage(e) && win && !win.isFocused()) win.flashFrame(true); });
 ipcMain.on('call-state', (e, s) => {
@@ -808,7 +920,7 @@ ipcMain.handle('idle-time', (e) => (fromOurPage(e) ? powerMonitor.getSystemIdleT
 const detect = require('./detect');
 ipcMain.on('detect', (e, o) => {
   if (!fromOurPage(e)) return;
-  if (o && (o.games || o.songs)) detect.start((a) => { if (win && !win.isDestroyed()) win.webContents.send('activity', a); }, o);
+  if (o && (o.games || o.songs)) detect.start((a) => sendToPage('activity', a), o);
   else detect.stop();
 });
 // Is it a Cindrly server? (/api/config answers with its name.) A certificate error counts as "there": the
@@ -848,7 +960,7 @@ ipcMain.handle('retry-server', async (e) => {
   const origin = serverOrigin();
   if (!origin) return { ok: false, error: 'No server yet.' };
   const r = await probe(origin);
-  if (r.ok && win && !win.isDestroyed() && isConnectScreen(win.webContents.getURL())) load();
+  if (r.ok && win && !win.isDestroyed() && isConnectScreen(page.getURL())) load();
   return { ok: r.ok, error: r.error || '' };
 });
 
@@ -860,7 +972,7 @@ app.whenReady().then(() => {
   setupUpdates();
   // A hearth:// link that started the app: opened once the server's page has loaded (not the connecting screen).
   if (pendingLink) {
-    const wc = win.webContents;
+    const wc = page;
     const later = () => { if (!onServerPage()) return; wc.removeListener('did-finish-load', later); const l = pendingLink; pendingLink = ''; if (l) openLink(l); };
     wc.on('did-finish-load', later);
   }

@@ -159,9 +159,9 @@ test('ux-shells-7: desktop: Linux doesn’t close to the tray unless asked; the 
   // Cold start: the connecting screen first, then the server from there; --hidden still never shows the window
   assert.match(main, /load\(\{ coldStart: true \}\);/);
   const load = main.slice(main.indexOf('function load('), main.indexOf('function connectQuery('));
-  assert.match(load, /if \(!coldStart\) return win\.loadURL\(origin \+ '\/'\);/);
-  assert.match(load, /win\.loadFile\(CONNECT_FILE, \{ query: connectQuery\(\{ connecting: '1' \}\) \}\);[\s\S]*win\.loadURL\(origin \+ '\/'\)/);
-  assert.match(main, /win\.once\('ready-to-show', \(\) => \{ if \(!process\.argv\.includes\('--hidden'\) && !openedAtLogin\) win\.show\(\); \}\);/);
+  assert.match(load, /if \(!coldStart\) return page\.loadURL\(origin \+ '\/'\);/);
+  assert.match(load, /page\.loadFile\(CONNECT_FILE, \{ query: connectQuery\(\{ connecting: '1' \}\) \}\);[\s\S]*page\.loadURL\(origin \+ '\/'\)/);
+  assert.match(main, /page\.once\('did-finish-load', \(\) => \{ if \(!process\.argv\.includes\('--hidden'\) && !openedAtLogin\) showWindow\(\); \}\);/);
 
   const html = read('desktop', 'connect.html');
   const explainSrc = script(html);

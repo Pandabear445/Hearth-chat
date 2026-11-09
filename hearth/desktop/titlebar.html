@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self'">
+  <title>Cindrly</title>
+  <!-- The strip across the top of the window (main.js puts it above the server's page, never over it).
+       Windows and Linux draw their own minimize / maximize / close buttons on its right (titleBarOverlay);
+       macOS draws its traffic lights on its left. Everything here except the Cindrly button moves the window. -->
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    body {
+      display: flex; align-items: center; height: 32px;
+      /* Room for the system's buttons: never put anything under them. */
+      padding: 0 calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)) 0 8px;
+      background: #100e16; color: #b6afc6;
+      font: 600 12px/1 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+      -webkit-app-region: drag; user-select: none; cursor: default;
+    }
+    body.mac { padding-left: 80px; }
+    body.blurred { color: #847c97; }
+    body.blurred .brand img { opacity: .6; }
+    .brand {
+      display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px 0 6px;
+      border: 0; border-radius: 4px; background: none; color: inherit; font: inherit; letter-spacing: .01em;
+      -webkit-app-region: no-drag; transition: background-color .12s, color .12s;
+    }
+    .brand:hover { background: rgba(255, 255, 255, .06); color: #ede9f5; }
+    .brand:active, .brand[aria-expanded="true"] { background: rgba(255, 255, 255, .1); }
+    .brand:focus-visible { outline: 2px solid #f2a541; outline-offset: -2px; }
+    .brand img { width: 16px; height: 16px; border-radius: 4px; flex: none; }
+    @media (prefers-reduced-motion: reduce) { .brand { transition: none; } }
+    @media (forced-colors: active) {
+      body, body.blurred { background: Canvas; color: CanvasText; }
+      .brand:hover, .brand:active { background: Highlight; color: HighlightText; }
+    }
+  </style>
+</head>
+<body>
+  <button class="brand" id="brand" type="button" aria-label="Cindrly menu" aria-haspopup="menu" aria-expanded="false" title="Menu (Alt)">
+    <img src="build/icon.png" alt=""><span id="name">Cindrly</span>
+  </button>
+  <script src="titlebar.js"></script>
+</body>
+</html>
