@@ -751,6 +751,8 @@ function serializeDm(row, userId) {
   return {
     id: row.id, userId: row.user_a === userId ? row.user_b : row.user_a, lastMessageAt: row.last_message_at, region: row.rtc_region || null, regionVersion: row.rtc_region_v || 0,
     disappear: row.disappear_secs || 0,
+    // Cleared for both (POST /dms/:id/clear): by whom and when, shown at the top of the conversation.
+    cleared: row.cleared_at ? { by: row.cleared_by, at: row.cleared_at } : null,
     last: dmLast(row.id),
     look: LOOKS ? LOOKS.lookOf('d:' + row.id) : null,
   };
@@ -4599,6 +4601,36 @@ api.delete('/dm-messages/:id', auth, (req, res) => {
   // A comment on a photo: that photo has one fewer.
   if (m.reply_file != null) emitFileReplies('dm_messages', [m.reply_to]);
   res.json({ ok: true });
+});
+
+// Clear a DM for both people: every message in it up to now, from either of them, with their files, reactions, pins
+// and photo tags (forgetMessages), as if each had been deleted. Either person may do it, the way either can delete
+// the whole conversation in many messengers; the other one always sees who cleared it and when, at the top of the
+// conversation (dm_channels.cleared_*), and gets the same event. Not after a block either way: whoever was blocked
+// mustn't be able to erase what the other person may still want to report (and reports keep their own copies).
+// Messages sent while this runs, after `upTo`, stay. Scheduled messages that haven't gone out yet aren't touched.
+const CLEAR_IDS_SENT = 5000; // the event lists the deleted ids up to this many (apps also drop everything up to upTo)
+api.post('/dms/:id/clear', auth, (req, res) => {
+  const d = requireDm(req.params.id, req.userId);
+  if (isBlocked(d.user_a, d.user_b)) fail(403, 'You can\u2019t clear this conversation after a block.');
+  rateLimit('dmclear:' + req.userId, 10, 60 * 60 * 1000);
+  const top = db.prepare('SELECT id FROM dm_messages WHERE dm_id = ? ORDER BY id DESC LIMIT 1').get(d.id);
+  const t = now();
+  let ids = [];
+  if (top) {
+    ids = db.prepare('SELECT id FROM dm_messages WHERE dm_id = ? AND id <= ?').all(d.id, top.id).map((r) => r.id);
+    forgetMessages(ids);
+    db.transaction(() => {
+      for (let i = 0; i < ids.length; i += 500) {
+        const part = ids.slice(i, i + 500);
+        db.prepare(`DELETE FROM dm_messages WHERE id IN (${part.map(() => '?').join(',')})`).run(...part);
+      }
+    })();
+  }
+  db.prepare('UPDATE dm_channels SET cleared_at = ?, cleared_by = ? WHERE id = ?').run(t, req.userId, d.id);
+  const event = { dmId: d.id, upTo: top ? top.id : null, by: req.userId, at: t, count: ids.length, last: dmLast(d.id) };
+  io.to([`user:${d.user_a}`, `user:${d.user_b}`]).emit('dm:cleared', ids.length <= CLEAR_IDS_SENT ? { ...event, ids } : event);
+  res.json({ ok: true, deleted: ids.length });
 });
 
 // Encrypted attachment blobs. The client encrypts each file with its own random key before upload.

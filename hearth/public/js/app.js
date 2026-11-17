@@ -1231,6 +1231,7 @@ function startApp(account) {
   });
   socket.on('dm:update', (m) => onUpdateMessage('d:' + m.dmId, m));
   // With the DM's newest message now (last), for its line in the conversation list.
+  socket.on('dm:cleared', (p) => onDmCleared(p));
   socket.on('dm:delete', ({ id, dmId, expired, last }) => {
     onDeleteMessage('d:' + dmId, id, { expired: !!expired });
     const d = last !== undefined && S.dms.find((x) => x.id === dmId);
@@ -3118,7 +3119,45 @@ function dmMenuItems(d) {
     { label: 'View profile', icon: 'user', action: () => openProfileModal(u.id) },
     personalNameItem(u),
     { label: 'Verify encryption', icon: 'shield', action: () => openSafetyNumber(u) },
+    // Not after a block, either way (the server refuses it too: server/index.js POST /dms/:id/clear).
+    ...(S.blocked.has(u.id) ? [] : ['-', { label: 'Clear chat for both', icon: 'trash', danger: true, action: () => clearDmForBoth(d) }]),
   ];
+}
+// Deletes every message in a DM, from both people, for both of them, after asking. The other person sees a line at the
+// top of the conversation saying who cleared it and when, and gets the same update live (onDmCleared).
+async function clearDmForBoth(d) {
+  const u = getUser(d.userId);
+  if (!(await confirmDialog({ title: 'Clear this chat for both of you?',
+    text: `Every message, file and reaction in this conversation is deleted for you and ${displayName(u)}, including the ones they sent. This can\u2019t be undone. ${displayName(u)} will see that you cleared it. Scheduled messages that haven\u2019t been sent yet are kept.`,
+    confirm: 'Clear for both', danger: true }))) return;
+  try {
+    const r = await api('POST', `/dms/${encodeURIComponent(d.id)}/clear`);
+    toast(r.deleted ? `Cleared ${r.deleted} message${r.deleted === 1 ? '' : 's'} for both of you.` : 'The chat was already empty.');
+  } catch (e) { toast(e.message, 'error'); }
+}
+// A DM cleared for both (by either person, on any of their devices): everything up to `upTo` goes from this app too:
+// the messages, their copies in Photos & videos, photo tags, the side view and Reels (onDeleteMessage), and their
+// notifications. The list's preview and the line at the top follow.
+function onDmCleared({ dmId, upTo, ids, by, at, last } = {}) {
+  if (!S.me || typeof dmId !== 'string') return;
+  const key = 'd:' + dmId;
+  const d = S.dms.find((x) => x.id === dmId);
+  if (d) { d.cleared = { by, at }; setLast(d, last || null); }
+  const store = S.msgs[key];
+  const gone = new Set(Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : []);
+  if (store && typeof upTo === 'string') store.list.forEach((m) => { if (m.id <= upTo) gone.add(m.id); });
+  // As thoroughly as disappearing messages (forgetCopies): their words in the inbox and reminders, opened files.
+  if (gone.size) onDeleteMessage(key, [...gone], { expired: true });
+  // Nothing in it is unread any more: no "new messages" bar, badge or notification for what went (the server's
+  // counts are asked for again, for anything sent after the clear).
+  S.unread.delete(key); S.mentions.delete(key);
+  if (S.unreadCounts) S.unreadCounts[key] = 0;
+  if (S.unreadMarker === key) { S.unreadMarker = null; S.markerCount = 0; }
+  closeNotifications(key);
+  refreshUnreadSoon();
+  renderSidebar(); renderRail(); updateTitle();
+  if (currentKey() === key) { renderMessages(false); renderUnreadBar(); }
+  if (by && by !== S.me.id && d) toast(`${displayName(getUser(by))} cleared your chat for both of you.`);
 }
 function groupMenuItems(g) {
   const c = textChannel(g);
@@ -5782,7 +5821,9 @@ function welcomeBlock() {
     return h('div', { class: 'welcome' }, avatarEl(u, 72), nameEl(u, { tag: 'h2' }),
       h('p', null, `This is the start of your conversation with ${displayName(u)}.`),
       h('p', { class: 'welcome-note' }, icon('lock'), 'Messages and files here are end-to-end encrypted. Only the two of you can read them.'),
-      timerWelcome('d:' + d.id));
+      timerWelcome('d:' + d.id),
+      d.cleared ? h('p', { class: 'welcome-note dm-cleared', role: 'note' }, icon('trash'),
+        `${d.cleared.by === S.me.id ? 'You' : displayName(getUser(d.cleared.by))} cleared this chat for both of you (${fmtStamp(d.cleared.at)}).`) : null);
   }
   const server = currentServer();
   if (isGroup(server)) {

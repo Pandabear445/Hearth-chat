@@ -25,7 +25,7 @@ const db = new Database(DB_FILE);
 // Each release that changes the schema bumps SCHEMA_VERSION. If this database is older and already
 // has accounts in it, a full copy goes to data/backups/ first, so an upgrade can always be undone
 // by stopping the server and copying the file back.
-const SCHEMA_VERSION = 27;
+const SCHEMA_VERSION = 28;
 const fromVersion = db.pragma('user_version', { simple: true });
 // v17 (data): a database written by a newer Cindrly (the code was rolled back by hand, or a newer backup was
 // restored) has columns and rules this code doesn't know. Running on it anyway can break sign-in or quietly ignore
@@ -1823,6 +1823,10 @@ addColumn('scheduled_messages', 'peer_pq', 'TEXT');
 // checks, back-off, "replaces", unsubscribing and sign-out all treat it like any other subscription.
 addColumn('push_subs', 'kind', "TEXT NOT NULL DEFAULT 'webpush'");
 addColumn('push_subs', 'apns_env', 'TEXT');
+// v28 (clear a chat for both): who last cleared a DM's messages for both people, and when. The apps show it at the top
+// of the conversation, so the other person always knows the history was cleared and by whom.
+addColumn('dm_channels', 'cleared_at', 'INTEGER');
+addColumn('dm_channels', 'cleared_by', 'TEXT');
 
 if (fromVersion < SCHEMA_VERSION) db.pragma(`user_version = ${SCHEMA_VERSION}`);
 db.exec('COMMIT');

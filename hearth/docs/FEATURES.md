@@ -1959,6 +1959,24 @@ Tests:
 - `test/photo-notes-client.test.js` (sealing, binding, tampering, labels);
 - the e2e flows "photos & videos" and "photo comments and tags".
 
+## Clear a DM for both of you (v28)
+
+Either person in a direct message can delete the whole conversation for both of them: the conversation's menu (its
+row in the list, or ⋯ in its header) → **Clear chat for both**, then confirm. Every message up to that moment goes,
+the other person's too, with their files, reactions, pins and photo tags (`POST /api/dms/:id/clear`, server/index.js).
+
+- **Both sides see it:** the other person's app empties live (`dm:cleared`), and both see a line at the top of the
+  conversation: "Alice cleared this chat for both of you (date)" (`dm_channels.cleared_at`, `cleared_by`). Clearing
+  can't be done quietly.
+- **Not after a block,** either way: whoever was blocked can't erase what the other person may still want to report.
+  Reports already made keep their own copy of the reported messages.
+- **What stays:** messages sent after the clear began, scheduled messages that haven't been sent yet, the
+  disappearing-messages setting and the chat background.
+- **On the device:** the app drops everything it held from the conversation, as for disappearing messages: notifications,
+  the inbox and reminders' copies, opened files, Photos & videos, photo tags, the side view and Reels.
+- Limits: 10 clears an hour per account. Group chats don't have it (one member can't delete everyone's messages);
+  a group's own message deletion and moderation work as before.
+
 ## Chat backgrounds and Pin to side
 
 What people asked for: backgrounds "for DMs with friends and stuff", and to "pin messages on the side so people can
